@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connexion — Baccara Bot</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0f1115; color: #e8e8ec; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 380px; background: #171a21; border: 1px solid #262b36;
+    border-radius: 14px; padding: 28px 24px; box-shadow: 0 10px 40px rgba(0,0,0,.35);
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: #9098a8; font-size: 13px; margin: 0 0 22px; }
+  label { display: block; font-size: 13px; color: #b6bcc9; margin: 14px 0 6px; }
+  input {
+    width: 100%; padding: 11px 12px; border-radius: 9px; border: 1px solid #2c3140;
+    background: #10131a; color: #e8e8ec; font-size: 14px; outline: none;
+  }
+  input:focus { border-color: #5b7cff; }
+  button {
+    width: 100%; margin-top: 20px; padding: 12px; border: none; border-radius: 9px;
+    background: #5b7cff; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { background: #4a6bee; }
+  button:disabled { opacity: .6; cursor: wait; }
+  button.ghost { background: transparent; color: #9098a8; margin-top: 10px; text-decoration: underline; font-weight: 400; }
+  .msg { margin-top: 14px; font-size: 13px; padding: 10px 12px; border-radius: 8px; display: none; }
+  .msg.err { display: block; background: #3a1a1f; color: #ff9aa6; }
+  .msg.ok { display: block; background: #17301f; color: #8ef0a8; }
+  .switch { text-align: center; margin-top: 16px; font-size: 13px; color: #9098a8; }
+  .switch a { color: #5b7cff; cursor: pointer; text-decoration: none; }
+  .hidden { display: none !important; }
+
+  /* petite roue de chargement dans les boutons, pendant l'envoi */
+  .spin-ico {
+    display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px;
+    border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%;
+    animation: spinIco 700ms linear infinite;
+  }
+  @keyframes spinIco { to { transform: rotate(360deg); } }
+
+  /* ── Fenêtre modale : saisie du code de confirmation ──────────────── */
+  #verifyModalBackdrop {
+    position: fixed; inset: 0; z-index: 1000; background: rgba(5,7,13,.72);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    opacity: 0; pointer-events: none; transition: opacity 220ms ease;
+  }
+  #verifyModalBackdrop.open { opacity: 1; pointer-events: auto; }
+  #verifyModal {
+    width: 100%; max-width: 360px; background: #171a21; border: 1px solid #2c3140;
+    border-radius: 16px; padding: 26px 22px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    transform: translateY(14px) scale(.97); transition: transform 220ms ease;
+  }
+  #verifyModalBackdrop.open #verifyModal { transform: translateY(0) scale(1); }
+
+  /* ── Fenêtre modale : « patientez, l'administrateur va traiter » ────── */
+  #pendingModalBackdrop, #blockedModalBackdrop {
+    position: fixed; inset: 0; z-index: 1000; background: rgba(5,7,13,.72);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    opacity: 0; pointer-events: none; transition: opacity 220ms ease;
+  }
+  #pendingModalBackdrop.open, #blockedModalBackdrop.open { opacity: 1; pointer-events: auto; }
+  #pendingModal, #blockedModal {
+    width: 100%; max-width: 360px; background: #171a21; border: 1px solid #2c3140;
+    border-radius: 16px; padding: 30px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    text-align: center; transform: translateY(14px) scale(.97); transition: transform 220ms ease;
+  }
+  #pendingModalBackdrop.open #pendingModal, #blockedModalBackdrop.open #blockedModal { transform: translateY(0) scale(1); }
+  .wait-ico {
+    width: 40px; height: 40px; margin: 0 auto 16px; border: 3px solid rgba(91,124,255,.3);
+    border-top-color: #5b7cff; border-radius: 50%; animation: spinIco 900ms linear infinite;
+  }
+  .lock-ico { font-size: 38px; margin-bottom: 10px; }
+  #pendingModal p, #blockedModal p { color: #9098a8; font-size: 13px; margin: 0 0 4px; }
+  .telegram-link {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; margin-top: 18px; padding: 12px; border-radius: 9px;
+    background: #229ed9; color: #fff; font-size: 14px; font-weight: 600;
+    text-decoration: none; box-sizing: border-box;
+  }
+  .telegram-link:hover { background: #1c8bc0; }
+
+  /* ── Écran d'intro animé (avant connexion) : chargement puis image ──── */
+  #splash {
+    position: fixed; inset: 0; z-index: 999;
+    background: #05070d;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  #splash.leaving { animation: splashOut 700ms ease forwards; }
+
+  /* étape 1 : barre de progression orange (simule un téléchargement) */
+  #loadStage {
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    width: 240px; transition: opacity 350ms ease;
+  }
+  #loadStage.hidden-stage { opacity: 0; pointer-events: none; position: absolute; }
+  .bar-track {
+    width: 100%; height: 8px; border-radius: 999px; background: rgba(255,255,255,.12);
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%; width: 0%; border-radius: 999px;
+    background: linear-gradient(90deg, #ff7a00, #ffb347);
+    box-shadow: 0 0 14px rgba(255,138,0,.6);
+  }
+  .bar-fill.done { background: linear-gradient(90deg, #35e08a, #6bf0ac); box-shadow: 0 0 14px rgba(53,224,138,.55); }
+  #loadPct { font-size: 15px; color: #cfd4e2; letter-spacing: .03em; font-variant-numeric: tabular-nums; }
+  #loadLabel { font-size: 12px; color: #7c8398; letter-spacing: .05em; text-transform: uppercase; }
+
+  /* étape 2 : l'image, révélée une fois le "téléchargement" terminé */
+  #imgStage { position: absolute; inset: 0; opacity: 0; transition: opacity 500ms ease; }
+  #imgStage.visible { opacity: 1; }
+  #imgStage img {
+    width: 100%; height: 100%; object-fit: cover;
+    animation: splashZoom 2600ms ease-out forwards;
+  }
+  #imgStage .tap {
+    position: absolute; bottom: 26px; left: 0; right: 0; text-align: center;
+    color: #cfd4e2; font-size: 12px; letter-spacing: .04em;
+    opacity: 0; animation: tapFade 900ms ease forwards; animation-delay: 500ms;
+  }
+  @keyframes splashZoom {
+    0%   { transform: scale(1.08); filter: brightness(.55) saturate(1.05); }
+    60%  { transform: scale(1.02); filter: brightness(1) saturate(1.05); }
+    100% { transform: scale(1);    filter: brightness(1) saturate(1.05); }
+  }
+  @keyframes tapFade { from { opacity: 0; } to { opacity: .75; } }
+  @keyframes splashOut {
+    to { opacity: 0; visibility: hidden; pointer-events: none; }
+  }
+  body.no-scroll { overflow: hidden; }
+</style>
+</head>
+<body class="no-scroll">
+  <div id="splash" onclick="closeSplash()">
+    <div id="loadStage">
+      <div class="bar-track"><div class="bar-fill" id="barFillEl"></div></div>
+      <div id="loadPct">0 %</div>
+      <div id="loadLabel">Téléchargement…</div>
+    </div>
+    <div id="imgStage">
+      <img src="/splash.jpg" alt="1XBET + Baccara + IA">
+      <div class="tap">Touchez pour continuer</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="loginView">
+      <h1>🔒 Connexion</h1>
+      <p class="sub">Accès au tableau de bord — identifiants requis.</p>
+      <label>Identifiant</label>
+      <input id="loginId" autocomplete="username" placeholder="sossoukouam">
+      <label>Mot de passe</label>
+      <input id="loginPwd" type="password" autocomplete="current-password" placeholder="••••••••">
+      <button id="loginBtn" onclick="doLogin()">Se connecter</button>
+      <div id="loginMsg" class="msg"></div>
+      <div class="switch">Pas de compte ? <a onclick="showView('signup')">Créer un compte</a></div>
+    </div>
+
+    <div id="signupView" class="hidden">
+      <h1>✉️ Créer un compte</h1>
+      <p class="sub">Adresse Gmail requise. Aucun code n'est envoyé : après l'inscription, l'administrateur valide votre compte et vous accorde un temps d'accès.</p>
+      <label>Email Gmail</label>
+      <input id="suEmail" type="email" autocomplete="email" placeholder="vous@gmail.com">
+      <label>Mot de passe</label>
+      <input id="suPwd" type="password" autocomplete="new-password" placeholder="6 caractères minimum">
+      <label>Confirmation du mot de passe</label>
+      <input id="suPwd2" type="password" autocomplete="new-password" placeholder="Répéter le mot de passe">
+      <button id="signupBtn" onclick="doSignup()">Créer le compte</button>
+      <div id="signupMsg" class="msg"></div>
+      <div class="switch">Déjà un compte ? <a onclick="showView('login')">Se connecter</a></div>
+    </div>
+  </div>
+
+  <!-- ── Fenêtre modale : compte en attente de traitement par l'admin ───── -->
+  <div id="pendingModalBackdrop">
+    <div id="pendingModal">
+      <div class="wait-ico"></div>
+      <h1 style="font-size:17px">Merci de patienter</h1>
+      <p>Inscription enregistrée avec succès.</p>
+      <p>Identifiant Gmail : <b id="pendingEmailLabel"></b></p>
+      <p>Mot de passe : enregistré et sécurisé.</p>
+      <p>Statut : en attente de validation par l'administrateur.</p>
+      <p>L'administrateur va maintenant traiter votre compte depuis son panneau. Vous pourrez vous connecter dès qu'il l'aura accepté et vous aura accordé un temps d'accès.</p>
+      <a class="telegram-link" href="https://t.me/Kouamappoloak" target="_blank" rel="noopener">✈️ Contacter l'administrateur sur Telegram</a>
+      <button style="margin-top:18px" onclick="closePendingModal()">Retour à la connexion</button>
+    </div>
+  </div>
+
+  <!-- ── Fenêtre modale : compte bloqué (temps accordé écoulé) ──────────── -->
+  <div id="blockedModalBackdrop">
+    <div id="blockedModal">
+      <div class="lock-ico">🔒</div>
+      <h1 style="font-size:17px">Compte bloqué</h1>
+      <p>Le temps d'accès accordé par l'administrateur est écoulé.</p>
+      <a class="telegram-link" id="blockedTelegramLink" href="https://t.me/Kouamappoloak" target="_blank" rel="noopener">✈️ Contacter l'administrateur sur Telegram</a>
+      <button class="ghost" style="margin-top:12px" onclick="closeBlockedModal()">Fermer</button>
+    </div>
+  </div>
+
+<script>
+let pendingEmail = '';
+
+// écran d'intro : rotation + pourcentage (« téléchargement »), puis image,
+// puis fermeture (au clic, ou automatiquement).
+function closeSplash() {
+  const s = document.getElementById('splash');
+  if (!s) return;
+  s.classList.add('leaving');
+  s.addEventListener('animationend', function done(e) {
+    if (e.animationName !== 'splashOut') return;
+    s.removeEventListener('animationend', done);
+    s.style.display = 'none';
+  });
+  document.body.classList.remove('no-scroll');
+}
+(function () {
+  const s = document.getElementById('splash');
+  if (!s) return;
+  const pctEl = document.getElementById('loadPct');
+  const labelEl = document.getElementById('loadLabel');
+  const barFillEl = document.getElementById('barFillEl');
+  const loadStage = document.getElementById('loadStage');
+  const imgStage = document.getElementById('imgStage');
+
+  const DURATION = 1600; // durée du "téléchargement" (ms)
+  const start = performance.now();
+
+  function tick(now) {
+    const pct = Math.min(100, Math.round(((now - start) / DURATION) * 100));
+    pctEl.textContent = pct + ' %';
+    barFillEl.style.width = pct + '%';
+    if (pct < 100) {
+      requestAnimationFrame(tick);
+    } else {
+      // téléchargement terminé : barre verte, puis on révèle l'image
+      barFillEl.classList.add('done');
+      labelEl.textContent = 'Terminé ✓';
+      setTimeout(() => {
+        loadStage.classList.add('hidden-stage');
+        imgStage.classList.add('visible');
+        setTimeout(closeSplash, 2600); // temps d'affichage de l'image avant fermeture
+      }, 450);
+    }
+  }
+  requestAnimationFrame(tick);
+
+  setTimeout(closeSplash, 6500); // filet de sécurité si l'animation ne se déclenche pas
+})();
+
+function showView(name) {
+  document.getElementById('loginView').classList.toggle('hidden', name !== 'login');
+  document.getElementById('signupView').classList.toggle('hidden', name !== 'signup');
+}
+
+function openPendingModal(email) {
+  if (email) {
+    pendingEmail = email;
+    document.getElementById('pendingEmailLabel').textContent = email;
+  }
+  document.getElementById('pendingModalBackdrop').classList.add('open');
+}
+function closePendingModal() {
+  document.getElementById('pendingModalBackdrop').classList.remove('open');
+  showView('login');
+}
+
+function openBlockedModal(telegram) {
+  const link = document.getElementById('blockedTelegramLink');
+  if (telegram) {
+    const url = /^https?:\/\//i.test(telegram) ? telegram : 'https://' + telegram;
+    link.href = url;
+  }
+  document.getElementById('blockedModalBackdrop').classList.add('open');
+}
+function closeBlockedModal() {
+  document.getElementById('blockedModalBackdrop').classList.remove('open');
+}
+
+// arrivée depuis une session coupée en cours de route (temps expiré pendant
+// que la personne utilisait déjà le tableau de bord) : voir server.js.
+(function checkBlockedRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('blocked') === '1') {
+    closeSplash();
+    openBlockedModal(params.get('telegram') || '');
+  }
+})();
+
+function setBusy(btnId, busy, busyText, idleText) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.innerHTML = busy ? `<span class="spin-ico"></span>${busyText}` : idleText;
+}
+
+function showMsg(id, text, ok) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    credentials: 'same-origin',
+  });
+  let data = {};
+  try { data = await r.json(); } catch (_) {}
+  return { ok: r.ok, data };
+}
+
+async function doLogin() {
+  const identifier = document.getElementById('loginId').value.trim();
+  const password = document.getElementById('loginPwd').value;
+  if (!identifier || !password) return showMsg('loginMsg', 'Identifiant et mot de passe requis.', false);
+  setBusy('loginBtn', true, 'Connexion…', 'Se connecter');
+  const { ok, data } = await post('/api/auth/login', { identifier, password });
+  setBusy('loginBtn', false, '', 'Se connecter');
+  if (ok && data.ok) {
+    window.location.href = '/';
+    return;
+  }
+  if (data.pendingApproval) {
+    openPendingModal(identifier.includes('@') ? identifier : '');
+    return;
+  }
+  if (data.blocked) {
+    openBlockedModal(data.telegram);
+    return;
+  }
+  if (data.unknown) {
+    showMsg('loginMsg', "Identifiants inconnus — vous pouvez créer un compte ci-dessous.", false);
+    return;
+  }
+  showMsg('loginMsg', data.error || 'Identifiants incorrects.', false);
+}
+
+async function doSignup() {
+  const email = document.getElementById('suEmail').value.trim();
+  const password = document.getElementById('suPwd').value;
+  const confirmPassword = document.getElementById('suPwd2').value;
+  if (!email || !password || !confirmPassword) return showMsg('signupMsg', 'Tous les champs sont requis.', false);
+  document.getElementById('signupMsg').className = 'msg';
+  setBusy('signupBtn', true, 'Création du compte…', 'Créer le compte');
+  const { data } = await post('/api/auth/signup', { email, password, confirmPassword });
+  setBusy('signupBtn', false, '', 'Créer le compte');
+  if (data.ok) {
+    // Plus de code par email : la fenêtre « patientez » s'ouvre directement,
+    // c'est l'administrateur qui confirmera le compte.
+    openPendingModal(data.email || email);
+    return;
+  }
+  showMsg('signupMsg', data.error || "Erreur lors de la création du compte.", false);
+}
+</script>
+</body>
+</html>
