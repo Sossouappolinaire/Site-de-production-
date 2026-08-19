@@ -1067,6 +1067,7 @@ app.post('/api/after-loss/trackers', async (req, res) => {
     const key = req.body && req.body.key;
     const t = afterLoss.addTracker(key, req.body && req.body.triggers, req.body && req.body.repeat, {
       channels: req.body && req.body.channels,
+      siteChannelId: req.body && req.body.siteChannelId,
       format: req.body && req.body.format,
     });
     // la stratégie suivie a été activée automatiquement par addTracker() —

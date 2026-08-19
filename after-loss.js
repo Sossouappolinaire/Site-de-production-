@@ -34,7 +34,7 @@ const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
-const { state, setStrategyConfig, hasSuit, parityOf } = require('./predictor');
+const { state, setStrategyConfig, hasSuit, parityOf, addSiteChannelMessage, siteChannelsView } = require('./predictor');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
 
@@ -44,6 +44,12 @@ const TRIGGER_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage
 const panel = {
   enabled: true,
   channels: [],   // canaux Telegram où sont relayées les prédictions « après perte »
+  // canal DU SITE (vitrine interne, voir predictor.js siteChannelsView) où le
+  // relais est ÉGALEMENT publié — indépendant des canaux Telegram ci-dessus :
+  // les deux destinations sont utilisées en parallèle, chacune facultative.
+  // null = aucun canal du site choisi (comportement d'origine, Telegram
+  // uniquement).
+  siteChannelId: null,
   format: 1,      // format de prédiction utilisé pour les messages relayés
   maxR: 1,        // nombre de rattrapage affiché sur le message relayé
   // trackers : [{ id, key, name, triggers:{r1:{enabled,n}, r2:{...}, r3:{...}, perdue:{...}},
@@ -88,6 +94,7 @@ function parseChannels(value) {
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
+  if (patch.siteChannelId !== undefined) panel.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
   if (patch.format !== undefined) panel.format = fmt.clampFormat(patch.format);
   if (patch.maxR !== undefined) panel.maxR = Math.max(0, Math.min(9, parseInt(patch.maxR, 10) || 0));
   persist();
@@ -98,6 +105,7 @@ function config() {
   return {
     enabled: panel.enabled,
     channels: panel.channels,
+    siteChannelId: panel.siteChannelId,
     format: panel.format,
     maxR: panel.maxR,
   };
@@ -165,12 +173,39 @@ function sanitizeTrackerFormat(input) {
   return fmt.clampFormat(input);
 }
 
+// canal DU SITE : on ne valide pas contre la liste courante ici (elle peut
+// changer indépendamment, et un id momentanément inconnu ne doit pas
+// empêcher d'enregistrer les autres réglages) — l'envoi silencieusement
+// n'échoue que si l'id ne correspond à aucun canal au moment du relais réel
+// (voir postToSiteChannel). '' ou null = pas de canal du site choisi.
+function sanitizeSiteChannelId(input) {
+  if (input === undefined || input === null || input === '') return null;
+  return String(input);
+}
+
 function effectiveChannels(tracker) {
   return (tracker.channels && tracker.channels.length) ? tracker.channels : panel.channels;
 }
 
 function effectiveFormat(tracker) {
   return (tracker.format !== null && tracker.format !== undefined) ? tracker.format : panel.format;
+}
+
+function effectiveSiteChannelId(tracker) {
+  return (tracker.siteChannelId !== null && tracker.siteChannelId !== undefined) ? tracker.siteChannelId : panel.siteChannelId;
+}
+
+// publie le relais dans le canal DU SITE choisi (en plus, ou à la place, du
+// canal Telegram) — n'importe qui l'ouvrant sur le site voit apparaître le
+// même texte que celui envoyé sur Telegram, avec le nom de la stratégie
+// suivie comme expéditeur. Si l'id ne correspond plus à aucun canal du site
+// (supprimé entre-temps), on l'ignore silencieusement (pas d'erreur bloquante
+// pour l'envoi Telegram, qui reste indépendant).
+function postToSiteChannel(tracker, text) {
+  const id = effectiveSiteChannelId(tracker);
+  if (!id) return false;
+  const entry = addSiteChannelMessage(id, { sender: tracker.name, text });
+  return !!entry;
 }
 
 // type de résultat d'une prédiction terminée : 'r0' (gagné direct — jamais
@@ -222,6 +257,7 @@ function applySaved(saved) {
   if (saved.config) {
     panel.enabled = saved.config.enabled !== false;
     panel.channels = parseChannels(saved.config.channels);
+    panel.siteChannelId = sanitizeSiteChannelId(saved.config.siteChannelId);
     panel.format = fmt.clampFormat(saved.config.format);
     panel.maxR = Math.max(0, Math.min(9, parseInt(saved.config.maxR, 10) || 0));
   }
@@ -237,6 +273,7 @@ function applySaved(saved) {
       triggers: t.triggers ? sanitizeTriggers(t.triggers) : defaultTriggers(),
       repeat: sanitizeRepeat(t.repeat),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
+      siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: sanitizeTrackerFormat(t.format),
       lastRepeatSource: Number.isFinite(Number(t.lastRepeatSource)) ? Number(t.lastRepeatSource) : 0,
       counting: !!t.counting,
@@ -295,6 +332,7 @@ function addTracker(key, triggers, repeat, extra = {}) {
     // canal(x) et format propres à cette stratégie ; vides → hérite du
     // canal/format global du panneau (voir effectiveChannels/effectiveFormat).
     channels: parseChannels(extra.channels),
+    siteChannelId: sanitizeSiteChannelId(extra.siteChannelId),
     format: sanitizeTrackerFormat(extra.format),
     // on ne rejoue pas les pertes déjà passées au moment de l'ajout.
     lastRepeatSource: currentMaxTarget(opt.key),
@@ -340,6 +378,9 @@ function updateTracker(id, patch = {}) {
   }
   if (patch.channels !== undefined) {
     tracker.channels = parseChannels(patch.channels);
+  }
+  if (patch.siteChannelId !== undefined) {
+    tracker.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
   }
   if (patch.format !== undefined) {
     tracker.format = sanitizeTrackerFormat(patch.format);
@@ -511,20 +552,37 @@ async function verifyPending() {
 }
 
 async function forward(tracker, pred) {
-  const bot = typeof sender === 'function' ? sender() : null;
-  if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   const targetChannels = effectiveChannels(tracker);
-  if (!targetChannels.length) { panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni propre à la stratégie, ni sur le panneau)`; return false; }
+  const siteChannelId = effectiveSiteChannelId(tracker);
+  if (!targetChannels.length && !siteChannelId) {
+    panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni Telegram, ni canal du site, sur la stratégie ou le panneau)`;
+    return false;
+  }
   const out = relayText(tracker, pred);
   let ok = false;
   const errors = [];
   const sentMessages = [];
-  for (const id of targetChannels) {
-    try {
-      const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
-      sentMessages.push({ chatId: id, messageId: m.message_id });
-      ok = true;
-    } catch (e) { errors.push(`${id} : ${e.message}`); }
+  // canal(x) Telegram — facultatif, indépendant du canal du site ci-dessous.
+  if (targetChannels.length) {
+    const bot = typeof sender === 'function' ? sender() : null;
+    if (!bot) {
+      errors.push('Aucun token Telegram configuré');
+    } else {
+      for (const id of targetChannels) {
+        try {
+          const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+          sentMessages.push({ chatId: id, messageId: m.message_id });
+          ok = true;
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
+      }
+    }
+  }
+  // canal DU SITE — facultatif, publié en parallèle du/des canal(aux)
+  // Telegram ci-dessus ; l'un n'empêche jamais l'autre.
+  if (siteChannelId) {
+    const posted = postToSiteChannel(tracker, out.text);
+    if (posted) ok = true;
+    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;
@@ -542,8 +600,10 @@ async function forward(tracker, pred) {
     panel.history = panel.history.slice(0, 100);
     // CORRECTIF : on mémorise ce relais pour qu'il soit vérifié comme les
     // prédictions normales (voir verifyPending) au lieu de rester bloqué
-    // « en attente » indéfiniment dans le canal.
-    pushPending(tracker, pred, sentMessages);
+    // « en attente » indéfiniment dans le canal. (Le canal du site n'a pas
+    // de messageId à éditer : seuls les envois Telegram, s'il y en a, sont
+    // mémorisés ici.)
+    if (sentMessages.length) pushPending(tracker, pred, sentMessages);
   } else if (errors.length) {
     panel.lastError = errors[0];
   }
@@ -637,10 +697,12 @@ function adviceForRepeat(tracker, lead) {
 }
 
 async function forwardRepeat(tracker, synth) {
-  const bot = typeof sender === 'function' ? sender() : null;
-  if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   const targetChannels = effectiveChannels(tracker);
-  if (!targetChannels.length) { panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni propre à la stratégie, ni sur le panneau)`; return false; }
+  const siteChannelId = effectiveSiteChannelId(tracker);
+  if (!targetChannels.length && !siteChannelId) {
+    panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni Telegram, ni canal du site, sur la stratégie ou le panneau)`;
+    return false;
+  }
   const out = fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: synth.target,
     suit: synth.suit,
@@ -653,12 +715,24 @@ async function forwardRepeat(tracker, synth) {
   let ok = false;
   const errors = [];
   const sentMessages = [];
-  for (const id of targetChannels) {
-    try {
-      const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
-      sentMessages.push({ chatId: id, messageId: m.message_id });
-      ok = true;
-    } catch (e) { errors.push(`${id} : ${e.message}`); }
+  if (targetChannels.length) {
+    const bot = typeof sender === 'function' ? sender() : null;
+    if (!bot) {
+      errors.push('Aucun token Telegram configuré');
+    } else {
+      for (const id of targetChannels) {
+        try {
+          const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+          sentMessages.push({ chatId: id, messageId: m.message_id });
+          ok = true;
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
+      }
+    }
+  }
+  if (siteChannelId) {
+    const posted = postToSiteChannel(tracker, out.text);
+    if (posted) ok = true;
+    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;
@@ -675,7 +749,7 @@ async function forwardRepeat(tracker, synth) {
     });
     panel.history = panel.history.slice(0, 100);
     // CORRECTIF : idem forward() — ce relais est désormais suivi et vérifié.
-    pushPending(tracker, synth, sentMessages);
+    if (sentMessages.length) pushPending(tracker, synth, sentMessages);
   } else if (errors.length) {
     panel.lastError = errors[0];
   }
@@ -863,6 +937,9 @@ function status() {
     options: options(),
     triggerKeys: TRIGGER_KEYS,
     triggerLabels: TRIGGER_LABELS,
+    // canaux du site disponibles pour le sélecteur (panneau + par stratégie
+    // suivie) — même liste que la page « Canaux » (voir siteChannelsView).
+    siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     trackers: panel.trackers.map((t) => ({
       id: t.id,
       key: t.key,
@@ -870,6 +947,7 @@ function status() {
       triggers: t.triggers,
       repeat: t.repeat,
       channels: t.channels,
+      siteChannelId: t.siteChannelId,
       format: t.format,
       counting: t.counting,
       armedTrigger: t.armedTrigger,
