@@ -211,7 +211,7 @@
       .hero, .two-col { grid-template-columns: 1fr; } .stat-grid { grid-template-columns: repeat(2,1fr); }
       .three-col { grid-template-columns: 1fr; } .shell { padding: 0 15px 52px; } .hero { padding-top: 40px; }
     }
-    /* ── Écran de démarrage : intro « combat » animée (5 s), avant le tableau de bord ── */
+    /* ── Écran de démarrage : combat animé (3 s) puis image de marque (2 s) ── */
     #splash {
       position: fixed; inset: 0; z-index: 999;
       background: #05070d;
@@ -219,28 +219,33 @@
       cursor: pointer; overflow: hidden;
     }
     #splash.leaving { animation: splashOut 700ms ease forwards; }
-    .fight-intro { position: relative; width: 100%; height: 100%; overflow: hidden;
-      background: radial-gradient(ellipse at center, #2a0a0a 0%, #0a0505 55%, #05070d 100%); }
+    .fight-intro { position: relative; width: 100%; height: 100%; overflow: hidden; }
+    /* phase 1 — combat, deux personnages qui se percutent (0 → ~3 s) */
+    .intro-combat { position: absolute; inset: 0;
+      background: radial-gradient(ellipse at center, #2a0a0a 0%, #0a0505 55%, #05070d 100%);
+      animation: combatPhaseOut 600ms ease 2500ms forwards; }
     .arena-glow { position: absolute; inset: 0;
       background: radial-gradient(circle at 50% 50%, rgba(255,90,30,.35), transparent 60%);
-      animation: arenaGlow 5000ms ease-in-out both; }
-    .fighter { position: absolute; top: 50%; left: 50%; font-size: 88px; line-height: 1;
-      filter: drop-shadow(0 0 18px rgba(0,0,0,.6)); animation-duration: 5000ms; animation-fill-mode: both; animation-timing-function: ease-in-out; }
+      animation: arenaGlow 3000ms ease-in-out both; }
+    .fighter { position: absolute; top: 50%; left: 50%; font-size: 96px; line-height: 1;
+      filter: drop-shadow(0 0 18px rgba(0,0,0,.6)); animation-duration: 3000ms; animation-fill-mode: both; animation-timing-function: ease-in-out; }
     .fighter-left { animation-name: fighterLeftIn; }
     .fighter-right { animation-name: fighterRightIn; transform: scaleX(-1); }
     .vs-text { position: absolute; top: 50%; left: 50%; font-size: 52px; font-weight: 900; letter-spacing: .05em;
       background: linear-gradient(180deg,#ffe38a,#ff7a00); -webkit-background-clip: text; background-clip: text; color: transparent;
-      text-shadow: 0 0 26px rgba(255,138,0,.55); animation: vsIn 5000ms ease-in-out both; }
-    .impact-burst { position: absolute; top: 50%; left: 50%; font-size: 120px; animation: impactBurst 5000ms ease-in-out both; }
+      text-shadow: 0 0 26px rgba(255,138,0,.55); animation: vsIn 3000ms ease-in-out both; }
+    .clash-burst { position: absolute; top: 50%; left: 50%; font-size: 120px; animation: clashBurst 3000ms ease-in-out both; }
     .combat-stamp { position: absolute; top: 50%; left: 50%; font-size: 54px; font-weight: 900; text-transform: uppercase;
       letter-spacing: .06em; color: #ff3b3b; text-shadow: 0 0 18px rgba(255,59,59,.7), 0 0 40px rgba(255,59,59,.35);
-      animation: combatStamp 5000ms ease-in-out both; }
-    .intro-brand { position: absolute; top: 50%; left: 50%; text-align: center; animation: introBrand 5000ms ease-in-out both; }
-    .intro-brand b { display: block; font-size: 30px; font-weight: 900; letter-spacing: .08em; color: #fff; }
-    .intro-brand span { display: block; margin-top: 4px; font-size: 12px; letter-spacing: .18em; color: #ffb347; text-transform: uppercase; }
-    .flash-overlay { position: absolute; inset: 0; background: #fff; opacity: 0; animation: flashPulse 5000ms ease-in-out both; }
+      animation: combatStamp 3000ms ease-in-out both; }
+    /* phase 2 — image de marque (public/splash.jpg), ~2 s */
+    .intro-image { position: absolute; inset: 0; opacity: 0; background: #05070d;
+      animation: imagePhaseIn 600ms ease 2600ms forwards; }
+    .intro-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .intro-image .veil { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 40%, rgba(5,7,13,.82) 100%); }
+    .flash-overlay { position: absolute; inset: 0; background: #fff; opacity: 0; animation: flashPulse 3000ms ease-in-out both; }
     .skip-hint { position: absolute; bottom: 26px; left: 0; right: 0; text-align: center; color: #cfd4e2; font-size: 12px;
-      letter-spacing: .04em; opacity: 0; animation: skipHintIn 5000ms ease-in-out both; }
+      letter-spacing: .04em; opacity: 0; animation: skipHintIn 5000ms ease-in-out both; z-index: 5; }
     @keyframes arenaGlow { 0% { opacity: .25; } 50% { opacity: .6; } 100% { opacity: .4; } }
     @keyframes fighterLeftIn {
       0%   { transform: translate(-170%, -50%) rotate(-18deg); opacity: 0; }
@@ -268,7 +273,7 @@
       40%  { opacity: 0; transform: translate(-50%, -50%) scale(.6); }
       100% { opacity: 0; }
     }
-    @keyframes impactBurst {
+    @keyframes clashBurst {
       0%, 44% { opacity: 0; transform: translate(-50%, -50%) scale(.2); }
       46%  { opacity: 1; transform: translate(-50%, -50%) scale(1.5); }
       52%  { opacity: 0; transform: translate(-50%, -50%) scale(2.3); }
@@ -284,15 +289,10 @@
       0%, 52% { opacity: 0; transform: translate(-50%, -50%) scale(3) rotate(-10deg); }
       54%  { opacity: 1; transform: translate(-50%, -50%) scale(1.05) rotate(-6deg); }
       58%  { transform: translate(-50%, -50%) scale(1) rotate(-6deg); }
-      72%  { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-6deg); }
-      76%  { opacity: 0; transform: translate(-50%, -50%) scale(1.3) rotate(-6deg); }
-      100% { opacity: 0; }
+      100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-6deg); }
     }
-    @keyframes introBrand {
-      0%, 76% { opacity: 0; transform: translate(-50%, -50%) translateY(14px) scale(.92); }
-      80%  { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
-      100% { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
-    }
+    @keyframes combatPhaseOut { to { opacity: 0; visibility: hidden; } }
+    @keyframes imagePhaseIn { to { opacity: 1; } }
     @keyframes skipHintIn { 0%, 88% { opacity: 0; } 100% { opacity: .7; } }
     @keyframes splashOut { to { opacity: 0; visibility: hidden; pointer-events: none; } }
     body.no-scroll { overflow: hidden; }
@@ -301,13 +301,18 @@
 <body class="no-scroll">
   <div id="splash" onclick="closeSplash()">
     <div class="fight-intro">
-      <div class="arena-glow"></div>
-      <div class="fighter fighter-left">🥊</div>
-      <div class="fighter fighter-right">🥊</div>
-      <div class="vs-text">VS</div>
-      <div class="impact-burst">💥</div>
-      <div class="combat-stamp">COMBAT</div>
-      <div class="intro-brand"><b>BACCARA</b><span>Control Room</span></div>
+      <div class="intro-combat">
+        <div class="arena-glow"></div>
+        <div class="fighter fighter-left">🥷</div>
+        <div class="fighter fighter-right">🤺</div>
+        <div class="vs-text">VS</div>
+        <div class="clash-burst">💥</div>
+        <div class="combat-stamp">COMBAT</div>
+      </div>
+      <div class="intro-image">
+        <img src="/splash.jpg" alt="Baccara Control Room">
+        <div class="veil"></div>
+      </div>
       <div class="flash-overlay"></div>
       <div class="skip-hint">Touchez pour continuer</div>
     </div>
@@ -994,6 +999,20 @@ Faites-en bon usage !
     function readAfterLossRepeat(prefix) {
       return { enabled: !!$(`#${prefix}-repeat-on`)?.checked, lead: val(`${prefix}-repeat-lead`) };
     }
+    function afterLossChannelFormatRow(prefix, tracker) {
+      const t = tracker || {};
+      const channels = (t.channels || []).join(', ');
+      const format = (t.format === null || t.format === undefined) ? '' : t.format;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0">
+        <div class="field" style="flex:1;margin:0"><label style="font-size:11px">Canal Telegram propre (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format propre (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = format du panneau"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Laisse ces deux champs vides pour utiliser le canal/format réglés en haut de la page. Renseigne-les pour envoyer cette stratégie ailleurs — vers un canal différent pour chaque stratégie, ou plusieurs vers le même canal, au choix.</p>`;
+    }
+    function readAfterLossChannelFormat(prefix) {
+      const rawFormat = val(`${prefix}-format`);
+      return { channels: ids(val(`${prefix}-channels`)), format: rawFormat === '' ? null : rawFormat };
+    }
     function afterLossPage() {
       setNav('after-loss');
       const p = snapshot.afterLoss || {};
@@ -1016,10 +1035,11 @@ Faites-en bon usage !
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Stratégies suivies</span><h2 style="margin-top:7px">${trackers.length} stratégie(s)</h2></div></div>
           ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.armed ? 'warn' : (t.counting ? 'warn' : 'good')}">${t.armed ? 'En attente de la prochaine prédiction' : (t.counting ? `Décompte en cours : ${esc(String(t.armedSeen))}/${esc(String(t.armedNeeded))}` : 'Surveillance')}</span></div>
-            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd></dl>
+            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
             <div id="opt-result-${esc(t.id)}"></div>
             ${afterLossTriggerRows('trk-' + t.id, t.triggers)}
             ${afterLossRepeatRow('trk-' + t.id, t.repeat)}
+            ${afterLossChannelFormatRow('trk-' + t.id, t)}
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Stratégie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
@@ -1030,19 +1050,22 @@ Faites-en bon usage !
         <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
         ${afterLossTriggerRows('new', { perdue: { enabled: true, n: 0 } })}
         ${afterLossRepeatRow('new', { enabled: false, lead: 5 })}
+        ${afterLossChannelFormatRow('new', { channels: [], format: null })}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function addAfterLossTracker() {
       const key = val('newTrackerKey');
       const triggers = readAfterLossTriggers('new');
       const repeat = readAfterLossRepeat('new');
-      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      const { channels, format } = readAfterLossChannelFormat('new');
+      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, channels, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function updateAfterLossTriggers(id) {
       const triggers = readAfterLossTriggers('trk-' + id);
       const repeat = readAfterLossRepeat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      const { channels, format } = readAfterLossChannelFormat('trk-' + id);
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, channels, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function optimizeAfterLossTracker(id) {
