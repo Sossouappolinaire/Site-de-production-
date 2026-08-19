@@ -167,6 +167,24 @@
     .modal-head { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; }
     .empty { padding: 36px 20px; color: var(--muted); text-align: center; border: 1px dashed var(--line); border-radius: 14px; }
     .loading { min-height: 160px; display: grid; place-items: center; color: var(--muted); }
+    /* --- Canaux : jeu en direct (cartes en temps réel) ------------------ */
+    .live-game-wrap { margin-bottom: 16px; min-height: 0; overflow: hidden; transition: max-height .3s ease, opacity .3s ease, margin .3s ease; }
+    .live-game-wrap.empty-state { display: none; }
+    .live-game { border: 1px solid rgba(112,225,229,.32); border-radius: 18px; padding: 16px 18px;
+      background: linear-gradient(150deg, rgba(22,33,47,.98), rgba(11,16,25,.98)); animation: rise .22s ease; }
+    .live-game-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .live-game-head .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan-2); display: inline-block; margin-right: 7px; box-shadow: 0 0 0 0 rgba(112,225,229,.6); animation: livePulse 1.4s infinite; }
+    @keyframes livePulse { 0% { box-shadow: 0 0 0 0 rgba(112,225,229,.55); } 70% { box-shadow: 0 0 0 9px rgba(112,225,229,0); } 100% { box-shadow: 0 0 0 0 rgba(112,225,229,0); } }
+    .live-game-hands { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+    .live-hand { border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+    .live-hand-top { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+    .live-hand-value { font-size: 22px; font-weight: 900; color: var(--text); }
+    .live-cards { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; min-height: 44px; }
+    .playing-card { width: 32px; height: 44px; border-radius: 6px; background: #f4f4f2; color: #1a1a1a; display: grid; place-items: center;
+      font-size: 12px; font-weight: 900; box-shadow: 0 3px 8px rgba(0,0,0,.35); animation: dealIn .25s ease; border: 1px solid rgba(0,0,0,.08); }
+    .playing-card.red { color: #d13a3a; }
+    @keyframes dealIn { from { opacity: 0; transform: translateY(-8px) scale(.85); } to { opacity: 1; transform: none; } }
+    .live-game-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
     /* --- Canaux (vitrine style Telegram) ------------------------------- */
     .canal-list { display: flex; flex-direction: column; gap: 10px; }
     .canal-row { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 16px;
@@ -1002,19 +1020,30 @@ Faites-en bon usage !
     function readAfterLossRepeat(prefix) {
       return { enabled: !!$(`#${prefix}-repeat-on`)?.checked, lead: val(`${prefix}-repeat-lead`) };
     }
+    // options du sélecteur « canal du site » : la même liste que la page
+    // Canaux (voir siteChannelsView côté serveur), avec une option vide pour
+    // « aucun » (n'envoie que sur Telegram, comportement d'origine).
+    function siteChannelOptions(currentId) {
+      const list = snapshot.afterLoss?.siteChannels || [];
+      const cur = currentId === null || currentId === undefined ? '' : String(currentId);
+      const opts = list.map(c => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+      return `<option value="">— aucun —</option>${opts}`;
+    }
     function afterLossChannelFormatRow(prefix, tracker) {
       const t = tracker || {};
       const channels = (t.channels || []).join(', ');
       const format = (t.format === null || t.format === undefined) ? '' : t.format;
-      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0">
-        <div class="field" style="flex:1;margin:0"><label style="font-size:11px">Canal Telegram propre (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram propre (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+        <div class="field" style="flex:1;min-width:160px;margin:0"><label style="font-size:11px">Canal du site propre (optionnel)</label><select id="${prefix}-siteChannel">${siteChannelOptions(t.siteChannelId)}</select></div>
         <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format propre (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = format du panneau"></div>
       </div>
-      <p class="small muted" style="margin:6px 0 0">Laisse ces deux champs vides pour utiliser le canal/format réglés en haut de la page. Renseigne-les pour envoyer cette stratégie ailleurs — vers un canal différent pour chaque stratégie, ou plusieurs vers le même canal, au choix.</p>`;
+      <p class="small muted" style="margin:6px 0 0">Laisse ces champs vides/« aucun » pour utiliser les réglages du panneau (en haut de la page). Renseigne-les pour envoyer cette stratégie ailleurs — Telegram et canal du site sont indépendants, tu peux activer l'un, l'autre, ou les deux.</p>`;
     }
     function readAfterLossChannelFormat(prefix) {
       const rawFormat = val(`${prefix}-format`);
-      return { channels: ids(val(`${prefix}-channels`)), format: rawFormat === '' ? null : rawFormat };
+      const siteChannelId = val(`${prefix}-siteChannel`);
+      return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat };
     }
     function afterLossPage() {
       setNav('after-loss');
@@ -1026,7 +1055,10 @@ Faites-en bon usage !
           <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit uniquement les prédictions relayées après perte.</p>
             <div class="field"><label>ID ou @nom du canal</label><input id="afterLossChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="toolbar"><button class="button small primary" onclick="saveAfterLossChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="afterLossTest()">Envoyer un test</button><button class="button small danger" onclick="removeAfterLossChannel()">Retirer</button></div>
-            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
+            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}
+            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine, page « Canaux »)</label><select id="afterLossSiteChannel">${siteChannelOptions(p.siteChannelId)}</select></div>
+            <p class="small muted" style="margin:6px 0 0">Indépendant du canal Telegram ci-dessus : les deux reçoivent le relais en parallèle si les deux sont configurés. Crée d'abord un canal depuis la page « Canaux » s'il n'apparaît pas dans la liste.</p>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveAfterLoss()">Enregistrer le canal du site</button></div></div>
           <div class="panel"><h3>Réglages du panneau</h3>
             <label class="check"><input id="afterLossEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer le relais automatique</label>
             <div class="two-col" style="margin-top:16px">
@@ -1038,7 +1070,7 @@ Faites-en bon usage !
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Stratégies suivies</span><h2 style="margin-top:7px">${trackers.length} stratégie(s)</h2></div></div>
           ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.armed ? 'warn' : (t.counting ? 'warn' : 'good')}">${t.armed ? 'En attente de la prochaine prédiction' : (t.counting ? `Décompte en cours : ${esc(String(t.armedSeen))}/${esc(String(t.armedNeeded))}` : 'Surveillance')}</span></div>
-            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
+            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
             <div id="opt-result-${esc(t.id)}"></div>
             ${afterLossTriggerRows('trk-' + t.id, t.triggers)}
             ${afterLossRepeatRow('trk-' + t.id, t.repeat)}
@@ -1060,15 +1092,15 @@ Faites-en bon usage !
       const key = val('newTrackerKey');
       const triggers = readAfterLossTriggers('new');
       const repeat = readAfterLossRepeat('new');
-      const { channels, format } = readAfterLossChannelFormat('new');
-      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, channels, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
+      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, channels, siteChannelId, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function updateAfterLossTriggers(id) {
       const triggers = readAfterLossTriggers('trk-' + id);
       const repeat = readAfterLossRepeat('trk-' + id);
-      const { channels, format } = readAfterLossChannelFormat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, channels, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      const { channels, siteChannelId, format } = readAfterLossChannelFormat('trk-' + id);
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function optimizeAfterLossTracker(id) {
@@ -1086,7 +1118,8 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
     async function saveAfterLoss() {
-      try { await api('/api/after-loss/config', 'POST', { enabled: $('#afterLossEnabled')?.checked, maxR: val('afterLossMaxR'), format: val('afterLossFormat'), channels: ids(val('afterLossChannel')) }); await refresh(); afterLossPage(); toast('Panneau « Prédiction après perte » enregistré.'); }
+      const rawSite = val('afterLossSiteChannel');
+      try { await api('/api/after-loss/config', 'POST', { enabled: $('#afterLossEnabled')?.checked, maxR: val('afterLossMaxR'), format: val('afterLossFormat'), channels: ids(val('afterLossChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); afterLossPage(); toast('Panneau « Prédiction après perte » enregistré.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function saveAfterLossChannel() {
@@ -1118,8 +1151,60 @@ Faites-en bon usage !
     let canalRefreshTimer = null;
     function stopCanalRefresh() { if (canalRefreshTimer) { clearInterval(canalRefreshTimer); canalRefreshTimer = null; } }
 
+    // --- Jeu en direct (cartes en temps réel) sur la page Canaux ---------
+    // Un même numéro de jeu (`live.number`) reste affiché tant qu'il est en
+    // cours ; dès que le serveur bascule sur le jeu suivant (celui-ci
+    // terminé), le widget se remplace automatiquement au prochain sondage —
+    // aucune carte de l'ancien jeu ne reste affichée.
+    let lastLiveNumber = null;
+    function cardFace(label) {
+      // label du type "K♠️", "10❤️"... on sépare le rang du costume pour
+      // colorer en rouge ♦️/❤️ et en clair ♠️/♣️.
+      const m = String(label || '').match(/^(10|[2-9]|[AJQK]|\?)(.*)$/);
+      const rank = m ? m[1] : (label || '?');
+      const suit = m ? m[2] : '';
+      const red = suit === '♦️' || suit === '❤️';
+      return `<div class="playing-card${red ? ' red' : ''}">${esc(rank)}<br>${suit}</div>`;
+    }
+    function handBlock(title, cards, value, dealing) {
+      const faces = (cards && cards.length) ? cards.map(cardFace).join('') : (dealing ? '<span class="small muted">en attente des cartes…</span>' : '');
+      return `<div class="live-hand"><div class="live-hand-top"><span>${title}</span><span class="live-hand-value">${value ?? '—'}</span></div><div class="live-cards">${faces}</div></div>`;
+    }
+    function liveGameWidget(live) {
+      if (!live) return '<div class="live-game-wrap empty-state"></div>';
+      const statusTag = live.finished ? '<span class="tag good">Terminé</span>' : '<span class="tag warn"><span class="live-dot"></span>En direct</span>';
+      return `<div class="live-game-wrap"><div class="live-game" id="liveGameCard">
+        <div class="live-game-head"><span class="eyebrow">Jeu en direct — #N${esc(live.number)}</span>${statusTag}</div>
+        <div class="live-game-hands">
+          ${handBlock('Joueur', live.player, live.playerValue, !live.finished)}
+          ${handBlock('Banquier', live.banker, live.bankerValue, !live.finished)}
+        </div>
+        <div class="live-game-foot"><span class="small muted">${live.winner ? `Résultat : ${esc(live.winner)}` : (live.dealing ? 'Distribution des cartes…' : 'En attente du prochain jeu…')}</span></div>
+      </div></div>`;
+    }
+    async function refreshLiveGame() {
+      const holder = document.getElementById('liveGameHolder');
+      if (!holder) return; // page changée entre-temps
+      try {
+        const r = await api('/api/games?limit=1');
+        const live = r.live || null;
+        // le jeu affiché change de numéro (celui d'avant a fini, ou un
+        // nouveau vient de commencer) : on remplace tout le bloc pour que
+        // l'ancien disparaisse et le nouveau arrive avec son animation.
+        if (live && live.number !== lastLiveNumber) {
+          lastLiveNumber = live.number;
+          holder.innerHTML = liveGameWidget(live);
+          return;
+        }
+        // même jeu : on met juste à jour les cartes/valeurs en place (sans
+        // tout ré-animer) pour suivre la distribution en temps réel.
+        if (live) holder.innerHTML = liveGameWidget(live);
+      } catch (_) { /* on garde le dernier affichage en cas d'erreur réseau */ }
+    }
+
     async function canauxPage() {
       stopCanalRefresh();
+      lastLiveNumber = null;
       setNav('canaux'); $('#app').innerHTML = '<div class="loading">Chargement des canaux…</div>';
       try {
         const r = await api('/api/canaux');
@@ -1136,6 +1221,7 @@ Faites-en bon usage !
           : '<div class="empty">Aucun canal pour l\'instant.</div>';
         const strategyOptions = (snapshot.strategies || []).map(s => `<option value="${esc(s.key)}">${esc(s.name)}</option>`).join('');
         $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Canaux</span><h2 style="margin-top:7px">Fil des prédictions</h2><p class="small">Chaque canal affiche les prédictions d'une stratégie, mises en forme exactement comme sur Telegram.</p></div><button class="button small ghost" onclick="canauxPage()">Actualiser</button></div>
+        <div id="liveGameHolder">${liveGameWidget(null)}</div>
         ${isAdmin ? `<div class="panel" style="margin-bottom:16px">
             <b>Créer un canal</b>
             <div class="split" style="margin-top:12px;gap:10px;flex-wrap:wrap">
@@ -1145,6 +1231,8 @@ Faites-en bon usage !
             </div>
           </div>` : ''}
         <div class="canal-list">${rows}</div>`;
+        await refreshLiveGame();
+        canalRefreshTimer = setInterval(() => refreshLiveGame().catch(() => {}), 2500);
       } catch(e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
 
