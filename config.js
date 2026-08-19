@@ -35,7 +35,7 @@ const GEMINI = {
 
 const GROQ = {
   CHAT_URL: 'https://api.groq.com/openai/v1/chat/completions',
-  API_KEY: process.env.GROQ_API_KEY || '',
+  API_KEY: process.env.GROQ_API_KEY || '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',
   // llama-3.3-70b-versatile est en cours de retrait chez Groq (courant 2026) :
   // openai/gpt-oss-120b est le modèle de migration recommandé. Réglable via
   // GROQ_MODEL sans toucher au code si Groq change encore ses modèles.

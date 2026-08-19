@@ -15,6 +15,20 @@ const SUITS = ['♦️', '❤️', '♣️', '♠️'];
 const MAX_OFFSET = 3;          // on regarde a+1, a+2, a+3
 const MIN_SUPPORT = 4;         // nombre minimum d'observations
 const MIN_RATE = 75;           // % minimum pour parler d'une régularité
+// Position exacte dans la main (index 0 = 1ère carte reçue, etc.), pour
+// décrire un costume avec précision plutôt que « présent dans la main ».
+const POSITION_LABELS = ['1ère position', '2e position', '3e position'];
+const posLabel = (idx) => (idx == null || idx < 0 ? null : (POSITION_LABELS[idx] || `${idx + 1}e position`));
+
+// position dominante d'un costume donné parmi les occurrences comptées dans
+// un bucket (b.hitPos[suit] = { idx: count, ... })
+function dominantPosLabel(b, suit) {
+  const posCounts = (b.hitPos && b.hitPos[suit]) || {};
+  const keys = Object.keys(posCounts);
+  if (!keys.length) return null;
+  const best = keys.sort((x, y) => posCounts[y] - posCounts[x])[0];
+  return posLabel(Number(best));
+}
 
 const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
 
@@ -78,31 +92,40 @@ function mineCardRules(games) {
           const target = games[i + k];
           if (!target) continue;
           const key = `${hand}|${token}|${k}`;
-          if (!buckets.has(key)) buckets.set(key, { hand, token, k, support: 0, hits: {} });
+          if (!buckets.has(key)) buckets.set(key, { hand, token, k, support: 0, hits: {}, hitPos: {} });
           const b = buckets.get(key);
           b.support += 1;
           for (const suit of SUITS) {
-            if (hasSuit(target, suit, 'joueur')) b.hits[suit] = (b.hits[suit] || 0) + 1;
+            const idx = (target.playerSuits || []).indexOf(suit);
+            if (idx === -1) continue;
+            b.hits[suit] = (b.hits[suit] || 0) + 1;
+            b.hitPos[suit] = b.hitPos[suit] || {};
+            b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
           }
         }
       }
     }
   }
-  return rankBuckets(buckets, (b, suit, rate) => ({
-    kind: 'carte',
-    finding: `Quand le ${b.hand} a ${b.token} au jeu a, ${suit} apparaît dans la main du joueur au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
-    proposal: {
-      name: `${b.token} (${b.hand}) → ${suit} au jeu a+${b.k}`,
-      logic: `Dès que ${b.token} est vu dans la main du ${b.hand} au jeu a, prédire ${suit} sur le jeu a+${b.k} (main du joueur).`,
-      trigger: `${b.token} présent dans la main du ${b.hand}`,
-      target: `jeu a+${b.k}`,
-      suggestedLead: b.k,
-      minimumSample: 20,
-      evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%).`,
-      risks: "Régularité observée sur un échantillon court : à laisser tourner en mode silencieux avant publication.",
-      compatibleExisting: 'costume',
-    },
-  }));
+  return rankBuckets(buckets, (b, suit, rate) => {
+    const pos = dominantPosLabel(b, suit);
+    const posTxt = pos ? ` en ${pos}` : '';
+    return {
+      kind: 'carte',
+      finding: `Quand le ${b.hand} a ${b.token} au jeu a, ${suit} apparaît${posTxt} dans la main du joueur au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
+      proposal: {
+        name: `${b.token} (${b.hand}) → ${suit}${posTxt} au jeu a+${b.k}`,
+        logic: `Dès que ${b.token} est vu dans la main du ${b.hand} au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k} (main du joueur).`,
+        trigger: `${b.token} présent dans la main du ${b.hand}`,
+        target: `jeu a+${b.k}`,
+        position: pos,
+        suggestedLead: b.k,
+        minimumSample: 20,
+        evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%)${posTxt ? `, majoritairement${posTxt}` : ''}.`,
+        risks: "Régularité observée sur un échantillon court : à laisser tourner en mode silencieux avant publication.",
+        compatibleExisting: 'costume',
+      },
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -117,27 +140,38 @@ function mineValueRules(games) {
       const target = games[i + k];
       if (!target) continue;
       const key = `point|${value}|${k}`;
-      if (!buckets.has(key)) buckets.set(key, { hand: 'joueur', token: `point ${value}`, value, k, support: 0, hits: {} });
+      if (!buckets.has(key)) buckets.set(key, { hand: 'joueur', token: `point ${value}`, value, k, support: 0, hits: {}, hitPos: {} });
       const b = buckets.get(key);
       b.support += 1;
-      for (const suit of SUITS) if (hasSuit(target, suit, 'joueur')) b.hits[suit] = (b.hits[suit] || 0) + 1;
+      for (const suit of SUITS) {
+        const idx = (target.playerSuits || []).indexOf(suit);
+        if (idx === -1) continue;
+        b.hits[suit] = (b.hits[suit] || 0) + 1;
+        b.hitPos[suit] = b.hitPos[suit] || {};
+        b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
+      }
     }
   }
-  return rankBuckets(buckets, (b, suit, rate) => ({
-    kind: 'point',
-    finding: `Quand le joueur totalise ${b.value} points au jeu a, ${suit} revient au jeu a+${b.k} dans ${rate}% des cas (${b.hits[suit]}/${b.support}).`,
-    proposal: {
-      name: `Point ${b.value} → ${suit} au jeu a+${b.k}`,
-      logic: `Quand le point du joueur vaut ${b.value} au jeu a, prédire ${suit} sur le jeu a+${b.k}.`,
-      trigger: `point joueur = ${b.value}`,
-      target: `jeu a+${b.k}`,
-      suggestedLead: b.k,
-      minimumSample: 20,
-      evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%).`,
-      risks: 'Le point du joueur dépend du tirage : contrôler la règle sur les 20 prochains jeux.',
-      compatibleExisting: 'costume',
-    },
-  }));
+  return rankBuckets(buckets, (b, suit, rate) => {
+    const pos = dominantPosLabel(b, suit);
+    const posTxt = pos ? ` en ${pos}` : '';
+    return {
+      kind: 'point',
+      finding: `Quand le joueur totalise ${b.value} points au jeu a, ${suit} revient${posTxt} au jeu a+${b.k} dans ${rate}% des cas (${b.hits[suit]}/${b.support}).`,
+      proposal: {
+        name: `Point ${b.value} → ${suit}${posTxt} au jeu a+${b.k}`,
+        logic: `Quand le point du joueur vaut ${b.value} au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k}.`,
+        trigger: `point joueur = ${b.value}`,
+        target: `jeu a+${b.k}`,
+        position: pos,
+        suggestedLead: b.k,
+        minimumSample: 20,
+        evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%)${posTxt ? `, majoritairement${posTxt}` : ''}.`,
+        risks: 'Le point du joueur dépend du tirage : contrôler la règle sur les 20 prochains jeux.',
+        compatibleExisting: 'costume',
+      },
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -147,33 +181,46 @@ function mineSuitChains(games) {
   const buckets = new Map();
   for (let i = 0; i < games.length; i += 1) {
     for (const suit of SUITS) {
-      if (!hasSuit(games[i], suit)) continue;
+      const triggerIdx = (games[i].playerSuits || []).indexOf(suit);
+      if (triggerIdx === -1) continue;
       for (let k = 1; k <= 2; k += 1) {
         const target = games[i + k];
         if (!target) continue;
-        const key = `chaine|${suit}|${k}`;
-        if (!buckets.has(key)) buckets.set(key, { hand: 'joueur', token: suit, k, support: 0, hits: {} });
+        const key = `chaine|${suit}|${triggerIdx}|${k}`;
+        if (!buckets.has(key)) buckets.set(key, { hand: 'joueur', token: suit, triggerPos: triggerIdx, k, support: 0, hits: {}, hitPos: {} });
         const b = buckets.get(key);
         b.support += 1;
-        for (const s of SUITS) if (hasSuit(target, s)) b.hits[s] = (b.hits[s] || 0) + 1;
+        for (const s of SUITS) {
+          const idx = (target.playerSuits || []).indexOf(s);
+          if (idx === -1) continue;
+          b.hits[s] = (b.hits[s] || 0) + 1;
+          b.hitPos[s] = b.hitPos[s] || {};
+          b.hitPos[s][idx] = (b.hitPos[s][idx] || 0) + 1;
+        }
       }
     }
   }
-  return rankBuckets(buckets, (b, suit, rate) => ({
-    kind: 'chaine',
-    finding: `${b.token} dans la main du joueur est suivi de ${suit} au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
-    proposal: {
-      name: `Chaîne ${b.token} → ${suit} (a+${b.k})`,
-      logic: `Après ${b.token} côté joueur, prédire ${suit} au jeu a+${b.k}.`,
-      trigger: `${b.token} vu côté joueur`,
-      target: `jeu a+${b.k}`,
-      suggestedLead: b.k,
-      minimumSample: 25,
-      evidence: `${b.hits[suit]} confirmations sur ${b.support} observations.`,
-      risks: 'Un enchaînement de costumes peut se casser sans prévenir : garder les rattrapages.',
-      compatibleExisting: 'costume',
-    },
-  }), 88); // exigence plus haute : ces enchaînements sont fréquents
+  return rankBuckets(buckets, (b, suit, rate) => {
+    const triggerPosTxt = posLabel(b.triggerPos) ? ` (${posLabel(b.triggerPos)})` : '';
+    const targetPos = dominantPosLabel(b, suit);
+    const targetPosTxt = targetPos ? ` en ${targetPos}` : '';
+    return {
+      kind: 'chaine',
+      finding: `${b.token}${triggerPosTxt} dans la main du joueur est suivi de ${suit}${targetPosTxt} au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
+      proposal: {
+        name: `Chaîne ${b.token}${triggerPosTxt} → ${suit}${targetPosTxt} (a+${b.k})`,
+        logic: `Après ${b.token}${triggerPosTxt} côté joueur, prédire ${suit}${targetPosTxt} au jeu a+${b.k}.`,
+        trigger: `${b.token}${triggerPosTxt} vu côté joueur`,
+        target: `jeu a+${b.k}`,
+        position: targetPos,
+        suggestedLead: b.k,
+        minimumSample: 25,
+        evidence: `${b.hits[suit]} confirmations sur ${b.support} observations${targetPosTxt ? `, majoritairement${targetPosTxt}` : ''}.`,
+        risks: 'Un enchaînement de costumes peut se casser sans prévenir : garder les rattrapages.',
+        compatibleExisting: 'costume',
+      },
+    };
+  }, 88); // exigence plus haute : ces enchaînements sont fréquents
 }
 
 function rankBuckets(buckets, build, minRate = MIN_RATE) {

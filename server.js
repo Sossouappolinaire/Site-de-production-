@@ -997,7 +997,7 @@ app.post('/api/after-loss/scan', async (req, res) => {
 app.post('/api/after-loss/trackers', async (req, res) => {
   try {
     const key = req.body && req.body.key;
-    const t = afterLoss.addTracker(key, req.body && req.body.lossThreshold);
+    const t = afterLoss.addTracker(key, req.body && req.body.triggers, req.body && req.body.repeat);
     // la stratégie suivie a été activée automatiquement par addTracker() —
     // on persiste ce changement comme le fait la route /api/strategies/:key,
     // sinon l'activation ne survit pas à un redémarrage/redéploiement.
@@ -1010,14 +1010,27 @@ app.post('/api/after-loss/trackers', async (req, res) => {
 });
 
 app.put('/api/after-loss/trackers/:id', (req, res) => {
-  const t = afterLoss.updateTracker(req.params.id, req.body || {});
-  if (!t) return res.status(404).json({ error: 'Stratégie suivie introuvable' });
-  res.json({ ok: true, tracker: t, afterLoss: afterLoss.status() });
+  try {
+    const t = afterLoss.updateTracker(req.params.id, req.body || {});
+    if (!t) return res.status(404).json({ error: 'Stratégie suivie introuvable' });
+    res.json({ ok: true, tracker: t, afterLoss: afterLoss.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.delete('/api/after-loss/trackers/:id', (req, res) => {
   afterLoss.removeTracker(req.params.id);
   res.json(afterLoss.status());
+});
+
+// Optimisation IA : teste chaque déclencheur (rattrapage 1/2/3, perdue) x
+// chaque N sur l'historique réel de la stratégie suivie, et fait expliquer
+// par l'IA la combinaison la plus performante observée (pas une garantie
+// de 100% futur — voir commentaire dans after-loss.js).
+app.post('/api/after-loss/trackers/:id/optimize', async (req, res) => {
+  try {
+    const result = await afterLoss.optimizeTracker(req.params.id);
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // --- diagnostic complet des envois de prédictions ---------------------------

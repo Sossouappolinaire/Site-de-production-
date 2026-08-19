@@ -8,6 +8,19 @@ const miner = require('./pattern-miner');
 
 const MAX_GAMES = 120;
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
+// Libellés de position pour décrire une main avec précision : l'index 0 du
+// tableau playerSuits/bankerSuits est la 1ère carte reçue, l'index 1 la 2e,
+// l'index 2 la 3e (main à 3 cartes). Exemple : ❤️♦️♣️ → ❤️ = 1ère position,
+// ♦️ = 2e position, ♣️ = 3e position.
+const POSITION_LABELS = ['1ère position', '2e position', '3e position'];
+
+// Décrit une main (tableau de costumes) en rattachant explicitement chaque
+// costume à sa position, ex. "❤️ (1ère position), ♦️ (2e position)".
+function describeHandPositions(suits = []) {
+  return (suits || [])
+    .map((s, i) => `${s} (${POSITION_LABELS[i] || `${i + 1}e position`})`)
+    .join(', ');
+}
 
 // clé utilisable à chaud (page Analyseur IA) sinon variable d'environnement
 let runtimeKey = '';
@@ -232,6 +245,8 @@ function compactGame(game) {
     banker: game.banker || game.banker_cards || [],
     playerSuits: game.playerSuits || game.player_suits || [],
     bankerSuits: game.bankerSuits || game.banker_suits || [],
+    playerSuitsPositions: describeHandPositions(game.playerSuits || game.player_suits || []),
+    bankerSuitsPositions: describeHandPositions(game.bankerSuits || game.banker_suits || []),
     playerValue: game.playerValue ?? game.player_value ?? null,
     bankerValue: game.bankerValue ?? game.banker_value ?? null,
     winner: game.winner || null,
@@ -346,6 +361,38 @@ function localAnalysis(rawGames = [], options = {}) {
             compatibleExisting: 'absente',
           });
         }
+      }
+    }
+  }
+
+  // 1bis) dominance d'un costume à une position précise de la main joueur
+  // (ex : ♦️ domine spécifiquement la 2e position, pas la main en général).
+  // C'est ce que l'utilisateur appelle « position 2 » vs « position 3 ».
+  const posRecent = games.slice(0, Math.min(30, games.length));
+  for (let posIdx = 0; posIdx < 3; posIdx += 1) {
+    const label = POSITION_LABELS[posIdx];
+    const atPos = posRecent.filter((g) => (g.playerSuits || [])[posIdx]);
+    if (atPos.length < 15) continue; // pas assez de mains à 3 cartes observées
+    const counts = Object.fromEntries(SUITS.map((s) => [s, atPos.filter((g) => g.playerSuits[posIdx] === s).length]));
+    const top = SUITS.slice().sort((a, b) => counts[b] - counts[a])[0];
+    const topRate = pct(counts[top], atPos.length);
+    if (topRate >= 55) {
+      findings.push(`En ${label} de la main du joueur, ${top} domine : ${topRate}% des ${atPos.length} mains à 3 cartes récentes (ex. main ${describeHandPositions(atPos[0].playerSuits)}).`);
+      if (atPos.length >= 20) {
+        proposals.push({
+          name: `Dominance de ${top} en ${label}`,
+          logic: `Tant que ${top} reste au-dessus de 55% en ${label} du joueur sur les mains à 3 cartes récentes, jouer ${top} pour cette position.`,
+          trigger: `${top} vu dans ${topRate}% des mains à 3 cartes en ${label}`,
+          target: `prochaine main à 3 cartes, ${label}`,
+          suggestedLead: 2,
+          minimumSample: 20,
+          rate: topRate,
+          support: atPos.length,
+          evidence: `${counts[top]} occurrences de ${top} en ${label} sur ${atPos.length} mains à 3 cartes observées.`,
+          risks: 'Le tirage reste indépendant : une dominance de position peut disparaître sans préavis. À tester en mode silencieux.',
+          compatibleExisting: 'costume',
+          position: posIdx + 1,
+        });
       }
     }
   }
@@ -483,6 +530,9 @@ async function analyze({ games = [], date = null, objective = '', pastDays = [] 
     'Tu dois analyser uniquement les observations fournies et ne jamais promettre une prédiction fiable ou certaine.',
     'Les cartes de la main joueur sont la seule base de vérification des stratégies; la main banquier sert aux comparaisons et au contexte.',
     'Ne te limite JAMAIS aux stratégies déjà existantes : cherche de NOUVELLES régularités.',
+    "Précision obligatoire : chaque fois que tu mentionnes un costume dans 'logic', 'trigger', 'evidence' ou 'observation', indique aussi sa position exacte dans la main (1ère, 2e ou 3e position), jamais juste « le costume est présent ». " +
+    "Exemple : pour une main ❤️♦️♣️, dis « ❤️ en 1ère position, ♦️ en 2e position, ♣️ en 3e position », pas seulement « ❤️♦️♣️ présents ». " +
+    "Le champ playerSuitsPositions/bankerSuitsPositions de chaque jeu te donne déjà cette description position par position : réutilise-la.",
     'Exemples de ce que tu dois chercher : « quand le joueur ou le banquier a eu 6❤️ au jeu a, ♣️ arrive au jeu a+2 », « la partie du 20/08/2026 se rejoue aujourd\'hui », « telle séquence de vainqueurs annonce le suivant », « il faut remplacer le costume prédit par un autre quand le déclencheur est vu ».',
     'Cherche des fréquences, séries, absences, distributions, décalages (a+1, a+2, a+3), répétitions de journées et signaux de sur-ajustement.',
     'Une stratégie proposée doit être testable, réversible, limitée à un échantillon minimum et accompagnée de ses risques.',
@@ -503,12 +553,13 @@ async function analyze({ games = [], date = null, objective = '', pastDays = [] 
       observation: 'résumé factuel',
       strategies: [{
         name: 'nom',
-        logic: 'règle testable en une phrase',
-        trigger: 'déclencheur',
+        logic: 'règle testable en une phrase, position du costume précisée (1ère/2e/3e)',
+        trigger: 'déclencheur, avec la position exacte du costume dans la main',
         target: 'tour ou condition ciblée',
+        position: '1ère position|2e position|3e position|null (si la règle ne porte pas sur une position précise)',
         suggestedLead: 1,
         minimumSample: 20,
-        evidence: 'ce que les données montrent',
+        evidence: 'ce que les données montrent, position du costume incluse',
         risks: 'risques et limites',
         compatibleExisting: 'costume|dominant|matchnul|parite|absente|ombre|null',
       }],
