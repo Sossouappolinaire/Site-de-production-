@@ -28,6 +28,7 @@ state.botToken = saved.botToken || config.BOT_TOKEN || '';
 state.adminId = saved.adminId || config.ADMIN_ID;
 if (Array.isArray(saved.channels)) state.channels = saved.channels;
 if (Array.isArray(saved.activeChannels)) state.activeChannels = saved.activeChannels;
+if (Array.isArray(saved.siteChannels)) state.siteChannels = saved.siteChannels;
 if (saved.B) state.B = saved.B;
 if (saved.maxR != null) state.maxR = saved.maxR;
 state.hand = 'joueur';
@@ -67,6 +68,7 @@ function persist() {
     adminId: state.adminId,
     channels: state.channels,
     activeChannels: state.activeChannels,
+    siteChannels: state.siteChannels,
     B: state.B,
     maxR: state.maxR,
     hand: 'joueur',
@@ -84,12 +86,14 @@ function persist() {
       adminId: state.adminId || 0,
       channels: state.channels || [],
       activeChannels: state.activeChannels || [],
+      siteChannels: state.siteChannels || [],
       B: state.B,
       maxR: state.maxR,
       format: state.format,
       template: state.template || '',
       savedAt: new Date().toISOString(),
     });
+    db.setSetting('site_channels', JSON.stringify(state.siteChannels || []));
     db.setSetting('B', state.B);
     db.setSetting('maxR', state.maxR);
     db.setSetting('format', state.format);
@@ -1502,6 +1506,18 @@ async function applyDbConfigs() {
     }
     if (Array.isArray(app.activeChannels) && app.activeChannels.length) {
       state.activeChannels = app.activeChannels; restored.push('canaux actifs');
+    }
+    if (Array.isArray(app.siteChannels) && app.siteChannels.length) {
+      state.siteChannels = app.siteChannels; restored.push('canaux du site');
+    }
+  }
+  if (!state.siteChannels.length) {
+    const rawSiteChannels = await db.getSetting('site_channels');
+    if (rawSiteChannels) {
+      try {
+        const parsed = JSON.parse(rawSiteChannels);
+        if (Array.isArray(parsed) && parsed.length) { state.siteChannels = parsed; restored.push('canaux du site'); }
+      } catch (_) { /* ignore */ }
     }
   }
   const rows = await db.loadStrategies();

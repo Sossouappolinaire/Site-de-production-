@@ -476,7 +476,74 @@ const ombre = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, ombre];
+// ---------------------------------------------------------------------------
+// 7) Prédiction dans l'ombre (Joueur) — retour d'un costume sur la main du
+//    JOUEUR UNIQUEMENT (le banquier n'entre jamais en compte, contrairement à
+//    la stratégie « ombre » qui peut surveiller les deux mains).
+// ---------------------------------------------------------------------------
+// Règle : on surveille en silence les 4 costumes de la main du JOUEUR. Dès
+// qu'un costume est absent de la main du joueur pendant AU MOINS `absence`
+// jeux consécutifs (4 par défaut), il passe en état « surveillé ». Aucune
+// prédiction n'est émise pendant l'absence : le bot attend son RETOUR sur la
+// main du joueur, aussi longtemps qu'il faut. Le jeu où il RÉAPPARAÎT devient
+// le déclencheur : on prédit ce même costume au jeu déclencheur + `lead`
+// (4 par défaut), vérifié sur la main du joueur + rattrapages configurés.
+//   ❤️ absent (joueur) aux jeux 1-2-3-4 → rien … ❤️ revient au jeu 8 →
+//   prédiction ❤️ sur le jeu 12 (8 + 4).
+const ombreJoueur = {
+  key: 'ombreJoueur',
+  name: "Prédiction dans l'ombre (Joueur)",
+  about:
+    "Surveillance silencieuse des 4 costumes de la main du JOUEUR uniquement " +
+    "(le banquier n'est jamais pris en compte). Un costume absent de la main " +
+    "du joueur pendant au moins 4 jeux consécutifs (réglable) est mis sous " +
+    "surveillance. Aucune prédiction n'est émise pendant l'absence : le bot " +
+    "attend son RETOUR sur la main du joueur, aussi longtemps qu'il faut. Le " +
+    "jeu du retour devient le déclencheur et le même costume est prédit au " +
+    "jeu +4 (réglable). Exemple : ❤️ absent de la main du joueur aux jeux 1 à " +
+    "4, retour au jeu 8 → prédiction ❤️ sur le jeu 12.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 4,
+    absence: 4,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const games = (ctx && ctx.games) || new Map();
+    const need = Math.max(1, Math.min(30, parseInt(cfg && cfg.absence, 10) || 4));
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 4));
+    const scope = 'joueur'; // fixe : uniquement la main du joueur, jamais le banquier
+    const present = SUITS.filter((s) => suitPresent(game, s, scope));
+    if (!present.length) return null;
+    let best = null;
+    for (const suit of present) {
+      const gap = absenceBefore(games, game.number, suit, scope);
+      if (gap >= need && (!best || gap > best.gap)) best = { suit, gap };
+    }
+    if (!best) return null;
+    return {
+      kind: 'suit',
+      target: game.number + lead,
+      suit: best.suit,
+      label: best.suit,
+      trigger: game.number,
+      reason:
+        `${best.suit} absent de la main du JOUEUR pendant ${best.gap} jeux consécutifs ` +
+        `(#N${game.number - best.gap} → #N${game.number - 1}), retour au jeu ` +
+        `#N${game.number} → prédiction ${best.suit} sur #N${game.number + lead} (+${lead})`,
+      meta: { absence: best.gap, need, lead, scope, returnedAt: game.number },
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, ombre, ombreJoueur];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

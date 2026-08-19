@@ -42,6 +42,7 @@ const state = {
   freshFinished: [],       // tours terminés depuis la dernière évaluation
   startedAt: Date.now(),
   announcements: [],       // historique des annonces de position (filtre « double perte »)
+  siteChannels: [],        // canaux « vitrine » du site (voir section dédiée plus bas)
 };
 
 // ---------------------------------------------------------------------------
@@ -1490,6 +1491,83 @@ function predictionRow(p) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// « Canaux » du site — vitrines internes (aucun lien avec Telegram) : un
+// administrateur crée un canal avec un nom et l'associe à UNE stratégie ; les
+// utilisateurs le voient dans la liste « Canaux » du site et, en l'ouvrant,
+// retrouvent le fil des prédictions de cette stratégie mis en forme EXACTEMENT
+// comme les messages envoyés sur Telegram (même texte, via predictionMessage),
+// précédé du bilan courant de la stratégie (même carte que /bilan Telegram).
+// ---------------------------------------------------------------------------
+let siteChannelSeq = Date.now();
+
+function siteChannelsView() {
+  return state.siteChannels.map((c) => {
+    const def = strategies.BY_KEY[c.strategy];
+    const preds = state.predictions.filter((p) => p.strategy === c.strategy && p.messages && p.messages.length);
+    const last = preds[preds.length - 1] || null;
+    const s = stats(c.strategy);
+    return {
+      id: c.id,
+      name: c.name,
+      strategy: c.strategy,
+      strategyName: def ? def.name : c.strategy,
+      lastText: last ? predictionMessage(last) : null,
+      lastAt: last ? last.sentAt : null,
+      lastStatus: last ? last.status : null,
+      stats: s,
+    };
+  });
+}
+
+function addSiteChannel(name, strategyKey) {
+  const clean = String(name || '').trim();
+  if (!clean) return { ok: false, error: 'Nom du canal requis.' };
+  const def = strategies.BY_KEY[strategyKey];
+  if (!def) return { ok: false, error: 'Stratégie invalide.' };
+  const entry = { id: ++siteChannelSeq, name: clean, strategy: strategyKey };
+  state.siteChannels.push(entry);
+  return { ok: true, channel: entry };
+}
+
+function removeSiteChannel(id) {
+  const idx = state.siteChannels.findIndex((c) => String(c.id) === String(id));
+  if (idx === -1) return { ok: false, error: 'Canal introuvable.' };
+  state.siteChannels.splice(idx, 1);
+  return { ok: true };
+}
+
+// fil affiché à l'ouverture d'un canal : bilan de la stratégie + prédictions
+// réellement publiées (celles qui sont réellement parties dans un canal
+// Telegram, `messages.length`), du plus ancien au plus récent — comme un fil
+// de discussion. `limit` borne le nombre de cartes de prédiction renvoyées.
+function siteChannelFeed(id, limit = 30) {
+  const c = state.siteChannels.find((x) => String(x.id) === String(id));
+  if (!c) return null;
+  const def = strategies.BY_KEY[c.strategy];
+  const items = state.predictions
+    .filter((p) => p.strategy === c.strategy && p.status !== 'en attente' && p.messages && p.messages.length)
+    .sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0))
+    .slice(-Math.max(1, Math.min(100, limit)))
+    .map((p) => ({
+      key: `${p.target}-${p.sentAt || 0}`,
+      target: p.target,
+      status: p.status,
+      step: p.step,
+      text: predictionMessage(p),
+      at: p.sentAt || null,
+    }));
+  return {
+    id: c.id,
+    name: c.name,
+    strategy: c.strategy,
+    strategyName: def ? def.name : c.strategy,
+    bilan: bilanText(c.strategy),
+    stats: stats(c.strategy),
+    items,
+  };
+}
+
 function predictionsPanel(limit = 60) {
   const all = state.predictions.map(predictionRow);
   const byStrategy = {};
@@ -1523,6 +1601,10 @@ module.exports = {
   SUITS,
   predictionRow,
   predictionsPanel,
+  siteChannelsView,
+  addSiteChannel,
+  removeSiteChannel,
+  siteChannelFeed,
   evaluate,
   verify,
   registerGames,

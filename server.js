@@ -25,7 +25,7 @@ const {
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
   strategyGames, bilanText, gameCategories, gateView, shadowRuntime,
   predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock,
-  announcementsFor,
+  announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, siteChannelFeed,
 } = require('./predictor');
 const { startLoop, startBot, botStatus, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
 
@@ -340,6 +340,41 @@ app.post('/api/channels/main', async (req, res) => {
 app.post('/api/channels/deactivate', (req, res) => {
   deactivate(parseInt(req.body.id, 10));
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// « Canaux » du site — vitrines internes (indépendantes de Telegram) : un
+// canal = un nom + une stratégie. Visible par tous les comptes connectés
+// (lecture seule pour un compte « user », déjà garanti par le middleware
+// ci-dessus : seul un GET passe pour ce rôle) ; création/suppression
+// réservées à l'administrateur.
+// ---------------------------------------------------------------------------
+app.get('/api/canaux', (req, res) => {
+  res.json({ channels: siteChannelsView() });
+});
+
+app.post('/api/canaux', (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const r = addSiteChannel(req.body && req.body.name, req.body && req.body.strategy);
+  if (!r.ok) return res.status(400).json(r);
+  persist();
+  res.json(r);
+});
+
+app.delete('/api/canaux/:id', (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const r = removeSiteChannel(req.params.id);
+  if (!r.ok) return res.status(404).json(r);
+  persist();
+  res.json(r);
+});
+
+// fil d'un canal : bilan de la stratégie + prédictions déjà publiées, dans
+// l'ordre chronologique — exactement le rendu Telegram (même texte).
+app.get('/api/canaux/:id', (req, res) => {
+  const feed = siteChannelFeed(req.params.id, Math.min(100, parseInt(req.query.limit, 10) || 30));
+  if (!feed) return res.status(404).json({ error: 'Canal introuvable.' });
+  res.json(feed);
 });
 
 app.post('/api/setb', (req, res) => {
