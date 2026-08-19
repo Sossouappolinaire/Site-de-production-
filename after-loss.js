@@ -379,7 +379,7 @@ function adviceForTracker(tracker) {
 // ---------------------------------------------------------------------------
 // Relais Telegram
 // ---------------------------------------------------------------------------
-function relayText(tracker, pred, advice) {
+function relayText(tracker, pred) {
   const out = fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: pred.target,
     suit: pred.suit,
@@ -388,7 +388,9 @@ function relayText(tracker, pred, advice) {
     status: 'en attente',
     rattrapage: 0,
   }, null);
-  if (advice) out.text = `${out.text}\n\n${advice}`;
+  // Le conseil (adviceForTracker) n'est plus ajouté aux messages de
+  // prédiction envoyés sur Telegram — il reste disponible ailleurs
+  // (panneau/API) si besoin, mais ne doit jamais polluer le relais.
   return out;
 }
 
@@ -397,8 +399,7 @@ async function forward(tracker, pred) {
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   const targetChannels = effectiveChannels(tracker);
   if (!targetChannels.length) { panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni propre à la stratégie, ni sur le panneau)`; return false; }
-  const advice = adviceForTracker(tracker);
-  const out = relayText(tracker, pred, advice);
+  const out = relayText(tracker, pred);
   let ok = false;
   const errors = [];
   for (const id of targetChannels) {
@@ -513,7 +514,7 @@ function adviceForRepeat(tracker, lead) {
   return `${base} Résultat passé sans tendance nette — laisser l'échantillon grandir avant de conclure.`;
 }
 
-async function forwardRepeat(tracker, synth, advice) {
+async function forwardRepeat(tracker, synth) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   const targetChannels = effectiveChannels(tracker);
@@ -526,7 +527,7 @@ async function forwardRepeat(tracker, synth, advice) {
     status: 'en attente',
     rattrapage: 0,
   }, null);
-  if (advice) out.text = `${out.text}\n\n${advice}`;
+  // Idem : plus de conseil ajouté au message de prédiction envoyé.
   let ok = false;
   const errors = [];
   for (const id of targetChannels) {
@@ -569,8 +570,7 @@ async function processRepeat(tracker) {
     if (pred.status !== 'perdu' || !pred.suit) continue;
     const lead = tracker.repeat.lead;
     const synth = { target: pred.target + lead, suit: pred.suit };
-    const advice = adviceForRepeat(tracker, lead);
-    await forwardRepeat(tracker, synth, advice);
+    await forwardRepeat(tracker, synth);
   }
 }
 
