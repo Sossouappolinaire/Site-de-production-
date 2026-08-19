@@ -86,52 +86,89 @@
   }
   .telegram-link:hover { background: #1c8bc0; }
 
-  /* ── Écran d'intro animé (avant connexion) : chargement puis image ──── */
+  /* ── Écran d'intro « combat » animé (5 s), avant la page de connexion ──── */
   #splash {
     position: fixed; inset: 0; z-index: 999;
     background: #05070d;
     display: flex; align-items: center; justify-content: center;
-    cursor: pointer;
+    cursor: pointer; overflow: hidden;
   }
   #splash.leaving { animation: splashOut 700ms ease forwards; }
-
-  /* étape 1 : barre de progression orange (simule un téléchargement) */
-  #loadStage {
-    display: flex; flex-direction: column; align-items: center; gap: 16px;
-    width: 240px; transition: opacity 350ms ease;
+  .fight-intro { position: relative; width: 100%; height: 100%; overflow: hidden;
+    background: radial-gradient(ellipse at center, #2a0a0a 0%, #0a0505 55%, #05070d 100%); }
+  .arena-glow { position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(255,90,30,.35), transparent 60%);
+    animation: arenaGlow 5000ms ease-in-out both; }
+  .fighter { position: absolute; top: 50%; left: 50%; font-size: 88px; line-height: 1;
+    filter: drop-shadow(0 0 18px rgba(0,0,0,.6)); animation-duration: 5000ms; animation-fill-mode: both; animation-timing-function: ease-in-out; }
+  .fighter-left { animation-name: fighterLeftIn; }
+  .fighter-right { animation-name: fighterRightIn; transform: scaleX(-1); }
+  .vs-text { position: absolute; top: 50%; left: 50%; font-size: 52px; font-weight: 900; letter-spacing: .05em;
+    background: linear-gradient(180deg,#ffe38a,#ff7a00); -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 26px rgba(255,138,0,.55); animation: vsIn 5000ms ease-in-out both; }
+  .impact-burst { position: absolute; top: 50%; left: 50%; font-size: 120px; animation: impactBurst 5000ms ease-in-out both; }
+  .combat-stamp { position: absolute; top: 50%; left: 50%; font-size: 54px; font-weight: 900; text-transform: uppercase;
+    letter-spacing: .06em; color: #ff3b3b; text-shadow: 0 0 18px rgba(255,59,59,.7), 0 0 40px rgba(255,59,59,.35);
+    animation: combatStamp 5000ms ease-in-out both; }
+  .intro-brand { position: absolute; top: 50%; left: 50%; text-align: center; animation: introBrand 5000ms ease-in-out both; }
+  .intro-brand b { display: block; font-size: 30px; font-weight: 900; letter-spacing: .08em; color: #fff; }
+  .intro-brand span { display: block; margin-top: 4px; font-size: 12px; letter-spacing: .18em; color: #ffb347; text-transform: uppercase; }
+  .flash-overlay { position: absolute; inset: 0; background: #fff; opacity: 0; animation: flashPulse 5000ms ease-in-out both; }
+  .skip-hint { position: absolute; bottom: 26px; left: 0; right: 0; text-align: center; color: #cfd4e2; font-size: 12px;
+    letter-spacing: .04em; opacity: 0; animation: skipHintIn 5000ms ease-in-out both; }
+  @keyframes arenaGlow { 0% { opacity: .25; } 50% { opacity: .6; } 100% { opacity: .4; } }
+  @keyframes fighterLeftIn {
+    0%   { transform: translate(-170%, -50%) rotate(-18deg); opacity: 0; }
+    8%   { opacity: 1; }
+    16%  { transform: translate(-58%, -50%) rotate(-8deg); opacity: 1; }
+    38%  { transform: translate(-58%, -50%) rotate(-8deg); opacity: 1; }
+    46%  { transform: translate(-8%, -50%) rotate(6deg) scale(1.15); opacity: 1; }
+    50%  { transform: translate(-32%, -50%) rotate(-22deg) scale(.85); opacity: 0; }
+    100% { opacity: 0; }
   }
-  #loadStage.hidden-stage { opacity: 0; pointer-events: none; position: absolute; }
-  .bar-track {
-    width: 100%; height: 8px; border-radius: 999px; background: rgba(255,255,255,.12);
-    overflow: hidden;
+  @keyframes fighterRightIn {
+    0%   { transform: translate(70%, -50%) scaleX(-1) rotate(18deg); opacity: 0; }
+    8%   { opacity: 1; }
+    16%  { transform: translate(-42%, -50%) scaleX(-1) rotate(8deg); opacity: 1; }
+    38%  { transform: translate(-42%, -50%) scaleX(-1) rotate(8deg); opacity: 1; }
+    46%  { transform: translate(-92%, -50%) scaleX(-1) rotate(-6deg) scale(1.15); opacity: 1; }
+    50%  { transform: translate(-68%, -50%) scaleX(-1) rotate(22deg) scale(.85); opacity: 0; }
+    100% { opacity: 0; }
   }
-  .bar-fill {
-    height: 100%; width: 0%; border-radius: 999px;
-    background: linear-gradient(90deg, #ff7a00, #ffb347);
-    box-shadow: 0 0 14px rgba(255,138,0,.6);
+  @keyframes vsIn {
+    0%, 14% { opacity: 0; transform: translate(-50%, -50%) scale(.2); }
+    18%  { opacity: 1; transform: translate(-50%, -50%) scale(1.25); }
+    22%  { transform: translate(-50%, -50%) scale(1); }
+    36%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    40%  { opacity: 0; transform: translate(-50%, -50%) scale(.6); }
+    100% { opacity: 0; }
   }
-  .bar-fill.done { background: linear-gradient(90deg, #35e08a, #6bf0ac); box-shadow: 0 0 14px rgba(53,224,138,.55); }
-  #loadPct { font-size: 15px; color: #cfd4e2; letter-spacing: .03em; font-variant-numeric: tabular-nums; }
-  #loadLabel { font-size: 12px; color: #7c8398; letter-spacing: .05em; text-transform: uppercase; }
-
-  /* étape 2 : l'image, révélée une fois le "téléchargement" terminé */
-  #imgStage { position: absolute; inset: 0; opacity: 0; transition: opacity 500ms ease; }
-  #imgStage.visible { opacity: 1; }
-  #imgStage img {
-    width: 100%; height: 100%; object-fit: cover;
-    animation: splashZoom 2600ms ease-out forwards;
+  @keyframes impactBurst {
+    0%, 44% { opacity: 0; transform: translate(-50%, -50%) scale(.2); }
+    46%  { opacity: 1; transform: translate(-50%, -50%) scale(1.5); }
+    52%  { opacity: 0; transform: translate(-50%, -50%) scale(2.3); }
+    100% { opacity: 0; }
   }
-  #imgStage .tap {
-    position: absolute; bottom: 26px; left: 0; right: 0; text-align: center;
-    color: #cfd4e2; font-size: 12px; letter-spacing: .04em;
-    opacity: 0; animation: tapFade 900ms ease forwards; animation-delay: 500ms;
+  @keyframes flashPulse {
+    0% { opacity: 0; } 15% { opacity: .4; } 17% { opacity: 0; }
+    33% { opacity: 0; } 35% { opacity: .8; } 38% { opacity: 0; }
+    45% { opacity: 0; } 47% { opacity: 1; } 53% { opacity: 0; }
+    100% { opacity: 0; }
   }
-  @keyframes splashZoom {
-    0%   { transform: scale(1.08); filter: brightness(.55) saturate(1.05); }
-    60%  { transform: scale(1.02); filter: brightness(1) saturate(1.05); }
-    100% { transform: scale(1);    filter: brightness(1) saturate(1.05); }
+  @keyframes combatStamp {
+    0%, 52% { opacity: 0; transform: translate(-50%, -50%) scale(3) rotate(-10deg); }
+    54%  { opacity: 1; transform: translate(-50%, -50%) scale(1.05) rotate(-6deg); }
+    58%  { transform: translate(-50%, -50%) scale(1) rotate(-6deg); }
+    72%  { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-6deg); }
+    76%  { opacity: 0; transform: translate(-50%, -50%) scale(1.3) rotate(-6deg); }
+    100% { opacity: 0; }
   }
-  @keyframes tapFade { from { opacity: 0; } to { opacity: .75; } }
+  @keyframes introBrand {
+    0%, 76% { opacity: 0; transform: translate(-50%, -50%) translateY(14px) scale(.92); }
+    80%  { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
+    100% { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
+  }
+  @keyframes skipHintIn { 0%, 88% { opacity: 0; } 100% { opacity: .7; } }
   @keyframes splashOut {
     to { opacity: 0; visibility: hidden; pointer-events: none; }
   }
@@ -140,14 +177,16 @@
 </head>
 <body class="no-scroll">
   <div id="splash" onclick="closeSplash()">
-    <div id="loadStage">
-      <div class="bar-track"><div class="bar-fill" id="barFillEl"></div></div>
-      <div id="loadPct">0 %</div>
-      <div id="loadLabel">Téléchargement…</div>
-    </div>
-    <div id="imgStage">
-      <img src="/splash.jpg" alt="1XBET + Baccara + IA">
-      <div class="tap">Touchez pour continuer</div>
+    <div class="fight-intro">
+      <div class="arena-glow"></div>
+      <div class="fighter fighter-left">🥊</div>
+      <div class="fighter fighter-right">🥊</div>
+      <div class="vs-text">VS</div>
+      <div class="impact-burst">💥</div>
+      <div class="combat-stamp">COMBAT</div>
+      <div class="intro-brand"><b>BACCARA</b><span>Control Room</span></div>
+      <div class="flash-overlay"></div>
+      <div class="skip-hint">Touchez pour continuer</div>
     </div>
   </div>
 
@@ -208,8 +247,8 @@
 <script>
 let pendingEmail = '';
 
-// écran d'intro : rotation + pourcentage (« téléchargement »), puis image,
-// puis fermeture (au clic, ou automatiquement).
+// écran d'intro « combat » de 5 secondes (animation CSS), puis fermeture
+// (au clic, ou automatiquement une fois l'intro terminée).
 function closeSplash() {
   const s = document.getElementById('splash');
   if (!s) return;
@@ -224,35 +263,7 @@ function closeSplash() {
 (function () {
   const s = document.getElementById('splash');
   if (!s) return;
-  const pctEl = document.getElementById('loadPct');
-  const labelEl = document.getElementById('loadLabel');
-  const barFillEl = document.getElementById('barFillEl');
-  const loadStage = document.getElementById('loadStage');
-  const imgStage = document.getElementById('imgStage');
-
-  const DURATION = 1600; // durée du "téléchargement" (ms)
-  const start = performance.now();
-
-  function tick(now) {
-    const pct = Math.min(100, Math.round(((now - start) / DURATION) * 100));
-    pctEl.textContent = pct + ' %';
-    barFillEl.style.width = pct + '%';
-    if (pct < 100) {
-      requestAnimationFrame(tick);
-    } else {
-      // téléchargement terminé : barre verte, puis on révèle l'image
-      barFillEl.classList.add('done');
-      labelEl.textContent = 'Terminé ✓';
-      setTimeout(() => {
-        loadStage.classList.add('hidden-stage');
-        imgStage.classList.add('visible');
-        setTimeout(closeSplash, 2600); // temps d'affichage de l'image avant fermeture
-      }, 450);
-    }
-  }
-  requestAnimationFrame(tick);
-
-  setTimeout(closeSplash, 6500); // filet de sécurité si l'animation ne se déclenche pas
+  setTimeout(closeSplash, 5000); // durée fixe de l'intro combat
 })();
 
 function showView(name) {
