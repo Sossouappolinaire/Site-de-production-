@@ -204,6 +204,9 @@
     .tg-share { flex: 0 0 30px; width: 30px; height: 30px; border-radius: 50%; background: rgba(0,0,0,.18); display: grid; place-items: center; color: #fff; font-size: 13px; align-self: flex-end; margin-bottom: 2px; }
     .tg-inputbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #ffffff; color: #9aa3ad; }
     .tg-inputbar .tg-input { flex: 1; background: #eef1f4; border-radius: 20px; padding: 9px 14px; font-size: 13px; color: #9aa3ad; }
+    .tg-inputbar input.tg-input-real { flex: 1; background: #eef1f4; border: none; outline: none; border-radius: 20px; padding: 9px 14px; font-size: 13px; color: #1a2330; }
+    .tg-inputbar .tg-send { width: 34px; height: 34px; border-radius: 50%; background: #3390ec; border: none; display: grid; place-items: center; color: #fff; flex: 0 0 34px; cursor: pointer; font-size: 14px; }
+    .tg-inputbar .tg-send:disabled { opacity: .6; cursor: default; }
     .tg-inputbar .tg-mic { width: 34px; height: 34px; border-radius: 50%; background: #3390ec; display: grid; place-items: center; color: #fff; flex: 0 0 34px; }
     footer { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
     @media (max-width: 820px) {
@@ -1180,7 +1183,7 @@ Faites-en bon usage !
       const items = feed.items || [];
       return [
         tgBubble(feed.strategyName || feed.name, feed.bilan, { bilan: true, time: formatTime(Date.now()) }),
-        ...items.map(it => tgBubble(feed.name, it.text, { time: formatTime(it.at) })),
+        ...items.map(it => tgBubble(it.sender || feed.name, it.text, { time: formatTime(it.at) })),
       ].join('');
     }
 
@@ -1211,10 +1214,32 @@ Faites-en bon usage !
             <div class="tg-topbar-dots">⋯</div>
           </div>
           <div class="tg-body"><div id="canalFeed" class="tg-feed">${bubbles}</div></div>
-          <div class="tg-inputbar"><span>😊</span><span class="tg-input">Diffusion</span><span>🔔</span><span>📎</span><span class="tg-mic">🎤</span></div>
+          <div class="tg-inputbar">
+            <input id="canalMsgInput" class="tg-input-real" placeholder="Écrire un message…" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();sendCanalMessage('${id}')}">
+            <button class="tg-send" id="canalSendBtn" onclick="sendCanalMessage('${id}')" title="Envoyer">➤</button>
+          </div>
         </div>
-        <p class="small muted" style="text-align:center;margin-top:12px">Aperçu en direct — se met à jour toutes les 6 secondes.</p>`;
+        <p class="small muted" style="text-align:center;margin-top:12px">Écris un message : l'IA (Bak Sossou IA) te répond directement dans le fil — visible par tous.</p>`;
       return feed;
+    }
+
+    async function sendCanalMessage(id) {
+      const input = $('#canalMsgInput');
+      const btn = $('#canalSendBtn');
+      const text = (input && input.value || '').trim();
+      if (!text) return;
+      if (input) input.value = '';
+      if (btn) btn.disabled = true;
+      try {
+        const feed = await api(`/api/canaux/${id}/message`, 'POST', { text });
+        const wrap = $('#canalFeed');
+        if (wrap) { wrap.innerHTML = renderCanalBubbles(feed); wrap.scrollTop = wrap.scrollHeight; }
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+        if (input) input.focus();
+      }
     }
 
     async function announcementsPage() {
