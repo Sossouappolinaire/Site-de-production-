@@ -34,7 +34,7 @@ const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
-const { state, setStrategyConfig } = require('./predictor');
+const { state, setStrategyConfig, hasSuit, parityOf } = require('./predictor');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
 
@@ -51,6 +51,11 @@ const panel = {
   //               lastSeenTarget, sentCount, lastSentAt, createdAt }]
   trackers: [],
   history: [],    // journal des relais envoyés (les 100 derniers)
+  // CORRECTIF « prédictions non vérifiées » : chaque message relayé (forward
+  // et forwardRepeat) est désormais mémorisé ici avec son chatId/messageId
+  // Telegram, pour pouvoir être revérifié comme une prédiction normale (voir
+  // verifyPending) et édité avec le vrai résultat (✅/❌) une fois connu.
+  pendingMessages: [],
   sentCount: 0,
   lastSentAt: null,
   lastScanAt: null,
@@ -188,6 +193,7 @@ function persist() {
     config: config(),
     trackers: panel.trackers,
     history: panel.history,
+    pendingMessages: panel.pendingMessages,
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -246,6 +252,7 @@ function applySaved(saved) {
     }));
   }
   if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
+  if (Array.isArray(saved.pendingMessages)) panel.pendingMessages = saved.pendingMessages.slice(-200);
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
@@ -394,6 +401,115 @@ function relayText(tracker, pred) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Vérification des messages relayés — CORRECTIF.
+// Avant ce correctif, un message envoyé par forward()/forwardRepeat() restait
+// affiché « ⌛ en attente » pour toujours dans le canal configuré : il n'était
+// jamais rapproché du vrai résultat du jeu, contrairement aux prédictions
+// normales (voir verify() dans predictor.js, qui ne regarde QUE
+// state.predictions — les relais de ce panneau n'y figurent pas). On
+// mémorise donc désormais, pour chaque relais, son (ou ses) chatId/messageId
+// Telegram, puis on revérifie le résultat réel comme le fait predictor.verify()
+// (mêmes règles : tour illisible = on saute sans consommer de rattrapage,
+// rattrapage jusqu'à panel.maxR, annulation après 6 tours illisibles
+// d'affilée) et on ÉDITE le message avec le vrai résultat (✅/❌).
+// ---------------------------------------------------------------------------
+function pushPending(tracker, pred, messages) {
+  if (!messages.length) return;
+  panel.pendingMessages.push({
+    id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    trackerId: tracker.id,
+    target: pred.target,
+    suit: pred.suit,
+    kind: pred.kind || 'suit',
+    strategyName: tracker.name,
+    format: effectiveFormat(tracker),
+    maxR: panel.maxR,
+    step: 0,
+    gap: 0,
+    skipped: 0,
+    status: 'en attente',
+    messages,
+    createdAt: Date.now(),
+    resolvedAt: null,
+  });
+  // on garde une fenêtre large (200) : largement de quoi couvrir le temps
+  // que met un rattrapage à se vérifier, sans grossir indéfiniment.
+  panel.pendingMessages = panel.pendingMessages.slice(-200);
+}
+
+function editPending(entry, statusFr) {
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return;
+  const out = fmt.renderMessage(entry.format, {
+    gameNumber: entry.target,
+    suit: entry.suit,
+    strategy: entry.strategyName,
+    maxR: entry.maxR,
+    status: statusFr,
+    rattrapage: entry.step,
+  }, null);
+  for (const m of entry.messages) {
+    bot.editMessageText(out.text, {
+      chat_id: m.chatId, message_id: m.messageId,
+      ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}),
+    }).catch(() => {
+      // le message a pu être supprimé du canal entre-temps : pas bloquant
+    });
+  }
+}
+
+function maxFinishedGameNumber() {
+  let max = 0;
+  for (const g of state.games.values()) if (g.finished && g.number > max) max = g.number;
+  return max;
+}
+
+async function verifyPending() {
+  const maxDone = maxFinishedGameNumber();
+  for (const entry of panel.pendingMessages) {
+    if (entry.status !== 'en attente') continue;
+    let guard = 0;
+    while (entry.status === 'en attente' && guard++ <= entry.maxR + entry.gap + 8) {
+      const num = entry.target + entry.step + entry.gap;
+      const g = state.games.get(num);
+      const usable = !!g && g.finished && g.complete !== false;
+      if (!usable) {
+        if (num + 2 <= maxDone) {
+          entry.gap += 1;
+          entry.skipped = (entry.skipped || 0) + 1;
+          if (entry.skipped > 6) {
+            entry.status = 'annulé';
+            entry.resolvedAt = Date.now();
+            break;
+          }
+          continue;
+        }
+        break; // le tour n'est pas encore joué : on réessaiera au prochain tick
+      }
+      const won = entry.kind === 'parity' ? parityOf(g) === entry.suit : hasSuit(g, entry.suit);
+      if (won) {
+        entry.status = 'gagné';
+        entry.resolvedAt = Date.now();
+        editPending(entry, 'gagné');
+        break;
+      }
+      if (entry.step >= entry.maxR) {
+        entry.status = 'perdu';
+        entry.resolvedAt = Date.now();
+        editPending(entry, 'perdu');
+        break;
+      }
+      entry.step += 1;
+    }
+  }
+  // ménage : on ne garde pas indéfiniment les entrées déjà résolues.
+  const cutoff = Date.now() - 24 * 3600 * 1000;
+  panel.pendingMessages = panel.pendingMessages.filter(
+    (e) => e.status === 'en attente' || !e.resolvedAt || e.resolvedAt >= cutoff
+  );
+}
+
 async function forward(tracker, pred) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
@@ -402,9 +518,11 @@ async function forward(tracker, pred) {
   const out = relayText(tracker, pred);
   let ok = false;
   const errors = [];
+  const sentMessages = [];
   for (const id of targetChannels) {
     try {
-      await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+      const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+      sentMessages.push({ chatId: id, messageId: m.message_id });
       ok = true;
     } catch (e) { errors.push(`${id} : ${e.message}`); }
   }
@@ -422,6 +540,10 @@ async function forward(tracker, pred) {
       sentAt: Date.now(),
     });
     panel.history = panel.history.slice(0, 100);
+    // CORRECTIF : on mémorise ce relais pour qu'il soit vérifié comme les
+    // prédictions normales (voir verifyPending) au lieu de rester bloqué
+    // « en attente » indéfiniment dans le canal.
+    pushPending(tracker, pred, sentMessages);
   } else if (errors.length) {
     panel.lastError = errors[0];
   }
@@ -530,9 +652,11 @@ async function forwardRepeat(tracker, synth) {
   // Idem : plus de conseil ajouté au message de prédiction envoyé.
   let ok = false;
   const errors = [];
+  const sentMessages = [];
   for (const id of targetChannels) {
     try {
-      await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+      const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+      sentMessages.push({ chatId: id, messageId: m.message_id });
       ok = true;
     } catch (e) { errors.push(`${id} : ${e.message}`); }
   }
@@ -550,6 +674,8 @@ async function forwardRepeat(tracker, synth) {
       sentAt: Date.now(),
     });
     panel.history = panel.history.slice(0, 100);
+    // CORRECTIF : idem forward() — ce relais est désormais suivi et vérifié.
+    pushPending(tracker, synth, sentMessages);
   } else if (errors.length) {
     panel.lastError = errors[0];
   }
@@ -569,7 +695,7 @@ async function processRepeat(tracker) {
     tracker.lastRepeatSource = pred.target;
     if (pred.status !== 'perdu' || !pred.suit) continue;
     const lead = tracker.repeat.lead;
-    const synth = { target: pred.target + lead, suit: pred.suit };
+    const synth = { target: pred.target + lead, suit: pred.suit, kind: pred.kind || 'suit' };
     await forwardRepeat(tracker, synth);
   }
 }
@@ -583,6 +709,9 @@ async function tick() {
       await processTracker(tracker);
       await processRepeat(tracker);
     }
+    // CORRECTIF : sans cet appel, les messages déjà relayés restaient
+    // « ⌛ en attente » pour toujours — voir le commentaire sur verifyPending.
+    await verifyPending();
     panel.lastScanAt = Date.now();
   } catch (e) {
     panel.lastError = e.message;
@@ -695,6 +824,35 @@ async function optimizeTracker(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Déclencheurs fiables (≥ seuil), calculés directement sur l'historique réel
+// d'UNE stratégie — sans qu'un tracker « après perte » existe pour elle.
+// Réutilise simulateCombo (backtest) sur les mêmes règles que backtestTracker.
+// Utilisé par shoe-report.js pour le rapport PDF envoyé à chaque nouveau
+// sabot (voir la boucle principale dans bot.js).
+// ---------------------------------------------------------------------------
+function triggersAboveThreshold(key, name, minRatePct = 75, minSample = 2) {
+  const history = trackerPredictions(key).filter((p) => p.status === 'gagné' || p.status === 'perdu');
+  const results = [];
+  for (const kind of TRIGGER_KEYS) {
+    for (let n = 0; n <= 10; n++) {
+      const r = simulateCombo(history, kind, n);
+      if (r.sends >= minSample) {
+        const ratePct = Math.round(r.rate * 1000) / 10;
+        if (ratePct >= minRatePct) {
+          results.push({ kind, label: resultLabel(kind), n, sends: r.sends, wins: r.wins, ratePct });
+        }
+      }
+    }
+  }
+  results.sort((a, b) => b.ratePct - a.ratePct || b.sends - a.sends || a.n - b.n);
+  return { key, name, sampleSize: history.length, triggers: results };
+}
+
+function allTriggersAboveThreshold(minRatePct = 75, minSample = 2) {
+  return strategies.LIST.map((def) => triggersAboveThreshold(def.key, def.name, minRatePct, minSample));
+}
+
+// ---------------------------------------------------------------------------
 // Statut (pour le tableau de bord)
 // ---------------------------------------------------------------------------
 function status() {
@@ -724,6 +882,7 @@ function status() {
       createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 20),
+    pendingVerification: panel.pendingMessages.filter((e) => e.status === 'en attente').length,
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -734,5 +893,6 @@ function status() {
 module.exports = {
   panel, status, config, configure, restore, restoreFromDb, setSender, tick, test,
   parseChannels, options, addTracker, updateTracker, removeTracker,
-  backtestTracker, optimizeTracker, TRIGGER_KEYS, TRIGGER_LABELS,
+  backtestTracker, optimizeTracker, triggersAboveThreshold, allTriggersAboveThreshold,
+  TRIGGER_KEYS, TRIGGER_LABELS,
 };

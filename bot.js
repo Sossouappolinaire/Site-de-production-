@@ -8,11 +8,13 @@ const predit = require('./predit');
 const auth = require('./auth');
 const aiAuto = require('./ai-auto');
 const ai = require('./ai-analyzer');
+const aiQa = require('./ai-qa');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
+const shoeReport = require('./shoe-report');
 const {
-  state, evaluate, verify, registerGames, setOnFinished, setOnGateChange, setOnConfirm,
+  state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
   initStrategies, setStrategyConfig, resetStrategy, strategyChannels, parityRuntime,
   bilanText, canSend, noteGateSent, gateView, autoView, noteSent, shadowRuntime, sweepAutoUnlock, unlockGate,
@@ -217,6 +219,24 @@ function wire(b) {
     if (['administrator', 'member', 'creator'].includes(status)) rememberChannel(u.chat);
   });
   b.on('channel_post', (m) => rememberChannel(m.chat));
+
+  // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une
+  // commande (ne commence pas par /) est transmis à l'IA (ai-qa.js), qui
+  // répond au nom de « Bak Sossou IA » (voir le prompt système dans
+  // ai-qa.js) en s'appuyant sur les vraies données du bot. isAdmin détermine
+  // seulement si les détails techniques d'une éventuelle erreur IA sont
+  // visibles (jamais montrés à un utilisateur normal — voir fallbackAnswer).
+  b.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+    if (!msg.chat || msg.chat.type !== 'private') return;
+    try {
+      const entry = await aiQa.ask(msg.text, { isAdmin: isAdmin(msg) });
+      await b.sendMessage(msg.chat.id, entry.answer);
+    } catch (_) {
+      // question vide ou erreur imprévue : on reste silencieux plutôt que
+      // de spammer l'utilisateur avec un message d'erreur technique.
+    }
+  });
 
   b.onText(/^\/(start|aide|help)/, (msg) =>
     b.sendMessage(msg.chat.id, HELP, { parse_mode: 'Markdown' })
@@ -930,6 +950,16 @@ function wire(b) {
     b.sendMessage(msg.chat.id, `📊 Bilan publié : ${r.strategies.length} stratégie(s) + IA (${r.ai.ok ? 'envoyé' : r.ai.error || 'non envoyé'}).`);
   });
 
+  // déclenchement manuel du rapport PDF de fin de sabot (déclencheurs ≥75%
+  // des 7 stratégies + conseil ciblé) — utile pour le tester sans attendre
+  // un vrai retour du jeu à #N1.
+  b.onText(/^\/rapportsabot\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    b.sendMessage(msg.chat.id, '📄 Génération du rapport en cours…');
+    const ok = await sendShoeReport('commande /rapportsabot', state.shoeSeq || 0);
+    if (!ok) b.sendMessage(msg.chat.id, "❌ Échec de l'envoi (aucun token, aucun administrateur configuré, ou erreur — voir les logs).");
+  });
+
   b.onText(/^\/stats/, (msg) => {
     const s = stats();
     b.sendMessage(
@@ -1601,6 +1631,37 @@ async function applyDbConfigs() {
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
 }
 
+// ---------------------------------------------------------------------------
+// « Rapport de fin de sabot » : dès que le jeu revient à #N1 (nouveau sabot,
+// voir resetShoe() dans predictor.js), on génère le PDF listant, pour
+// CHACUNE des 7 stratégies, les déclencheurs « après perte » dont le taux
+// mesuré sur l'historique réel est ≥ 75%, avec un conseil ciblé — puis on
+// l'envoie en document Telegram à l'ADMINISTRATEUR (c'est une analyse
+// interne, pas une prédiction à publier dans un canal public).
+// ---------------------------------------------------------------------------
+let shoeReportBusy = false;
+async function sendShoeReport(reason, seq) {
+  if (shoeReportBusy) return false; // pas deux rapports en parallèle si plusieurs resets rapprochés
+  const sender = senderFor();
+  if (!sender || !state.adminId) return false;
+  shoeReportBusy = true;
+  try {
+    const { pdf } = await shoeReport.generate();
+    await sender.sendDocument(
+      state.adminId,
+      pdf,
+      { caption: `📄 Rapport de fin de sabot #${seq} (${reason}) — déclencheurs ≥ ${shoeReport.MIN_RATE}% des 7 stratégies.` },
+      { filename: `rapport-sabot-${seq}.pdf`, contentType: 'application/pdf' }
+    );
+    return true;
+  } catch (e) {
+    console.error('Rapport de fin de sabot : envoi échoué —', e.message);
+    return false;
+  } finally {
+    shoeReportBusy = false;
+  }
+}
+
 async function startLoop() {
   predit.restore();
   predit.setSender(senderFor);
@@ -1608,6 +1669,9 @@ async function startLoop() {
   afterLoss.setSender(senderFor);
   // base de données : chaque jeu terminé est archivé par date
   setOnFinished((round) => { if (db.ready) db.saveGame(round); });
+  // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
+  // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
+  setOnShoeReset((reason, seq) => sendShoeReport(reason, seq));
   setOnGateChange((key, g) => { if (db.ready) db.saveGate(key, g); });
   setOnAnnouncementSave((entry) => { if (db.ready) db.saveAnnouncement(entry); });
   setOnAnnouncementDelete((id) => { if (db.ready) db.deleteAnnouncement(id); });
@@ -1633,4 +1697,4 @@ async function startLoop() {
   startBot();
 }
 
-module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs };
+module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };

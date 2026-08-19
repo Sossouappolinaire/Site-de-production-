@@ -25,7 +25,7 @@ const {
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
   strategyGames, bilanText, gameCategories, gateView, shadowRuntime,
   predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock,
-  announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, siteChannelFeed,
+  announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, addSiteChannelMessage, siteChannelFeed,
 } = require('./predictor');
 const { startLoop, startBot, botStatus, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
 
@@ -160,12 +160,17 @@ app.use(express.static(path.join(__dirname, 'public')));
 const USER_WRITE_ALLOWLIST = new Set([
   '/api/ai/ask', // Question IA
 ]);
+// écrire dans le fil d'un canal du site (n'importe quel compte connecté,
+// pas seulement l'administrateur) : l'IA répond automatiquement — voir la
+// route POST /api/canaux/:id/message plus bas.
+const USER_WRITE_PATTERNS = [/^\/api\/canaux\/[^/]+\/message$/];
 app.use((req, res, next) => {
   if (isPublicPath(req.path)) return next();
   if (!req.path.startsWith('/api/')) return next();
   if (req.method === 'GET') return next();
   if (!req.session || req.session.role === 'admin') return next();
   if (USER_WRITE_ALLOWLIST.has(req.path)) return next();
+  if (USER_WRITE_PATTERNS.some((re) => re.test(req.path))) return next();
   return res.status(403).json({
     error: "Accès en lecture seule — seul l'administrateur peut modifier la configuration.",
     readOnly: true,
@@ -374,6 +379,34 @@ app.delete('/api/canaux/:id', (req, res) => {
 app.get('/api/canaux/:id', (req, res) => {
   const feed = siteChannelFeed(req.params.id, Math.min(100, parseInt(req.query.limit, 10) || 30));
   if (!feed) return res.status(404).json({ error: 'Canal introuvable.' });
+  res.json(feed);
+});
+
+// écrire dans un canal du site : accessible à TOUT compte connecté (pas
+// réservé à l'administrateur, voir USER_WRITE_PATTERNS ci-dessus). Le
+// message est mémorisé dans le fil, puis l'IA (ai-qa.js, même moteur que le
+// panneau « Question IA ») y répond directement — la réponse apparaît comme
+// un nouveau message dans ce même canal, visible par tous ceux qui l'ouvrent.
+app.post('/api/canaux/:id/message', async (req, res) => {
+  const text = String((req.body && req.body.text) || '').trim();
+  if (!text) return res.status(400).json({ error: 'Message vide.' });
+  const exists = siteChannelFeed(req.params.id, 1);
+  if (!exists) return res.status(404).json({ error: 'Canal introuvable.' });
+  const isAdminSession = !!(req.session && req.session.role === 'admin');
+  const senderLabel = (req.session && req.session.identifier) || (isAdminSession ? 'Administrateur' : 'Visiteur');
+  addSiteChannelMessage(req.params.id, { sender: senderLabel, text });
+  persist();
+  try {
+    const entry = await aiQa.ask(text, { isAdmin: isAdminSession });
+    addSiteChannelMessage(req.params.id, { sender: 'Bak Sossou IA', text: entry.answer });
+  } catch (_) {
+    addSiteChannelMessage(req.params.id, {
+      sender: 'Bak Sossou IA',
+      text: "Désolé, je n'ai pas pu répondre à l'instant — réessaie dans un moment.",
+    });
+  }
+  persist();
+  const feed = siteChannelFeed(req.params.id, Math.min(100, parseInt(req.query.limit, 10) || 30));
   res.json(feed);
 });
 

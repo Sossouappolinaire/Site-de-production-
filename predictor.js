@@ -947,6 +947,11 @@ function nextTarget(current) {
 let onFinishedHook = null;
 function setOnFinished(fn) { onFinishedHook = fn; }
 
+// déclenché UNE fois par vrai nouveau sabot (retour du jeu à #N1) — utilisé
+// par shoe-report.js pour envoyer le rapport PDF des déclencheurs fiables.
+let onShoeResetHook = null;
+function setOnShoeReset(fn) { onShoeResetHook = fn; }
+
 // ---------------------------------------------------------------------------
 // Nouveau sabot : la table repart au jeu n°1
 // ---------------------------------------------------------------------------
@@ -970,6 +975,11 @@ function resetShoe(reason = 'nouveau sabot') {
   // compteur de sabots : le bot s'en sert pour publier le bilan complet
   // (toutes les stratégies + prédictions IA) dès que le jeu repart à 1.
   state.shoeSeq = (state.shoeSeq || 0) + 1;
+  // asynchrone et volontairement non bloquant : resetShoe() reste synchrone,
+  // la génération du PDF et l'envoi Telegram se font en arrière-plan.
+  if (onShoeResetHook) {
+    try { Promise.resolve(onShoeResetHook(reason, state.shoeSeq)).catch(() => {}); } catch (_) {}
+  }
   return true;
 }
 
@@ -1505,16 +1515,19 @@ function siteChannelsView() {
   return state.siteChannels.map((c) => {
     const def = strategies.BY_KEY[c.strategy];
     const preds = state.predictions.filter((p) => p.strategy === c.strategy && p.messages && p.messages.length);
-    const last = preds[preds.length - 1] || null;
+    const lastPred = preds[preds.length - 1] || null;
+    const msgs = Array.isArray(c.messages) ? c.messages : [];
+    const lastMsg = msgs.length ? msgs[msgs.length - 1] : null;
+    const lastIsMsg = !!lastMsg && (!lastPred || (lastMsg.at || 0) > (lastPred.sentAt || 0));
     const s = stats(c.strategy);
     return {
       id: c.id,
       name: c.name,
       strategy: c.strategy,
       strategyName: def ? def.name : c.strategy,
-      lastText: last ? predictionMessage(last) : null,
-      lastAt: last ? last.sentAt : null,
-      lastStatus: last ? last.status : null,
+      lastText: lastIsMsg ? lastMsg.text : (lastPred ? predictionMessage(lastPred) : null),
+      lastAt: lastIsMsg ? lastMsg.at : (lastPred ? lastPred.sentAt : null),
+      lastStatus: lastIsMsg ? null : (lastPred ? lastPred.status : null),
       stats: s,
     };
   });
@@ -1525,7 +1538,7 @@ function addSiteChannel(name, strategyKey) {
   if (!clean) return { ok: false, error: 'Nom du canal requis.' };
   const def = strategies.BY_KEY[strategyKey];
   if (!def) return { ok: false, error: 'Stratégie invalide.' };
-  const entry = { id: ++siteChannelSeq, name: clean, strategy: strategyKey };
+  const entry = { id: ++siteChannelSeq, name: clean, strategy: strategyKey, messages: [] };
   state.siteChannels.push(entry);
   return { ok: true, channel: entry };
 }
@@ -1537,26 +1550,52 @@ function removeSiteChannel(id) {
   return { ok: true };
 }
 
+// message écrit par un visiteur (ou par l'IA en réponse) dans le fil de
+// discussion d'un canal du site — indépendant des cartes de prédiction,
+// stocké et persisté avec le canal (voir persist() dans bot.js, qui
+// réécrit déjà state.siteChannels tel quel à chaque sauvegarde).
+function addSiteChannelMessage(id, { sender, text, at } = {}) {
+  const c = state.siteChannels.find((x) => String(x.id) === String(id));
+  if (!c) return null;
+  if (!Array.isArray(c.messages)) c.messages = [];
+  const entry = { sender: sender || '—', text: String(text || '').trim(), at: at || Date.now() };
+  if (!entry.text) return null;
+  c.messages.push(entry);
+  c.messages = c.messages.slice(-200);
+  return entry;
+}
+
 // fil affiché à l'ouverture d'un canal : bilan de la stratégie + prédictions
 // réellement publiées (celles qui sont réellement parties dans un canal
-// Telegram, `messages.length`), du plus ancien au plus récent — comme un fil
-// de discussion. `limit` borne le nombre de cartes de prédiction renvoyées.
+// Telegram, `messages.length`) MÊLÉES, dans l'ordre chronologique, aux
+// messages écrits par les visiteurs et aux réponses de l'IA — comme un vrai
+// fil de discussion. `limit` borne le nombre total de bulles renvoyées.
 function siteChannelFeed(id, limit = 30) {
   const c = state.siteChannels.find((x) => String(x.id) === String(id));
   if (!c) return null;
   const def = strategies.BY_KEY[c.strategy];
-  const items = state.predictions
+  const predictionItems = state.predictions
     .filter((p) => p.strategy === c.strategy && p.status !== 'en attente' && p.messages && p.messages.length)
-    .sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0))
-    .slice(-Math.max(1, Math.min(100, limit)))
     .map((p) => ({
-      key: `${p.target}-${p.sentAt || 0}`,
+      key: `pred-${p.target}-${p.sentAt || 0}`,
+      kind: 'prediction',
+      sender: c.name,
       target: p.target,
       status: p.status,
       step: p.step,
       text: predictionMessage(p),
-      at: p.sentAt || null,
+      at: p.sentAt || 0,
     }));
+  const chatItems = (Array.isArray(c.messages) ? c.messages : []).map((m, i) => ({
+    key: `chat-${i}-${m.at}`,
+    kind: 'chat',
+    sender: m.sender,
+    text: m.text,
+    at: m.at,
+  }));
+  const items = [...predictionItems, ...chatItems]
+    .sort((a, b) => (a.at || 0) - (b.at || 0))
+    .slice(-Math.max(1, Math.min(200, limit)));
   return {
     id: c.id,
     name: c.name,
@@ -1604,11 +1643,13 @@ module.exports = {
   siteChannelsView,
   addSiteChannel,
   removeSiteChannel,
+  addSiteChannelMessage,
   siteChannelFeed,
   evaluate,
   verify,
   registerGames,
   setOnFinished,
+  setOnShoeReset,
   setOnGateChange,
   setOnConfirm,
   fulfillAnnouncement,
