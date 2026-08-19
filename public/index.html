@@ -873,12 +873,42 @@ Faites-en bon usage !
     async function preditScan() { try { await api('/api/predit/scan', 'POST', {}); await refresh(); preditPage(); toast('Analyse du panneau effectuée.'); } catch (e) { toast(e.message, 'error'); } }
 
     // --- Prédiction après perte -------------------------------------------
+    // libellés des 4 cases à cocher (rattrapage 1/2/3, perdue)
+    const AFTER_LOSS_TRIGGER_LABELS = { r1: 'Rattrapage 1 (✅1️⃣)', r2: 'Rattrapage 2 (✅2️⃣)', r3: 'Rattrapage 3 (✅3️⃣)', perdue: 'Perdue (❌)' };
+    function afterLossTriggerRows(prefix, triggers) {
+      const t = triggers || {};
+      return ['r1', 'r2', 'r3', 'perdue'].map((k) => {
+        const cur = t[k] || { enabled: false, n: 0 };
+        return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:8px">
+          <label class="check" style="flex:1"><input id="${prefix}-${k}-on" type="checkbox" ${cur.enabled ? 'checked' : ''}> ${esc(AFTER_LOSS_TRIGGER_LABELS[k])}</label>
+          <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">N à attendre</label><input id="${prefix}-${k}-n" type="number" min="0" max="50" value="${esc(String(cur.n || 0))}"></div>
+        </div>`;
+      }).join('');
+    }
+    function readAfterLossTriggers(prefix) {
+      const out = {};
+      for (const k of ['r1', 'r2', 'r3', 'perdue']) {
+        out[k] = { enabled: !!$(`#${prefix}-${k}-on`)?.checked, n: val(`${prefix}-${k}-n`) };
+      }
+      return out;
+    }
+    function afterLossRepeatRow(prefix, repeat) {
+      const r = repeat || { enabled: false, lead: 5 };
+      return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0">
+        <label class="check" style="flex:1"><input id="${prefix}-repeat-on" type="checkbox" ${r.enabled ? 'checked' : ''}> Même costume après une perte</label>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Décalage (+N jeux)</label><input id="${prefix}-repeat-lead" type="number" min="1" max="50" value="${esc(String(r.lead || 5))}"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Dès qu'une prédiction de cette stratégie est perdue, prédit le même costume N jeux plus loin (ex. +5 ou +10). Indépendant des déclencheurs ci-dessus.</p>`;
+    }
+    function readAfterLossRepeat(prefix) {
+      return { enabled: !!$(`#${prefix}-repeat-on`)?.checked, lead: val(`${prefix}-repeat-lead`) };
+    }
     function afterLossPage() {
       setNav('after-loss');
       const p = snapshot.afterLoss || {};
       const trackers = p.trackers || [];
       const history = p.history || [];
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Rattrapage par stratégie</span><h2 style="margin-top:7px">Prédiction après perte</h2><p class="small">Choisis une stratégie existante du bot (ou la stratégie IA) et un nombre de pertes consécutives. Dès que ce nombre est atteint, le panneau attend la PROCHAINE prédiction de cette stratégie et la relaie automatiquement dans le canal configuré ici.</p></div><div class="toolbar"><button class="button primary" onclick="addAfterLossTrackerModal()">Ajouter une stratégie</button><button class="button ghost" onclick="afterLossPage()">Actualiser</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Rattrapage par stratégie</span><h2 style="margin-top:7px">Prédiction après perte</h2><p class="small">Choisis une stratégie existante du bot (ou la stratégie IA), coche un ou plusieurs types de résultat déclencheurs (rattrapage 1/2/3, perdue), et pour chacun le nombre N de prédictions à laisser passer avant de relayer la suivante — ou active « même costume après perte » pour re-prédire directement le même costume N jeux plus loin.</p></div><div class="toolbar"><button class="button primary" onclick="addAfterLossTrackerModal()">Ajouter une stratégie</button><button class="button ghost" onclick="afterLossPage()">Actualiser</button></div></div>
         <div class="two-col">
           <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit uniquement les prédictions relayées après perte.</p>
             <div class="field"><label>ID ou @nom du canal</label><input id="afterLossChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
@@ -894,27 +924,45 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveAfterLoss()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Stratégies suivies</span><h2 style="margin-top:7px">${trackers.length} stratégie(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.armed ? 'warn' : 'good'}">${t.armed ? 'En attente de la prochaine prédiction' : 'Surveillance'}</span></div><dl><dt>Nombre de perte requis</dt><dd>${esc(String(t.lossThreshold))}</dd><dt>Pertes consécutives actuelles</dt><dd>${esc(String(t.consecutiveLosses))} / ${esc(String(t.lossThreshold))}</dd><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd></dl><div class="toolbar" style="margin-top:12px"><div class="field" style="max-width:160px"><label>Nombre de perte</label><input id="thresh-${esc(t.id)}" type="number" min="1" max="20" value="${esc(String(t.lossThreshold))}"></div><button class="button small primary" onclick="updateAfterLossThreshold('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.armed ? 'warn' : (t.counting ? 'warn' : 'good')}">${t.armed ? 'En attente de la prochaine prédiction' : (t.counting ? `Décompte en cours : ${esc(String(t.armedSeen))}/${esc(String(t.armedNeeded))}` : 'Surveillance')}</span></div>
+            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd></dl>
+            <div id="opt-result-${esc(t.id)}"></div>
+            ${afterLossTriggerRows('trk-' + t.id, t.triggers)}
+            ${afterLossRepeatRow('trk-' + t.id, t.repeat)}
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Stratégie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
     }
     function addAfterLossTrackerModal() {
       const opts = (snapshot.afterLoss?.options || []).map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('');
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot ou la stratégie IA, puis le nombre de pertes consécutives avant relais.</p></div></div>
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot ou la stratégie IA, puis coche au moins un type de résultat déclencheur et le N à attendre pour chacun.</p></div></div>
         <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
-        <div class="field"><label>Nombre de perte</label><input id="newTrackerLoss" type="number" min="1" max="20" value="1"></div>
-        <div class="modal-actions"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+        ${afterLossTriggerRows('new', { perdue: { enabled: true, n: 0 } })}
+        ${afterLossRepeatRow('new', { enabled: false, lead: 5 })}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function addAfterLossTracker() {
       const key = val('newTrackerKey');
-      const lossThreshold = val('newTrackerLoss');
-      try { await api('/api/after-loss/trackers', 'POST', { key, lossThreshold }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      const triggers = readAfterLossTriggers('new');
+      const repeat = readAfterLossRepeat('new');
+      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
       catch (e) { toast(e.message, 'error'); }
     }
-    async function updateAfterLossThreshold(id) {
-      const lossThreshold = val(`thresh-${id}`);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { lossThreshold }); await refresh(); afterLossPage(); toast('Nombre de perte mis à jour.'); }
+    async function updateAfterLossTriggers(id) {
+      const triggers = readAfterLossTriggers('trk-' + id);
+      const repeat = readAfterLossRepeat('trk-' + id);
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
+    }
+    async function optimizeAfterLossTracker(id) {
+      const box = $(`#opt-result-${id}`);
+      if (box) box.innerHTML = '<div class="notice" style="margin:10px 0">Analyse de l\'historique en cours…</div>';
+      try {
+        const r = await api(`/api/after-loss/trackers/${encodeURIComponent(id)}/optimize`, 'POST', {});
+        if (!box) return;
+        const rows = (r.top || []).map(x => `<tr><td>${esc(x.label)}</td><td>${esc(String(x.n))}</td><td>${esc(String(x.wins))}/${esc(String(x.sends))}</td><td>${esc(String(x.ratePct))}%</td></tr>`).join('');
+        box.innerHTML = `<div class="notice" style="margin:10px 0"><b>Backtest sur ${esc(String(r.sampleSize))} prédiction(s) passée(s)</b><p class="small" style="margin:6px 0">${esc(r.explanation || '')}</p>${rows ? `<table style="margin-top:8px"><thead><tr><th>Déclencheur</th><th>N</th><th>Gagnés/Envois</th><th>Taux</th></tr></thead><tbody>${rows}</tbody></table>` : ''}</div>`;
+      } catch (e) { toast(e.message, 'error'); if (box) box.innerHTML = ''; }
     }
     async function removeAfterLossTracker(id) {
       try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); afterLossPage(); toast('Stratégie retirée du suivi.'); }
