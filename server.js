@@ -1032,7 +1032,10 @@ app.post('/api/after-loss/scan', async (req, res) => {
 app.post('/api/after-loss/trackers', async (req, res) => {
   try {
     const key = req.body && req.body.key;
-    const t = afterLoss.addTracker(key, req.body && req.body.triggers, req.body && req.body.repeat);
+    const t = afterLoss.addTracker(key, req.body && req.body.triggers, req.body && req.body.repeat, {
+      channels: req.body && req.body.channels,
+      format: req.body && req.body.format,
+    });
     // la stratégie suivie a été activée automatiquement par addTracker() —
     // on persiste ce changement comme le fait la route /api/strategies/:key,
     // sinon l'activation ne survit pas à un redémarrage/redéploiement.

@@ -21,6 +21,13 @@
 //    (silencieuses), et c'est la 3ᵉ qui est relayée.
 //  • Une fois la prédiction relayée, le panneau repart à zéro pour cette
 //    stratégie (il attend un nouveau déclencheur parmi les cases cochées).
+//  • Canal et format par stratégie suivie (facultatifs) : chaque stratégie
+//    peut avoir son propre canal Telegram et/ou son propre format de
+//    prédiction, indépendants du canal/format global du panneau. Si l'un des
+//    deux est laissé vide à l'ajout/modification, cette stratégie utilise le
+//    canal/format du panneau (comportement d'origine). Ça permet d'envoyer
+//    chaque stratégie suivie vers un canal différent, ou plusieurs vers le
+//    même canal, au choix.
 'use strict';
 
 const strategies = require('./strategies');
@@ -142,6 +149,25 @@ function sanitizeRepeat(input) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Canal(x) et format PROPRES à une stratégie suivie — facultatifs. Une
+// stratégie sans réglage propre utilise le canal/format du panneau (comme
+// avant). Ça permet d'envoyer chaque stratégie suivie dans un canal
+// différent, ou plusieurs dans le même canal, au choix.
+// ---------------------------------------------------------------------------
+function sanitizeTrackerFormat(input) {
+  if (input === undefined || input === null || input === '') return null;
+  return fmt.clampFormat(input);
+}
+
+function effectiveChannels(tracker) {
+  return (tracker.channels && tracker.channels.length) ? tracker.channels : panel.channels;
+}
+
+function effectiveFormat(tracker) {
+  return (tracker.format !== null && tracker.format !== undefined) ? tracker.format : panel.format;
+}
+
 // type de résultat d'une prédiction terminée : 'r0' (gagné direct — jamais
 // une case cochable), 'r1'/'r2'/'r3'... (gagné à ce rattrapage), ou 'perdue'.
 function resultKind(pred) {
@@ -204,6 +230,8 @@ function applySaved(saved) {
       // proche : envoi dès la prédiction suivante après une perte).
       triggers: t.triggers ? sanitizeTriggers(t.triggers) : defaultTriggers(),
       repeat: sanitizeRepeat(t.repeat),
+      channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
+      format: sanitizeTrackerFormat(t.format),
       lastRepeatSource: Number.isFinite(Number(t.lastRepeatSource)) ? Number(t.lastRepeatSource) : 0,
       counting: !!t.counting,
       armedTrigger: t.armedTrigger || null,
@@ -236,7 +264,7 @@ function currentMaxTarget(key) {
   return list.length ? list[list.length - 1].target : 0;
 }
 
-function addTracker(key, triggers, repeat) {
+function addTracker(key, triggers, repeat, extra = {}) {
   const opt = optionByKey(key);
   if (!opt) throw new Error("Stratégie inconnue pour le suivi « après perte »");
   const clean = sanitizeTriggers(triggers);
@@ -257,6 +285,10 @@ function addTracker(key, triggers, repeat) {
     name: opt.name,
     triggers: clean,
     repeat: cleanRepeat,
+    // canal(x) et format propres à cette stratégie ; vides → hérite du
+    // canal/format global du panneau (voir effectiveChannels/effectiveFormat).
+    channels: parseChannels(extra.channels),
+    format: sanitizeTrackerFormat(extra.format),
     // on ne rejoue pas les pertes déjà passées au moment de l'ajout.
     lastRepeatSource: currentMaxTarget(opt.key),
     counting: false,
@@ -298,6 +330,12 @@ function updateTracker(id, patch = {}) {
   }
   if (patch.repeat !== undefined) {
     tracker.repeat = sanitizeRepeat(patch.repeat);
+  }
+  if (patch.channels !== undefined) {
+    tracker.channels = parseChannels(patch.channels);
+  }
+  if (patch.format !== undefined) {
+    tracker.format = sanitizeTrackerFormat(patch.format);
   }
   persist();
   return tracker;
@@ -342,7 +380,7 @@ function adviceForTracker(tracker) {
 // Relais Telegram
 // ---------------------------------------------------------------------------
 function relayText(tracker, pred, advice) {
-  const out = fmt.renderMessage(panel.format, {
+  const out = fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: pred.target,
     suit: pred.suit,
     strategy: tracker.name,
@@ -357,12 +395,13 @@ function relayText(tracker, pred, advice) {
 async function forward(tracker, pred) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
-  if (!panel.channels.length) { panel.lastError = "Aucun canal configuré pour « Prédiction après perte »"; return false; }
+  const targetChannels = effectiveChannels(tracker);
+  if (!targetChannels.length) { panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni propre à la stratégie, ni sur le panneau)`; return false; }
   const advice = adviceForTracker(tracker);
   const out = relayText(tracker, pred, advice);
   let ok = false;
   const errors = [];
-  for (const id of panel.channels) {
+  for (const id of targetChannels) {
     try {
       await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
       ok = true;
@@ -477,8 +516,9 @@ function adviceForRepeat(tracker, lead) {
 async function forwardRepeat(tracker, synth, advice) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
-  if (!panel.channels.length) { panel.lastError = "Aucun canal configuré pour « Prédiction après perte »"; return false; }
-  const out = fmt.renderMessage(panel.format, {
+  const targetChannels = effectiveChannels(tracker);
+  if (!targetChannels.length) { panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni propre à la stratégie, ni sur le panneau)`; return false; }
+  const out = fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: synth.target,
     suit: synth.suit,
     strategy: `${tracker.name} — même costume après perte (+${tracker.repeat.lead})`,
@@ -489,7 +529,7 @@ async function forwardRepeat(tracker, synth, advice) {
   if (advice) out.text = `${out.text}\n\n${advice}`;
   let ok = false;
   const errors = [];
-  for (const id of panel.channels) {
+  for (const id of targetChannels) {
     try {
       await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
       ok = true;
@@ -671,6 +711,8 @@ function status() {
       name: t.name,
       triggers: t.triggers,
       repeat: t.repeat,
+      channels: t.channels,
+      format: t.format,
       counting: t.counting,
       armedTrigger: t.armedTrigger,
       armedNeeded: t.armedNeeded,

@@ -1,0 +1,58 @@
+{
+  "afterLoss": {
+    "config": {
+      "enabled": true,
+      "channels": [],
+      "format": 1,
+      "maxR": 1
+    },
+    "trackers": [
+      {
+        "id": "t-1787138407717-51e9d",
+        "key": "parite",
+        "name": "Pair / Impair (VAR)",
+        "triggers": {
+          "r1": {
+            "enabled": false,
+            "n": 0
+          },
+          "r2": {
+            "enabled": false,
+            "n": 0
+          },
+          "r3": {
+            "enabled": false,
+            "n": 0
+          },
+          "perdue": {
+            "enabled": true,
+            "n": 0
+          }
+        },
+        "repeat": {
+          "enabled": false,
+          "lead": 5
+        },
+        "channels": [
+          -999
+        ],
+        "format": 7,
+        "lastRepeatSource": 0,
+        "counting": false,
+        "armedTrigger": null,
+        "armedNeeded": 0,
+        "armedSeen": 0,
+        "armed": false,
+        "armedAt": null,
+        "lastSeenTarget": 0,
+        "sentCount": 0,
+        "lastSentAt": null,
+        "createdAt": 1787138407717
+      }
+    ],
+    "history": [],
+    "sentCount": 0,
+    "lastSentAt": null,
+    "lastScanAt": null
+  }
+}
