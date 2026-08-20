@@ -234,7 +234,7 @@ async function runRemote() {
     const result = await ai.analyze({
       games,
       pastDays,
-      objective: "Analyse automatique en temps réel : cherche aussi des régularités nouvelles (carte précise suivie d'un costume, décalages a+1/a+2/a+3, répétition d'une journée déjà jouée) et propose les remplacements de costume utiles aux stratégies existantes.",
+      objective: "Analyse automatique en temps réel : cherche aussi des régularités nouvelles (carte précise suivie d'un costume, égalité avec un point donné, forme de la main [nb de cartes joueur/banquier] avec un point donné, décalages a+1/a+2/a+3, répétition d'une journée déjà jouée). Ne propose ni enchaînement de costumes (chaîne) ni remplacement de costume conseillé pour une stratégie existante — ces deux types sont explicitement écartés.",
     });
     auto.lastRemoteAt = Date.now();
     auto.lastError = null;

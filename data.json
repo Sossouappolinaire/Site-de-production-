@@ -3,14 +3,15 @@
     "config": {
       "enabled": true,
       "channels": [],
+      "siteChannelId": null,
       "format": 1,
       "maxR": 1
     },
     "trackers": [
       {
-        "id": "t-1787138407717-51e9d",
-        "key": "parite",
-        "name": "Pair / Impair (VAR)",
+        "id": "t-1787213442912-ov0ny",
+        "key": "costume",
+        "name": "Costume par numéro",
         "triggers": {
           "r1": {
             "enabled": false,
@@ -33,10 +34,9 @@
           "enabled": false,
           "lead": 5
         },
-        "channels": [
-          -999
-        ],
-        "format": 7,
+        "channels": [],
+        "siteChannelId": null,
+        "format": null,
         "lastRepeatSource": 0,
         "counting": false,
         "armedTrigger": null,
@@ -47,10 +47,46 @@
         "lastSeenTarget": 0,
         "sentCount": 0,
         "lastSentAt": null,
-        "createdAt": 1787138407717
+        "createdAt": 1787213442912
       }
     ],
     "history": [],
+    "pendingMessages": [
+      {
+        "id": "p1",
+        "trackerId": "t-1787213442912-ov0ny",
+        "target": 100,
+        "suit": "❤️",
+        "kind": "suit",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "annulé",
+        "messages": [],
+        "createdAt": 1787213442912,
+        "resolvedAt": 1787213442918
+      },
+      {
+        "id": "p2",
+        "trackerId": "t-1787213442912-ov0ny",
+        "target": 110,
+        "suit": "❤️",
+        "kind": "suit",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "annulé",
+        "messages": [],
+        "createdAt": 1787213442912,
+        "resolvedAt": 1787213442918
+      }
+    ],
     "sentCount": 0,
     "lastSentAt": null,
     "lastScanAt": null

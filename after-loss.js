@@ -34,7 +34,7 @@ const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
-const { state, setStrategyConfig, hasSuit, parityOf, addSiteChannelMessage, siteChannelsView } = require('./predictor');
+const { state, setStrategyConfig, hasSuit, parityOf, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
 
@@ -499,6 +499,61 @@ function editPending(entry, statusFr) {
     });
   }
 }
+
+// ---------------------------------------------------------------------------
+// CORRECTIF MAJEUR — nouveau sabot (retour du jeu à #N1) :
+//
+// Deux bugs distincts venaient de là, tous deux causés par des compteurs qui
+// comparaient les numéros de jeu SANS savoir qu'un nouveau sabot était
+// reparti de zéro :
+//
+//  1) Les relais déjà envoyés mais pas encore résolus (`panel.pendingMessages`,
+//     ex. #N100, #N110… restés « en attente » indéfiniment sur la capture
+//     d'écran) visaient des numéros de l'ANCIEN sabot. Une fois le sabot
+//     remis à zéro, ces numéros n'existent plus jamais dans `state.games`
+//     (vidé par resetShoe) : `verifyPending()` les prenait pour des jeux
+//     « pas encore joués » et attendait pour toujours un résultat qui ne
+//     viendrait jamais.
+//
+//  2) `tracker.lastSeenTarget` / `tracker.lastRepeatSource` gardaient le
+//     dernier grand numéro de l'ancien sabot (ex. 232). Comme les nouvelles
+//     prédictions du nouveau sabot repartent à des numéros petits (1, 2, 3…),
+//     la condition `pred.target <= tracker.lastSeenTarget` restait VRAIE pour
+//     toutes les prédictions à venir : plus aucune n'était jamais traitée —
+//     le suivi « après perte » restait bloqué jusqu'au prochain redémarrage
+//     du bot.
+//
+// On s'abonne donc au même événement « nouveau sabot » que le rapport PDF
+// (voir setOnShoeReset dans predictor.js, désormais multi-écouteurs) pour
+// remettre tout ça à plat à chaque fois.
+setOnShoeReset(() => {
+  for (const t of panel.trackers) {
+    t.lastSeenTarget = 0;
+    t.lastRepeatSource = 0;
+    // un armement/comptage en cours visait l'ancien sabot : on le repart
+    // proprement plutôt que de le laisser « armé » sur un contexte obsolète.
+    t.counting = false;
+    t.armedTrigger = null;
+    t.armedNeeded = 0;
+    t.armedSeen = 0;
+    t.armed = false;
+    t.armedAt = null;
+  }
+  let cancelled = 0;
+  for (const entry of panel.pendingMessages) {
+    if (entry.status !== 'en attente') continue;
+    // Pas d'edit Telegram ici : il n'existe pas de statut « annulé » dans le
+    // rendu des messages (mapStatus() le traiterait comme « en attente », donc
+    // l'édition n'afficherait rien de différent) — comme pour les prédictions
+    // normales annulées par resetShoe() dans predictor.js, le message reste
+    // affiché tel quel sur Telegram, mais n'est plus suivi ni compté ici.
+    entry.status = 'annulé';
+    entry.resolvedAt = Date.now();
+    cancelled += 1;
+  }
+  if (cancelled) panel.lastError = null;
+  persist();
+});
 
 function maxFinishedGameNumber() {
   let max = 0;

@@ -949,8 +949,12 @@ function setOnFinished(fn) { onFinishedHook = fn; }
 
 // déclenché UNE fois par vrai nouveau sabot (retour du jeu à #N1) — utilisé
 // par shoe-report.js pour envoyer le rapport PDF des déclencheurs fiables.
-let onShoeResetHook = null;
-function setOnShoeReset(fn) { onShoeResetHook = fn; }
+// CORRECTIF : plusieurs modules doivent réagir à un nouveau sabot (bot.js
+// pour le rapport PDF, after-loss.js pour remettre à zéro ses compteurs —
+// voir plus bas) ; un seul callback à la fois écrasait le précédent, donc
+// on garde désormais une LISTE d'écouteurs plutôt qu'un unique callback.
+const onShoeResetHooks = [];
+function setOnShoeReset(fn) { if (typeof fn === 'function') onShoeResetHooks.push(fn); }
 
 // ---------------------------------------------------------------------------
 // Nouveau sabot : la table repart au jeu n°1
@@ -977,8 +981,8 @@ function resetShoe(reason = 'nouveau sabot') {
   state.shoeSeq = (state.shoeSeq || 0) + 1;
   // asynchrone et volontairement non bloquant : resetShoe() reste synchrone,
   // la génération du PDF et l'envoi Telegram se font en arrière-plan.
-  if (onShoeResetHook) {
-    try { Promise.resolve(onShoeResetHook(reason, state.shoeSeq)).catch(() => {}); } catch (_) {}
+  for (const hook of onShoeResetHooks) {
+    try { Promise.resolve(hook(reason, state.shoeSeq)).catch(() => {}); } catch (_) {}
   }
   return true;
 }

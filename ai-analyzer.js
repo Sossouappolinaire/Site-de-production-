@@ -470,6 +470,9 @@ function localAnalysis(rawGames = [], options = {}) {
   });
   for (const f of mined.findings) findings.push(f);
   for (const p of mined.proposals) proposals.push(p);
+  // CORRECTIF (demande) : mined.replacements est désormais toujours vide
+  // (voir pattern-miner.js) — les « remplacements de costume conseillés »
+  // ne sont plus générés, cette boucle ne produit donc plus rien.
   for (const r of mined.replacements) {
     findings.push(r.text);
     proposals.push({
@@ -533,7 +536,8 @@ async function analyze({ games = [], date = null, objective = '', pastDays = [] 
     "Précision obligatoire : chaque fois que tu mentionnes un costume dans 'logic', 'trigger', 'evidence' ou 'observation', indique aussi sa position exacte dans la main (1ère, 2e ou 3e position), jamais juste « le costume est présent ». " +
     "Exemple : pour une main ❤️♦️♣️, dis « ❤️ en 1ère position, ♦️ en 2e position, ♣️ en 3e position », pas seulement « ❤️♦️♣️ présents ». " +
     "Le champ playerSuitsPositions/bankerSuitsPositions de chaque jeu te donne déjà cette description position par position : réutilise-la.",
-    'Exemples de ce que tu dois chercher : « quand le joueur ou le banquier a eu 6❤️ au jeu a, ♣️ arrive au jeu a+2 », « la partie du 20/08/2026 se rejoue aujourd\'hui », « telle séquence de vainqueurs annonce le suivant », « il faut remplacer le costume prédit par un autre quand le déclencheur est vu ».',
+    'INTERDIT : ne propose JAMAIS de déclencheur du type « enchaînement de costumes » (un costume vu au jeu a annonce un autre costume précis au jeu a+k, façon chaîne) ni de « remplacement de costume conseillé » (remplacer la prédiction habituelle d\'une stratégie existante par un autre costume). Ces deux types sont explicitement écartés, même si tu les repères dans les données.',
+    'Exemples de ce que tu dois chercher à la place : « quand le joueur ou le banquier a eu 6❤️ au jeu a, ♣️ arrive au jeu a+2 », « après une égalité (match nul) avec un point donné pour le joueur, tel costume revient a+k jeux plus tard », « quand le joueur a reçu 2 cartes et le banquier 3 cartes avec tel point, tel costume revient a+k jeux plus tard », « la partie du 20/08/2026 se rejoue aujourd\'hui », « telle séquence de vainqueurs annonce le suivant ». Ce ne sont que des exemples : explore librement d\'autres combinaisons de conditions observables (résultat du tour, nombre de cartes reçues par main, point, position dans le sabot) tant que ce n\'est ni une chaîne de costumes ni un remplacement de costume.',
     'Cherche des fréquences, séries, absences, distributions, décalages (a+1, a+2, a+3), répétitions de journées et signaux de sur-ajustement.',
     'Une stratégie proposée doit être testable, réversible, limitée à un échantillon minimum et accompagnée de ses risques.',
     'Réponds uniquement avec un JSON valide, sans Markdown.',
@@ -544,7 +548,6 @@ async function analyze({ games = [], date = null, objective = '', pastDays = [] 
     resumeLocal: summary,
     signauxDetectesLocalement: local.findings,
     reglesDecouvertesLocalement: local.discoveries || [],
-    remplacementsDeCostumeConseilles: local.replacements || [],
     journeesSimilaires: local.dayMatches || [],
     jeux: normalized,
     formatReponse: {
@@ -563,7 +566,6 @@ async function analyze({ games = [], date = null, objective = '', pastDays = [] 
         risks: 'risques et limites',
         compatibleExisting: 'costume|dominant|matchnul|parite|absente|ombre|null',
       }],
-      replacements: [{ from: '♦️', to: '♣️', lead: 2, text: "d'après mes analyses, remplace ♦️ par ♣️ quand le déclencheur est vu" }],
       nextChecks: ['contrôles à faire sur les prochains jeux'],
     },
   };
@@ -580,7 +582,9 @@ async function analyze({ games = [], date = null, objective = '', pastDays = [] 
     source: `IA — ${chatRoute() || 'pollinations'}`,
     findings: Array.isArray(result.findings) && result.findings.length ? result.findings : local.findings,
     discoveries: local.discoveries || [],
-    replacements: Array.isArray(result.replacements) && result.replacements.length ? result.replacements : local.replacements || [],
+    // CORRECTIF (demande) : les remplacements de costume sont écartés, y
+    // compris si l'IA cloud en propose malgré la consigne du prompt système.
+    replacements: [],
     dayMatches: local.dayMatches || [],
     generatedAt: new Date().toISOString(),
     sample: normalized.length,

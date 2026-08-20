@@ -121,6 +121,7 @@ function restore() {
     const saved = (store.read() || {}).predit;
     if (saved) configure({ ...saved });
   } catch (_) {}
+  purgeChainRules();
   return config();
 }
 
@@ -148,7 +149,21 @@ async function restoreFromDb() {
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
+  purgeChainRules();
   return config();
+}
+
+// CORRECTIF (demande) : les règles de type « chaine » (enchaînement de
+// costumes) ne sont plus proposées par l'analyseur (voir pattern-miner.js),
+// et triggered() ne sait plus les évaluer — une règle « chaine » certifiée
+// avant ce changement resterait donc inerte pour toujours (ni retirée, ni
+// jamais re-déclenchée). On la retire proprement au chargement.
+function purgeChainRules() {
+  const stale = panel.certified.filter((c) => c.id && c.id.startsWith('ia:chaine:'));
+  for (const entry of stale) {
+    retire(entry, "Type de déclencheur « enchaînement de costumes » désactivé.");
+    dropPredictionsFor(entry.id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +195,12 @@ function triggered(rule, game) {
   if (!rule || !game) return false;
   if (rule.kind === 'carte') return cardTokens(game, rule.hand).has(rule.token);
   if (rule.kind === 'point') return game.playerValue != null && Number(game.playerValue) === Number(rule.value);
-  if (rule.kind === 'chaine') return suitsOf(game).includes(rule.token);
+  if (rule.kind === 'egalite') return game.winner === 'Égalité' && game.playerValue != null && Number(game.playerValue) === Number(rule.value);
+  if (rule.kind === 'forme') {
+    return game.playerValue != null && Number(game.playerValue) === Number(rule.value)
+      && (game.playerCards || []).length === Number(rule.pCount)
+      && (game.bankerCards || []).length === Number(rule.bCount);
+  }
   return false;
 }
 
