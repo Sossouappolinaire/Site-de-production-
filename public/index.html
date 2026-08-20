@@ -801,8 +801,10 @@ Faites-en bon usage !
       <div id="aiCumulative" class="section"><div class="loading">Chargement des paliers…</div></div>
       <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Avis sur les stratégies</span><h2 style="margin-top:7px">L’IA juge les stratégies existantes (cumul complet)</h2><p class="small">L’IA reprend TOUT le cumul de la journée (jeux 1 → 1440) et les résultats réels de chaque stratégie pour dire laquelle garder, laquelle ajuster et laquelle mettre en silencieux.</p></div><div class="toolbar"><button class="button primary" onclick="runAdvice(false)">Mettre à jour</button><button class="button orange" onclick="runAdvice(true)">Avis Pollinations.ai</button></div></div>
       <div id="aiAdvice" class="section"><div class="loading">Chargement de l’avis…</div></div>
+      <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Formation</span><h2 style="margin-top:7px">L’IA apprend des enchaînements de prédictions</h2><p class="small">Pour chaque stratégie (y compris « Prédit »), l’IA regarde ce qui arrive à une prédiction quand celle qui la précède a perdu ou nécessité un rattrapage, et propose un taux de réussite pour ce cas précis.</p></div><div class="toolbar"><button class="button primary" onclick="runFormation(false)">Actualiser</button><button class="button orange" onclick="runFormation(true)">Avis Pollinations.ai</button></div></div>
+      <div id="aiFormation" class="section"><div class="loading">Chargement de la formation…</div></div>
       <div id="aiResult" class="section"></div>`;
-      renderAiResults(); loadPatterns(); loadCompare(); loadCumulative(); loadAdvice();
+      renderAiResults(); loadPatterns(); loadCompare(); loadCumulative(); loadAdvice(); loadFormation();
     }
     function aiAskPage() {
       setNav('ai');
@@ -899,6 +901,18 @@ Faites-en bon usage !
       } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
     async function runAdvice(remote) { const box = $('#aiAdvice'); if (box) box.innerHTML = '<div class="loading">Analyse en cours…</div>'; try { await api('/api/ai/strategy-advice/run', 'POST', { remote: !!remote }); await loadAdvice(); toast('Avis mis à jour.'); } catch(e) { toast(e.message, 'error'); } }
+    async function loadFormation() {
+      const box = $('#aiFormation'); if (!box) return;
+      try {
+        const r = await api('/api/formation');
+        const list = r.strategies || [];
+        if (!list.length) { box.innerHTML = '<div class="empty">Aucune donnée pour l’instant.</div>'; return; }
+        box.innerHTML = list.map(s => `<div class="panel" style="margin-bottom:12px"><div class="split"><b>${esc(s.name)}</b><span class="tag ${s.reliable ? (s.rate >= 75 ? 'good' : 'warn') : ''}">${s.reliable ? `Formation de ${esc(String(s.formationLength))} · ${esc(String(s.rate))}%` : 'échantillon insuffisant'} · ${esc(String(s.troubleEvents))} incident(s)</span></div>
+          ${s.findings.length ? `<ul class="small">${s.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : `<p class="small muted">Pas encore assez de pertes/rattrapages observés pour cette stratégie (minimum ${esc(String(r.minSupport || 5))} incidents).</p>`}</div>`).join('')
+          + (r.remote ? `<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(r.remote.title || 'Avis Pollinations.ai')}</b><span class="tag">${formatDate(r.remoteAt)}</span></div><p class="small">${esc(r.remote.observation || '')}</p>${r.remote.meilleureStrategie ? `<div class="notice">Formation la plus exploitable selon l’IA : <b>${esc(r.remote.meilleureStrategie)}</b></div>` : ''}${(r.remote.findings || []).length ? `<ul class="small">${r.remote.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}${r.remote.risks ? `<p class="small muted">${esc(r.remote.risks)}</p>` : ''}</div>` : '');
+      } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+    }
+    async function runFormation(remote) { const box = $('#aiFormation'); if (box) box.innerHTML = '<div class="loading">Analyse en cours…</div>'; try { await api('/api/formation/run', 'POST', { remote: !!remote }); await loadFormation(); toast('Formation mise à jour.'); } catch(e) { toast(e.message, 'error'); } }
     function renderAiQaEntry(e) {
       return `<div class="ai-qa-entry"><div class="ai-qa-question">${esc(e.question)}</div><div class="ai-qa-text">${esc(e.answer)}</div><div class="ai-qa-meta">${formatDate(e.at)} · source : ${esc(e.source || 'local')}</div></div>`;
     }
@@ -1214,7 +1228,7 @@ Faites-en bon usage !
             <div class="canal-avatar">${esc((c.name || '?').slice(0,1).toUpperCase())}</div>
             <div class="canal-row-body">
               <div class="canal-row-top"><span class="canal-row-name">${esc(c.name)}</span><span class="canal-row-time">${c.lastAt ? formatDate(c.lastAt) : ''}</span></div>
-              <div class="canal-row-preview">${c.lastText ? esc(c.lastText.replace(/\\n/g,' · ')) : `Stratégie : ${esc(c.strategyName)} — aucune prédiction envoyée pour l'instant`}</div>
+              <div class="canal-row-preview">${c.lastText ? esc(c.lastText.replace(/\n/g,' · ')) : `Stratégie : ${esc(c.strategyName)} — aucune prédiction envoyée pour l'instant`}</div>
             </div>
             ${isAdmin ? `<span class="tag" onclick="event.stopPropagation(); deleteCanal(${c.id}, '${esc(c.name).replace(/'/g,"\\'")}')" title="Supprimer">🗑️</span>` : ''}
           </button>`).join('')
