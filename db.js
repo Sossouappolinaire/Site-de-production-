@@ -668,7 +668,7 @@ async function predictionsByDate(dateStr, limit = 200) {
   const d = normalizeDate(dateStr);
   if (!d) return [];
   const r = await q(
-    `SELECT target, suit, hand, max_r, status, rattrapage, hit_number, created_at
+    `SELECT target, suit, hand, max_r, status, rattrapage, hit_number, created_at, strategy
        FROM predictions WHERE played_on = $1 ORDER BY target DESC LIMIT $2`, [d, limit]);
   return r ? r.rows : [];
 }

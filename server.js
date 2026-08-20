@@ -15,6 +15,7 @@ const miner = require('./pattern-miner');
 const aiAuto = require('./ai-auto');
 const cumulative = require('./cumulative');
 const advisor = require('./strategy-advisor');
+const formation = require('./formation');
 const aiQa = require('./ai-qa');
 const predit = require('./predit');
 const afterLoss = require('./after-loss');
@@ -912,6 +913,19 @@ app.get('/api/ai/strategy-advice', async (req, res) => {
 app.post('/api/ai/strategy-advice/run', async (req, res) => {
   const remote = !!(req.body && req.body.remote);
   res.json(await advisor.run({ remote }));
+});
+
+// --- Formation : l'IA déduit, pour chaque stratégie, si la prédiction qui
+// suit une perte ou un rattrapage a plus de chances d'être validée --------
+app.get('/api/formation', async (req, res) => {
+  const st = formation.status();
+  if (!st.lastRunAt) return res.json(await formation.run());
+  res.json(st);
+});
+
+app.post('/api/formation/run', async (req, res) => {
+  const remote = !!(req.body && req.body.remote);
+  res.json(await formation.run({ remote }));
 });
 
 // --- « Poser une question à l'IA » sur le projet (prédictions réelles, raisons, réglages) ---
