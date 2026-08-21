@@ -665,8 +665,8 @@
         <div class="panel"><h3>Publier une nouvelle stratégie</h3>
           <div class="field"><label>Source</label><select id="shopSource" onchange="shopSourceChanged()">${shopSourceOptions()}</select></div>
           <div class="field"><label>Nom (référence interne, optionnel pour une source du catalogue/IA)</label><input id="shopRealName" placeholder="Ex. Stratégie ombre variante 2"></div>
-          <div class="field"><label>Détails de la stratégie (avec exemple intégré ou séparé ci-dessous)</label><textarea id="shopDetails" rows="5" placeholder="Décris la stratégie en détail : logique, déclencheur, quand l'utiliser…"></textarea></div>
-          <div class="field"><label>Exemple concret</label><textarea id="shopExample" rows="3" placeholder="Ex. Si tu observes ♦️ absent pendant 5 jeux consécutifs, prédis ♦️ sur le jeu suivant…"></textarea></div>
+          <div class="field" id="shopDetailsField"><label id="shopDetailsLabel">Détails de la stratégie (avec exemple intégré ou séparé ci-dessous)</label><textarea id="shopDetails" rows="5" placeholder="Décris la stratégie en détail : logique, déclencheur, quand l'utiliser…"></textarea></div>
+          <div class="field"><label>Exemple concret <span class="small">(optionnel)</span></label><textarea id="shopExample" rows="3" placeholder="Ex. Si tu observes ♦️ absent pendant 5 jeux consécutifs, prédis ♦️ sur le jeu suivant…"></textarea></div>
           <div class="field" id="shopRateField"><label>Taux de réussite (%) — pour une stratégie personnalisée</label><input id="shopRate" type="number" min="0" max="100" placeholder="Ex. 82"></div>
           <div class="toolbar"><button class="button primary" onclick="shopCreate()">Publier dans la boutique</button></div>
           <div id="shopCreateMsg"></div>
@@ -687,6 +687,13 @@
       const realName = $('#shopRealName'); const rateField = $('#shopRateField');
       if (realName) realName.closest('.field').style.display = custom ? '' : 'none';
       if (rateField) rateField.style.display = custom ? '' : 'none';
+      // Pour une stratégie du catalogue/IA (déjà connue du bot), pas besoin de
+      // retaper la description à la main : l'IA explique déjà toute seule à
+      // partir de la vraie stratégie (voir resolvedDetails() côté serveur).
+      // Le champ reste disponible seulement pour la surcharger si voulu.
+      const label = $('#shopDetailsLabel'); const details = $('#shopDetails');
+      if (label) label.textContent = custom ? 'Détails de la stratégie (avec exemple intégré ou séparé ci-dessous)' : 'Détails de la stratégie (optionnel — laisse vide : l\'IA utilise déjà la vraie description de cette stratégie)';
+      if (details) details.placeholder = custom ? 'Décris la stratégie en détail : logique, déclencheur, quand l\'utiliser…' : 'Laisse vide pour que l\'IA explique la stratégie telle qu\'elle existe déjà. Ne remplis que pour surcharger.';
     }
     async function shopCreate() {
       const raw = val('shopSource');
