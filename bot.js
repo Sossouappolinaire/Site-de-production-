@@ -14,6 +14,7 @@ const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
+const shop = require('./shop');
 const {
   state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
@@ -24,10 +25,14 @@ const {
 } = require('./predictor');
 
 let bot = null;
+let shopBot = null;
 let loopStarted = false;
 
 const saved = store.read();
 state.botToken = saved.botToken || config.BOT_TOKEN || '';
+// Token API dédié EXCLUSIVEMENT à la boutique de stratégies (shop.js) —
+// jamais partagé avec le bot principal ni avec un autre service.
+state.shopBotToken = saved.shopBotToken || config.SHOP_BOT_TOKEN || '';
 state.adminId = saved.adminId || config.ADMIN_ID;
 if (Array.isArray(saved.channels)) state.channels = saved.channels;
 if (Array.isArray(saved.activeChannels)) state.activeChannels = saved.activeChannels;
@@ -73,6 +78,7 @@ let dbDirty = false;
 function persist() {
   store.patch({
     botToken: state.botToken,
+    shopBotToken: state.shopBotToken,
     adminId: state.adminId,
     channels: state.channels,
     activeChannels: state.activeChannels,
@@ -101,6 +107,9 @@ function persist() {
       template: state.template || '',
       savedAt: new Date().toISOString(),
     });
+    // token de la boutique : clé séparée, jamais mêlée à saveAppConfig()
+    // (qui ne concerne que le bot principal).
+    db.setSetting('shop_bot_token', state.shopBotToken || '');
     db.setSetting('site_channels', JSON.stringify(state.siteChannels || []));
     db.setSetting('B', state.B);
     db.setSetting('maxR', state.maxR);
@@ -148,6 +157,8 @@ function listChannels() {
 
 const HELP =
   '🎴 *Bot Baccara 1xbet — main du JOUEUR*\n\n' +
+  'ℹ️ La boutique de stratégies (/start, /boutique, /langue) est sur son ' +
+  'propre bot Telegram — ce bot-ci ne gère que les prédictions et l\'admin.\n\n' +
   '*Jeu*\n' +
   '/live — jeu réellement en cours (cartes + costumes joueur)\n' +
   '/stats — statistiques des prédictions\n' +
@@ -226,15 +237,23 @@ function wire(b) {
   });
   b.on('channel_post', (m) => rememberChannel(m.chat));
 
+  // ---------------------------------------------------------------------
+  // La boutique de stratégies (shop.js) vit désormais sur son PROPRE bot
+  // Telegram, avec son propre token (voir wireShop() + state.shopBotToken
+  // ci-dessous) : le bot principal ne gère plus /boutique, /langue, /start
+  // ni la saisie des codes de paiement.
+  // ---------------------------------------------------------------------
+
   // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une
-  // commande (ne commence pas par /) est transmis à l'IA (ai-qa.js), qui
-  // répond au nom de « Bak Sossou IA » (voir le prompt système dans
-  // ai-qa.js) en s'appuyant sur les vraies données du bot. isAdmin détermine
-  // seulement si les détails techniques d'une éventuelle erreur IA sont
-  // visibles (jamais montrés à un utilisateur normal — voir fallbackAnswer).
+  // commande (ne commence pas par /) est transmis à l'IA générale
+  // (ai-qa.js) qui répond au nom de « Bak Sossou IA » en s'appuyant sur les
+  // vraies données du bot. isAdmin détermine seulement si les détails
+  // techniques d'une éventuelle erreur IA sont visibles (jamais montrés à un
+  // utilisateur normal).
   b.on('message', async (msg) => {
     if (!msg.text || msg.text.startsWith('/')) return;
     if (!msg.chat || msg.chat.type !== 'private') return;
+
     try {
       const entry = await aiQa.ask(msg.text, { isAdmin: isAdmin(msg) });
       await b.sendMessage(msg.chat.id, entry.answer);
@@ -244,7 +263,7 @@ function wire(b) {
     }
   });
 
-  b.onText(/^\/(start|aide|help)/, (msg) =>
+  b.onText(/^\/(aide|help)/, (msg) =>
     b.sendMessage(msg.chat.id, HELP, { parse_mode: 'Markdown' })
   );
 
@@ -980,6 +999,114 @@ function wire(b) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Bot DÉDIÉ à la boutique de stratégies (shop.js) — token API totalement
+// séparé de celui du bot principal (state.botToken). Ce bot ne gère QUE :
+// accueil multilingue, liste de stratégies, saisie du code de paiement,
+// explication IA restreinte à la stratégie achetée. Voir shop.js.
+// ---------------------------------------------------------------------------
+function wireShop(b) {
+  b.on('polling_error', (e) => { state.shopBotError = e.message; });
+
+  function langKeyboard() {
+    return { inline_keyboard: shop.LANGS.map((l) => [{ text: `${l.flag} ${l.label}`, callback_data: `lang:${l.code}` }]) };
+  }
+
+  async function sendWelcome(chatId) {
+    await b.sendMessage(chatId, shop.t('welcome', 'fr'), { parse_mode: 'Markdown', reply_markup: langKeyboard() });
+  }
+
+  async function sendShopMenu(chatId, userId, lang) {
+    const items = shop.listActive();
+    if (!items.length) return b.sendMessage(chatId, shop.t('noItems', lang));
+    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}`, callback_data: `shop:${it.id}` }]);
+    await b.sendMessage(chatId, shop.t('shopIntro', lang), { reply_markup: { inline_keyboard: rows } });
+  }
+
+  b.on('callback_query', async (q) => {
+    try {
+      const data = String(q.data || '');
+      const chatId = q.message && q.message.chat && q.message.chat.id;
+      const userId = q.from && q.from.id;
+      if (!chatId || !userId) return b.answerCallbackQuery(q.id);
+
+      if (data.startsWith('lang:')) {
+        const lang = data.slice(5);
+        shop.setLang(userId, lang);
+        await b.answerCallbackQuery(q.id, { text: shop.t('langSaved', lang) });
+        await sendShopMenu(chatId, userId, lang);
+        return;
+      }
+      if (data.startsWith('shop:')) {
+        const itemId = data.slice(5);
+        const item = shop.getItem(itemId);
+        const lang = shop.getLang(userId) || 'fr';
+        if (!item || !item.active) {
+          await b.answerCallbackQuery(q.id);
+          return b.sendMessage(chatId, shop.t('itemInactive', lang));
+        }
+        if (shop.hasUnlocked(userId, itemId)) {
+          // déjà acheté : on rouvre directement le mode questions, sans redemander le code.
+          shop.setActiveItem(userId, itemId);
+          await b.answerCallbackQuery(q.id);
+          const text = await shop.fullPresentation(item, lang);
+          await b.sendMessage(chatId, text);
+          return b.sendMessage(chatId, shop.t('canAsk', lang));
+        }
+        shop.setPendingCode(userId, itemId);
+        await b.answerCallbackQuery(q.id);
+        return b.sendMessage(chatId, shop.t('askCode', lang));
+      }
+      await b.answerCallbackQuery(q.id);
+    } catch (_) { try { await b.answerCallbackQuery(q.id); } catch (__) {} }
+  });
+
+  b.onText(/^\/boutique/, async (msg) => {
+    const userId = msg.from.id;
+    const lang = shop.getLang(userId);
+    if (!lang) return sendWelcome(msg.chat.id);
+    return sendShopMenu(msg.chat.id, userId, lang);
+  });
+
+  b.onText(/^\/langue/, (msg) => sendWelcome(msg.chat.id));
+  b.onText(/^\/start/, (msg) => sendWelcome(msg.chat.id));
+
+  // Code de paiement saisi une fois avec succès → CODE EXPIRÉ immédiatement
+  // (voir shop.redeem()) : un nouveau code est régénéré automatiquement pour
+  // cette stratégie, donc l'ancien code ne peut plus servir à personne.
+  b.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+    if (!msg.chat || msg.chat.type !== 'private') return;
+    const userId = msg.from && msg.from.id;
+    if (!userId) return;
+    const lang = shop.getLang(userId);
+    if (!lang) return sendWelcome(msg.chat.id);
+
+    const pendingItemId = shop.getPendingCode(userId);
+    if (pendingItemId) {
+      const r = shop.redeem(userId, pendingItemId, msg.text);
+      if (r.ok) {
+        await b.sendMessage(msg.chat.id, shop.t('unlockedHeader', lang));
+        const text = await shop.fullPresentation(r.item, lang);
+        await b.sendMessage(msg.chat.id, text);
+        return b.sendMessage(msg.chat.id, shop.t('canAsk', lang));
+      }
+      if (r.reason === 'used') return b.sendMessage(msg.chat.id, shop.t('codeUsed', lang));
+      if (r.reason === 'inactive') return b.sendMessage(msg.chat.id, shop.t('itemInactive', lang));
+      return b.sendMessage(msg.chat.id, shop.t('codeWrong', lang));
+    }
+    const activeItemId = shop.getActiveItem(userId);
+    if (activeItemId) {
+      const item = shop.getItem(activeItemId);
+      if (item) {
+        const answer = await shop.explain(item, msg.text, lang);
+        return b.sendMessage(msg.chat.id, answer || shop.t('itemInactive', lang));
+      }
+    }
+    return sendShopMenu(msg.chat.id, userId, lang);
+  });
+}
+
 function activate(id) {
   if (!state.activeChannels.includes(id)) state.activeChannels.push(id);
   if (!state.channels.some((c) => c.id === id)) state.channels.push({ id, title: String(id) });
@@ -992,6 +1119,14 @@ function deactivate(id) {
 }
 
 async function startBot(token) {
+  // Validation AVANT toute mutation d'état / persistance : un token en
+  // conflit avec celui de la boutique ne doit jamais être enregistré, même
+  // temporairement (sinon un redémarrage ultérieur repartirait bloqué).
+  const nextToken = token ? token.trim() : state.botToken;
+  if (nextToken && state.shopBotToken && nextToken === state.shopBotToken) {
+    state.botError = 'Ce token est déjà utilisé par la boutique : configure un token différent pour le bot principal.';
+    return { ok: false, error: state.botError };
+  }
   if (token) state.botToken = token.trim();
   persist();
   state.botError = null;
@@ -1024,6 +1159,53 @@ function botStatus() {
     tokenMasked: state.botToken ? state.botToken.slice(0, 8) + '••••••' + state.botToken.slice(-4) : null,
     adminId: state.adminId,
     error: state.botError || null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cycle de vie du bot DÉDIÉ à la boutique — token strictement séparé du bot
+// principal (voir wireShop() et la vérification croisée ci-dessus/ci-dessous :
+// aucun des deux bots ne démarre si les deux tokens sont identiques).
+// ---------------------------------------------------------------------------
+async function startShopBot(token) {
+  // Même garde-fou que startBot() ci-dessus, dans l'autre sens : rien n'est
+  // persisté si le token entre en conflit avec celui du bot principal.
+  const nextToken = token ? token.trim() : state.shopBotToken;
+  if (nextToken && state.botToken && nextToken === state.botToken) {
+    state.shopBotError = 'Ce token est déjà utilisé par le bot principal : configure un token différent, réservé uniquement à la boutique.';
+    return { ok: false, error: state.shopBotError };
+  }
+  if (token) state.shopBotToken = token.trim();
+  persist();
+  state.shopBotError = null;
+  if (shopBot) {
+    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
+    shopBot = null;
+  }
+  if (!state.shopBotToken) {
+    state.shopBotError = 'Aucun token configuré';
+    return { ok: false, error: state.shopBotError };
+  }
+  try {
+    shopBot = new TelegramBot(state.shopBotToken, { polling: true });
+    wireShop(shopBot);
+    const me = await shopBot.getMe();
+    state.shopBotUsername = me.username;
+    return { ok: true, username: me.username };
+  } catch (e) {
+    state.shopBotError = e.message;
+    shopBot = null;
+    return { ok: false, error: e.message };
+  }
+}
+
+function shopBotStatus() {
+  return {
+    running: !!shopBot,
+    username: state.shopBotUsername || null,
+    tokenSet: !!state.shopBotToken,
+    tokenMasked: state.shopBotToken ? state.shopBotToken.slice(0, 8) + '••••••' + state.shopBotToken.slice(-4) : null,
+    error: state.shopBotError || null,
   };
 }
 
@@ -1587,6 +1769,11 @@ async function applyDbConfigs() {
       state.siteChannels = app.siteChannels; restored.push('canaux du site');
     }
   }
+  // token de la boutique : restauré depuis sa clé dédiée (jamais depuis
+  // loadAppConfig(), réservé au bot principal) — garantit la séparation
+  // même après un redémarrage.
+  const shopToken = await db.getSetting('shop_bot_token');
+  if (shopToken) { state.shopBotToken = shopToken; restored.push('token boutique'); }
   if (!state.siteChannels.length) {
     const rawSiteChannels = await db.getSetting('site_channels');
     if (rawSiteChannels) {
@@ -1687,6 +1874,7 @@ async function applyDbConfigs() {
   });
   await predit.restoreFromDb();
   await afterLoss.restoreFromDb();
+  await shop.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
 }
 
@@ -1758,6 +1946,7 @@ async function startLoop() {
     tick();
   }
   startBot();
+  startShopBot();
 }
 
-module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };
+module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, startShopBot, shopBotStatus, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };

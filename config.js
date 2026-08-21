@@ -98,6 +98,10 @@ const DB_URL = process.env.DATABASE_URL || (ON_RENDER ? DB_INTERNAL : DB_EXTERNA
 
 module.exports = {
   BOT_TOKEN: process.env.BOT_TOKEN || '',
+  // Token API dédié EXCLUSIVEMENT à la boutique de stratégies (shop.js) —
+  // variable Render séparée, jamais partagée avec BOT_TOKEN ni avec les
+  // autres clés (Pollinations, Gemini, Groq, OpenRouter, Brevo…).
+  SHOP_BOT_TOKEN: process.env.SHOP_BOT_TOKEN || '',
   ADMIN_ID: Number(process.env.ADMIN_ID || 0),
   PORT: Number(process.env.PORT || 10000),
 

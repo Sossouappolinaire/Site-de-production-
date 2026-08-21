@@ -22,6 +22,7 @@ const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
+const shop = require('./shop');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
@@ -29,7 +30,7 @@ const {
   predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock,
   announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, addSiteChannelMessage, siteChannelFeed,
 } = require('./predictor');
-const { startLoop, startBot, botStatus, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
+const { startLoop, startBot, botStatus, startShopBot, shopBotStatus, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
 
 const app = express();
 app.set('trust proxy', 1); // Render est derrière un proxy HTTPS : nécessaire pour les cookies "secure"
@@ -250,6 +251,7 @@ app.get('/api/state', async (req, res) => {
     lastFinished: state.lastFinished,
     error: state.lastError,
     bot: botStatus(),
+    shopBot: shopBotStatus(),
     db: db.status(),
     apiUrl: api.endpoints()[0],
     champId: config.CHAMP_ID,
@@ -334,6 +336,21 @@ app.post('/api/bot/admin', (req, res) => {
   state.adminId = id;
   persist();
   res.json({ ok: true, bot: botStatus() });
+});
+
+// --- bot de la boutique (token séparé, exclusivement dédié à shop.js) ------
+app.get('/api/shop/bot', (req, res) => res.json(shopBotStatus()));
+
+app.post('/api/shop/bot/token', async (req, res) => {
+  const token = (req.body.token || '').trim();
+  if (!/^\d+:[\w-]{20,}$/.test(token)) return res.status(400).json({ error: 'Token Telegram invalide' });
+  const r = await startShopBot(token);
+  res.status(r.ok ? 200 : 400).json({ ...r, bot: shopBotStatus() });
+});
+
+app.post('/api/shop/bot/restart', async (req, res) => {
+  const r = await startShopBot();
+  res.json({ ...r, bot: shopBotStatus() });
 });
 
 // --- base de données --------------------------------------------------------
@@ -625,6 +642,68 @@ app.post('/api/configs/load', async (req, res) => {
 app.get('/api/strategies', (req, res) => {
   initStrategies();
   res.json({ strategies: strategies.LIST.map((d) => strategyPayload(d.key)) });
+});
+
+// ---------------------------------------------------------------------------
+// Boutique — publication de stratégies vendues avec code de paiement.
+// Lecture accessible à tout compte connecté (GET), écriture réservée à
+// l'administrateur (voir le middleware générique plus haut : USER_WRITE_*).
+// ---------------------------------------------------------------------------
+app.get('/api/shop', (req, res) => {
+  res.json({
+    items: shop.listAll(),
+    sources: {
+      strategies: strategies.LIST.map((d) => ({ key: d.key, name: d.name, about: d.about, rate: (stats(d.key) || {}).rate ?? null })),
+      ia: aiAuto.listStrategies(),
+    },
+  });
+});
+
+app.post('/api/shop', async (req, res) => {
+  try {
+    const { source, sourceKey, details, example, rate, realName } = req.body || {};
+    let item;
+    if (source === 'strategy' && sourceKey) {
+      item = shop.publishFromStrategy(sourceKey, { details, example });
+    } else if (source === 'ia' && sourceKey) {
+      const aiItem = aiAuto.listStrategies().find((s) => s.id === sourceKey || s.key === sourceKey);
+      if (!aiItem) return res.status(404).json({ error: "Stratégie IA introuvable (peut-être expirée après 1h)." });
+      item = shop.publishFromAiStrategy(aiItem, { details, example });
+    } else {
+      item = await shop.createItem({ source: 'custom', realName, details, example, rate: Number.isFinite(rate) ? rate : null });
+    }
+    res.json({ ok: true, item });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/shop/:id', (req, res) => {
+  const item = shop.updateItem(req.params.id, req.body || {});
+  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
+  res.json({ ok: true, item });
+});
+
+app.delete('/api/shop/:id', (req, res) => {
+  const ok = shop.deleteItem(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Article introuvable.' });
+  res.json({ ok: true });
+});
+
+app.post('/api/shop/:id/code', (req, res) => {
+  const item = shop.regenerateCode(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
+  res.json({ ok: true, item });
+});
+
+app.post('/api/shop/:id/rename', async (req, res) => {
+  const item = await shop.renameItem(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
+  res.json({ ok: true, item });
+});
+
+app.post('/api/shop/:id/refresh-rate', (req, res) => {
+  const item = shop.refreshRateFromStrategy(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
+  res.json({ ok: true, item });
 });
 
 app.get('/api/strategies/:key', (req, res) => {
@@ -997,14 +1076,31 @@ function ombreBusy() {
   return pendingPrediction || pendingAnnouncement;
 }
 
+// CORRECTIF « redémarrage qui ne se termine jamais » : la stratégie « ombre »
+// est ACTIVÉE PAR DÉFAUT (voir strategies.js) et sa description dit
+// elle-même qu'elle attend « aussi longtemps qu'il faut » — en pratique,
+// une annonce en_attente peut donc rester vraie pendant très longtemps
+// (plusieurs minutes, parfois plus). Attendre indéfiniment revenait à ne
+// JAMAIS redémarrer, ce qui bloquait complètement la fonctionnalité
+// (observé : « En attente de redémarrage » qui ne se termine jamais).
+// On attend donc raisonnablement (jusqu'à ~2 min), mais on FORCE le
+// redémarrage au-delà — mieux vaut risquer de couper un décompte ombre en
+// cours (il repartira simplement de zéro) que de ne jamais mettre à jour
+// les stratégies créées par l'IA.
+const OMBRE_WAIT_MAX_ATTEMPTS = 12; // ~12 × 10 s = 2 min après le délai initial de 20 s
+
 function attemptRestart(attempt) {
-  if (ombreBusy()) {
-    if (attempt % 6 === 0) { // ~1 log par minute (10 s × 6) pour ne pas spammer
-      console.log('⏳ Redémarrage reporté : prédiction/annonce « ombre » (mode silencieux) en attente.');
-      aiRepair.log('⏳ Redémarrage reporté : une prédiction/annonce « ombre » (mode silencieux) est en attente — on ne la coupe pas.');
+  if (ombreBusy() && attempt < OMBRE_WAIT_MAX_ATTEMPTS) {
+    if (attempt % 3 === 0) { // log toutes les 30 s pour ne pas spammer
+      console.log(`⏳ Redémarrage reporté (${attempt}/${OMBRE_WAIT_MAX_ATTEMPTS}) : prédiction/annonce « ombre » (mode silencieux) en attente.`);
+      aiRepair.log('⏳ Redémarrage reporté : une prédiction/annonce « ombre » (mode silencieux) est en attente — on ne la coupe pas (sauf au-delà de 2 min).');
     }
     setTimeout(() => attemptRestart(attempt + 1), 10000);
     return;
+  }
+  if (attempt >= OMBRE_WAIT_MAX_ATTEMPTS && ombreBusy()) {
+    console.log('⚠️ Redémarrage forcé après 2 min d\'attente — la stratégie « ombre » était encore en cours, son décompte va repartir de zéro.');
+    aiRepair.log('⚠️ Redémarrage forcé après 2 min d\'attente : le décompte « ombre » en cours a été interrompu (il repart de zéro).');
   }
   try { persist(); } catch (e) { console.error('Persist avant redémarrage impossible :', e.message); }
   console.log('🔄 Redémarrage en cours (modifications de l\'IA appliquées au prochain démarrage)…');
@@ -1015,9 +1111,9 @@ function attemptRestart(attempt) {
 function scheduleGracefulRestart(reason) {
   if (restartScheduled) return; // déjà programmé — pas de double redémarrage
   restartScheduled = true;
-  console.log(`🔄 Redémarrage automatique programmé (${reason}) — dans 5 s…`);
-  aiRepair.log(`🔄 Redémarrage automatique dans 5 s pour appliquer : ${reason}.`);
-  setTimeout(() => attemptRestart(0), 5000);
+  console.log(`🔄 Redémarrage automatique programmé (${reason}) — dans 20 s…`);
+  aiRepair.log(`🔄 Redémarrage automatique dans 20 s pour appliquer : ${reason}.`);
+  setTimeout(() => attemptRestart(0), 20000);
 }
 
 app.get('/api/ai/repair', (req, res) => res.json(aiRepair.status()));

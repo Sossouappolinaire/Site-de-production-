@@ -13,7 +13,8 @@ des canaux Telegram et analyseur guidé par Pollinations.ai.
 
 | Variable | Obligatoire | Rôle |
 | --- | --- | --- |
-| `BOT_TOKEN` | Oui pour Telegram | Token du bot Telegram |
+| `BOT_TOKEN` | Oui pour Telegram | Token du bot Telegram principal (prédictions, canaux, admin) |
+| `SHOP_BOT_TOKEN` | Oui pour la boutique | Token d'un bot Telegram **distinct**, dédié UNIQUEMENT à la boutique de stratégies (`/boutique`, langue, code de paiement) — jamais le même que `BOT_TOKEN` |
 | `ADMIN_ID` | Recommandé | Identifiant Telegram de l'administrateur |
 | `DATABASE_URL` | Oui pour la persistance | URL PostgreSQL de la base de données |
 | `POLLINATIONS_API_KEY` | Non | Clé secrète pour l'enrichissement IA distant |
@@ -233,7 +234,37 @@ Désormais :
    plus un **bilan global IA** dans le canal du panneau « Prédit ».
 4. Déclenchement manuel : `/bilan` ou `POST /api/bilans/send`.
 
-## IA — que faire quand « Insufficient balance » s'affiche
+## Version 3.5 — bot boutique séparé + codes auto-renouvelés
+
+### Deux bots Telegram distincts
+La boutique de stratégies (`/boutique`) tourne désormais sur son **propre bot
+Telegram**, avec son propre token (`SHOP_BOT_TOKEN`), totalement indépendant
+du bot principal (`BOT_TOKEN`) qui publie les prédictions et répond aux
+commandes admin (`/live`, `/reglages`, etc.).
+
+1. Crée un **second** bot auprès de [@BotFather](https://t.me/BotFather)
+   (`/newbot`), récupère son token.
+2. Ajoute `SHOP_BOT_TOKEN` dans les variables Render (ou renseigne-le
+   directement depuis `/#/settings` → panneau « Bot de la boutique »).
+3. Ce token doit être **différent** de `BOT_TOKEN` : le service refuse de
+   démarrer l'un des deux bots si les deux tokens sont identiques.
+4. Le lien `/boutique`, `/langue`, `/start`, le choix de langue et la saisie
+   du code de paiement ne répondent plus que sur ce bot dédié. Le bot
+   principal ne gère plus aucun de ces échanges.
+
+Statut consultable via `GET /api/shop/bot` (token masqué, `@nomdubot`,
+dernière erreur), configurable via `POST /api/shop/bot/token` /
+`POST /api/shop/bot/restart`.
+
+### Code de paiement à usage unique, renouvelé automatiquement
+Dès qu'un client saisit le bon code avec succès pour la **première fois**, ce
+code expire immédiatement et un **nouveau code** est généré automatiquement
+pour cette stratégie — sans action de l'administrateur. L'ancien code ne peut
+plus jamais être réutilisé, ni par ce client, ni par personne d'autre. Le
+bouton « régénérer le code » du panneau admin reste disponible pour un
+renouvellement manuel à tout moment.
+
+
 
 La clé Pollinations est bien configurée, mais le **solde du compte est à 0
 pollen** : l'API refuse alors chaque requête (402). Le bot bascule
