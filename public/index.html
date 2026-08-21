@@ -121,6 +121,13 @@
     .notice { padding: 13px 15px; margin: 14px 0; border-radius: 12px; color: var(--soft); background: rgba(112,225,229,.06); border: 1px solid rgba(112,225,229,.18); font-size: 12px; line-height: 1.55; }
     .notice.warn { border-color: rgba(245,184,107,.28); background: rgba(245,184,107,.06); }
     .notice.error { border-color: rgba(255,131,144,.28); background: rgba(255,131,144,.06); }
+    .repair-bar { height: 16px; border-radius: 999px; background: #e6ebf3; overflow: hidden; border: 1px solid #cfd8e6; }
+    .repair-bar > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#0b7a45,#22c55e); transition: width .5s ease; }
+    .repair-percent { font-size: 34px; font-weight: 800; color: #0b3d91; }
+    .repair-item { padding: 14px 16px; margin: 10px 0; border-radius: 12px; background: #ffffff; border: 1px solid #dbe2ec; }
+    .repair-item b { color: #0b3d91; }
+    .repair-item .repair-note { margin-top: 6px; color: #10161f; font-size: 14.5px; white-space: pre-wrap; }
+    .repair-log { font-family: ui-monospace, monospace; font-size: 12.5px; color: #33415c; }
     .ai-qa-entry { padding: 18px 20px; margin: 14px 0; border-radius: 14px; background: #ffffff; border: 1px solid #dbe2ec; box-shadow: 0 2px 10px rgba(0,0,0,.18); }
     .ai-qa-entry .ai-qa-question { color: #0b3d91; font-size: 17px; font-weight: 700; line-height: 1.4; }
     .ai-qa-entry .ai-qa-text { margin-top: 10px; color: #10161f; font-size: 17px; line-height: 1.65; white-space: pre-wrap; }
@@ -349,6 +356,7 @@
         <a href="#/strategies" data-nav="strategies">Stratégies</a>
         <a href="#/ai" data-nav="ai">Analyseur IA</a>
         <a href="#/ai-strategies" data-nav="ai">Stratégies IA</a>
+        <a href="#/ai-repair" data-nav="ai-repair">🛠 Réparation IA</a>
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/diagnostics" data-nav="settings">Envois</a>
@@ -531,6 +539,7 @@
         <button class="home-button" onclick="location.hash='#/predit'">Prédit IA<small>${(snapshot.predit?.activeCount || 0)} stratégie(s) certifiée(s)</small></button>
         <button class="home-button" onclick="location.hash='#/after-loss'">Prédiction après perte<small>${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)</small></button>
         <button class="home-button" onclick="location.hash='#/ai-ask'">Question IA<small>Demander une explication au bot</small></button>
+        <button class="home-button" onclick="location.hash='#/ai-repair'">🛠 Réparation IA<small>L'IA identifie les problèmes et les corrige</small></button>
         <button class="home-button" onclick="resetAllStrategies()">Réinitialiser stratégies<small>Restaurer les valeurs du code</small></button>
         <button class="home-button" onclick="location.hash='#/announcements'">Annonces<small>Prédiction dans l'ombre</small></button>
         <button class="home-button" onclick="location.hash='#/diagnostics'">Envois<small>Vérification des canaux</small></button>
@@ -1460,6 +1469,109 @@ Faites-en bon usage !
     async function saveMailConfig() { try { await api('/api/auth/mail-config', 'POST', { apiKey: val('mailApiKey'), from: val('mailFrom') }); await refresh(); settingsPage(); toast("Clé Brevo enregistrée."); } catch(e) { toast(e.message, 'error'); } }
     async function doLogout() { try { await api('/api/auth/logout', 'POST', {}); } catch(e) {} window.location.href = '/login.html'; }
     async function saveGlobals() { try { await api('/api/setb', 'POST', { b: val('globalB') }); await api('/api/setmaxr', 'POST', { maxR: val('globalR') }); await api('/api/setformat', 'POST', { format: val('globalF') }); await refresh(); settingsPage(); toast('Réglages globaux enregistrés.'); } catch(e) { toast(e.message, 'error'); } }
+
+    // ---------------------------------------------------------------------
+    // Réparation IA (Groq) : diagnostic -> correction automatique avec
+    // pourcentage -> vérification finale.
+    // ---------------------------------------------------------------------
+    let repairState = null;
+    let repairRunning = false;
+    const REPAIR_BADGE = { pending: '<span class="tag warn">à corriger</span>', fixed: '<span class="tag good">corrigé</span>', skipped: '<span class="tag">rien à corriger</span>', failed: '<span class="tag bad">échec</span>' };
+    async function repairPage() {
+      try { repairState = await api('/api/ai/repair'); } catch (e) { repairState = null; }
+      renderRepair();
+    }
+    function renderRepair() {
+      const s = repairState || {};
+      const problems = s.problems || [];
+      const pct = s.percent || 0;
+      const v = s.verification;
+      const canFix = problems.length && (s.remaining || 0) > 0;
+      const canVerify = problems.length && (s.remaining || 0) === 0;
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Réparation automatique</span><h2 style="margin-top:7px">🛠 Réparation IA</h2><p class="small">Écris ce qui ne va pas : l'IA (Groq · ${esc(s.model || '')}) lit le code du projet, liste les problèmes qu'elle identifie, puis les corrige elle-même en affichant l'avancement jusqu'à 100 %. Ensuite, un bouton « Analyser » vérifie que tout est bien corrigé.</p></div></div>
+      <div class="panel"><div class="notice ${s.configured ? '' : 'warn'}">${s.configured ? 'Clé Groq active · modèle ' + esc(s.model || '') : "Aucune clé Groq configurée (GROQ_API_KEY) : la réparation IA ne peut pas fonctionner."}</div>
+        <div class="field" style="margin-top:14px"><label>Décris le problème (ou ce que l'IA doit vérifier)</label><textarea id="repairMessage" rows="4" placeholder="Ex. Les prédictions de la stratégie ombre ne partent pas dans le canal, et la page Base de données affiche une erreur.">${esc(s.message || '')}</textarea></div>
+        <div class="toolbar"><button class="button primary" onclick="repairDiagnose()">Envoyer à l'IA</button>${problems.length ? '<button class="button ghost" onclick="repairReset()">Nouvelle réparation</button>' : ''}</div>
+        <div id="repairMsg"></div></div>
+      <div class="panel"><h3>Créer une stratégie</h3><p class="small muted">Décris la stratégie que tu veux (ex. « une stratégie qui prédit ♠️ quand 3 costumes identiques se suivent »). L'IA écrit le code et l'ajoute dans la page Stratégies — TOUJOURS désactivée par défaut, à activer toi-même une fois vérifiée.</p>
+        <div class="field" style="margin-top:10px"><label>Description de la nouvelle stratégie</label><textarea id="repairStratDesc" rows="3" placeholder="Ex. Je veux une stratégie qui prédit le costume ♦️ quand le joueur a 2 cartes trois fois de suite."></textarea></div>
+        <div class="toolbar"><button class="button primary" onclick="repairCreateStrategy()">Créer la stratégie</button></div>
+        <div id="repairStratMsg"></div>
+        ${(s.createdStrategies || []).length ? `<div style="margin-top:14px">${s.createdStrategies.map(c => `<div class="repair-item"><div class="split"><b>${esc(c.name)}</b><span class="tag good">clé ${esc(c.key)}</span></div><div class="small muted">${formatDate(c.at)}</div><div class="repair-note">${esc(c.about)}</div></div>`).join('')}</div>` : ''}
+        </div>
+      ${s.summary ? `<div class="panel"><h3>Diagnostic de l'IA</h3><div class="repair-note">${esc(s.summary)}</div></div>` : ''}
+      ${problems.length ? `<div class="panel"><div class="split"><h3>Problèmes identifiés (${problems.length})</h3><span class="repair-percent">${pct} %</span></div>
+        <div class="repair-bar"><span style="width:${pct}%"></span></div>
+        <div class="small muted" style="margin-top:8px">${s.fixed || 0} corrigé(s) · ${s.remaining || 0} restant(s)</div>
+        ${problems.map(p => `<div class="repair-item"><div class="split"><b>${esc(p.title)}</b>${REPAIR_BADGE[p.status] || ''}</div>
+          <div class="small muted">${esc(p.file || '—')} · gravité ${esc(p.severity)}</div>
+          <div class="repair-note">${esc(p.detail)}</div>
+          ${p.note ? `<div class="repair-note"><i>IA :</i> ${esc(p.note)}</div>` : ''}</div>`).join('')}
+        <div class="toolbar" style="margin-top:16px">
+          ${canFix ? `<button class="button orange" id="repairFixBtn" onclick="repairFixAll()">Corriger (${s.remaining} problème(s))</button>` : ''}
+          ${canVerify ? `<button class="button primary" onclick="repairVerify()">Analyser si tout est corrigé</button>` : ''}
+        </div></div>` : ''}
+      ${v ? `<div class="panel"><h3>Vérification finale</h3><div class="notice ${v.allFixed ? '' : 'error'}">${v.allFixed ? '✅ Tous les problèmes sont corrigés' : '⚠️ Il reste des points à corriger'} · score ${esc(v.score)} / 100</div>
+        <div class="repair-note">${esc(v.summary)}</div>
+        ${(v.checks || []).map(c => `<div class="repair-item"><div class="split"><b>${esc(c.title)}</b>${c.fixed ? '<span class="tag good">OK</span>' : '<span class="tag bad">à revoir</span>'}</div><div class="repair-note">${esc(c.comment)}</div></div>`).join('')}
+        ${(v.syntaxErrors || []).length ? `<div class="notice error">Erreurs de syntaxe restantes : ${esc(JSON.stringify(v.syntaxErrors))}</div>` : ''}</div>` : ''}
+      ${(s.logs || []).length ? `<div class="panel"><h3>Journal</h3>${s.logs.map(l => `<div class="repair-log">${formatDate(l.at)} — ${esc(l.text)}</div>`).join('')}</div>` : ''}`;
+      applyReadOnly();
+    }
+    async function repairDiagnose() {
+      const message = ($('#repairMessage')?.value || '').trim();
+      if (!message) return toast('Écris ce qui ne va pas.', 'error');
+      const box = $('#repairMsg');
+      if (box) box.innerHTML = '<div class="loading">L\'IA analyse le code du projet…</div>';
+      try {
+        repairState = await api('/api/ai/repair/diagnose', 'POST', { message }, 180000);
+        renderRepair();
+        toast(`${repairState.total} problème(s) identifié(s).`);
+      } catch (e) { if (box) box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; toast(e.message, 'error'); }
+    }
+    // corrige les problèmes un par un : chaque appel renvoie le pourcentage
+    // d'avancement, réaffiché immédiatement jusqu'à atteindre 100 %.
+    async function repairFixAll() {
+      if (repairRunning) return;
+      repairRunning = true;
+      const btn = $('#repairFixBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Correction en cours…'; }
+      try {
+        for (let guard = 0; guard < 12; guard += 1) {
+          const r = await api('/api/ai/repair/fix', 'POST', {}, 200000);
+          repairState = r;
+          renderRepair();
+          if (r.problem) toast(`${r.problem.title} → ${r.problem.status === 'fixed' ? 'corrigé' : r.problem.status === 'skipped' ? 'rien à corriger' : 'échec'} (${r.percent} %)`, r.problem.status === 'failed' ? 'error' : '');
+          if (r.done || r.percent >= 100) break;
+        }
+        if ((repairState?.percent || 0) >= 100) toast('100 % — corrections terminées. Clique sur « Analyser ».');
+      } catch (e) { toast(e.message, 'error'); await repairPage(); }
+      finally { repairRunning = false; }
+    }
+    async function repairVerify() {
+      const box = $('#repairMsg');
+      if (box) box.innerHTML = '<div class="loading">Vérification par l\'IA…</div>';
+      try {
+        repairState = await api('/api/ai/repair/verify', 'POST', {}, 200000);
+        renderRepair();
+        toast(repairState.verification?.allFixed ? 'Tous les problèmes sont bien corrigés.' : 'Il reste des points à corriger.', repairState.verification?.allFixed ? '' : 'error');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function repairReset() { try { repairState = await api('/api/ai/repair/reset', 'POST', {}); renderRepair(); } catch (e) { toast(e.message, 'error'); } }
+    async function repairCreateStrategy() {
+      const description = ($('#repairStratDesc')?.value || '').trim();
+      if (!description) return toast('Décris la stratégie que tu veux créer.', 'error');
+      const box = $('#repairStratMsg');
+      if (box) box.innerHTML = '<div class="loading">L\'IA écrit la stratégie…</div>';
+      try {
+        const r = await api('/api/ai/repair/create-strategy', 'POST', { description }, 150000);
+        if (box) box.innerHTML = `<div class="notice">Stratégie « ${esc(r.name)} » créée (désactivée) — va dans la page Stratégies pour la vérifier et l'activer.</div>`;
+        $('#repairStratDesc').value = '';
+        await repairPage();
+        toast(`Stratégie « ${r.name} » créée.`);
+      } catch (e) { if (box) box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; toast(e.message, 'error'); }
+    }
+
     function injectBack() {
       const app = $('#app');
       if (!app) return;
@@ -1482,6 +1594,7 @@ Faites-en bon usage !
         else if (h === '#/ai') aiPage();
         else if (h === '#/ai-ask') aiAskPage();
         else if (h === '#/ai-strategies') aiStrategiesPage();
+        else if (h === '#/ai-repair') await repairPage();
         else if (h === '#/predit') preditPage();
         else if (h === '#/after-loss') afterLossPage();
         else if (h === '#/announcements') await announcementsPage();
