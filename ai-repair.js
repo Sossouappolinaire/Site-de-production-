@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const config = require('./config');
+const db = require('./db');
 
 const ROOT = __dirname;
 const BACKUP_DIR = path.join(ROOT, '.repair-backups');
@@ -375,6 +376,7 @@ async function fixNext() {
       if (syntax) throw new Error(`Correction refusée (syntaxe invalide) : ${syntax}`);
       backup(problem.file, current);
       fs.writeFileSync(path.join(ROOT, problem.file), next);
+      markFileChanged();
       problem.status = 'fixed';
       problem.note = String(parsed.explanation || 'Corrigé.').slice(0, 800);
     }
@@ -448,7 +450,28 @@ async function verify() {
 //    elle apparaît dans la page Stratégies, à activer manuellement après
 //    vérification.
 // ---------------------------------------------------------------------------
-const strategyCreation = { history: [] }; // { at, key, name, about, explanation }
+// CORRECTIF « bouton Créé par moi avec IA » : `history` reste le journal
+// détaillé (limité à 20, pour l'affichage récent). `keys` est la liste
+// COMPLÈTE et JAMAIS purgée des clés créées via cette fonction — c'est elle
+// qui sert de filtre pour la page dédiée « Créé par moi avec IA », donc elle
+// ne doit jamais perdre une entrée même après plus de 20 créations.
+// Persistée en base (settings) pour survivre au redémarrage automatique
+// déclenché juste après chaque création (voir server.js).
+const strategyCreation = { history: [], keys: [] }; // { at, key, name, about, explanation }
+
+async function persistCreatedStrategies() {
+  if (!db.ready) return;
+  try { await db.setSetting('ai_created_strategy_keys', JSON.stringify(strategyCreation.keys)); } catch (_) { /* best-effort */ }
+  try { await db.setSetting('ai_created_strategy_history', JSON.stringify(strategyCreation.history)); } catch (_) { /* best-effort */ }
+}
+
+// appelée au démarrage (bot.js → applyDbConfigs) pour restaurer la liste
+// après un redémarrage — sinon le bouton « Créé par moi avec IA » repartirait
+// vide à chaque fois que le process redémarre.
+function restoreCreated(keys, history) {
+  if (Array.isArray(keys)) strategyCreation.keys = [...new Set(keys)];
+  if (Array.isArray(history)) strategyCreation.history = history.slice(0, 20);
+}
 
 const CREATE_STRATEGY_SYSTEM = `Tu es un ingénieur logiciel senior. Tu écris UNE NOUVELLE stratégie de prédiction Baccarat pour le fichier strategies.js d'un projet Node.js.
 On te donne le contenu actuel de strategies.js (avec plusieurs stratégies déjà écrites, à prendre comme exemples de style) et les clés déjà utilisées.
@@ -479,6 +502,69 @@ function slugifyKey(s) {
     .replace(/[^a-z0-9]+/g, '')
     .slice(0, 24);
   return /^[a-z]/.test(base) ? base : `s${base}`;
+}
+
+// CORRECTIF « vérifier avant de mettre en place » : le contrôle de syntaxe
+// (node --check) garantit seulement que le fichier est du JS valide — pas
+// que la stratégie fonctionne réellement, ni qu'elle n'a pas écrasé/dupliqué
+// une clé existante. On charge donc le nouveau strategies.js dans un
+// PROCESS NODE SÉPARÉ (jamais dans celui qui tourne — aucun risque pour
+// l'app en cours) et on vérifie, avant d'écrire quoi que ce soit sur le
+// vrai strategies.js :
+//   1. le module se charge sans lever d'exception ;
+//   2. la clé existe UNE SEULE fois dans LIST (pas absente, pas dupliquée) ;
+//   3. BY_KEY[key] existe, expose bien detect() comme fonction ;
+//   4. la stratégie est bien désactivée par défaut ;
+//   5. detect() ne plante PAS quand on l'appelle sur un tour factice réaliste ;
+//   6. aucune stratégie déjà existante n'a disparu (LIST n'a pas rétréci).
+function smokeTestStrategiesCode(newContent, key, expectedCount) {
+  const tmpPath = path.join(ROOT, `strategies.smoketest.${Date.now()}.js`);
+  fs.writeFileSync(tmpPath, newContent);
+  const script = `
+    const mod = require(${JSON.stringify(tmpPath)});
+    const key = ${JSON.stringify(key)};
+    if (!Array.isArray(mod.LIST)) throw new Error('LIST absente ou invalide après création.');
+    if (mod.LIST.length < ${expectedCount}) throw new Error('des stratégies existantes ont disparu de LIST (' + mod.LIST.length + ' au lieu d\\'au moins ${expectedCount}).');
+    const occurrences = mod.LIST.filter((d) => d && d.key === key).length;
+    if (occurrences !== 1) throw new Error('clé "' + key + '" absente ou dupliquée dans LIST (' + occurrences + ' occurrence(s)).');
+    const def = mod.BY_KEY && mod.BY_KEY[key];
+    if (!def) throw new Error('BY_KEY["' + key + '"] introuvable.');
+    if (typeof def.detect !== 'function') throw new Error('detect() n\\'est pas une fonction.');
+    if (!def.defaults || def.defaults.enabled !== false) throw new Error('la stratégie ne serait pas désactivée par défaut.');
+    const sample = {
+      finished: true, number: 123, winner: 'player',
+      playerCards: 3, bankerCards: 3,
+      playerSuits: ['♦️', '❤️', '♣️'], bankerSuits: ['♠️', '♦️', '❤️'],
+      playerValue: 7, bankerValue: 5,
+    };
+    try { def.detect(sample, { ...(def.defaults || {}) }, {}); }
+    catch (e) { throw new Error('detect() plante à l\\'exécution sur un tour de test : ' + e.message); }
+    console.log('OK ' + mod.LIST.length);
+  `;
+  try {
+    execFileSync(process.execPath, ['-e', script], { stdio: 'pipe', timeout: 8000 });
+    return null; // rien à signaler : tout est propre
+  } catch (e) {
+    return String((e.stderr && e.stderr.toString()) || e.message).replace(/^Error:\s*/i, '').trim().slice(0, 600);
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch { /* fichier temporaire, tant pis */ }
+  }
+}
+
+// CORRECTIF « survivre à un disque non persistant » : keys/history suffisent
+// pour afficher le bouton « Créé par moi avec IA », mais PAS pour reproduire
+// le fichier strategies.js si le disque de l'hébergeur a été réinitialisé
+// entre-temps (Render sans disque persistant — voir bootstrap.js). On
+// sauvegarde donc aussi le CODE SOURCE exact de chaque stratégie créée,
+// sous forme d'une map { clé: code }, en base de données.
+async function persistStrategyCode(key, code) {
+  if (!db.ready) return;
+  try {
+    const raw = await db.getSetting('ai_strategy_code_blocks');
+    const map = raw ? JSON.parse(raw) : {};
+    map[key] = code;
+    await db.setSetting('ai_strategy_code_blocks', JSON.stringify(map));
+  } catch (_) { /* best-effort — bootstrap.js gérera l'absence gracieusement */ }
 }
 
 async function createStrategy(description) {
@@ -533,8 +619,18 @@ async function createStrategy(description) {
   const syntaxErr = syntaxCheck('strategies.js', newContent);
   if (syntaxErr) throw new Error(`Code refusé par le contrôle de syntaxe : ${syntaxErr}`);
 
+  // CORRECTIF « vérifier avant de mettre en place » : test à blanc dans un
+  // process isolé AVANT d'écrire le vrai strategies.js — voir
+  // smokeTestStrategiesCode() ci-dessus. En cas d'échec, RIEN n'est écrit :
+  // l'ancien strategies.js reste intact, aucun redémarrage n'est programmé,
+  // et l'erreur remonte telle quelle à l'admin.
+  const currentCount = (current.match(/\bkey\s*:\s*'[a-zA-Z0-9_]+'/g) || []).length;
+  const smokeErr = smokeTestStrategiesCode(newContent, key, currentCount);
+  if (smokeErr) throw new Error(`Test à blanc échoué (rien n'a été appliqué) : ${smokeErr}`);
+
   backup('strategies.js', current);
   fs.writeFileSync(path.join(ROOT, 'strategies.js'), newContent);
+  markFileChanged();
 
   const name = String(parsed.name || key).slice(0, 120);
   const about = String(parsed.about || '').slice(0, 1500);
@@ -542,6 +638,9 @@ async function createStrategy(description) {
   const entry = { at: new Date().toISOString(), key, name, about, explanation };
   strategyCreation.history.unshift(entry);
   strategyCreation.history = strategyCreation.history.slice(0, 20);
+  if (!strategyCreation.keys.includes(key)) strategyCreation.keys.push(key);
+  persistCreatedStrategies(); // fire-and-forget — ne bloque pas la réponse
+  persistStrategyCode(key, code); // fire-and-forget — voir bootstrap.js
   log(`Nouvelle stratégie créée : « ${name} » (clé ${key}) — désactivée par défaut, à activer depuis la page Stratégies.`);
 
   return { ok: true, ...entry };
@@ -558,6 +657,18 @@ function reset() {
   session.summary = '';
   return status();
 }
+
+// CORRECTIF « redémarrage automatique » : Node ne recharge jamais un fichier
+// .js modifié sur disque (require() met en cache le module chargé au
+// démarrage) — donc tant que le process entier n'est pas relancé, une
+// stratégie créée ou un fichier corrigé par l'IA ne prend PAS effet dans
+// l'app qui tourne, même si le fichier est bien à jour sur disque. On note
+// ici qu'un redémarrage est nécessaire ; server.js le déclenchera
+// proprement (après avoir répondu au client) via needsRestart()/wasWritten().
+let filesChangedSinceRestart = false;
+function markFileChanged() { filesChangedSinceRestart = true; }
+function needsRestart() { return filesChangedSinceRestart; }
+function clearRestartFlag() { filesChangedSinceRestart = false; }
 
 function status() {
   return {
@@ -577,7 +688,9 @@ function status() {
     fixed: session.problems.filter((p) => p.status === 'fixed').length,
     remaining: session.problems.filter((p) => p.status === 'pending').length,
     createdStrategies: strategyCreation.history,
+    createdStrategyKeys: strategyCreation.keys,
+    needsRestart: filesChangedSinceRestart,
   };
 }
 
-module.exports = { diagnose, fixNext, verify, status, reset, listFiles, createStrategy };
+module.exports = { diagnose, fixNext, verify, status, reset, listFiles, createStrategy, needsRestart, clearRestartFlag, log, restoreCreated };

@@ -13,6 +13,7 @@ const fmt = require('./formats');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const shoeReport = require('./shoe-report');
+const aiRepair = require('./ai-repair');
 const {
   state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
@@ -1636,6 +1637,19 @@ async function applyDbConfigs() {
   // le redémarrage n'apparaissait plus jamais dans la liste.
   const announcementRows = await db.loadAnnouncements();
   restoreAnnouncements(announcementRows);
+
+  // CORRECTIF « bouton Créé par moi avec IA » : même raisonnement que les
+  // annonces ci-dessus — sans cette restauration, la liste des stratégies
+  // créées par l'IA repartirait vide à chaque redémarrage (y compris celui
+  // déclenché automatiquement juste après une création, voir server.js).
+  const createdKeysRaw = await db.getSetting('ai_created_strategy_keys');
+  const createdHistoryRaw = await db.getSetting('ai_created_strategy_history');
+  try {
+    aiRepair.restoreCreated(
+      createdKeysRaw ? JSON.parse(createdKeysRaw) : null,
+      createdHistoryRaw ? JSON.parse(createdHistoryRaw) : null,
+    );
+  } catch (_) { /* données corrompues — on repart d'une liste vide, pas bloquant */ }
 
   // Stratégies IA : la base est la source de vérité (data.json est perdu à
   // chaque redéploiement/redémarrage sur les plateformes sans disque persistant).

@@ -232,6 +232,7 @@ app.post('/api/users/:id/reject', async (req, res) => {
 });
 
 app.get('/api/state', async (req, res) => {
+  const aiCreatedKeys = new Set(aiRepair.status().createdStrategyKeys || []);
   res.json({
     role: req.session ? req.session.role || null : null,
     b: state.B,
@@ -270,7 +271,18 @@ app.get('/api/state', async (req, res) => {
     strategies: strategies.LIST.map((d) => ({
       key: d.key, name: d.name, about: d.about, usesB: !!d.usesB,
       config: state.strategies[d.key] || {}, stats: stats(d.key),
+      aiCreated: aiCreatedKeys.has(d.key),
     })),
+    // stratégies créées par l'IA mais dont le redémarrage automatique n'est
+    // pas encore terminé — le fichier strategies.js est déjà à jour sur
+    // disque, mais Node ne l'a pas encore rechargé. Affichées à part sur la
+    // page « Créé par moi avec IA » avec un état « en attente ».
+    pendingAiStrategies: [...aiCreatedKeys]
+      .filter((key) => !strategies.BY_KEY[key])
+      .map((key) => {
+        const h = (aiRepair.status().createdStrategies || []).find((c) => c.key === key);
+        return { key, name: h ? h.name : key, about: h ? h.about : '', at: h ? h.at : null };
+      }),
     predit: predit.status(),
     afterLoss: afterLoss.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
@@ -952,6 +964,62 @@ function repairError(res, e) {
   const status = e.code === 'GROQ_NOT_CONFIGURED' ? 503 : e.code === 'NO_MESSAGE' || e.code === 'NO_SESSION' ? 400 : e.status === 429 ? 429 : 502;
   res.status(status).json({ error: e.message, code: e.code || 'REPAIR_ERROR' });
 }
+
+// CORRECTIF « redémarrage automatique après réparation IA » : Node garde en
+// cache tout fichier chargé via require() (strategies.js, auth.js, etc.) —
+// modifier ces fichiers sur disque ne suffit donc pas à faire prendre effet
+// la correction/nouvelle stratégie dans l'app en cours d'exécution. Sur
+// Render (voir render.yaml, type: web), le processus est automatiquement
+// relancé dès qu'il se termine — on profite de ce comportement plutôt que
+// d'ajouter un vrai rechargement à chaud (risqué avec des require() en
+// cascade et des connexions Telegram/DB déjà ouvertes).
+//
+// Le redémarrage n'est jamais immédiat : on laisse d'abord la réponse HTTP
+// partir vers le client (déjà fait par res.json() avant l'appel), puis on
+// attend quelques secondes pour laisser le panneau admin afficher le
+// résultat final et laisser un tick() éventuellement en cours se terminer
+// proprement, avant de sauvegarder l'état et de couper le processus.
+let restartScheduled = false;
+
+// CORRECTIF « ne pas couper une annonce ombre en cours » : la stratégie
+// « Prédiction dans l'ombre » (mode silencieux) compte plusieurs jeux en
+// silence avant d'annoncer, puis d'envoyer, une seule prédiction dans le
+// canal public (voir predictor.js : state.announcements, state.gates.ombre).
+// Redémarrer le process PENDANT cette fenêtre couperait le décompte et/ou
+// une annonce déjà publiée mais pas encore honorée par un envoi réel — donc
+// avant de couper le process, on vérifie qu'il n'y a :
+//   - ni prédiction « ombre » encore « en attente » (pas encore résolue),
+//   - ni annonce « ombre » encore « en_attente » (position annoncée mais
+//     prédiction pas encore réellement envoyée dans le canal public).
+function ombreBusy() {
+  const pendingPrediction = state.predictions.some((p) => p.strategy === 'ombre' && p.status === 'en attente');
+  const pendingAnnouncement = (state.announcements || []).some((a) => a.strategy === 'ombre' && a.status === 'en_attente');
+  return pendingPrediction || pendingAnnouncement;
+}
+
+function attemptRestart(attempt) {
+  if (ombreBusy()) {
+    if (attempt % 6 === 0) { // ~1 log par minute (10 s × 6) pour ne pas spammer
+      console.log('⏳ Redémarrage reporté : prédiction/annonce « ombre » (mode silencieux) en attente.');
+      aiRepair.log('⏳ Redémarrage reporté : une prédiction/annonce « ombre » (mode silencieux) est en attente — on ne la coupe pas.');
+    }
+    setTimeout(() => attemptRestart(attempt + 1), 10000);
+    return;
+  }
+  try { persist(); } catch (e) { console.error('Persist avant redémarrage impossible :', e.message); }
+  console.log('🔄 Redémarrage en cours (modifications de l\'IA appliquées au prochain démarrage)…');
+  aiRepair.clearRestartFlag();
+  process.exit(0);
+}
+
+function scheduleGracefulRestart(reason) {
+  if (restartScheduled) return; // déjà programmé — pas de double redémarrage
+  restartScheduled = true;
+  console.log(`🔄 Redémarrage automatique programmé (${reason}) — dans 5 s…`);
+  aiRepair.log(`🔄 Redémarrage automatique dans 5 s pour appliquer : ${reason}.`);
+  setTimeout(() => attemptRestart(0), 5000);
+}
+
 app.get('/api/ai/repair', (req, res) => res.json(aiRepair.status()));
 app.post('/api/ai/repair/diagnose', async (req, res) => {
   try { res.json({ ok: true, ...(await aiRepair.diagnose(req.body && req.body.message)) }); }
@@ -962,13 +1030,23 @@ app.post('/api/ai/repair/fix', async (req, res) => {
   catch (e) { repairError(res, e); }
 });
 app.post('/api/ai/repair/verify', async (req, res) => {
-  try { res.json({ ok: true, ...(await aiRepair.verify()) }); }
-  catch (e) { repairError(res, e); }
+  try {
+    const r = await aiRepair.verify();
+    res.json({ ok: true, ...r });
+    // le process entier ne redémarre qu'ici (fin du cycle diagnose → fixNext…
+    // → verify), jamais pendant fixNext() : redémarrer en plein milieu
+    // tuerait la session de réparation en mémoire (liste des problèmes
+    // restants) avant qu'elle soit terminée.
+    if (aiRepair.needsRestart()) scheduleGracefulRestart('correctif(s) appliqué(s) par l\'IA');
+  } catch (e) { repairError(res, e); }
 });
 app.post('/api/ai/repair/reset', (req, res) => res.json({ ok: true, ...aiRepair.reset() }));
 app.post('/api/ai/repair/create-strategy', async (req, res) => {
-  try { res.json(await aiRepair.createStrategy(req.body && req.body.description)); }
-  catch (e) { repairError(res, e); }
+  try {
+    const r = await aiRepair.createStrategy(req.body && req.body.description);
+    res.json(r);
+    scheduleGracefulRestart('nouvelle stratégie créée par l\'IA');
+  } catch (e) { repairError(res, e); }
 });
 
 
