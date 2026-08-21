@@ -150,4 +150,15 @@ module.exports = {
   DEFAULT_B: Number(process.env.B || 3),
   DEFAULT_MAX_R: Number(process.env.MAX_R || 2),
   DEFAULT_FORMAT: Number(process.env.TG_FORMAT || 1),
+
+  // Bilan quotidien : envoyé UNE SEULE FOIS quand les numéros de jeu
+  // REPARTENT À 1 (fin de sabot), mais seulement si le sabot qui vient de
+  // se terminer a atteint AU MOINS ce nombre de jeux — c'est-à-dire qu'il
+  // est bien allé jusqu'au bout de la journée (jeu n°1440), et pas une
+  // remise à zéro isolée/anormale en plein milieu de la journée (coupure
+  // réseau, redémarrage du site source…). Une petite marge est laissée
+  // sous 1440 (au lieu d'exiger 1440 pile) car le tout dernier tour peut
+  // parfois manquer ou arriver incomplet dans le flux 1xbet juste avant le
+  // rebouclage — voir isNewShoe()/registerGames() dans predictor.js.
+  BILAN_MIN_GAMES: Number(process.env.BILAN_MIN_GAMES || 1430),
 };

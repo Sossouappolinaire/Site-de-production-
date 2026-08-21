@@ -964,6 +964,11 @@ function setOnShoeReset(fn) { if (typeof fn === 'function') onShoeResetHooks.pus
 // calculées étaient donc considérées comme « déjà jouées » et PLUS AUCUNE
 // prédiction ne sortait après l'envoi du bilan.
 function resetShoe(reason = 'nouveau sabot') {
+  // capturé AVANT le nettoyage : nombre de jeux réellement joués dans le
+  // sabot qui vient de se terminer — sert à distinguer une VRAIE fin de
+  // journée (sabot presque complet) d'une remise à zéro isolée/anormale
+  // (voir sendBilanIfDayOver() dans bot.js, branché via setOnShoeReset).
+  const previousMax = maxFinishedNumber();
   state.games.clear();
   state.history = [];
   state.freshFinished = [];
@@ -982,7 +987,7 @@ function resetShoe(reason = 'nouveau sabot') {
   // asynchrone et volontairement non bloquant : resetShoe() reste synchrone,
   // la génération du PDF et l'envoi Telegram se font en arrière-plan.
   for (const hook of onShoeResetHooks) {
-    try { Promise.resolve(hook(reason, state.shoeSeq)).catch(() => {}); } catch (_) {}
+    try { Promise.resolve(hook(reason, state.shoeSeq, previousMax)).catch(() => {}); } catch (_) {}
   }
   return true;
 }
@@ -1160,6 +1165,10 @@ function evaluate() {
       result: null,
       hitNumber: null,
       messages: [],
+      // CORRECTIF « bilans cumulés » : numéro de sabot au moment de la
+      // création, pour pouvoir distinguer une prédiction du jour qui vient
+      // de commencer de celles du jour précédent en cas de besoin de debug.
+      shoe: state.shoeSeq || 0,
     };
     if (trigKey) state.triggersDone[trigKey] = true;
     state.predictions.unshift(pred);
@@ -1342,8 +1351,8 @@ function parityRuntime() {
 // ---------------------------------------------------------------------------
 // Bilan envoyé sur Telegram quand le jeu reprend
 // ---------------------------------------------------------------------------
-function bilanText(key) {
-  const s = stats(key);
+function bilanText(key, list) {
+  const s = list ? statsFrom(list, key) : stats(key);
   const def = key ? strategies.BY_KEY[key] : null;
   return (
     '📊 STATISTIQUE 📈\n\n' +
@@ -1427,18 +1436,27 @@ function strategyGames(key, limit = 12) {
   return { live, upcoming, games: rows, counters: counterView(), stats: stats(key), bilan: bilanText(key), gate: gateView(key) };
 }
 
-function stats(key) {
-  const list = key ? state.predictions.filter((p) => p.strategy === key) : state.predictions;
-  const done = list.filter((p) => p.status !== 'en attente' && p.status !== 'annulé');
+// CORRECTIF « bilans cumulés » : statsFrom() calcule les stats à partir
+// d'une LISTE explicite plutôt que de toujours relire state.predictions en
+// direct. stats(key) garde l'ancien comportement (lecture live, pour
+// l'affichage du tableau de bord). bilanText(key, list) accepte désormais
+// un instantané figé — voir flushBilans() dans bot.js pour pourquoi c'est
+// nécessaire : sans ça, un bilan envoyé pendant plusieurs secondes
+// (plusieurs canaux Telegram) pouvait lire des prédictions du jour SUIVANT,
+// déjà créées et parfois déjà résolues entre-temps par un tick concurrent.
+function statsFrom(list, key) {
+  const arr = key ? list.filter((p) => p.strategy === key) : list;
+  const done = arr.filter((p) => p.status !== 'en attente' && p.status !== 'annulé');
   const win = done.filter((p) => p.status === 'gagné').length;
   return {
-    total: list.length,
+    total: arr.length,
     win,
     loss: done.length - win,
-    pending: list.length - done.length,
+    pending: arr.length - done.length,
     rate: done.length ? Math.round((win / done.length) * 100) : 0,
   };
 }
+function stats(key) { return statsFrom(state.predictions, key); }
 
 
 // état courant de la stratégie « Prédiction dans l'ombre » (costumes surveillés)
@@ -1670,6 +1688,7 @@ module.exports = {
   liveText,
   recentGames,
   stats,
+  statsFrom,
   BADGES,
   parityOf,
   parityRuntime,

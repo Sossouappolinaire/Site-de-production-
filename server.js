@@ -15,8 +15,9 @@ const miner = require('./pattern-miner');
 const aiAuto = require('./ai-auto');
 const cumulative = require('./cumulative');
 const advisor = require('./strategy-advisor');
-const formation = require('./formation');
 const aiQa = require('./ai-qa');
+const aiRepair = require('./ai-repair');
+const formation = require('./formation');
 const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const dayCompare = require('./day-compare');
@@ -915,19 +916,6 @@ app.post('/api/ai/strategy-advice/run', async (req, res) => {
   res.json(await advisor.run({ remote }));
 });
 
-// --- Formation : l'IA déduit, pour chaque stratégie, si la prédiction qui
-// suit une perte ou un rattrapage a plus de chances d'être validée --------
-app.get('/api/formation', async (req, res) => {
-  const st = formation.status();
-  if (!st.lastRunAt) return res.json(await formation.run());
-  res.json(st);
-});
-
-app.post('/api/formation/run', async (req, res) => {
-  const remote = !!(req.body && req.body.remote);
-  res.json(await formation.run({ remote }));
-});
-
 // --- « Poser une question à l'IA » sur le projet (prédictions réelles, raisons, réglages) ---
 app.post('/api/ai/ask', async (req, res) => {
   const question = req.body && req.body.question;
@@ -943,6 +931,46 @@ app.post('/api/ai/ask', async (req, res) => {
   }
 });
 app.get('/api/ai/ask', (req, res) => res.json({ ok: true, history: aiQa.history() }));
+
+// --- Formation : l'IA déduit, pour chaque stratégie, si la prédiction qui
+// suit une perte ou un rattrapage a plus de chances d'être validée --------
+app.get('/api/formation', async (req, res) => {
+  const st = formation.status();
+  if (!st.lastRunAt) return res.json(await formation.run());
+  res.json(st);
+});
+
+app.post('/api/formation/run', async (req, res) => {
+  const remote = !!(req.body && req.body.remote);
+  res.json(await formation.run({ remote }));
+});
+
+// --- « Réparation IA » : l'IA (Groq) identifie les problèmes du projet, les
+// corrige elle-même avec un pourcentage d'avancement, puis vérifie que tout
+// est bien corrigé. Réservé à l'administrateur (écriture de fichiers).
+function repairError(res, e) {
+  const status = e.code === 'GROQ_NOT_CONFIGURED' ? 503 : e.code === 'NO_MESSAGE' || e.code === 'NO_SESSION' ? 400 : e.status === 429 ? 429 : 502;
+  res.status(status).json({ error: e.message, code: e.code || 'REPAIR_ERROR' });
+}
+app.get('/api/ai/repair', (req, res) => res.json(aiRepair.status()));
+app.post('/api/ai/repair/diagnose', async (req, res) => {
+  try { res.json({ ok: true, ...(await aiRepair.diagnose(req.body && req.body.message)) }); }
+  catch (e) { repairError(res, e); }
+});
+app.post('/api/ai/repair/fix', async (req, res) => {
+  try { res.json({ ok: true, ...(await aiRepair.fixNext()) }); }
+  catch (e) { repairError(res, e); }
+});
+app.post('/api/ai/repair/verify', async (req, res) => {
+  try { res.json({ ok: true, ...(await aiRepair.verify()) }); }
+  catch (e) { repairError(res, e); }
+});
+app.post('/api/ai/repair/reset', (req, res) => res.json({ ok: true, ...aiRepair.reset() }));
+app.post('/api/ai/repair/create-strategy', async (req, res) => {
+  try { res.json(await aiRepair.createStrategy(req.body && req.body.description)); }
+  catch (e) { repairError(res, e); }
+});
+
 
 // --- analyseur automatique en temps réel ------------------------------------
 app.get('/api/ai/auto', (req, res) => res.json(aiAuto.status()));

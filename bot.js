@@ -41,18 +41,23 @@ if (Array.isArray(saved.aiAnalyses)) state.aiAnalyses = saved.aiAnalyses;
 if (Array.isArray(saved.aiStrategies)) state.aiStrategies = saved.aiStrategies;
 initStrategies();
 
-// jour calendaire (UTC) du dernier bilan envoyé — persisté pour ne pas
-// renvoyer/re-déclencher deux fois le même jour après un redémarrage.
-let lastBilanDate = saved.lastBilanDate || null;
+// numéro de sabot (state.shoeSeq) pour lequel le bilan a déjà été envoyé —
+// persisté pour ne pas en renvoyer un second après un redémarrage.
+let lastBilanShoeSeq = saved.lastBilanShoeSeq || 0;
 
-// date du jour à Abidjan (Côte d'Ivoire, GMT+0 toute l'année, pas d'heure
-// d'été) — sert à faire partir le bilan à 00h00 heure ivoirienne.
-const abidjanFmt = new Intl.DateTimeFormat('fr-CA', {
-  timeZone: 'Africa/Abidjan', year: 'numeric', month: '2-digit', day: '2-digit',
-});
-function abidjanDateString(d = new Date()) {
-  return abidjanFmt.format(d); // "YYYY-MM-DD"
-}
+// CORRECTIF « bilan pendant l'envoi des prédictions » : le hook de reset de
+// sabot (setOnShoeReset) est appelé en « fire-and-forget » par
+// resetShoe()/registerGames() — nécessaire pour ne jamais bloquer
+// resetShoe(), qui doit rester synchrone (d'autres écouteurs en dépendent :
+// shoe-report.js, after-loss.js). On ne lance donc PAS flushBilans()
+// directement depuis ce hook : on se contente de MÉMORISER qu'un bilan est
+// dû, et c'est tick() ci-dessous qui l'exécute et l'ATTEND explicitement,
+// juste après registerGames() et AVANT evaluate()/broadcast() — donc avant
+// toute diffusion de prédiction du nouveau jour. Comme les tick() ne se
+// chevauchent jamais (garde `ticking`), le bilan est ainsi garanti de
+// s'envoyer intégralement, un jour à la fois, sans jamais se mélanger avec
+// l'envoi des prédictions.
+let pendingBilan = null;
 
 // CORRECTIF : quand `persist()` est appelée alors que la base n'est pas
 // joignable (coupure, veille Render Free…), l'écriture DB est silencieusement
@@ -79,7 +84,7 @@ function persist() {
     strategies: state.strategies,
     aiAnalyses: state.aiAnalyses,
     aiStrategies: state.aiStrategies,
-    lastBilanDate,
+    lastBilanShoeSeq,
   });
   if (db.ready) {
     // configuration complète (token, admin, canaux) : elle est relue au démarrage
@@ -1089,7 +1094,6 @@ function dropSender(token) {
 const bilanPending = new Set();
 let lastLiveNumber = null;
 let lastShoeSeq = 0;
-let firstTick = true;
 // CORRECTIF : setInterval(tick, 1500ms) ne garantit pas qu'un tick se termine
 // avant que le suivant démarre. Si un tour (appel réseau, envoi Telegram) est
 // lent, deux exécutions de tick() pouvaient se chevaucher et repérer TOUTES
@@ -1097,28 +1101,55 @@ let firstTick = true;
 // pas encore mis à jour par la première) → double envoi dans le canal public.
 let ticking = false;
 
-async function sendBilan(key) {
+async function sendBilan(key, snapshot) {
   const cfg = state.strategies[key] || {};
   if (cfg.bilan === false) return;
   const sender = senderFor();
   if (!sender) return;
-  const text = bilanText(key);
+  // CORRECTIF « bilans cumulés » : snapshot figé fourni par flushBilans()
+  // (voir plus bas) — sans lui (appel manuel /bilan sur UNE stratégie via
+  // le panneau admin), on retombe sur l'état live, comportement inchangé.
+  const text = bilanText(key, snapshot);
   for (const id of strategyChannels(key)) {
     try { await sender.sendMessage(id, text); countSent(key); }
     catch (e) { console.error('Bilan non envoyé', id, e.message); }
   }
 }
 
-// Publie le bilan COMPLET (un par jour calendaire) : chaque stratégie ayant
-// prédit + les prédictions IA, puis remet les compteurs à zéro sur le site.
+// Déclenche le bilan complet UNIQUEMENT quand le sabot qui vient de se
+// terminer représente une VRAIE journée (au moins config.BILAN_MIN_GAMES
+// jeux joués) — filtre les remises à zéro isolées/anormales en cours de
+// journée. Une seule fois par sabot (garde lastBilanShoeSeq, persistée).
+// CORRECTIF : ne fait plus qu'ENREGISTRER la demande — voir pendingBilan
+// ci-dessus et son traitement (await) dans tick().
+function sendBilanIfDayOver(reason, seq, previousMax) {
+  if (!previousMax || previousMax < config.BILAN_MIN_GAMES) return; // pas une vraie fin de journée
+  if (seq === lastBilanShoeSeq) return;                              // déjà envoyé pour ce sabot
+  pendingBilan = { reason, seq, previousMax };
+}
+
+// Publie le bilan COMPLET : chaque stratégie ayant prédit + les prédictions
+// IA, puis remet les compteurs à zéro sur le site. Appelée par
+// sendBilanIfDayOver() ci-dessus (fin de journée réelle) ou manuellement
+// (commande /bilan).
 async function flushBilans(reason = 'nouveau jour') {
   bilanPending.clear();
+  // CORRECTIF « bilans cumulés » : instantané figé de state.predictions AU
+  // MOMENT où le bilan démarre. L'envoi Telegram (plusieurs canaux, un par
+  // stratégie) prend plusieurs secondes ; pendant ce temps, le jeu reprend
+  // déjà au numéro 1 et de NOUVELLES prédictions du jour suivant sont créées
+  // (et parfois même déjà résolues) par le tick() en cours. Sans cet
+  // instantané, bilanText(key) relisait l'état LIVE à chaque itération de la
+  // boucle ci-dessous et mélangeait les résultats du jour qui vient de
+  // commencer avec ceux du jour qui vient de se terminer — d'où le bilan
+  // qui « cumule » jour 1 et jour 2.
+  const snapshot = state.predictions.slice();
   const keys = strategies.LIST
     .map((d) => d.key)
-    .filter((key) => state.predictions.some((p) => p.strategy === key));
+    .filter((key) => snapshot.some((p) => p.strategy === key));
   const done = [];
   for (const key of keys) {
-    try { await sendBilan(key); done.push(key); }
+    try { await sendBilan(key, snapshot); done.push(key); }
     catch (e) { console.error('Bilan non envoyé', key, e.message); }
   }
   let ai = { ok: false, error: 'panneau Prédit indisponible' };
@@ -1128,7 +1159,13 @@ async function flushBilans(reason = 'nouveau jour') {
   // que les prédictions déjà TERMINÉES (gagné/perdu/annulé) de la vue en
   // cours — celles encore « en attente » restent affichées (en cours), et
   // l'historique complet reste consultable en base de données (/pred, /jeux…).
-  state.predictions = state.predictions.filter((p) => p.status === 'en attente');
+  // CORRECTIF « bilans cumulés » : on ne retire QUE les prédictions qui
+  // faisaient partie de l'instantané envoyé ci-dessus ET qui sont désormais
+  // résolues. Une prédiction créée APRÈS l'instantané (déjà le jour suivant)
+  // n'est jamais retirée ici, même si elle s'est résolue entre-temps — elle
+  // sera comptée dans SON PROPRE bilan, au prochain retour à 1.
+  const snapshotIds = new Set(snapshot.map((p) => p.id));
+  state.predictions = state.predictions.filter((p) => p.status === 'en attente' || !snapshotIds.has(p.id));
   console.log(`📊 Bilan (${reason}) : ${done.join(', ') || 'aucune stratégie'} • IA : ${ai.ok ? 'envoyé' : ai.error}`);
   return { strategies: done, ai };
 }
@@ -1391,6 +1428,21 @@ async function tick() {
     state.lastError = null;
     registerGames(games);
 
+    // CORRECTIF « bilan pendant l'envoi des prédictions / un bilan par jour » :
+    // traité et ATTENDU ici, avant tout le reste (verify/evaluate/broadcast)
+    // — voir pendingBilan plus haut. Comme tick() ne se chevauche jamais
+    // (garde `ticking`), aucune prédiction (nouvelle ou « ombre ») ne peut
+    // être diffusée tant que l'envoi du bilan n'est pas terminé.
+    if (pendingBilan) {
+      const { seq, previousMax } = pendingBilan;
+      pendingBilan = null;
+      if (seq !== lastBilanShoeSeq) {
+        lastBilanShoeSeq = seq;
+        persist();
+        await flushBilans(`journée terminée (${previousMax} jeux, retour à 1)`);
+      }
+    }
+
     // déblocage automatique des stratégies bloquées depuis plus de 10 minutes
     const freed = sweepAutoUnlock();
     if (freed.length) console.log('🔓 Déblocage automatique : ' + freed.join(', '));
@@ -1455,18 +1507,11 @@ async function tick() {
       await broadcast(stuck);
     }
 
-    // CORRECTIF : le bilan partait à CHAQUE nouveau sabot (donc plusieurs fois
-    // par jour, dès que le jeu repartait au n°1). On publie désormais UN SEUL
-    // bilan par jour, à 00h00 heure d'Abidjan (Côte d'Ivoire, GMT+0 toute
-    // l'année). Le jour est comparé au dernier jour où un bilan a été envoyé
-    // (persisté, pour ne pas en renvoyer un second après un redémarrage le
-    // même jour).
-    const today = abidjanDateString();
-    if (!firstTick && lastBilanDate && today !== lastBilanDate) {
-      await flushBilans('nouveau jour (00h00 Abidjan)');
-    }
-    if (lastBilanDate !== today) { lastBilanDate = today; persist(); }
-    firstTick = false;
+    // Le bilan (résumé complet : toutes stratégies + IA) part désormais
+    // directement au moment où le sabot se termine (numéros revenus à 1),
+    // via le hook sendBilanIfDayOver() ci-dessous — voir sa définition pour
+    // la logique « vraie fin de journée » (filtrage des remises à zéro
+    // isolées) et la garde anti-doublon (lastBilanShoeSeq).
 
     const preds = evaluate();
     for (const pred of preds) await broadcast(pred);
@@ -1672,6 +1717,10 @@ async function startLoop() {
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
   setOnShoeReset((reason, seq) => sendShoeReport(reason, seq));
+  // bilan complet (toutes stratégies + IA) — envoyé quand les numéros
+  // reviennent à 1 ET que le sabot qui vient de se terminer représente une
+  // vraie journée (voir sendBilanIfDayOver ci-dessus pour le seuil).
+  setOnShoeReset((reason, seq, previousMax) => sendBilanIfDayOver(reason, seq, previousMax));
   setOnGateChange((key, g) => { if (db.ready) db.saveGate(key, g); });
   setOnAnnouncementSave((entry) => { if (db.ready) db.saveAnnouncement(entry); });
   setOnAnnouncementDelete((id) => { if (db.ready) db.deleteAnnouncement(id); });

@@ -256,3 +256,19 @@ le compte est créé immédiatement en statut « en attente » et une fenêtre
 « Merci de patienter » récapitule les informations. C'est l'administrateur
 qui accepte le compte et accorde un temps d'accès depuis le panneau
 « Utilisateurs ».
+
+## 🛠 Réparation IA (nouveau)
+
+Page `#/ai-repair` du tableau de bord (bouton « 🛠 Réparation IA » dans le menu et sur l'accueil).
+
+1. **Envoyer à l'IA** : on écrit ce qui ne va pas ; l'IA (Groq, `ai-repair.js`) lit l'inventaire du projet
+   et les extraits de code pertinents, puis liste les problèmes identifiés (fichier, gravité, détail).
+2. **Corriger** : l'IA corrige les problèmes un par un et écrit directement les fichiers
+   (sauvegarde automatique dans `.repair-backups/`, contrôle de syntaxe `node --check` avant écriture).
+   Le pourcentage d'avancement s'affiche et progresse jusqu'à 100 %.
+3. **Analyser** : à 100 %, le bouton d'analyse relit le code corrigé et confirme si tous les
+   problèmes sont bien réglés (score sur 100 + contrôle de syntaxe de tout le projet).
+
+Routes : `GET /api/ai/repair`, `POST /api/ai/repair/diagnose|fix|verify|reset` (administrateur uniquement).
+Clé Groq : `GROQ_API_KEY` (déjà présente dans `config.js`), modèle réglable via `GROQ_MODEL`.
+Le palier gratuit Groq limite le débit (8000 tokens/min) : les erreurs 429 sont réessayées automatiquement.
