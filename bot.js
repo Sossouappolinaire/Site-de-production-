@@ -1171,6 +1171,22 @@ function botStatus() {
   };
 }
 
+// Déconnexion volontaire : arrête le polling, efface le token en mémoire ET
+// en base (data.json + PostgreSQL via persist()), afin qu'aucun ancien token
+// ne reste actif ni ne revienne après un redémarrage. L'API Telegram cesse de
+// répondre pour ce bot jusqu'à ce qu'un nouveau token soit configuré.
+async function disconnectBot() {
+  if (bot) {
+    try { await bot.stopPolling({ cancel: true }); } catch (_) {}
+    bot = null;
+  }
+  state.botToken = '';
+  state.botUsername = null;
+  state.botError = null;
+  persist();
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Cycle de vie du bot DÉDIÉ à la boutique — token strictement séparé du bot
 // principal (voir wireShop() et la vérification croisée ci-dessus/ci-dessous :
@@ -1206,6 +1222,20 @@ async function startShopBot(token) {
     shopBot = null;
     return { ok: false, error: e.message };
   }
+}
+
+// Déconnexion volontaire du bot boutique — même logique que disconnectBot()
+// ci-dessus, côté token séparé (voir shop_bot_token dans persist()).
+async function disconnectShopBot() {
+  if (shopBot) {
+    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
+    shopBot = null;
+  }
+  state.shopBotToken = '';
+  state.shopBotUsername = null;
+  state.shopBotError = null;
+  persist();
+  return { ok: true };
 }
 
 function shopBotStatus() {
@@ -1958,4 +1988,4 @@ async function startLoop() {
   startShopBot();
 }
 
-module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, startShopBot, shopBotStatus, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };
+module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };

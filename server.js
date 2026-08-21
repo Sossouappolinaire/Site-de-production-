@@ -30,7 +30,7 @@ const {
   predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock,
   announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, addSiteChannelMessage, siteChannelFeed,
 } = require('./predictor');
-const { startLoop, startBot, botStatus, startShopBot, shopBotStatus, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
+const { startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
 
 const app = express();
 app.set('trust proxy', 1); // Render est derrière un proxy HTTPS : nécessaire pour les cookies "secure"
@@ -330,6 +330,14 @@ app.post('/api/bot/restart', async (req, res) => {
   res.json({ ...r, bot: botStatus() });
 });
 
+// Déconnexion volontaire du bot principal : arrête le polling et efface le
+// token (mémoire + data.json + base). Le bot ne répond plus tant qu'un
+// nouveau token n'est pas enregistré via POST /api/bot/token.
+app.delete('/api/bot/token', async (req, res) => {
+  const r = await disconnectBot();
+  res.json({ ...r, bot: botStatus() });
+});
+
 app.post('/api/bot/admin', (req, res) => {
   const id = parseInt(req.body.adminId, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'ID administrateur invalide' });
@@ -350,6 +358,13 @@ app.post('/api/shop/bot/token', async (req, res) => {
 
 app.post('/api/shop/bot/restart', async (req, res) => {
   const r = await startShopBot();
+  res.json({ ...r, bot: shopBotStatus() });
+});
+
+// Déconnexion volontaire du bot boutique — même principe que
+// DELETE /api/bot/token ci-dessus, côté token séparé de la boutique.
+app.delete('/api/shop/bot/token', async (req, res) => {
+  const r = await disconnectShopBot();
   res.json({ ...r, bot: shopBotStatus() });
 });
 
