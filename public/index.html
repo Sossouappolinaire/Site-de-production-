@@ -357,6 +357,7 @@
         <a href="#/ai" data-nav="ai">Analyseur IA</a>
         <a href="#/ai-strategies" data-nav="ai">Stratégies IA</a>
         <a href="#/ai-repair" data-nav="ai-repair">🛠 Réparation IA</a>
+        <a href="#/ai-created" data-nav="ai-created">Créé par moi avec IA</a>
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/diagnostics" data-nav="settings">Envois</a>
@@ -552,6 +553,24 @@
       <button class="logout-home-btn" onclick="doLogout()">🔴 Se déconnecter</button>`;
     }
     function strategiesPage() { setNav('strategies'); $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Catalogue</span><h2 style="margin-top:7px">Choisir une stratégie</h2></div><button class="button ghost" onclick="resetAllStrategies()">Réinitialiser TOUT aux valeurs du code</button></div><div class="strategy-grid">${strategyButtons()}</div>`; }
+    function aiCreatedStrategiesPage() {
+      setNav('ai-created');
+      const created = (snapshot.strategies || []).filter(s => s.aiCreated);
+      const pending = snapshot.pendingAiStrategies || [];
+      const readyGrid = created.length ? `<div class="strategy-grid">${created.map(s => {
+        const st = s.stats || {};
+        return `<button class="strategy-button" onclick="location.hash='#/strategy/${encodeURIComponent(s.key)}'">
+        <span class="eyebrow">${s.config?.enabled ? 'Active' : 'En pause'}</span><b>${esc(s.name)}</b><span>${esc((s.about || '').slice(0, 92))}...</span>
+        <span class="strategy-stats"><span class="tag">${esc(st.total ?? 0)} préd.</span><span class="tag good">${esc(st.win ?? 0)} gagné(s)</span><span class="tag bad">${esc(st.loss ?? 0)} perdu(s)</span></span>
+        <em>Configurer canal · format · rattrapage →</em></button>`;
+      }).join('')}</div>` : '';
+      const pendingBlock = pending.length ? `<div class="panel" style="margin-top:18px"><h3>En attente de redémarrage (${pending.length})</h3><p class="small muted">Le code est déjà écrit, mais le redémarrage automatique n'est pas encore terminé — ces stratégies apparaîtront ici comme configurables dès qu'il sera fini (actualise la page dans quelques secondes).</p>
+        ${pending.map(p => `<div class="repair-item"><div class="split"><b>${esc(p.name)}</b><span class="tag warn">clé ${esc(p.key)}</span></div>${p.about ? `<div class="repair-note">${esc(p.about)}</div>` : ''}</div>`).join('')}</div>` : '';
+      const empty = (!created.length && !pending.length)
+        ? '<div class="empty">Aucune stratégie créée par toi via l\'IA pour le moment. Rends-toi sur 🛠 Réparation IA → « Créer une stratégie ».</div>' : '';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Tes créations</span><h2 style="margin-top:7px">Créé par moi avec IA</h2><p class="small">Les stratégies que tu as fait créer par l'IA depuis 🛠 Réparation IA. Configure ici leur canal, leur format et leurs rattrapages, exactement comme pour une stratégie du catalogue.</p></div><button class="button ghost" onclick="location.hash='#/ai-repair'">Créer une nouvelle stratégie</button></div>
+        ${readyGrid}${pendingBlock}${empty}`;
+    }
 
     // ── Panneau administrateur : Utilisateurs ──────────────────────────────
     const USER_STATUS_TAG = {
@@ -1493,9 +1512,9 @@ Faites-en bon usage !
         <div class="field" style="margin-top:14px"><label>Décris le problème (ou ce que l'IA doit vérifier)</label><textarea id="repairMessage" rows="4" placeholder="Ex. Les prédictions de la stratégie ombre ne partent pas dans le canal, et la page Base de données affiche une erreur.">${esc(s.message || '')}</textarea></div>
         <div class="toolbar"><button class="button primary" onclick="repairDiagnose()">Envoyer à l'IA</button>${problems.length ? '<button class="button ghost" onclick="repairReset()">Nouvelle réparation</button>' : ''}</div>
         <div id="repairMsg"></div></div>
-      <div class="panel"><h3>Créer une stratégie</h3><p class="small muted">Décris la stratégie que tu veux (ex. « une stratégie qui prédit ♠️ quand 3 costumes identiques se suivent »). L'IA écrit le code et l'ajoute dans la page Stratégies — TOUJOURS désactivée par défaut, à activer toi-même une fois vérifiée.</p>
+      <div class="panel"><h3>Créer une stratégie</h3><p class="small muted">Décris la stratégie que tu veux (ex. « une stratégie qui prédit ♠️ quand 3 costumes identiques se suivent »). L'IA écrit le code, le teste à blanc, puis l'ajoute dans la page Stratégies — TOUJOURS désactivée par défaut, à activer toi-même une fois vérifiée.</p>
         <div class="field" style="margin-top:10px"><label>Description de la nouvelle stratégie</label><textarea id="repairStratDesc" rows="3" placeholder="Ex. Je veux une stratégie qui prédit le costume ♦️ quand le joueur a 2 cartes trois fois de suite."></textarea></div>
-        <div class="toolbar"><button class="button primary" onclick="repairCreateStrategy()">Créer la stratégie</button></div>
+        <div class="toolbar"><button class="button primary" onclick="repairCreateStrategy()">Créer la stratégie</button><button class="button ghost" onclick="location.hash='#/ai-created'">Créé par moi avec IA →</button></div>
         <div id="repairStratMsg"></div>
         ${(s.createdStrategies || []).length ? `<div style="margin-top:14px">${s.createdStrategies.map(c => `<div class="repair-item"><div class="split"><b>${esc(c.name)}</b><span class="tag good">clé ${esc(c.key)}</span></div><div class="small muted">${formatDate(c.at)}</div><div class="repair-note">${esc(c.about)}</div></div>`).join('')}</div>` : ''}
         </div>
@@ -1565,10 +1584,10 @@ Faites-en bon usage !
       if (box) box.innerHTML = '<div class="loading">L\'IA écrit la stratégie…</div>';
       try {
         const r = await api('/api/ai/repair/create-strategy', 'POST', { description }, 150000);
-        if (box) box.innerHTML = `<div class="notice">Stratégie « ${esc(r.name)} » créée (désactivée) — va dans la page Stratégies pour la vérifier et l'activer.</div>`;
+        if (box) box.innerHTML = `<div class="notice">Stratégie « ${esc(r.name)} » créée (désactivée) — redémarrage automatique en cours, puis configure-la depuis « Créé par moi avec IA ».</div>`;
         $('#repairStratDesc').value = '';
         await repairPage();
-        toast(`Stratégie « ${r.name} » créée.`);
+        toast(`Stratégie « ${r.name} » créée — voir « Créé par moi avec IA ».`);
       } catch (e) { if (box) box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; toast(e.message, 'error'); }
     }
 
@@ -1595,6 +1614,7 @@ Faites-en bon usage !
         else if (h === '#/ai-ask') aiAskPage();
         else if (h === '#/ai-strategies') aiStrategiesPage();
         else if (h === '#/ai-repair') await repairPage();
+        else if (h === '#/ai-created') aiCreatedStrategiesPage();
         else if (h === '#/predit') preditPage();
         else if (h === '#/after-loss') afterLossPage();
         else if (h === '#/announcements') await announcementsPage();
