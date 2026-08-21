@@ -1058,7 +1058,16 @@ function wireShop(b) {
         return b.sendMessage(chatId, shop.t('askCode', lang));
       }
       await b.answerCallbackQuery(q.id);
-    } catch (_) { try { await b.answerCallbackQuery(q.id); } catch (__) {} }
+    } catch (e) {
+      // AVANT : l'erreur était totalement avalée (catch (_) {}) — un clic sur
+      // un bouton (langue, stratégie...) qui échouait en interne ne laissait
+      // AUCUNE trace : le bouton semblait "ne pas répondre" sans qu'on sache
+      // pourquoi. On log désormais l'erreur et on la garde visible dans
+      // /api/shop/bot (state.shopBotError), comme pour polling_error.
+      console.error('Boutique — erreur callback_query (' + (q.data || '?') + ') :', e && e.message);
+      state.shopBotError = e && e.message ? e.message : String(e);
+      try { await b.answerCallbackQuery(q.id); } catch (__) {}
+    }
   });
 
   b.onText(/^\/boutique/, async (msg) => {
