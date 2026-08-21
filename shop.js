@@ -377,8 +377,29 @@ function hasUnlocked(userId, itemId) {
 // ---------------------------------------------------------------------------
 // Explication IA — strictement bornée aux détails/exemple de LA stratégie
 // achetée, jamais aux données internes du bot ni aux autres stratégies.
+//
+// CORRECTIF : pour une stratégie issue du catalogue (source === 'strategy'),
+// l'admin n'a JAMAIS besoin de retaper une description à la main — le champ
+// « détails » de la boutique peut rester vide, l'IA doit se baser directement
+// sur le vrai texte `about` de la stratégie (strategies.js), déjà écrit et
+// tenu à jour dans le code. Avant ce correctif, explain()/fullPresentation()
+// ne lisaient QUE item.details : s'il était vide (article publié sans rien
+// saisir), l'IA répondait honnêtement qu'elle n'avait aucune information —
+// alors que la vraie description existait bel et bien dans strategies.js.
+// resolvedDetails() va la chercher dynamiquement à CHAQUE explication, donc
+// ça corrige aussi les articles déjà publiés (pas besoin de les recréer).
 // ---------------------------------------------------------------------------
+function resolvedDetails(item) {
+  if (item.details && item.details.trim()) return item.details;
+  if (item.source === 'strategy' && item.sourceKey) {
+    const def = strategies.BY_KEY[item.sourceKey];
+    if (def && def.about) return def.about;
+  }
+  return item.details || '';
+}
+
 async function explain(item, question, lang) {
+  const details = resolvedDetails(item);
   const system = [
     `Tu es l'assistant qui présente et explique EXCLUSIVEMENT la stratégie nommée "${item.aiName}" à un client qui vient de l'acheter.`,
     "Base-toi UNIQUEMENT sur les informations fournies ci-dessous (détails + exemple). N'invente et ne révèle RIEN d'autre : ni les autres stratégies de la boutique, ni le fonctionnement interne du bot, ni du code, ni des données techniques.",
@@ -388,7 +409,7 @@ async function explain(item, question, lang) {
   try {
     const raw = await ai.chat({
       system,
-      user: { question, details: item.details, example: item.example },
+      user: { question, details, example: item.example },
       temperature: 0.3,
       timeoutMs: 20000,
     });
@@ -400,7 +421,7 @@ async function fullPresentation(item, lang) {
   const question = "Présente cette stratégie de façon claire et structurée, en intégrant l'exemple fourni pour bien montrer comment l'utiliser.";
   const ans = await explain(item, question, lang);
   if (ans) return ans;
-  const details = await translate(item.details, lang);
+  const details = await translate(resolvedDetails(item), lang);
   const example = item.example ? await translate(item.example, lang) : '';
   return `${details}${example ? '\n\nExemple : ' + example : ''}`;
 }
