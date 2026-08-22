@@ -273,6 +273,17 @@ function genCode() { return `BAC-${crypto.randomBytes(4).toString('hex').toUpper
 
 const NAME_A = ['Éclipse', 'Zénith', 'Alizée', 'Onyx', 'Météore', 'Vermeil', 'Cobalt', 'Solstice', 'Nébuleuse', 'Émeraude', 'Orage', 'Mirage'];
 const NAME_B = ['Dorée', 'Silencieuse', 'Boréale', 'Ultime', 'Discrète', 'Royale', 'Secrète', 'Nocturne', 'Rapide', 'Précise', 'Furtive', 'Éclatante'];
+
+// Tarifs par défaut selon l'origine de la stratégie : une stratégie du
+// catalogue (déjà existante, éprouvée) vaut 50€, un déclencheur IA vendu à
+// l'unité vaut 4€. Utilisé si aucun prix n'est fourni explicitement.
+const PRICE_CATALOG = 50;
+const PRICE_IA = 4;
+function defaultPriceFor(source) {
+  if (source === 'strategy') return PRICE_CATALOG;
+  if (source === 'ia') return PRICE_IA;
+  return null; // 'custom' : prix laissé au choix de l'admin
+}
 function fallbackName() {
   return `${NAME_A[Math.floor(Math.random() * NAME_A.length)]} ${NAME_B[Math.floor(Math.random() * NAME_B.length)]}`;
 }
@@ -327,7 +338,7 @@ function listAll() { return [...shop.items].sort((a, b) => (b.createdAt || '').l
 function listActive() { return listAll().filter((i) => i.active); }
 function getItem(id) { return shop.items.find((i) => i.id === id) || null; }
 
-async function createItem({ source = 'custom', sourceKey = null, realName = '', details = '', example = '', rate = null } = {}) {
+async function createItem({ source = 'custom', sourceKey = null, realName = '', details = '', example = '', rate = null, price = null, auto = false } = {}) {
   const existingNames = shop.items.map((i) => i.aiName);
   const aiName = await generateAiName(existingNames);
   const item = {
@@ -339,6 +350,8 @@ async function createItem({ source = 'custom', sourceKey = null, realName = '', 
     details: String(details || ''),
     example: String(example || ''),
     rate: Number.isFinite(rate) ? rate : null,
+    price: Number.isFinite(price) ? price : defaultPriceFor(source),
+    auto: !!auto, // publiée automatiquement (déclencheur IA >93%) — voir syncAutoIaListings()
     code: genCode(),
     active: true,
     codeUsedBy: null,
@@ -354,7 +367,7 @@ async function createItem({ source = 'custom', sourceKey = null, realName = '', 
 function updateItem(id, patch = {}) {
   const item = getItem(id);
   if (!item) return null;
-  const allowed = ['details', 'example', 'rate', 'active', 'realName', 'aiName'];
+  const allowed = ['details', 'example', 'rate', 'active', 'realName', 'aiName', 'price'];
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(patch, k)) item[k] = patch[k];
   }
@@ -395,7 +408,7 @@ async function renameItem(id) {
 // taux courant est capturé en instantané (photographié au moment de la
 // publication) — un bouton « actualiser le taux » permet de le remettre à
 // jour plus tard sans changer le nom de code ni le code déjà distribué.
-function publishFromStrategy(key, { details = '', example = '' } = {}) {
+function publishFromStrategy(key, { details = '', example = '', price = null } = {}) {
   const def = strategies.BY_KEY[key];
   if (!def) return null;
   const s = strategyStats(key);
@@ -406,15 +419,16 @@ function publishFromStrategy(key, { details = '', example = '' } = {}) {
     details: details || def.about || '',
     example,
     rate: s && s.total ? s.rate : null,
+    price,
   });
 }
 
 // Publication depuis une stratégie créée par l'IA (pattern-miner / ai-auto) :
 // on COPIE le déclencheur/la cible/le taux au moment de la publication car
 // ces stratégies expirent automatiquement au bout d'1h côté ai-auto.js.
-function publishFromAiStrategy(aiItem, { details = '', example = '' } = {}) {
+function publishFromAiStrategy(aiItem, { details = '', example = '', price = null, auto = false } = {}) {
   if (!aiItem) return null;
-  const auto = [
+  const autoText = [
     aiItem.trigger ? `Déclencheur : ${aiItem.trigger}` : null,
     aiItem.target ? `Cible : ${aiItem.target}` : null,
   ].filter(Boolean).join('\n');
@@ -422,9 +436,11 @@ function publishFromAiStrategy(aiItem, { details = '', example = '' } = {}) {
     source: 'ia',
     sourceKey: aiItem.id || aiItem.key || null,
     realName: aiItem.name || '',
-    details: details || auto || (aiItem.name || ''),
+    details: details || autoText || (aiItem.name || ''),
     example,
     rate: Number.isFinite(aiItem.rate) ? aiItem.rate : null,
+    price,
+    auto,
   });
 }
 
@@ -434,6 +450,55 @@ function refreshRateFromStrategy(id) {
   const s = strategyStats(item.sourceKey);
   if (s && s.total) { item.rate = s.rate; item.updatedAt = new Date().toISOString(); persist(); }
   return item;
+}
+
+// ---------------------------------------------------------------------------
+// Vente automatique des déclencheurs IA à plus de 93% de réussite — AUCUNE
+// configuration admin nécessaire : dès qu'un déclencheur créé par l'IA
+// (ai-auto.js / pattern-miner) dépasse 93% de réussite, il est publié tout
+// seul dans la boutique à 4€ (nom de code + code de paiement générés comme
+// pour une publication manuelle). Dès que son taux redescend à 93% ou moins
+// — ou qu'il expire côté ai-auto.js (1h) — il disparaît automatiquement de
+// la boutique (désactivé, plus proposé aux acheteurs). Appelée à intervalle
+// régulier par bot.js (tick), avec la liste courante de aiAuto.listStrategies().
+// ---------------------------------------------------------------------------
+const AUTO_IA_THRESHOLD = 93;
+
+async function syncAutoIaListings(aiList) {
+  const list = Array.isArray(aiList) ? aiList : [];
+  const byId = new Map(list.filter((s) => s && s.id).map((s) => [s.id, s]));
+  let changed = false;
+
+  // 1) publication / mise à jour des déclencheurs IA au-dessus du seuil
+  for (const ia of list) {
+    if (!ia || !ia.id || !Number.isFinite(ia.rate) || ia.rate <= AUTO_IA_THRESHOLD) continue;
+    const existing = shop.items.find((i) => i.source === 'ia' && i.auto && i.sourceKey === ia.id);
+    if (existing) {
+      if (existing.rate !== ia.rate || !existing.active) {
+        existing.rate = ia.rate;
+        existing.active = true;
+        existing.updatedAt = new Date().toISOString();
+        changed = true;
+      }
+    } else {
+      await publishFromAiStrategy(ia, { auto: true, price: PRICE_IA });
+      changed = true; // createItem() a déjà persisté, mais on force la relecture ailleurs
+    }
+  }
+
+  // 2) désactivation automatique de ce qui est retombé ≤ 93% ou a expiré
+  for (const item of shop.items) {
+    if (item.source !== 'ia' || !item.auto) continue;
+    const current = byId.get(item.sourceKey);
+    const stillAbove = current && Number.isFinite(current.rate) && current.rate > AUTO_IA_THRESHOLD;
+    if (!stillAbove && item.active) {
+      item.active = false;
+      item.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+  if (changed) persist();
+  return changed;
 }
 
 // ---------------------------------------------------------------------------
@@ -562,11 +627,13 @@ async function fullPresentation(item, lang) {
 
 module.exports = {
   LANGS, LANG_CODES,
+  PRICE_CATALOG, PRICE_IA, AUTO_IA_THRESHOLD,
   t,
   loadFromDb,
   listAll, listActive, getItem,
   createItem, updateItem, deleteItem, regenerateCode, renameItem,
   publishFromStrategy, publishFromAiStrategy, refreshRateFromStrategy,
+  syncAutoIaListings,
   getLang, setLang,
   setPendingCode, getPendingCode, clearPendingCode,
   setActiveItem, getActiveItem,

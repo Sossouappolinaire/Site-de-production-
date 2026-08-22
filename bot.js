@@ -1019,7 +1019,7 @@ function wireShop(b) {
   async function sendShopMenu(chatId, userId, lang) {
     const items = shop.listActive();
     if (!items.length) return b.sendMessage(chatId, shop.t('noItems', lang));
-    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}`, callback_data: `shop:${it.id}` }]);
+    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}${Number.isFinite(it.price) ? ' — ' + it.price + '€' : ''}`, callback_data: `shop:${it.id}` }]);
     await b.sendMessage(chatId, shop.t('shopIntro', lang), { reply_markup: { inline_keyboard: rows } });
   }
 
@@ -1992,6 +1992,14 @@ async function startLoop() {
     loopStarted = true;
     setInterval(tick, config.POLL_INTERVAL_MS);
     tick();
+    // Vente automatique des déclencheurs IA >93% (shop.js/syncAutoIaListings) :
+    // intervalle dédié, séparé du tick jeu-par-jeu (1.5s) — la génération du
+    // nom de code par l'IA peut prendre plusieurs secondes, ça ne doit jamais
+    // ralentir le suivi des jeux en direct. « fire and forget » volontaire.
+    setInterval(() => {
+      shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
+    }, 60 * 1000);
+    shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
   }
   startBot();
   startShopBot();

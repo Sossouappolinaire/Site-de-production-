@@ -676,16 +676,17 @@ app.get('/api/shop', (req, res) => {
 
 app.post('/api/shop', async (req, res) => {
   try {
-    const { source, sourceKey, details, example, rate, realName } = req.body || {};
+    const { source, sourceKey, details, example, rate, realName, price } = req.body || {};
+    const priceNum = Number.isFinite(price) ? price : null;
     let item;
     if (source === 'strategy' && sourceKey) {
-      item = shop.publishFromStrategy(sourceKey, { details, example });
+      item = await shop.publishFromStrategy(sourceKey, { details, example, price: priceNum });
     } else if (source === 'ia' && sourceKey) {
       const aiItem = aiAuto.listStrategies().find((s) => s.id === sourceKey || s.key === sourceKey);
       if (!aiItem) return res.status(404).json({ error: "Stratégie IA introuvable (peut-être expirée après 1h)." });
-      item = shop.publishFromAiStrategy(aiItem, { details, example });
+      item = await shop.publishFromAiStrategy(aiItem, { details, example, price: priceNum });
     } else {
-      item = await shop.createItem({ source: 'custom', realName, details, example, rate: Number.isFinite(rate) ? rate : null });
+      item = await shop.createItem({ source: 'custom', realName, details, example, rate: Number.isFinite(rate) ? rate : null, price: priceNum });
     }
     res.json({ ok: true, item });
   } catch (e) { res.status(500).json({ error: e.message }); }
