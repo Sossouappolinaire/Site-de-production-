@@ -631,7 +631,9 @@
     let shopCache = { items: [], sources: { strategies: [], ia: [] } };
     function shopItemCard(it) {
       const rate = Number.isFinite(it.rate) ? `${it.rate}%` : '—';
+      const price = Number.isFinite(it.price) ? `${it.price}€` : '—';
       const badge = it.source === 'strategy' ? 'Catalogue' : it.source === 'ia' ? 'Créée par l\'IA' : 'Personnalisée';
+      const autoBadge = it.auto ? ` <span class="tag warn">Auto — IA &gt;93%</span>` : '';
       // CORRECTIF : le code est régénéré automatiquement dès qu'il est utilisé
       // (voir shop.js/redeem) — le code AFFICHÉ ICI (it.code) est donc TOUJOURS
       // le code courant, jamais consommé. codeUsedBy/codeUsedAt ne décrivent
@@ -641,7 +643,8 @@
       return `<article class="proposal" data-shop="${esc(it.id)}">
         <div class="split"><h3>${esc(it.aiName)}</h3><span class="tag ${it.active ? 'good' : 'bad'}">${it.active ? 'Active' : 'Désactivée'}</span></div>
         <dl>
-          <dt>Origine</dt><dd>${esc(badge)}${it.realName ? ' · ' + esc(it.realName) : ''}</dd>
+          <dt>Origine</dt><dd>${esc(badge)}${it.realName ? ' · ' + esc(it.realName) : ''}${autoBadge}</dd>
+          <dt>Prix</dt><dd>${esc(price)}</dd>
           <dt>Taux de réussite</dt><dd>${esc(rate)}</dd>
           <dt>Code de paiement</dt><dd class="mono">${esc(it.code)} <span class="tag good">Code disponible — non utilisé</span></dd>
           ${lastSale}
@@ -649,24 +652,25 @@
           ${it.example ? `<dt>Exemple</dt><dd>${esc(it.example.slice(0, 200))}${it.example.length > 200 ? '…' : ''}</dd>` : ''}
           <dt>Créée le</dt><dd>${formatDate(it.createdAt)}</dd>
         </dl>
+        ${it.auto ? `<p class="small muted" style="margin-top:8px">Publiée et retirée automatiquement par le système (déclencheur IA au-dessus de 93% de réussite) — aucune configuration nécessaire.</p>` : ''}
         <div class="toolbar" style="margin-top:12px">
           <button class="button small ghost" onclick="shopEdit('${esc(it.id)}')">Modifier</button>
           <button class="button small ghost" onclick="shopRename('${esc(it.id)}')">Nouveau nom IA</button>
           <button class="button small ghost" onclick="shopNewCode('${esc(it.id)}')">Nouveau code</button>
           ${it.source === 'strategy' ? `<button class="button small ghost" onclick="shopRefreshRate('${esc(it.id)}')">Actualiser le taux</button>` : ''}
-          <button class="button small ${it.active ? '' : 'primary'}" onclick="shopToggle('${esc(it.id)}', ${!it.active})">${it.active ? 'Désactiver' : 'Activer'}</button>
+          ${it.auto ? '' : `<button class="button small ${it.active ? '' : 'primary'}" onclick="shopToggle('${esc(it.id)}', ${!it.active})">${it.active ? 'Désactiver' : 'Activer'}</button>`}
           <button class="button small danger" onclick="shopDelete('${esc(it.id)}')">Supprimer</button>
         </div>
       </article>`;
     }
     function shopSourceOptions() {
-      const strat = shopCache.sources.strategies.map(s => `<option value="strategy:${esc(s.key)}">📦 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''}</option>`).join('');
-      const ia = shopCache.sources.ia.map(s => `<option value="ia:${esc(s.id || s.key)}">🤖 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''}</option>`).join('');
+      const strat = shopCache.sources.strategies.map(s => `<option value="strategy:${esc(s.key)}">📦 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — 50€</option>`).join('');
+      const ia = shopCache.sources.ia.map(s => `<option value="ia:${esc(s.id || s.key)}">🤖 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — 4€</option>`).join('');
       return `<option value="custom">✏️ Stratégie personnalisée (saisie libre)</option>${strat}${ia}`;
     }
     async function boutiquePage() {
       setNav('boutique');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vente</span><h2 style="margin-top:7px">Boutique de stratégies</h2><p class="small">Publie une stratégie (du catalogue, créée par l'IA, ou personnalisée) : l'IA lui donne un nom de code sans rapport avec son vrai nom, et un code de paiement à usage unique est généré. Distribue ce code à l'acheteur — dans le bot Telegram, il choisit sa langue, sélectionne la stratégie par son nom de code, entre le code, et reçoit alors le détail complet traduit dans sa langue.</p></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vente</span><h2 style="margin-top:7px">Boutique de stratégies</h2><p class="small">Publie une stratégie (du catalogue, créée par l'IA, ou personnalisée) : l'IA lui donne un nom de code sans rapport avec son vrai nom, et un code de paiement à usage unique est généré. Distribue ce code à l'acheteur — dans le bot Telegram, il choisit sa langue, sélectionne la stratégie par son nom de code, entre le code, et reçoit alors le détail complet traduit dans sa langue. <b>Vente automatique</b> : tout déclencheur créé par l'IA qui dépasse 93% de réussite est publié tout seul à 4€ (repéré par le badge « Auto »), et disparaît automatiquement dès que son taux redescend à 93% ou moins — aucune configuration nécessaire.</p></div>
         <button class="button small ghost" onclick="boutiquePage()">Actualiser</button></div>
         <div class="panel"><h3>Publier une nouvelle stratégie</h3>
           <div class="field"><label>Source</label><select id="shopSource" onchange="shopSourceChanged()">${shopSourceOptions()}</select></div>
@@ -674,6 +678,7 @@
           <div class="field" id="shopDetailsField"><label id="shopDetailsLabel">Détails de la stratégie (avec exemple intégré ou séparé ci-dessous)</label><textarea id="shopDetails" rows="5" placeholder="Décris la stratégie en détail : logique, déclencheur, quand l'utiliser…"></textarea></div>
           <div class="field"><label>Exemple concret <span class="small">(optionnel)</span></label><textarea id="shopExample" rows="3" placeholder="Ex. Si tu observes ♦️ absent pendant 5 jeux consécutifs, prédis ♦️ sur le jeu suivant…"></textarea></div>
           <div class="field" id="shopRateField"><label>Taux de réussite (%) — pour une stratégie personnalisée</label><input id="shopRate" type="number" min="0" max="100" placeholder="Ex. 82"></div>
+          <div class="field"><label>Prix (€) <span class="small">— 50€ par défaut pour le catalogue, 4€ pour un déclencheur IA, laisse vide pour garder ce défaut</span></label><input id="shopPrice" type="number" min="0" step="0.5" placeholder="Ex. 50"></div>
           <div class="toolbar"><button class="button primary" onclick="shopCreate()">Publier dans la boutique</button></div>
           <div id="shopCreateMsg"></div>
         </div>
@@ -710,6 +715,7 @@
         details: val('shopDetails'),
         example: val('shopExample'),
         rate: val('shopRate') ? Number(val('shopRate')) : null,
+        price: val('shopPrice') ? Number(val('shopPrice')) : null,
       };
       if (!body.details && source === 'custom') return toast('Ajoute au moins les détails de la stratégie.', 'error');
       const msg = $('#shopCreateMsg'); if (msg) msg.innerHTML = '<div class="loading">Publication en cours (l\'IA invente le nom de code)…</div>';
@@ -746,7 +752,10 @@
       if (details === null) return;
       const example = prompt('Modifier l\'exemple :', it.example || '');
       if (example === null) return;
-      api(`/api/shop/${id}`, 'POST', { details, example }).then(() => { toast('Stratégie mise à jour.'); boutiquePage(); }).catch(e => toast(e.message, 'error'));
+      const priceRaw = prompt('Modifier le prix (€) :', Number.isFinite(it.price) ? String(it.price) : '');
+      if (priceRaw === null) return;
+      const price = priceRaw.trim() === '' ? null : Number(priceRaw);
+      api(`/api/shop/${id}`, 'POST', { details, example, price }).then(() => { toast('Stratégie mise à jour.'); boutiquePage(); }).catch(e => toast(e.message, 'error'));
     }
 
     // ── Panneau administrateur : Utilisateurs ──────────────────────────────
