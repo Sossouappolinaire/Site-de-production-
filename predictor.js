@@ -134,6 +134,9 @@ function setStrategyConfig(key, patch = {}) {
   // stratégie « Prédiction dans l'ombre » : jeux d'absence minimum + périmètre
   if (patch.absence !== undefined) next.absence = Math.max(1, Math.min(30, parseInt(patch.absence, 10) || 4));
   if (patch.scope !== undefined) next.scope = patch.scope === 'joueur' ? 'joueur' : 'tous';
+  // stratégie « Dominant Baccarat » : écart minimum (en jeux) entre deux
+  // prédictions successives de cette stratégie
+  if (key === 'dominant' && patch.gap !== undefined) next.gap = Math.max(1, Math.min(20, parseInt(patch.gap, 10) || 3));
   // mode silencieux 1 — RÉSERVÉ à la stratégie « ombre », et OBLIGATOIRE pour
   // elle : ombre fonctionne exclusivement via ce filtre, `silent` ne peut donc
   // jamais y être désactivé (patch.silent est ignoré pour cette clé). Pour
@@ -1120,7 +1123,7 @@ function evaluate() {
   for (const [def, cfg, source] of jobs) {
     let hit = null;
     try {
-      hit = def.detect(source, cfg, { counters: state.counters, games: state.games });
+      hit = def.detect(source, cfg, { counters: state.counters, games: state.games, predictions: state.predictions });
     } catch (e) {
       state.lastError = `${def.key}: ${e.message}`;
       continue;

@@ -103,6 +103,13 @@ const TEXTS = {
     ru: '✅ Язык сохранён: Русский.',
     es: '✅ Idioma guardado: Español.',
   },
+  askMore: {
+    fr: 'Voulez-vous que je vous explique davantage ?',
+    en: 'Would you like me to explain further?',
+    ar: 'هل تريد أن أشرح لك أكثر؟',
+    ru: 'Хотите, я объясню подробнее?',
+    es: '¿Quieres que te explique más?',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -460,6 +467,7 @@ function redeem(userId, itemId, code) {
   // courant suffit à prouver que c'est un achat légitime et non rejoué.
   item.codeUsedBy = String(userId);
   item.codeUsedAt = new Date().toISOString();
+  item.salesCount = (item.salesCount || 0) + 1;
   // Code à usage unique : dès que la saisie réussit, il expire immédiatement
   // et un NOUVEAU code est généré automatiquement pour cette stratégie (sur
   // le site comme côté bot) — sans action de l'administrateur. L'ancien code
@@ -507,26 +515,40 @@ function resolvedDetails(item) {
 async function explain(item, question, lang) {
   const details = resolvedDetails(item);
   const system = [
-    `Tu es l'assistant qui présente et explique EXCLUSIVEMENT la stratégie nommée "${item.aiName}" à un client qui vient de l'acheter.`,
+    "Tu t'appelles Sossou Kouamé. Si on te demande qui tu es ou comment tu t'appelles, présente-toi ainsi (« Je suis Sossou Kouamé ») ; sinon, ne le répète pas à chaque message, ce n'est utile que quand on te le demande.",
+    `Tu expliques EXCLUSIVEMENT la stratégie nommée "${item.aiName}" à un client qui vient de l'acheter.`,
     "Base-toi UNIQUEMENT sur les informations fournies ci-dessous (détails + exemple). N'invente et ne révèle RIEN d'autre : ni les autres stratégies de la boutique, ni le fonctionnement interne du bot, ni du code, ni des données techniques.",
-    // CORRECTIF (explication « un peu brute ») : avant, l'IA pouvait rester
-    // abstraite (juste la règle en une phrase). On lui impose maintenant de
-    // TOUJOURS illustrer avec un exemple concret et chiffré, numéros de jeu
-    // fictifs à l'appui, pour que ce soit immédiatement applicable en jouant.
     "Ton explication doit TOUJOURS se terminer par un exemple concret et chiffré, avec de vrais numéros de jeu fictifs, au format : « Exemple : au jeu n°X, on observe [ce que dit la règle]. Au jeu n°X+N, tu prédis [résultat prédit]. » Si aucun exemple n'a été fourni ci-dessous, INVENTE-en un toi-même, cohérent avec les détails fournis (choisis des numéros de jeu plausibles) — ne reste jamais uniquement théorique.",
     "Si les détails fournis sont vraiment vides ou insuffisants pour construire quoi que ce soit de cohérent, dis-le clairement au lieu d'improviser une fausse règle.",
     "Si la question sort du cadre de cette stratégie précise, réponds poliment que tu ne peux répondre qu'aux questions concernant cette stratégie.",
+    "Termine TOUJOURS ta réponse par une courte question invitant le client à demander plus de détails s'il le souhaite (par exemple : « Voulez-vous que je vous explique davantage ? »), reformulée dans la langue de réponse.",
     `Réponds en ${LANG_NAMES[lang] || 'français'}, texte brut, en phrases claires et naturelles, sans markdown, sans astérisques, sans puces.`,
   ].join(' ');
-  try {
-    const raw = await ai.chat({
-      system,
-      user: { question, details, example: item.example },
-      temperature: 0.3,
-      timeoutMs: 20000,
-    });
-    return cleanText(raw) || null;
-  } catch (_) { return null; }
+  // Deux tentatives : ai.chat() bascule déjà entre plusieurs fournisseurs
+  // (OpenRouter → Gemini → Groq → Pollinations → secours gratuit), mais un
+  // aléa réseau isolé peut faire échouer les deux essais très vite ; on
+  // retente une fois avant de basculer sur le repli local ci-dessous, pour
+  // que le client reçoive quasi toujours une VRAIE réponse de l'IA.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const raw = await ai.chat({
+        system,
+        user: { question, details, example: item.example },
+        temperature: 0.3,
+        timeoutMs: 20000,
+      });
+      const out = cleanText(raw);
+      if (out) return out;
+    } catch (_) { /* on retente, puis on bascule sur le repli local */ }
+  }
+  // Repli local : l'IA est injoignable (aucun fournisseur configuré/en
+  // panne) — le client ne doit JAMAIS recevoir un message générique du type
+  // « stratégie indisponible ». On construit une explication directement à
+  // partir des détails/exemple enregistrés, traduits si besoin.
+  const fallbackDetails = await translate(details, lang);
+  const fallbackExample = item.example ? await translate(item.example, lang) : '';
+  const more = t('askMore', lang);
+  return `${fallbackDetails}${fallbackExample ? '\n\nExemple : ' + fallbackExample : ''}\n\n${more}`;
 }
 
 async function fullPresentation(item, lang) {

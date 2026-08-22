@@ -90,11 +90,17 @@ const dominant = {
     "Filtre obligatoire : joueur 3 cartes ET banquier 3 cartes. On mélange les " +
     "6 cartes, on compte les couleurs. S'il y a un dominant fort (une couleur " +
     "au moins 2 fois, sans égalité), on joue TOUJOURS son inverse " +
-    "(♥️↔♣️, ♦️↔♠️) sur le tour +2. Vérification sur la main du joueur.",
-  defaults: { enabled: true, format: 1, maxR: 2, b: 0, lead: 2, template: null, channels: [] },
+    "(♥️↔♣️, ♦️↔♠️) sur le tour +2. Vérification sur la main du joueur. " +
+    "Deux garde-fous avant l'envoi : (1) écart minimum (3 jeux par défaut) " +
+    "entre deux prédictions de cette stratégie ; (2) compteur de costumes sur " +
+    "3 jeux (le déclencheur et les 2 précédents) — si le costume à prédire " +
+    "est apparu sur la main du JOUEUR dans 2 jeux CONSÉCUTIFS parmi ces 3 " +
+    "(ex. déclencheur au jeu 23 : venu aux jeux 21 et 22, ou venu aux jeux 22 " +
+    "et 23), le déclencheur est ignoré.",
+  defaults: { enabled: true, format: 1, maxR: 2, b: 0, lead: 2, gap: 3, template: null, channels: [] },
   usesB: false,
   source: 'finished',
-  detect(game, cfg) {
+  detect(game, cfg, ctx) {
     if (!game || !game.finished) return null;
     if (game.playerCards !== 3 || game.bankerCards !== 3) return null; // filtre obligatoire
     const six = [...suitsOf(game.playerSuits), ...suitsOf(game.bankerSuits)];
@@ -103,13 +109,43 @@ const dominant = {
     if (!dom) return null;
     const suit = INVERSE[dom];
     if (!suit) return null;
+
+    // garde-fou 1 : écart minimum entre deux prédictions « dominant » — on
+    // regarde la dernière prédiction déjà émise par CETTE stratégie (la plus
+    // récente est en tête, voir predictor.js/evaluate → unshift) et on exige
+    // au moins `gap` jeux d'écart entre son déclencheur et celui-ci.
+    const gapNeeded = Math.max(1, Math.min(20, parseInt(cfg && cfg.gap, 10) || 3));
+    const predictions = (ctx && ctx.predictions) || [];
+    const lastDominant = predictions.find((p) => p.strategy === 'dominant');
+    if (lastDominant && lastDominant.from != null && (game.number - lastDominant.from) < gapNeeded) {
+      return null; // trop proche de la précédente prédiction « dominant »
+    }
+
+    // garde-fou 2 : compteur de costumes sur 3 jeux — le déclencheur (n) et
+    // les 2 jeux qui le précèdent immédiatement (n-1, n-2). On bloque
+    // UNIQUEMENT si le costume à prédire est apparu sur la main du JOUEUR
+    // dans 2 jeux CONSÉCUTIFS parmi ces 3 : (n-2 ET n-1) OU (n-1 ET n).
+    // Exemple : déclencheur au jeu 23 → on regarde 21, 22 et 23. S'il est
+    // venu aux jeux 21 ET 22 → on ignore. S'il est venu aux jeux 22 ET 23 →
+    // on ignore aussi. Une seule occurrence isolée (ni consécutive ni
+    // répétée) ne bloque pas la prédiction.
+    const games = (ctx && ctx.games) || new Map();
+    const playerHasSuitAt = (n) => {
+      const g = n === game.number ? game : games.get(n);
+      return g ? suitsOf(g.playerSuits).includes(suit) : false;
+    };
+    const atN2 = playerHasSuitAt(game.number - 2);
+    const atN1 = playerHasSuitAt(game.number - 1);
+    const atN0 = playerHasSuitAt(game.number);
+    if ((atN2 && atN1) || (atN1 && atN0)) return null;
+
     return {
       kind: 'suit',
       target: game.number + (cfg.lead || 2),
       suit,
       label: suit,
       reason: `dominant ${dom} (${reason}) → inverse ${suit}`,
-      meta: { dominant: dom, count },
+      meta: { dominant: dom, count, gap: gapNeeded },
     };
   },
 };

@@ -1118,7 +1118,7 @@ function wireShop(b) {
           return b.sendMessage(msg.chat.id, closing);
         }
         const answer = await shop.explain(item, msg.text, lang);
-        return b.sendMessage(msg.chat.id, answer || shop.t('itemInactive', lang));
+        return b.sendMessage(msg.chat.id, answer);
       }
     }
     return sendShopMenu(msg.chat.id, userId, lang);
