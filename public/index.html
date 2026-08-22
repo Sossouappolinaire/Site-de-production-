@@ -632,13 +632,19 @@
     function shopItemCard(it) {
       const rate = Number.isFinite(it.rate) ? `${it.rate}%` : '—';
       const badge = it.source === 'strategy' ? 'Catalogue' : it.source === 'ia' ? 'Créée par l\'IA' : 'Personnalisée';
-      const codeState = it.codeUsedBy ? `<span class="tag bad">Code utilisé — expiré</span>` : `<span class="tag good">Code disponible</span>`;
+      // CORRECTIF : le code est régénéré automatiquement dès qu'il est utilisé
+      // (voir shop.js/redeem) — le code AFFICHÉ ICI (it.code) est donc TOUJOURS
+      // le code courant, jamais consommé. codeUsedBy/codeUsedAt ne décrivent
+      // que la DERNIÈRE vente (à titre d'information), ils ne doivent plus
+      // faire passer le code actuel pour « expiré ».
+      const lastSale = it.codeUsedBy ? `<dt>Dernière vente</dt><dd>Utilisateur Telegram <span class="mono">${esc(it.codeUsedBy)}</span> — ${formatDate(it.codeUsedAt)}${it.salesCount ? ` · ${esc(it.salesCount)} vente(s) au total` : ''}</dd>` : '';
       return `<article class="proposal" data-shop="${esc(it.id)}">
         <div class="split"><h3>${esc(it.aiName)}</h3><span class="tag ${it.active ? 'good' : 'bad'}">${it.active ? 'Active' : 'Désactivée'}</span></div>
         <dl>
           <dt>Origine</dt><dd>${esc(badge)}${it.realName ? ' · ' + esc(it.realName) : ''}</dd>
           <dt>Taux de réussite</dt><dd>${esc(rate)}</dd>
-          <dt>Code de paiement</dt><dd class="mono">${esc(it.code)} ${codeState}</dd>
+          <dt>Code de paiement</dt><dd class="mono">${esc(it.code)} <span class="tag good">Code disponible — non utilisé</span></dd>
+          ${lastSale}
           <dt>Détails</dt><dd>${esc((it.details || '').slice(0, 240))}${(it.details || '').length > 240 ? '…' : ''}</dd>
           ${it.example ? `<dt>Exemple</dt><dd>${esc(it.example.slice(0, 200))}${it.example.length > 200 ? '…' : ''}</dd>` : ''}
           <dt>Créée le</dt><dd>${formatDate(it.createdAt)}</dd>
@@ -912,6 +918,7 @@ Faites-en bon usage !
           ${s.key === 'absente' ? `<div class="field"><label>Jeux sans costume</label><input id="cfgStreak" type="number" min="2" max="10" value="${c.streak ?? 3}"></div>` : ''}
           ${s.key === 'ombre' ? `<div class="three-col"><div class="field"><label>Absence minimum</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Périmètre</label><select id="cfgScope"><option value="tous" ${c.scope !== 'joueur' ? 'selected' : ''}>Joueur + banquier</option><option value="joueur" ${c.scope === 'joueur' ? 'selected' : ''}>Joueur uniquement</option></select></div></div>` : ''}
           ${s.key === 'ombreJoueur' ? `<div class="field"><label>Absence minimum (jeux sans le costume sur la main du joueur)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><p class="small">Périmètre fixe : main du joueur uniquement (le banquier n'est jamais pris en compte).</p>` : ''}
+          ${s.key === 'dominant' ? `<div class="three-col"><div class="field"><label>Écart minimum entre 2 prédictions (jeux)</label><input id="cfgGap" type="number" min="1" max="20" value="${c.gap ?? 3}"></div></div><p class="small">Un déclencheur au jeu N est ignoré si le costume à prédire est apparu sur la main du joueur dans 2 jeux consécutifs parmi N-2, N-1 et N (N-2+N-1, ou N-1+N), ou si l'écart avec la dernière prédiction « dominant » est inférieur à cette valeur.</p>` : ''}
           <div class="field"><label>Format du message</label><p class="small">Les 89 formats complets sont accessibles depuis le bouton Formats.</p></div><label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <div class="toolbar" style="margin-top:18px"><button class="button primary" onclick="saveStrategy('${s.key}')">Enregistrer les réglages</button><button class="button ghost" onclick="resetStrategy('${s.key}')">Réinitialiser</button><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester le canal</button>${s.key === 'ombre' ? '' : `<button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester canal silencieux</button>`}</div><div id="strategyMessage"></div></div>
         ${s.key === 'ombre' ? `<div class="panel"><h3>Mode silencieux 1 — filtre après pertes</h3><p class="small"><b>Réservé à la stratégie « ombre »</b> : c'est le seul mode silencieux configurable dans tout le projet. Il publie dans le <b>canal public</b>.<br><b>Phase 1</b> — on attend la 1ʳᵉ perte : elle devient la référence.<br><b>Phase 2</b> — on mesure l’écart (prédictions terminées) jusqu’à la perte suivante : écart ≥ intervalle MAX → cette perte devient la nouvelle référence ; écart &lt; intervalle MAX → confirmée, N = écart.<br><b>Phase 3</b> — décompte silencieux : la N-ᵉ prédiction depuis la confirmation part dans le canal public. Une perte pendant le décompte interrompt et redevient la référence.</p>
@@ -953,7 +960,7 @@ Faites-en bon usage !
     async function refreshStrategyLive(key) { await refresh(); strategyPage(key); }
     function val(id) { return document.getElementById(id)?.value ?? ''; }
     async function saveStrategy(key) {
-      const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
+      const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
       try { await api(`/api/strategies/${key}`, 'POST', patch); await refresh(); await strategyPage(key); toast('Réglages enregistrés.'); } catch (e) { toast(e.message, 'error'); }
