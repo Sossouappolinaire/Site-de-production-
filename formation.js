@@ -129,10 +129,160 @@ function findingText(name, events, rates) {
   return lines;
 }
 
-function buildEntry(key, name, list) {
+// ---------------------------------------------------------------------------
+// « Retour du costume après une perte » : pour chaque prédiction PERDUE
+// d'une stratégie, on regarde si le costume qui avait été prédit (et qui a
+// donc raté ce jeu-là) réapparaît sur la main du JOUEUR au jeu +1, +2, +3,
+// +4 ou +5 qui suit — et si oui, à quel décalage ça arrive le plus souvent.
+// Répond à : « après une perte, le costume prédit revient en général à
+// combien de jeux plus tard, dans la majorité des cas ? »
+// Source des jeux : table `games` en base (historique complet, tous jours
+// confondus) — avec repli sur la mémoire (manche en cours) si la base n'est
+// pas connectée ou si un jeu demandé n'y est pas encore.
+// ---------------------------------------------------------------------------
+const SUIT_RETURN_MAX_N = 5;
+
+async function suitReturnAfterLoss(predictions) {
+  const losses = (predictions || []).filter(
+    (p) => p && p.status === 'perdu' && p.suit && Number.isFinite(Number(p.target))
+  );
+  if (!losses.length) return null;
+
+  const targets = losses.map((p) => Number(p.target));
+  const minG = Math.min(...targets) + 1;
+  const maxG = Math.max(...targets) + SUIT_RETURN_MAX_N;
+
+  const suitsByNumber = new Map();
+  if (db.ready) {
+    try {
+      const rows = await db.gamesInRange(minG, maxG);
+      for (const r of rows) suitsByNumber.set(Number(r.number), r.player_suits || []);
+    } catch (_) { /* repli mémoire ci-dessous */ }
+  }
+  if (!suitsByNumber.size) {
+    // repli mémoire : uniquement les jeux encore connus de la manche en
+    // cours (state.games est vidé à chaque nouvelle manche).
+    for (const g of state.games.values()) {
+      if (g.number >= minG && g.number <= maxG) suitsByNumber.set(g.number, g.playerSuits || []);
+    }
+  }
+  if (!suitsByNumber.size) return null;
+
+  const perN = Array.from({ length: SUIT_RETURN_MAX_N }, () => ({ hits: 0, support: 0 }));
+  for (const p of losses) {
+    const t = Number(p.target);
+    const wanted = strategiesLib.normSuit(p.suit);
+    if (!wanted) continue;
+    for (let n = 1; n <= SUIT_RETURN_MAX_N; n += 1) {
+      const suits = suitsByNumber.get(t + n);
+      if (suits === undefined) continue; // jeu pas (encore) connu → hors échantillon pour ce palier
+      perN[n - 1].support += 1;
+      if (strategiesLib.suitsOf(suits).includes(wanted)) perN[n - 1].hits += 1;
+    }
+  }
+  const rates = perN
+    .map((e, i) => ({ n: i + 1, support: e.support, hits: e.hits, rate: pct(e.hits, e.support) }))
+    .filter((r) => r.support > 0);
+  if (!rates.length) return null;
+
+  // meilleur palier = le plus fiable (échantillon suffisant) au taux le plus
+  // haut ; à défaut, celui avec le plus d'observations (indication, moins sûre).
+  const qualifying = rates.filter((r) => r.support >= MIN_SUPPORT);
+  const best = qualifying.length
+    ? qualifying.reduce((acc, r) => (r.rate > acc.rate ? r : acc))
+    : rates.slice().sort((a, b) => b.support - a.support)[0];
+
+  return { totalLosses: losses.length, rates, best, reliable: qualifying.length > 0 };
+}
+
+function suitReturnFinding(name, suitReturn) {
+  if (!suitReturn || !suitReturn.best) return null;
+  const b = suitReturn.best;
+  const detail = suitReturn.rates.length > 1
+    ? ` Détail par décalage : ${suitReturn.rates.map((r) => `+${r.n} → ${r.rate}% (${r.hits}/${r.support})`).join(' · ')}.`
+    : '';
+  return (
+    `Sur ${suitReturn.totalLosses} perte(s) observée(s) pour « ${name} », le costume prédit (raté ce jeu-là) ` +
+    `réapparaît sur la main du joueur au jeu +${b.n} dans ${b.rate}% des cas (${b.hits}/${b.support} observations)` +
+    `${suitReturn.reliable ? '' : ' — échantillon encore faible, à confirmer'}.${detail}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Simulation du « mode silencieux 1 » (confirmation par pertes rapprochées,
+// voir predictor.js) REJOUÉE sur l'historique de CHAQUE stratégie, pour
+// estimer combien des pertes réellement observées auraient été évitées
+// (restées silencieuses, jamais envoyées publiquement) si ce filtre avait
+// été actif : 1) une 1ʳᵉ perte ouvre une fenêtre de vérification ; 2) si une
+// 2ᵉ perte (ou plus, selon `lossTrigger`) tombe dans les `lossWindow`
+// prédictions suivantes → l'envoi est ACTIVÉ à partir de LÀ ; 3) une
+// prédiction gagnée referme l'envoi et tout repart à zéro. C'est une version
+// simplifiée du principe documenté dans predictor.js (sans la file d'attente
+// à plusieurs positions, propre à la stratégie « ombre » en production) —
+// suffisante pour estimer, stratégie par stratégie, l'effet du filtre.
+// ---------------------------------------------------------------------------
+function simulateSilentMode(predictions, { lossTrigger = 2, lossWindow = 3 } = {}) {
+  const need = Math.max(1, Math.min(5, parseInt(lossTrigger, 10) || 2));
+  const window = Math.max(1, Math.min(20, parseInt(lossWindow, 10) || 3));
+  const done = (predictions || [])
+    .filter((p) => p && outcomeOf(p.status, p.step) !== null && Number.isFinite(Number(p.target)))
+    .sort((a, b) => Number(a.target) - Number(b.target));
+  if (!done.length) return null;
+
+  let armed = false;
+  let lossesInWindow = 0; // pertes comptées vers la confirmation en cours
+  let sinceLastLoss = 0;  // prédictions terminées depuis la dernière perte de référence
+  let totalLosses = 0;
+  let avoided = 0;
+  let stillLost = 0;
+
+  for (const p of done) {
+    const isLoss = p.status === 'perdu';
+    if (isLoss) totalLosses += 1;
+
+    if (armed) {
+      if (isLoss) stillLost += 1;
+      else armed = false; // gagné → referme l'envoi (resetOnWin)
+      continue;
+    }
+
+    // pas encore armé : cette prédiction serait restée silencieuse
+    if (isLoss) avoided += 1;
+
+    if (isLoss) {
+      lossesInWindow += 1;
+      sinceLastLoss = 0;
+      if (lossesInWindow >= need) armed = true;
+    } else if (lossesInWindow > 0) {
+      sinceLastLoss += 1;
+      if (sinceLastLoss > window) { lossesInWindow = 0; sinceLastLoss = 0; } // fenêtre dépassée → repart à zéro
+    }
+  }
+  if (!totalLosses) return null;
+  return { lossTrigger: need, lossWindow: window, totalLosses, avoided, stillLost, avoidedRate: pct(avoided, totalLosses) };
+}
+
+function silentModeFinding(name, silent) {
+  if (!silent) return null;
+  if (!silent.avoided) {
+    return `En simulant le mode silencieux (confirmation par ${silent.lossTrigger} perte(s) rapprochée(s), fenêtre de ${silent.lossWindow}) sur « ${name} », aucune des ${silent.totalLosses} perte(s) observée(s) n'aurait été évitée : le filtre les aurait toutes laissées passer.`;
+  }
+  return `En simulant le mode silencieux (confirmation par ${silent.lossTrigger} perte(s) rapprochée(s), fenêtre de ${silent.lossWindow}) sur « ${name} », ${silent.avoided} perte(s) sur ${silent.totalLosses} (${silent.avoidedRate}%) seraient restées silencieuses au lieu d'être envoyées publiquement — les ${silent.stillLost} autre(s) seraient quand même parties.`;
+}
+
+async function buildEntry(key, name, list, silentCfg) {
   const { events, doneCount } = troubleRuns(list);
   const rates = chainRates(events);
   const best = bestFormation(rates);
+  const suitReturn = await suitReturnAfterLoss(list);
+  const silent = simulateSilentMode(list, silentCfg);
+
+  const findings = findingText(name, events, rates);
+  const suitReturnLine = suitReturnFinding(name, suitReturn);
+  if (suitReturnLine) findings.push(suitReturnLine);
+  const silentLine = silentModeFinding(name, silent);
+  if (silentLine) findings.push(silentLine);
+
   return {
     key,
     name,
@@ -142,8 +292,10 @@ function buildEntry(key, name, list) {
     rate: best ? best.rate : null,
     support: best ? best.support : 0,
     reliable: !!best,
-    findings: findingText(name, events, rates),
+    findings,
     rates,
+    suitReturn,
+    silentModeBacktest: silent,
   };
 }
 
@@ -231,12 +383,14 @@ async function run({ remote = false } = {}) {
       const mem = memoryPredictions(def.key);
       const dbRows = await dbPredictions(def.key);
       const list = dbRows.length >= mem.length ? dbRows : mem;
-      out.push(buildEntry(def.key, def.name, list));
+      const cfg = state.strategies && state.strategies[def.key];
+      const silentCfg = { lossTrigger: cfg && cfg.lossTrigger, lossWindow: cfg && cfg.lossWindow };
+      out.push(await buildEntry(def.key, def.name, list, silentCfg));
     }
     // stratégie IA « Prédit » : vit dans son propre module (predit.js), pas
     // dans strategies.LIST — traitée séparément mais avec le même moteur.
-    const preditList = (predit.panel.predictions || []).map((p) => ({ target: p.target, status: p.status, step: p.step }));
-    out.push(buildEntry('predit', 'Prédit (IA)', preditList));
+    const preditList = (predit.panel.predictions || []).map((p) => ({ target: p.target, status: p.status, step: p.step, suit: p.suit }));
+    out.push(await buildEntry('predit', 'Prédit (IA)', preditList, {}));
 
     out.sort((a, b) => (Number(b.reliable) - Number(a.reliable)) || (b.formationLength || 0) - (a.formationLength || 0) || (b.rate || 0) - (a.rate || 0));
 

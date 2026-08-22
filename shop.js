@@ -14,6 +14,7 @@ const db = require('./db');
 const ai = require('./ai-analyzer');
 const strategies = require('./strategies');
 const { stats: strategyStats } = require('./predictor');
+const formation = require('./formation');
 
 // ---------------------------------------------------------------------------
 // Langues proposées à l'accueil du bot.
@@ -103,6 +104,92 @@ const TEXTS = {
     es: '✅ Idioma guardado: Español.',
   },
 };
+
+// ---------------------------------------------------------------------------
+// Remerciement de fin de discussion — une fois que l'acheteur dit avoir
+// compris la stratégie (« compris », « understood », « понятно »…), le bot
+// le remercie, lui souhaite bonne chance, PUIS donne un vrai conseil issu du
+// panneau « Formation » (formation.js) pour CETTE stratégie précise : combien
+// de prédictions jouer d'affilée après une perte/rattrapage, et avec quel
+// taux observé — jamais un conseil générique inventé.
+// ---------------------------------------------------------------------------
+const THANKS_TEMPLATES = {
+  fr: "🙏 Merci d'avoir acheté la stratégie « {name} » ! Je te souhaite bonne chance pour tes prochaines parties.",
+  en: '🙏 Thank you for buying the "{name}" strategy! I wish you good luck for your next games.',
+  ar: '🙏 شكرًا لشرائك استراتيجية «{name}»! أتمنى لك حظًا موفقًا في جولاتك القادمة.',
+  ru: '🙏 Спасибо за покупку стратегии «{name}»! Желаю удачи в следующих играх.',
+  es: '🙏 ¡Gracias por comprar la estrategia «{name}»! Te deseo mucha suerte en tus próximas partidas.',
+};
+const FORMATION_INTRO = {
+  fr: '📋 Un conseil tiré de la formation observée pour cette stratégie :',
+  en: '📋 A tip from the training pattern observed for this strategy:',
+  ar: '📋 نصيحة مستخلصة من التكوين الملاحَظ لهذه الاستراتيجية:',
+  ru: '📋 Небольшой совет на основе наблюдаемой формации для этой стратегии:',
+  es: '📋 Un consejo basado en la formación observada para esta estrategia:',
+};
+const NO_FORMATION_TEXT = {
+  fr: "Je n'ai pas encore assez de données de jeu pour te donner un conseil de formation fiable sur cette stratégie précise — reviens me demander plus tard, une fois qu'elle aura plus d'historique.",
+  en: "I don't have enough game data yet for a reliable training tip on this specific strategy — ask me again later once it has more history.",
+  ar: 'ليس لدي بعد بيانات كافية لتقديم نصيحة تكوين موثوقة لهذه الاستراتيجية بالذات — اسألني لاحقًا عندما يتوفر سجل أطول.',
+  ru: 'У меня пока недостаточно данных, чтобы дать надёжный совет по формации именно для этой стратегии — спросите позже, когда накопится больше истории.',
+  es: 'Todavía no tengo suficientes datos de juego para un consejo de formación fiable sobre esta estrategia en concreto — pregúntame más tarde cuando tenga más historial.',
+};
+
+// Détection multilingue (fr/en/ar/ru/es) d'un message signalant que
+// l'acheteur a compris. On exclut d'abord toute négation courante (« pas »,
+// « don't », « не »...) pour ne jamais confondre avec une vraie question du
+// type « je n'ai pas bien compris pourquoi... » ou « I don't understand ».
+const NEGATION_HINTS = /\b(pas|jamais|aucun(?:e)?|n'ai|don'?t|doesn'?t|didn'?t|not|no\s+entiendo|не\s|нет|لا\s|غير)\b/i;
+const UNDERSTOOD_PATTERNS = [
+  /\bcompris\b/i,
+  /\bc'?est\s+(clair|bon)\b/i,
+  /\bunderstood\b/i,
+  /\b(get|understand)\s+it\b/i,
+  /\bgot\s+it\b/i,
+  /\bunderstand\b/i,
+  /понял|поняла|понятно|ясно/i,
+  /entendido|lo\s+entiend[oí]|entend[íi]/i,
+  /فهمت|واضح/,
+];
+function isUnderstoodMessage(text) {
+  const s = String(text || '').trim();
+  if (!s || s.length > 160) return false;
+  if (NEGATION_HINTS.test(s)) return false;
+  return UNDERSTOOD_PATTERNS.some((re) => re.test(s));
+}
+
+// Cherche l'entrée du panneau Formation correspondant à la stratégie
+// achetée (par clé technique réelle — jamais par nom de code) et renvoie son
+// constat en français brut, ou null si pas assez de données/pas de lien.
+async function formationFindingsFor(item) {
+  let st = formation.status();
+  if (!st.lastRunAt) {
+    try { st = await formation.run(); } catch (_) { return null; }
+  }
+  const list = st.strategies || [];
+  let key = null;
+  if (item.source === 'strategy' && item.sourceKey) key = item.sourceKey;
+  else if (item.sourceKey === 'predit') key = 'predit';
+  if (!key) return null;
+  const entry = list.find((s) => s.key === key);
+  if (!entry || !entry.findings || !entry.findings.length) return null;
+  return entry.findings.join(' ');
+}
+
+async function closingMessage(item, lang) {
+  const headerTpl = THANKS_TEMPLATES[lang] || THANKS_TEMPLATES.fr;
+  const header = headerTpl.replace('{name}', item.aiName || '');
+  const findingsFr = await formationFindingsFor(item);
+  let body;
+  if (findingsFr) {
+    const intro = FORMATION_INTRO[lang] || FORMATION_INTRO.fr;
+    const findingsTranslated = await translate(findingsFr, lang);
+    body = `${intro}\n${findingsTranslated}`;
+  } else {
+    body = NO_FORMATION_TEXT[lang] || NO_FORMATION_TEXT.fr;
+  }
+  return `${header}\n\n${body}`;
+}
 
 function t(key, lang) {
   const l = LANG_CODES.has(lang) ? lang : 'fr';
@@ -348,19 +435,38 @@ function refreshRateFromStrategy(id) {
 function redeem(userId, itemId, code) {
   const item = getItem(itemId);
   if (!item || !item.active) return { ok: false, reason: 'inactive' };
-  if (item.codeUsedBy && String(item.codeUsedBy) !== String(userId)) return { ok: false, reason: 'used' };
+
+  // CORRECTIF : un acheteur qui a DÉJÀ débloqué cette stratégie ne doit plus
+  // JAMAIS être bloqué dessus, quel que soit l'état du code affiché ensuite
+  // (une revente à quelqu'un d'autre a pu régénérer le code entre-temps) —
+  // il la reverra toujours, sans consommer/perturber le code courant.
+  if (hasUnlocked(userId, itemId)) {
+    setActiveItem(userId, itemId);
+    clearPendingCode(userId);
+    return { ok: true, item };
+  }
+
   const submitted = String(code || '').trim().toUpperCase();
   if (submitted !== String(item.code || '').toUpperCase()) return { ok: false, reason: 'wrong' };
-  if (!item.codeUsedBy) {
-    item.codeUsedBy = String(userId);
-    item.codeUsedAt = new Date().toISOString();
-    // Code à usage unique : dès que la saisie réussit la PREMIÈRE fois, il
-    // expire immédiatement et un NOUVEAU code est généré automatiquement
-    // pour cette stratégie (sur le site comme côté bot) — sans action de
-    // l'administrateur. L'ancien code ne peut plus jamais être réutilisé.
-    item.code = genCode();
-    item.updatedAt = new Date().toISOString();
-  }
+
+  // CORRECTIF (bug « nouveau code toujours refusé ») : avant, `codeUsedBy`
+  // restait enregistré avec l'ID du TOUT PREMIER acheteur et n'était jamais
+  // effacé lors de la régénération automatique du code ci-dessous — un
+  // DEUXIÈME acheteur légitime, muni du nouveau code fraîchement généré,
+  // se voyait donc répondre « code déjà utilisé et expiré » (reason='used')
+  // alors que ce nouveau code n'avait jamais servi. Comme on vient de
+  // vérifier que le code saisi est bien LE code courant et valide, il n'y a
+  // plus besoin de gate sur un ancien `codeUsedBy` : correspondre au code
+  // courant suffit à prouver que c'est un achat légitime et non rejoué.
+  item.codeUsedBy = String(userId);
+  item.codeUsedAt = new Date().toISOString();
+  // Code à usage unique : dès que la saisie réussit, il expire immédiatement
+  // et un NOUVEAU code est généré automatiquement pour cette stratégie (sur
+  // le site comme côté bot) — sans action de l'administrateur. L'ancien code
+  // ne peut plus jamais être réutilisé (il ne correspondra plus à item.code).
+  item.code = genCode();
+  item.updatedAt = new Date().toISOString();
+
   const u = user(userId);
   if (!u.unlocked.includes(itemId)) u.unlocked.push(itemId);
   u.pendingCode = null;
@@ -403,6 +509,12 @@ async function explain(item, question, lang) {
   const system = [
     `Tu es l'assistant qui présente et explique EXCLUSIVEMENT la stratégie nommée "${item.aiName}" à un client qui vient de l'acheter.`,
     "Base-toi UNIQUEMENT sur les informations fournies ci-dessous (détails + exemple). N'invente et ne révèle RIEN d'autre : ni les autres stratégies de la boutique, ni le fonctionnement interne du bot, ni du code, ni des données techniques.",
+    // CORRECTIF (explication « un peu brute ») : avant, l'IA pouvait rester
+    // abstraite (juste la règle en une phrase). On lui impose maintenant de
+    // TOUJOURS illustrer avec un exemple concret et chiffré, numéros de jeu
+    // fictifs à l'appui, pour que ce soit immédiatement applicable en jouant.
+    "Ton explication doit TOUJOURS se terminer par un exemple concret et chiffré, avec de vrais numéros de jeu fictifs, au format : « Exemple : au jeu n°X, on observe [ce que dit la règle]. Au jeu n°X+N, tu prédis [résultat prédit]. » Si aucun exemple n'a été fourni ci-dessous, INVENTE-en un toi-même, cohérent avec les détails fournis (choisis des numéros de jeu plausibles) — ne reste jamais uniquement théorique.",
+    "Si les détails fournis sont vraiment vides ou insuffisants pour construire quoi que ce soit de cohérent, dis-le clairement au lieu d'improviser une fausse règle.",
     "Si la question sort du cadre de cette stratégie précise, réponds poliment que tu ne peux répondre qu'aux questions concernant cette stratégie.",
     `Réponds en ${LANG_NAMES[lang] || 'français'}, texte brut, en phrases claires et naturelles, sans markdown, sans astérisques, sans puces.`,
   ].join(' ');
@@ -418,7 +530,7 @@ async function explain(item, question, lang) {
 }
 
 async function fullPresentation(item, lang) {
-  const question = "Présente cette stratégie de façon claire et structurée, en intégrant l'exemple fourni pour bien montrer comment l'utiliser.";
+  const question = "Présente cette stratégie de façon claire et structurée : explique la logique en une ou deux phrases simples, PUIS donne un exemple concret et chiffré (numéros de jeu fictifs à l'appui, ex. « Jeu n°X : ... Jeu n°X+N : tu prédis ... ») pour bien montrer comment l'utiliser en pratique.";
   const ans = await explain(item, question, lang);
   if (ans) return ans;
   const details = await translate(resolvedDetails(item), lang);
@@ -438,4 +550,5 @@ module.exports = {
   setActiveItem, getActiveItem,
   redeem, hasUnlocked,
   explain, fullPresentation, translate,
+  isUnderstoodMessage, closingMessage,
 };

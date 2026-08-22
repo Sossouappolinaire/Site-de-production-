@@ -663,6 +663,17 @@ async function gameByNumber(n) {
   return r && r.rows[0] ? r.rows[0] : null;
 }
 
+// plage de jeux [minNumber, maxNumber] (bornes incluses), triés par numéro —
+// utilisé par formation.js pour vérifier, en UNE requête, si un costume perdu
+// réapparaît sur la main du joueur aux jeux qui suivent une perte.
+async function gamesInRange(minNumber, maxNumber) {
+  const r = await q(
+    `SELECT number, player_suits FROM games WHERE number >= $1 AND number <= $2 ORDER BY number`,
+    [Number(minNumber), Number(maxNumber)]
+  );
+  return r ? r.rows : [];
+}
+
 // prédictions d'une date
 async function predictionsByDate(dateStr, limit = 200) {
   const d = normalizeDate(dateStr);
@@ -733,7 +744,7 @@ module.exports = {
   saveAnnouncement, deleteAnnouncement, loadAnnouncements,
   saveAiStrategy, loadAiStrategies, deleteAiStrategy, pruneAiStrategies,
   saveAiAnalysis, loadAiAnalyses,
-  lastGames, gameByNumber, predictionsByDate, predictionSummary,
+  lastGames, gameByNumber, gamesInRange, predictionsByDate, predictionSummary,
   overview, availableDates, readOnlyQuery,
   saveAppConfig, loadAppConfig, savePreditState, loadPreditState, saveAfterLossState, loadAfterLossState,
   dump, allSettings, lastPredictions, strategyRows, tableCounts,

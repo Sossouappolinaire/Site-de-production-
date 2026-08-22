@@ -1108,6 +1108,15 @@ function wireShop(b) {
     if (activeItemId) {
       const item = shop.getItem(activeItemId);
       if (item) {
+        // L'acheteur signale qu'il a compris (fr/en/ar/ru/es, voir
+        // shop.isUnderstoodMessage) → on conclut la présentation : remerciement
+        // + bonne chance + vrai conseil du panneau Formation pour CETTE
+        // stratégie (voir shop.closingMessage / formation.js), au lieu de
+        // renvoyer ça à l'IA de Q&A comme une question ordinaire.
+        if (shop.isUnderstoodMessage(msg.text)) {
+          const closing = await shop.closingMessage(item, lang);
+          return b.sendMessage(msg.chat.id, closing);
+        }
         const answer = await shop.explain(item, msg.text, lang);
         return b.sendMessage(msg.chat.id, answer || shop.t('itemInactive', lang));
       }
