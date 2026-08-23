@@ -701,6 +701,7 @@
           <div class="field"><label>URL d'API (fournie par le tableau de bord Money Fusion)</label><input id="payApiUrl" value="${esc(p.apiUrl || '')}" placeholder="https://www.pay.moneyfusion.net/xxxxx/yyyyy/pay/"></div>
           <div class="field"><label>URL publique de ce serveur</label><input id="payPublicUrl" value="${esc(p.publicBaseUrl || '')}" placeholder="https://mon-bot.onrender.com"></div>
           <p class="small">Statut : ${p.configured ? '<span class="tag good">Configuré</span>' : '<span class="tag bad">Non configuré — le bouton Payer restera masqué (saisie manuelle du code toujours possible)</span>'}</p>
+          ${p.lastError ? `<div class="notice error">Dernier échec d'initiation de paiement (${formatDate(p.lastErrorAt)}) : ${esc(p.lastError)}</div>` : ''}
           <div class="toolbar"><button class="button primary" onclick="paiementSave()">Enregistrer</button></div>
           <div id="paiementMsg"></div>`;
       } catch (e) { $('#paiementFields').innerHTML = `<div class="empty">Impossible de charger la configuration.</div>`; }
