@@ -37,19 +37,25 @@
 </style>
 </head>
 <body>
-  <div class="card">
+  <div class="card" id="card">
     <div id="pending">
       <div class="icon spin">⏳</div>
-      <h1>Confirmation du paiement…</h1>
-      <p class="sub">Merci de patienter quelques secondes, on vérifie ton paiement auprès de FusionPay.</p>
+      <h1>Récupération de ton code…</h1>
+      <p class="sub">Merci de patienter un instant.</p>
     </div>
 
     <div id="paid" class="hidden">
-      <div class="icon">✅</div>
-      <h1 id="paidTitle">Paiement confirmé !</h1>
-      <p class="sub">Voici ton code — tu peux aussi retourner directement sur Telegram, il t'a déjà été envoyé automatiquement.</p>
-      <div class="code-box"><span id="codeValue"></span><button onclick="copyCode()">📋 Copier</button></div>
+      <div class="icon" id="paidIcon">🎟️</div>
+      <h1 id="paidTitle">Voici ton code</h1>
+      <p class="sub" id="paidSub">Ce code est réservé pour toi pendant quelques minutes — copie-le et reviens sur Telegram si besoin.</p>
+      <div class="code-box" id="codeBox"><span id="codeValue"></span><button onclick="copyCode()">📋 Copier</button></div>
       <div id="copyMsg" class="msg ok hidden">Code copié !</div>
+    </div>
+
+    <div id="thanks" class="hidden">
+      <div class="icon">🙏</div>
+      <h1 id="thanksTitle">Merci pour ton soutien !</h1>
+      <p class="sub" id="thanksSub"></p>
     </div>
 
     <div id="failed" class="hidden">
@@ -58,58 +64,109 @@
       <p class="sub">Le paiement n'a pas abouti ou a été annulé. Retourne sur Telegram pour réessayer.</p>
     </div>
 
+    <div id="closed" class="hidden">
+      <div class="icon">✅</div>
+      <h1>C'est noté !</h1>
+      <p class="sub">Ton code a été copié. Tu peux fermer cette page.</p>
+    </div>
+
     <div id="errorBox" class="msg err hidden"></div>
   </div>
 
 <script>
   const params = new URLSearchParams(location.search);
   const ref = params.get('ref');
+  const uid = params.get('uid');
+  const fn = params.get('fn');
+  const ln = params.get('ln');
   const $ = (id) => document.getElementById(id);
 
   function show(id) {
-    ['pending', 'paid', 'failed'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
+    ['pending', 'paid', 'thanks', 'failed', 'closed'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
   }
 
+  // Une fois le code copié, la page n'a plus besoin de rester ouverte — elle
+  // efface le code affiché (pour ne pas laisser une info sensible traîner à
+  // l'écran) et se referme automatiquement. window.close() ne fonctionne pas
+  // dans tous les navigateurs mobiles (restriction du navigateur intégré à
+  // Telegram notamment) : en repli, on affiche un message invitant à fermer
+  // la page à la main.
   function copyCode() {
     const text = $('codeValue').textContent;
     navigator.clipboard.writeText(text).then(() => {
       $('copyMsg').classList.remove('hidden');
-      setTimeout(() => $('copyMsg').classList.add('hidden'), 2000);
+      setTimeout(() => {
+        show('closed');
+        window.close();
+      }, 1200);
     });
+  }
+
+  function showWaiting(code, aiName) {
+    // Paiement en attente de confirmation MANUELLE par l'admin (pas de
+    // webhook en mode lien direct) : le code est déjà réservé pour cet
+    // acheteur (voir bot.js/paiement.js) et affiché tout de suite, on
+    // rassure juste sur la suite plutôt que d'attendre la confirmation
+    // avant de le montrer.
+    $('paidIcon').textContent = '⏳';
+    $('paidTitle').textContent = aiName ? `Code réservé — ${aiName}` : 'Code réservé';
+    $('paidSub').textContent = "Ton code est déjà prêt ci-dessous. Termine ton paiement sur Money Fusion si ce n'est pas encore fait — il te sera aussi envoyé automatiquement sur Telegram dès sa confirmation.";
+    $('codeValue').textContent = code;
+    show('paid');
+  }
+
+  function showPaid(code, aiName) {
+    $('paidIcon').textContent = '✅';
+    $('paidTitle').textContent = aiName ? `Paiement confirmé — ${aiName}` : 'Paiement confirmé !';
+    $('paidSub').textContent = "Voici ton code — tu peux aussi retourner directement sur Telegram, il t'a déjà été envoyé automatiquement.";
+    $('codeValue').textContent = code;
+    show('paid');
+  }
+
+  function showThanks(data) {
+    const name = (fn || ln) ? [fn, ln].filter(Boolean).join(' ') : (data.buyerName || '');
+    $('thanksTitle').textContent = name ? `Merci, ${name} !` : 'Merci pour ton soutien !';
+    $('thanksSub').textContent = `Sossou Kouamé te remercie infiniment — tu as versé ${data.amountUsd}$ (${data.amount} F CFA) pour ton soutien. ❤️ Ce message t'a aussi été envoyé sur Telegram.`;
+    show('thanks');
   }
 
   async function poll(attempt = 0) {
     if (!ref) {
-      show('failed');
-      $('errorBox').textContent = 'Lien invalide : référence de paiement manquante.';
-      $('errorBox').classList.remove('hidden');
+      // Pas de référence dans l'URL : lien ouvert sans passer par le bouton
+      // « Voir mon code » du bot — on ne peut rien afficher ici.
+      $('pending').querySelector('h1').textContent = 'Aucun code à afficher';
+      $('pending').querySelector('.sub').textContent = "Reviens sur Telegram et clique sur « Voir mon code » depuis le message de paiement.";
+      $('pending').querySelector('.icon').classList.remove('spin');
+      $('pending').querySelector('.icon').textContent = '🔎';
       return;
     }
     try {
       const res = await fetch(`/api/paiement/statut/${encodeURIComponent(ref)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Paiement introuvable.');
-      if (data.status === 'paid' && data.code) {
-        $('codeValue').textContent = data.code;
-        if (data.aiName) $('paidTitle').textContent = `Paiement confirmé — ${data.aiName}`;
-        show('paid');
-        return;
-      }
       if (data.status === 'failed') {
         show('failed');
         return;
       }
-      // toujours en attente : le webhook FusionPay peut arriver quelques
-      // secondes après la redirection du navigateur — on réessaie.
+      if (data.kind === 'support') {
+        showThanks(data);
+        if (data.status !== 'paid' && attempt < 40) return setTimeout(() => poll(attempt + 1), 3000);
+        return;
+      }
+      if (data.code) {
+        if (data.status === 'paid') showPaid(data.code, data.aiName);
+        else showWaiting(data.code, data.aiName);
+        // le statut peut encore passer de pending à paid pendant que la page
+        // reste ouverte : on continue de vérifier en tâche de fond pour
+        // mettre à jour l'affichage, sans redémarrer le compteur de
+        // tentatives depuis le début.
+        if (data.status !== 'paid' && attempt < 40) return setTimeout(() => poll(attempt + 1), 3000);
+        return;
+      }
+      // code pas encore attaché (cas rare/ancien lien) : on retente.
       if (attempt < 20) return setTimeout(() => poll(attempt + 1), 3000);
-      show('failed');
-      $('errorBox').textContent = "La confirmation prend plus de temps que prévu. Si tu as bien payé, ton code a normalement déjà été envoyé sur Telegram — sinon contacte l'administrateur.";
-      $('errorBox').classList.remove('hidden');
     } catch (e) {
       if (attempt < 20) return setTimeout(() => poll(attempt + 1), 3000);
-      show('failed');
-      $('errorBox').textContent = e.message;
-      $('errorBox').classList.remove('hidden');
     }
   }
   poll();

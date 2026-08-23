@@ -628,10 +628,11 @@
     }
 
     // ── Boutique : stratégies vendues avec code de paiement ────────────────
-    let shopCache = { items: [], sources: { strategies: [], ia: [] } };
+    let shopCache = { items: [], sources: { strategies: [], ia: [] }, pricing: { priceCatalog: 50, priceIa: 1.8 } };
     function shopItemCard(it) {
       const rate = Number.isFinite(it.rate) ? `${it.rate}%` : '—';
       const price = Number.isFinite(it.price) ? `${it.price}€` : '—';
+      const payAmount = Number.isFinite(it.payAmountLocal) ? esc(it.payAmountLocal) : '<span class="tag bad">non réglé — le bouton Payer restera masqué</span>';
       const badge = it.source === 'strategy' ? 'Catalogue' : it.source === 'ia' ? 'Créée par l\'IA' : 'Personnalisée';
       const autoBadge = it.auto ? ` <span class="tag warn">Auto — IA &gt;93%</span>` : '';
       // CORRECTIF : le code est régénéré automatiquement dès qu'il est utilisé
@@ -645,6 +646,7 @@
         <dl>
           <dt>Origine</dt><dd>${esc(badge)}${it.realName ? ' · ' + esc(it.realName) : ''}${autoBadge}</dd>
           <dt>Prix</dt><dd>${esc(price)}</dd>
+          <dt>Montant du lien de paiement</dt><dd>${payAmount}</dd>
           <dt>Taux de réussite</dt><dd>${esc(rate)}</dd>
           <dt>Code de paiement</dt><dd class="mono">${esc(it.code)} <span class="tag good">Code disponible — non utilisé</span></dd>
           ${lastSale}
@@ -664,18 +666,87 @@
       </article>`;
     }
     function shopSourceOptions() {
-      const strat = shopCache.sources.strategies.map(s => `<option value="strategy:${esc(s.key)}">📦 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — 50€</option>`).join('');
-      const ia = shopCache.sources.ia.map(s => `<option value="ia:${esc(s.id || s.key)}">🤖 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — 4€</option>`).join('');
+      const pc = Number.isFinite(shopCache.pricing?.priceCatalog) ? shopCache.pricing.priceCatalog : 50;
+      const pi100 = Number.isFinite(shopCache.pricing?.priceIa100) ? shopCache.pricing.priceIa100 : 2;
+      const pi93 = Number.isFinite(shopCache.pricing?.priceIa93) ? shopCache.pricing.priceIa93 : 1.8;
+      const strat = shopCache.sources.strategies.map(s => `<option value="strategy:${esc(s.key)}">📦 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — ${pc}€</option>`).join('');
+      const ia = shopCache.sources.ia.map(s => {
+        const p = Number.isFinite(s.rate) && s.rate >= 100 ? pi100 : pi93;
+        return `<option value="ia:${esc(s.id || s.key)}">🤖 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — ${p}€</option>`;
+      }).join('');
       return `<option value="custom">✏️ Stratégie personnalisée (saisie libre)</option>${strat}${ia}`;
+    }
+    function shopPricingPanel() {
+      const pc = Number.isFinite(shopCache.pricing?.priceCatalog) ? shopCache.pricing.priceCatalog : 50;
+      const pi100 = Number.isFinite(shopCache.pricing?.priceIa100) ? shopCache.pricing.priceIa100 : 2;
+      const pi93 = Number.isFinite(shopCache.pricing?.priceIa93) ? shopCache.pricing.priceIa93 : 1.8;
+      const fx = Number.isFinite(shopCache.pricing?.eurToXof) ? shopCache.pricing.eurToXof : 480;
+      const fxUsd = Number.isFinite(shopCache.pricing?.usdToXof) ? shopCache.pricing.usdToXof : 600;
+      return `<div class="panel"><h3>💶 Modifier les prix par méthode</h3>
+        <p class="small">Trois tarifs existent dans la boutique : les <b>stratégies existantes</b> (catalogue), et les <b>déclencheurs IA</b> qui ont deux paliers selon le taux de réussite au moment de la vente — <b>100% de réussite</b> et <b>93% à 99,99%</b>. Change un prix ci-dessous et appuie sur Enregistrer : il est appliqué automatiquement à TOUS les articles déjà publiés du palier concerné (le montant en francs du lien de paiement est recalculé en même temps), et devient le prix par défaut des prochaines publications de ce palier.</p>
+        <div class="three-col">
+          <div class="field"><label>📦 Stratégies existantes (catalogue)</label><input id="shopPriceCatalog" type="number" min="0" step="0.5" value="${esc(String(pc))}">
+            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePricing('strategy')">Enregistrer</button></div></div>
+          <div class="field"><label>🤖 Déclencheur IA — 100% de réussite</label><input id="shopPriceIa100" type="number" min="0" step="0.1" value="${esc(String(pi100))}">
+            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePricing('ia_100')">Enregistrer</button></div></div>
+          <div class="field"><label>🤖 Déclencheur IA — 93% à 99,99%</label><input id="shopPriceIa93" type="number" min="0" step="0.1" value="${esc(String(pi93))}">
+            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePricing('ia_93')">Enregistrer</button></div></div>
+        </div>
+        <div id="shopPricingMsg"></div>
+      </div>
+      <div class="panel"><h3>💱 Taux de change (€ → F CFA)</h3>
+        <p class="small">Utilisé pour calculer automatiquement le montant à intégrer dans le lien de paiement Money Fusion, à partir du prix en €. Exemple : si le taux est à 505 et qu'une stratégie coûte 3€, le lien sera généré avec 505 × 3 = 1515 F CFA. Change la valeur ci-dessous et appuie sur Enregistrer : le montant en francs de TOUS les articles déjà publiés (avec un prix en € connu) est recalculé immédiatement, et ce taux devient le défaut des prochaines publications.</p>
+        <div class="field"><label>Taux (F CFA pour 1€)</label><input id="shopExchangeRate" type="number" min="0" step="1" value="${esc(String(fx))}">
+          <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSaveExchangeRate()">Enregistrer</button></div></div>
+        <div id="shopExchangeRateMsg"></div>
+      </div>
+      <div class="panel"><h3>💛 Taux de change (bouton Soutien, $ → F CFA)</h3>
+        <p class="small">Utilisé uniquement pour le bouton « Soutien » du bot (dons libres, sans lien avec une stratégie) : le client tape un montant en dollars, ce taux calcule l'équivalent en F CFA affiché avant paiement.</p>
+        <div class="field"><label>Taux (F CFA pour 1$)</label><input id="shopSupportRate" type="number" min="0" step="1" value="${esc(String(fxUsd))}">
+          <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSaveSupportRate()">Enregistrer</button></div></div>
+        <div id="shopSupportRateMsg"></div>
+      </div>`;
+    }
+    async function shopSavePricing(method) {
+      const fieldId = method === 'strategy' ? 'shopPriceCatalog' : method === 'ia_100' ? 'shopPriceIa100' : 'shopPriceIa93';
+      const price = Number(val(fieldId));
+      if (!Number.isFinite(price) || price < 0) return toast('Prix invalide.', 'error');
+      try {
+        const r = await api('/api/shop/pricing', 'POST', { method, price });
+        toast(`Prix mis à jour — ${r.updatedCount} article(s) modifié(s).`);
+        boutiquePage();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function shopSaveExchangeRate() {
+      const rate = Number(val('shopExchangeRate'));
+      if (!Number.isFinite(rate) || rate <= 0) return toast('Taux invalide.', 'error');
+      try {
+        const r = await api('/api/shop/exchange-rate', 'POST', { rate });
+        toast(`Taux mis à jour — ${r.updatedCount} article(s) modifié(s).`);
+        boutiquePage();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function shopSaveSupportRate() {
+      const rate = Number(val('shopSupportRate'));
+      if (!Number.isFinite(rate) || rate <= 0) return toast('Taux invalide.', 'error');
+      try {
+        await api('/api/shop/support-rate', 'POST', { rate });
+        toast('Taux de soutien mis à jour.');
+        boutiquePage();
+      } catch (e) { toast(e.message, 'error'); }
     }
     async function boutiquePage() {
       setNav('boutique');
       $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vente</span><h2 style="margin-top:7px">Boutique de stratégies</h2><p class="small">Publie une stratégie (du catalogue, créée par l'IA, ou personnalisée) : l'IA lui donne un nom de code sans rapport avec son vrai nom, et un code de paiement à usage unique est généré. Distribue ce code à l'acheteur — dans le bot Telegram, il choisit sa langue, sélectionne la stratégie par son nom de code, entre le code, et reçoit alors le détail complet traduit dans sa langue. <b>Vente automatique</b> : tout déclencheur créé par l'IA qui dépasse 93% de réussite est publié tout seul à 4€ (repéré par le badge « Auto »), et disparaît automatiquement dès que son taux redescend à 93% ou moins — aucune configuration nécessaire.</p></div>
         <button class="button small ghost" onclick="boutiquePage()">Actualiser</button></div>
-        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne (FusionPay / Money Fusion)</h3>
-          <p class="small">Une fois configuré, un bouton « Payer » apparaît automatiquement sous chaque stratégie dans le bot boutique — le client paie, et le code lui est envoyé automatiquement sur Telegram et sur la page succes.html. Colle ici le lien d'API de ton application créée sur <a href="https://moneyfusion.net" target="_blank" rel="noopener">moneyfusion.net</a> (menu « API de paiement »).</p>
+        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne (lien direct Money Fusion)</h3>
+          <p class="small">Un bouton « Payer » apparaît sous chaque stratégie avec un lien de paiement direct (identifiant fixe, montant et nom du client remplacés). La confirmation est <b>automatique</b> : Money Fusion redirige le client vers la page succes.html uniquement après un paiement validé — c'est cette arrivée qui débloque la stratégie et envoie le code sur Telegram, sans aucune action de ta part.</p>
           <div id="paiementFields"><div class="loading">Chargement…</div></div>
         </div>
+        <div class="panel" id="paiementPendingPanel"><h3>⏳ Paiements en attente de confirmation</h3>
+          <div id="paiementPending"><div class="loading">Chargement…</div></div>
+        </div>
+        ${shopPricingPanel()}
         <div class="panel"><h3>Publier une nouvelle stratégie</h3>
           <div class="field"><label>Source</label><select id="shopSource" onchange="shopSourceChanged()">${shopSourceOptions()}</select></div>
           <div class="field"><label>Nom (référence interne, optionnel pour une source du catalogue/IA)</label><input id="shopRealName" placeholder="Ex. Stratégie ombre variante 2"></div>
@@ -683,6 +754,7 @@
           <div class="field"><label>Exemple concret <span class="small">(optionnel)</span></label><textarea id="shopExample" rows="3" placeholder="Ex. Si tu observes ♦️ absent pendant 5 jeux consécutifs, prédis ♦️ sur le jeu suivant…"></textarea></div>
           <div class="field" id="shopRateField"><label>Taux de réussite (%) — pour une stratégie personnalisée</label><input id="shopRate" type="number" min="0" max="100" placeholder="Ex. 82"></div>
           <div class="field"><label>Prix (€) <span class="small">— 50€ par défaut pour le catalogue, 4€ pour un déclencheur IA, laisse vide pour garder ce défaut</span></label><input id="shopPrice" type="number" min="0" step="0.5" placeholder="Ex. 50"></div>
+          <div class="field"><label>Montant du lien de paiement <span class="small">(unité Money Fusion — préréglé à 24000 pour le catalogue et 1000 pour l'IA, laisse vide pour garder ce préréglage)</span></label><input id="shopPayAmount" type="number" min="0" step="1" placeholder="Ex. 24000"></div>
           <div class="toolbar"><button class="button primary" onclick="shopCreate()">Publier dans la boutique</button></div>
           <div id="shopCreateMsg"></div>
         </div>
@@ -692,27 +764,27 @@
         const r = await api('/api/shop');
         shopCache = r;
         $('#shopSource').innerHTML = shopSourceOptions();
+        const pricingEl = $('#shopPriceCatalog')?.closest('.panel');
+        if (pricingEl) pricingEl.outerHTML = shopPricingPanel();
         const list = $('#shopList');
         list.innerHTML = shopCache.items.length ? shopCache.items.map(shopItemCard).join('') : '<div class="empty">Aucune stratégie publiée pour le moment.</div>';
       } catch (e) { toast(e.message, 'error'); }
       try {
         const p = await api('/api/paiement/config');
         $('#paiementFields').innerHTML = `
-          <div class="field"><label>URL d'API (fournie par le tableau de bord Money Fusion)</label><input id="payApiUrl" value="${esc(p.apiUrl || '')}" placeholder="https://www.pay.moneyfusion.net/xxxxx/yyyyy/pay/"></div>
-          <div class="field"><label>URL publique de ce serveur</label><input id="payPublicUrl" value="${esc(p.publicBaseUrl || '')}" placeholder="https://mon-bot.onrender.com"></div>
-          <p class="small">Statut : ${p.configured ? '<span class="tag good">Configuré</span>' : '<span class="tag bad">Non configuré — le bouton Payer restera masqué (saisie manuelle du code toujours possible)</span>'}</p>
-          ${p.lastError ? `<div class="notice error">Dernier échec d'initiation de paiement (${formatDate(p.lastErrorAt)}) : ${esc(p.lastError)}</div>` : ''}
-          <div class="toolbar"><button class="button primary" onclick="paiementSave()">Enregistrer</button></div>
-          <div id="paiementMsg"></div>`;
-      } catch (e) { $('#paiementFields').innerHTML = `<div class="empty">Impossible de charger la configuration.</div>`; }
-    }
-    async function paiementSave() {
-      const body = { apiUrl: val('payApiUrl'), publicBaseUrl: val('payPublicUrl') };
+          <p class="small">Lien de paiement fixe, rien à configurer. La confirmation est <b>automatique</b> : dès que le client arrive sur la page succes.html (Money Fusion n'y redirige qu'après un paiement validé), le code lui est envoyé sur Telegram.</p>
+          ${p.lastError ? `<div class="notice error">Dernier échec (${formatDate(p.lastErrorAt)}) : ${esc(p.lastError)}</div>` : ''}`;
+      } catch (e) { $('#paiementFields').innerHTML = `<div class="empty">Impossible de charger le statut.</div>`; }
       try {
-        await api('/api/paiement/config', 'POST', body);
-        toast('Configuration de paiement enregistrée.');
-        boutiquePage();
-      } catch (e) { toast(e.message, 'error'); }
+        const pend = await api('/api/paiement/pending');
+        $('#paiementPending').innerHTML = pend.items.length ? pend.items.map(paiementPendingCard).join('') : '<div class="empty">Aucun paiement en attente.</div>';
+      } catch (e) { $('#paiementPending').innerHTML = `<div class="empty">Impossible de charger les paiements en attente.</div>`; }
+    }
+    function paiementPendingCard(r) {
+      return `<div class="card" style="margin-top:10px"><dl class="meta"><dt>Article</dt><dd>${esc(r.aiName || r.itemId)}</dd><dt>Client</dt><dd>${esc(r.buyerName || r.userId)}</dd><dt>Montant attendu</dt><dd>${esc(r.amount)}</dd><dt>Demandé le</dt><dd>${formatDate(r.createdAt)}</dd></dl><p class="small">En attente que le client termine le paiement sur Money Fusion (confirmation automatique).</p><div class="toolbar"><button class="button ghost" onclick="paiementCancel('${r.ref}')">Annuler cette réservation</button></div></div>`;
+    }
+    async function paiementCancel(ref) {
+      try { await api('/api/paiement/cancel/' + encodeURIComponent(ref), 'POST', {}); toast('Paiement annulé.'); boutiquePage(); } catch (e) { toast(e.message, 'error'); }
     }
     function shopSourceChanged() {
       const v = val('shopSource');
@@ -738,6 +810,7 @@
         example: val('shopExample'),
         rate: val('shopRate') ? Number(val('shopRate')) : null,
         price: val('shopPrice') ? Number(val('shopPrice')) : null,
+        payAmountLocal: val('shopPayAmount') ? Number(val('shopPayAmount')) : null,
       };
       if (!body.details && source === 'custom') return toast('Ajoute au moins les détails de la stratégie.', 'error');
       const msg = $('#shopCreateMsg'); if (msg) msg.innerHTML = '<div class="loading">Publication en cours (l\'IA invente le nom de code)…</div>';
@@ -777,7 +850,10 @@
       const priceRaw = prompt('Modifier le prix (€) :', Number.isFinite(it.price) ? String(it.price) : '');
       if (priceRaw === null) return;
       const price = priceRaw.trim() === '' ? null : Number(priceRaw);
-      api(`/api/shop/${id}`, 'POST', { details, example, price }).then(() => { toast('Stratégie mise à jour.'); boutiquePage(); }).catch(e => toast(e.message, 'error'));
+      const payRaw = prompt('Modifier le montant du lien de paiement (Money Fusion) :', Number.isFinite(it.payAmountLocal) ? String(it.payAmountLocal) : '');
+      if (payRaw === null) return;
+      const payAmountLocal = payRaw.trim() === '' ? null : Number(payRaw);
+      api(`/api/shop/${id}`, 'POST', { details, example, price, payAmountLocal }).then(() => { toast('Stratégie mise à jour.'); boutiquePage(); }).catch(e => toast(e.message, 'error'));
     }
 
     // ── Panneau administrateur : Utilisateurs ──────────────────────────────
