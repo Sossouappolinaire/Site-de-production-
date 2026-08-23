@@ -70,6 +70,12 @@
       <p class="sub">Ton code a été copié. Tu peux fermer cette page.</p>
     </div>
 
+    <div id="expired" class="hidden">
+      <div class="icon">⌛</div>
+      <h1>Code expiré</h1>
+      <p class="sub">Les 3 minutes sont écoulées. Ce code n'est plus utilisable. Retourne sur Telegram pour lancer un nouveau paiement.</p>
+    </div>
+
     <div id="errorBox" class="msg err hidden"></div>
   </div>
 
@@ -82,7 +88,19 @@
   const $ = (id) => document.getElementById(id);
 
   function show(id) {
-    ['pending', 'paid', 'thanks', 'failed', 'closed'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
+    ['pending', 'paid', 'thanks', 'failed', 'closed', 'expired'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
+  }
+
+  let expiryTimer = null;
+  function armExpiry(expiresAt) {
+    if (!expiresAt) return;
+    if (expiryTimer) clearTimeout(expiryTimer);
+    const delay = Math.max(0, Number(expiresAt) - Date.now());
+    expiryTimer = setTimeout(() => {
+      $('codeValue').textContent = '';
+      $('codeBox').classList.add('hidden');
+      show('expired');
+    }, delay);
   }
 
   // Une fois le code copié, la page n'a plus besoin de rester ouverte — elle
@@ -102,24 +120,25 @@
     });
   }
 
-  function showWaiting(code, aiName) {
-    // Paiement en attente de confirmation MANUELLE par l'admin (pas de
-    // webhook en mode lien direct) : le code est déjà réservé pour cet
-    // acheteur (voir bot.js/paiement.js) et affiché tout de suite, on
-    // rassure juste sur la suite plutôt que d'attendre la confirmation
-    // avant de le montrer.
+  function showWaiting(code, aiName, expiresAt) {
+    // Le code est réservé pour cet acheteur et reste visible uniquement
+    // pendant la fenêtre de 3 minutes (voir bot.js/paiement.js).
     $('paidIcon').textContent = '⏳';
     $('paidTitle').textContent = aiName ? `Code réservé — ${aiName}` : 'Code réservé';
-    $('paidSub').textContent = "Ton code est déjà prêt ci-dessous. Termine ton paiement sur Money Fusion si ce n'est pas encore fait — il te sera aussi envoyé automatiquement sur Telegram dès sa confirmation.";
+    $('paidSub').textContent = "Ton code est prêt ci-dessous. Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie.";
     $('codeValue').textContent = code;
+    $('codeBox').classList.remove('hidden');
+    armExpiry(expiresAt);
     show('paid');
   }
 
-  function showPaid(code, aiName) {
+  function showPaid(code, aiName, expiresAt) {
     $('paidIcon').textContent = '✅';
     $('paidTitle').textContent = aiName ? `Paiement confirmé — ${aiName}` : 'Paiement confirmé !';
-    $('paidSub').textContent = "Voici ton code — tu peux aussi retourner directement sur Telegram, il t'a déjà été envoyé automatiquement.";
+    $('paidSub').textContent = "Voici ton code. Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie.";
     $('codeValue').textContent = code;
+    $('codeBox').classList.remove('hidden');
+    armExpiry(expiresAt);
     show('paid');
   }
 
@@ -148,14 +167,20 @@
         show('failed');
         return;
       }
+      if (data.status === 'expired') {
+        $('codeValue').textContent = '';
+        $('codeBox').classList.add('hidden');
+        show('expired');
+        return;
+      }
       if (data.kind === 'support') {
         showThanks(data);
         if (data.status !== 'paid' && attempt < 40) return setTimeout(() => poll(attempt + 1), 3000);
         return;
       }
       if (data.code) {
-        if (data.status === 'paid') showPaid(data.code, data.aiName);
-        else showWaiting(data.code, data.aiName);
+        if (data.status === 'paid') showPaid(data.code, data.aiName, data.expiresAt);
+        else showWaiting(data.code, data.aiName, data.expiresAt);
         // le statut peut encore passer de pending à paid pendant que la page
         // reste ouverte : on continue de vérifier en tâche de fond pour
         // mettre à jour l'affichage, sans redémarrer le compteur de
