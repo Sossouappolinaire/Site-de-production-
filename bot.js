@@ -1086,7 +1086,8 @@ function wireShop(b) {
         // vérification automatique du paiement. La saisie manuelle d'un
         // code reste possible en parallèle (ex. code donné par l'admin par
         // un autre moyen), voir le handler 'message' plus bas.
-        if (paiement.configured() && Number.isFinite(item.payAmountLocal) && item.payAmountLocal > 0) {
+        const payAmountLocal = shop.paymentAmountFor(item);
+        if (paiement.configured() && Number.isFinite(payAmountLocal) && payAmountLocal > 0) {
           // Verrou de 3 minutes sur CETTE stratégie (voir paiement.js) : tant
           // qu'un autre acheteur a une réservation active dessus, on ne
           // relance pas de nouveau paiement — ça évite que deux acheteurs
@@ -1098,7 +1099,13 @@ function wireShop(b) {
             return b.sendMessage(chatId, shop.t('itemLocked', lang));
           }
           const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
-          const pay = await paiement.initiatePayment({ item, userId, chatId, lang, buyerName });
+          const pay = await paiement.initiatePayment({
+            item: { ...item, payAmountLocal },
+            userId,
+            chatId,
+            lang,
+            buyerName,
+          });
           if (pay.ok) {
             // Le code COURANT de la stratégie est réservé/affiché dès CE
             // clic (pas seulement après confirmation admin) : c'est ce que

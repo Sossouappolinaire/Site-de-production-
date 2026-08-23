@@ -25,7 +25,7 @@ const db = require('./db');
 // du compte, réutilisés pour chaque achat en changeant juste le montant et
 // le nom du client. Plus besoin de le coller/configurer depuis le panneau.
 const LINK_BASE = 'https://payin.moneyfusion.net/payment';
-const LINK_ID = '6a8abc79ff0cbef4d3e8dc38';
+const LINK_ID = '6a8abd93ff0cbef4d3e8f6a3';
 
 const records = new Map(); // ref -> { ref, itemId, userId, chatId, lang, amount, buyerName, status, code, createdAt, updatedAt }
 

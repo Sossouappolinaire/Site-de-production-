@@ -391,6 +391,17 @@ function getEurToXof() {
 function eurToFrancs(price) {
   return Number.isFinite(price) ? Math.round(price * getEurToXof()) : null;
 }
+
+// Les anciennes stratégies peuvent ne pas avoir encore de montant CFA
+// enregistré. On le recalcule depuis le prix affiché afin de toujours
+// proposer le lien de paiement.
+function paymentAmountFor(item) {
+  if (!item) return null;
+  const saved = Number(item.payAmountLocal);
+  if (Number.isFinite(saved) && saved > 0) return Math.round(saved);
+  const price = Number(item.price);
+  return Number.isFinite(price) && price > 0 ? eurToFrancs(price) : null;
+}
 // Change le taux de change € -> F CFA : retenu comme nouveau défaut ET
 // appliqué immédiatement (montant en francs recalculé) à TOUS les articles
 // déjà publiés qui ont un prix en € connu.
@@ -853,6 +864,7 @@ module.exports = {
   LANGS, LANG_CODES,
   AUTO_IA_THRESHOLD,
   getPricingSettings, setMethodPrice, setExchangeRate, setSupportRate, getUsdToXof, supportThanksMessage,
+  paymentAmountFor,
   t,
   loadFromDb,
   listAll, listActive, getItem,
