@@ -102,11 +102,12 @@ module.exports = {
   ADMIN_ID: Number(process.env.ADMIN_ID || 0),
   PORT: Number(process.env.PORT || 10000),
 
-  // URL publique du site déployé (utilisée pour construire le lien vers
-  // succes.html envoyé au client dans le bot boutique dès qu'il clique
-  // « Payer »). Render fournit RENDER_EXTERNAL_URL automatiquement ; sinon
-  // définir PUBLIC_URL à la main (ex. en local). Sans l'une des deux, le
-  // bouton « Voir mon code » n'est simplement pas envoyé.
+  // URL publique du site déployé. N'est plus utilisée pour un lien vers
+  // succes.html dans le bot boutique (ce lien n'est plus envoyé : c'est
+  // Money Fusion qui redirige l'acheteur vers succes.html une fois le
+  // paiement validé, pas le bot). Conservée si une autre fonctionnalité en a
+  // besoin plus tard. Render fournit RENDER_EXTERNAL_URL automatiquement ;
+  // sinon définir PUBLIC_URL à la main (ex. en local).
   PUBLIC_URL: (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, ''),
 
   // Base PostgreSQL Render (en dur — se connecte sans variable Render).

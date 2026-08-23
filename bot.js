@@ -1018,10 +1018,22 @@ function wireShop(b) {
   }
 
   async function sendShopMenu(chatId, userId, lang) {
-    const items = shop.listActive();
+    // Les stratégies déjà achetées par CET utilisateur ne réapparaissent
+    // plus dans la liste principale — elles restent accessibles via le
+    // bouton « Mes stratégies » (voir myitems:list ci-dessous).
+    const items = shop.listActive().filter((it) => !shop.hasUnlocked(userId, it.id));
     const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}${Number.isFinite(it.price) ? ' — ' + it.price + '€' : ''}`, callback_data: `shop:${it.id}` }]);
+    if (shop.listUnlocked(userId).length) {
+      rows.push([{ text: shop.t('myItemsButton', lang), callback_data: 'myitems:list' }]);
+    }
     rows.push([{ text: shop.t('supportButton', lang), callback_data: 'support:start' }]);
     await b.sendMessage(chatId, items.length ? shop.t('shopIntro', lang) : shop.t('noItems', lang), { reply_markup: { inline_keyboard: rows } });
+  }
+
+  async function sendMyItemsMenu(chatId, userId, lang) {
+    const items = shop.listUnlocked(userId);
+    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}`, callback_data: `shop:${it.id}` }]);
+    await b.sendMessage(chatId, items.length ? shop.t('myItemsIntro', lang) : shop.t('noItemsUnlocked', lang), { reply_markup: { inline_keyboard: rows } });
   }
 
   b.on('callback_query', async (q) => {
@@ -1043,6 +1055,12 @@ function wireShop(b) {
         shop.setPendingSupport(userId, true);
         await b.answerCallbackQuery(q.id);
         await b.sendMessage(chatId, shop.t('supportAskAmount', lang));
+        return;
+      }
+      if (data === 'myitems:list') {
+        const lang = shop.getLang(userId) || 'fr';
+        await b.answerCallbackQuery(q.id);
+        await sendMyItemsMenu(chatId, userId, lang);
         return;
       }
       if (data.startsWith('support:pay:')) {
@@ -1099,6 +1117,17 @@ function wireShop(b) {
             return b.sendMessage(chatId, shop.t('itemLocked', lang));
           }
           const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
+          // Fenêtre d'information envoyée DÈS que le verrou de 3 minutes est
+          // obtenu (avant même de générer le lien de paiement) : elle
+          // confirme au client qu'il est désormais prioritaire sur cette
+          // stratégie et personne d'autre ne pourra lancer de paiement
+          // pendant ce délai.
+          const infoText = shop.t('reservationInfo', lang)
+            .replace('{lastName}', q.from.last_name || '—')
+            .replace('{firstName}', q.from.first_name || '—')
+            .replace('{userId}', String(userId))
+            .replace('{strategy}', item.aiName);
+          await b.sendMessage(chatId, infoText);
           const pay = await paiement.initiatePayment({
             item: { ...item, payAmountLocal },
             userId,
@@ -1115,13 +1144,11 @@ function wireShop(b) {
             // correspond donc exactement au code qui sera consommé quand
             // l'admin confirmera ce paiement précis (voir paidHandler plus bas).
             paiement.attachCode(pay.ref, item.code);
+            // Un seul bouton « Payer » : succes.html n'est plus lié depuis le
+            // bot. C'est Money Fusion qui redirige l'acheteur vers cette page
+            // une fois le paiement validé (URL de succès configurée côté
+            // compte Money Fusion) — le bot n'ouvre jamais ce lien lui-même.
             const buttons = [[{ text: `💳 ${shop.t('payButton', lang)} — ${item.price}€`, url: pay.checkoutUrl }]];
-            if (config.PUBLIC_URL) {
-              const firstName = q.from.first_name || '';
-              const lastName = q.from.last_name || '';
-              const extra = `&uid=${encodeURIComponent(userId)}&fn=${encodeURIComponent(firstName)}&ln=${encodeURIComponent(lastName)}`;
-              buttons.push([{ text: shop.t('viewCodeButton', lang), url: `${config.PUBLIC_URL}/succes.html?ref=${encodeURIComponent(pay.ref)}${extra}` }]);
-            }
             await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
             // 30s après avoir ouvert le lien de paiement, rappel : le client
             // peut aussi taper directement un code déjà en sa possession

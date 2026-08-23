@@ -54,6 +54,27 @@ const TEXTS = {
     ru: '😕 Сейчас в магазине нет доступных стратегий. Загляните позже.',
     es: '😕 Ninguna estrategia está disponible en la tienda por ahora. Vuelve más tarde.',
   },
+  myItemsButton: {
+    fr: '🔓 Mes stratégies',
+    en: '🔓 My strategies',
+    ar: '🔓 استراتيجياتي',
+    ru: '🔓 Мои стратегии',
+    es: '🔓 Mis estrategias',
+  },
+  myItemsIntro: {
+    fr: '🔓 Voici les stratégies que tu as déjà débloquées. Choisis-en une pour revoir son détail ou poser une question :',
+    en: "🔓 Here are the strategies you've already unlocked. Pick one to see its details again or ask a question:",
+    ar: '🔓 هذه الاستراتيجيات التي فتحتها بالفعل. اختر واحدة لمراجعة تفاصيلها أو طرح سؤال:',
+    ru: '🔓 Вот стратегии, которые вы уже разблокировали. Выберите одну, чтобы снова посмотреть детали или задать вопрос:',
+    es: '🔓 Aquí están las estrategias que ya desbloqueaste. Elige una para revisar su detalle o hacer una pregunta:',
+  },
+  noItemsUnlocked: {
+    fr: "😕 Tu n'as encore débloqué aucune stratégie. Choisis-en une dans la liste pour l'acheter.",
+    en: "😕 You haven't unlocked any strategy yet. Pick one from the list to buy it.",
+    ar: '😕 لم تفتح أي استراتيجية بعد. اختر واحدة من القائمة لشرائها.',
+    ru: '😕 Вы ещё не разблокировали ни одной стратегии. Выберите одну из списка, чтобы купить.',
+    es: '😕 Todavía no has desbloqueado ninguna estrategia. Elige una de la lista para comprarla.',
+  },
   askCode: {
     fr: '🔑 Envoie maintenant le code de paiement de cette stratégie pour la débloquer.',
     en: '🔑 Now send the payment code for this strategy to unlock it.',
@@ -110,6 +131,13 @@ const TEXTS = {
     ru: 'Хотите, я объясню подробнее?',
     es: '¿Quieres que te explique más?',
   },
+  reservationInfo: {
+    fr: '🔒 Réservation confirmée pour 3 minutes — tu es désormais prioritaire, personne d\'autre ne peut payer cette stratégie tant que ce délai n\'est pas écoulé.\n\n👤 Nom : {lastName}\n👤 Prénom : {firstName}\n🆔 ID Telegram : {userId}\n🎯 Stratégie : {strategy}',
+    en: '🔒 Reservation confirmed for 3 minutes — you are now the priority buyer, no one else can pay for this strategy until this time runs out.\n\n👤 Last name: {lastName}\n👤 First name: {firstName}\n🆔 Telegram ID: {userId}\n🎯 Strategy: {strategy}',
+    ar: '🔒 تم تأكيد الحجز لمدة 3 دقائق — أنت الآن الأولوية، لا يمكن لأي شخص آخر دفع ثمن هذه الاستراتيجية حتى ينتهي هذا الوقت.\n\n👤 الاسم العائلي: {lastName}\n👤 الاسم الأول: {firstName}\n🆔 معرّف تيليغرام: {userId}\n🎯 الاستراتيجية: {strategy}',
+    ru: '🔒 Бронь подтверждена на 3 минуты — теперь у вас приоритет, никто другой не сможет оплатить эту стратегию, пока не истечёт это время.\n\n👤 Фамилия: {lastName}\n👤 Имя: {firstName}\n🆔 Telegram ID: {userId}\n🎯 Стратегия: {strategy}',
+    es: '🔒 Reserva confirmada por 3 minutos — ahora tienes prioridad, nadie más puede pagar esta estrategia hasta que pase este tiempo.\n\n👤 Apellido: {lastName}\n👤 Nombre: {firstName}\n🆔 ID de Telegram: {userId}\n🎯 Estrategia: {strategy}',
+  },
   payIntro: {
     fr: '💳 Clique sur le bouton ci-dessous pour payer et débloquer cette stratégie instantanément. Tu as déjà un code ? Envoie-le directement ici.',
     en: '💳 Tap the button below to pay and unlock this strategy instantly. Already have a code? Send it directly here.',
@@ -123,13 +151,6 @@ const TEXTS = {
     ar: 'ادفع',
     ru: 'Оплатить',
     es: 'Pagar',
-  },
-  viewCodeButton: {
-    fr: '🎟️ Voir mon code',
-    en: '🎟️ View my code',
-    ar: '🎟️ عرض رمزي',
-    ru: '🎟️ Посмотреть мой код',
-    es: '🎟️ Ver mi código',
   },
   itemLocked: {
     fr: "⏳ Un autre utilisateur est en train d'effectuer un paiement. Merci de patienter 3 minutes avant de réessayer.",
@@ -801,6 +822,17 @@ function hasUnlocked(userId, itemId) {
   return !!(u && u.unlocked.includes(itemId));
 }
 
+// Stratégies déjà débloquées par cet utilisateur (les plus récentes en
+// premier) — utilisé pour le bouton « Mes stratégies » du bot boutique, qui
+// les sort de la liste principale une fois achetées.
+function listUnlocked(userId) {
+  const u = shop.users[String(userId)];
+  if (!u || !u.unlocked.length) return [];
+  return u.unlocked
+    .map((id) => getItem(id))
+    .filter((it) => it);
+}
+
 // ---------------------------------------------------------------------------
 // Explication IA — strictement bornée aux détails/exemple de LA stratégie
 // achetée, jamais aux données internes du bot ni aux autres stratégies.
@@ -889,7 +921,7 @@ module.exports = {
   setPendingCode, getPendingCode, clearPendingCode,
   setActiveItem, getActiveItem,
   setPendingSupport, getPendingSupport, clearPendingSupport,
-  redeem, hasUnlocked,
+  redeem, hasUnlocked, listUnlocked,
   explain, fullPresentation, translate,
   isUnderstoodMessage, closingMessage,
 };
