@@ -1305,9 +1305,8 @@ async function disconnectBot() {
 // ---------------------------------------------------------------------------
 // Paiement confirmé automatiquement (arrivée du client sur succes.html
 // après validation Money Fusion, voir paiement.js/markPaidOnArrival) :
-// - achat de stratégie (record.kind === 'item') : débloque la stratégie et
-//   envoie le détail + code automatiquement dans Telegram, exactement comme
-//   une saisie de code manuelle réussie.
+// - achat de stratégie (record.kind === 'item') : le code reste uniquement
+//   sur succes.html ; le client doit le copier et l'envoyer au bot.
 // - soutien (record.kind === 'support') : AUCUN code n'est envoyé, juste un
 //   message de remerciement personnalisé (voir shop.supportThanksMessage).
 // Enregistrée une seule fois (le handler regarde `shopBot` à l'appel, pas à
@@ -1321,19 +1320,12 @@ paiement.setPaidHandler(async (record) => {
     } catch (e) { console.error('Soutien (envoi Telegram après paiement) :', e.message); }
     return;
   }
-  const item = shop.getItem(record.itemId);
-  if (!item) return;
-  const paidCode = item.code; // capturé AVANT le déblocage, qui régénère un nouveau code
-  const r = shop.redeem(record.userId, record.itemId, paidCode);
-  if (!r.ok) return;
-  paiement.attachCode(record.ref, paidCode); // le code correspondant à CE paiement, affiché sur succes.html
-  if (!shopBot) return; // bot boutique non démarré : le client verra quand même le code sur succes.html
-  try {
-    await shopBot.sendMessage(record.chatId, shop.t('unlockedHeader', record.lang));
-    const text = await shop.fullPresentation(r.item, record.lang);
-    await shopBot.sendMessage(record.chatId, text);
-    await shopBot.sendMessage(record.chatId, shop.t('canAsk', record.lang));
-  } catch (e) { console.error('Paiement (envoi Telegram après paiement) :', e.message); }
+});
+
+// À l'expiration, seul le code courant lié à ce paiement est remplacé.
+// Aucun message « Code accepté » n'est envoyé automatiquement.
+paiement.setExpiredHandler(async (record) => {
+  if (record.kind === 'item') shop.expirePaymentCode(record.itemId, record.code);
 });
 
 async function startShopBot(token) {

@@ -132,11 +132,11 @@ const TEXTS = {
     es: '🎟️ Ver mi código',
   },
   itemLocked: {
-    fr: "⏳ Cette stratégie est en cours d'achat par quelqu'un d'autre. Réessaie dans quelques minutes.",
-    en: '⏳ This strategy is currently being purchased by someone else. Try again in a few minutes.',
-    ar: '⏳ يقوم شخص آخر بشراء هذه الاستراتيجية حاليًا. أعد المحاولة بعد بضع دقائق.',
-    ru: '⏳ Эту стратегию сейчас покупает кто-то другой. Повторите попытку через несколько минут.',
-    es: '⏳ Otra persona está comprando esta estrategia en este momento. Vuelve a intentarlo en unos minutos.',
+    fr: "⏳ Un autre utilisateur est en train d'effectuer un paiement. Merci de patienter 3 minutes avant de réessayer.",
+    en: '⏳ Another user is currently making a payment. Please wait 3 minutes before trying again.',
+    ar: '⏳ مستخدم آخر يقوم حاليًا بالدفع. يرجى الانتظار 3 دقائق قبل إعادة المحاولة.',
+    ru: '⏳ Другой пользователь сейчас выполняет оплату. Подождите 3 минуты перед повторной попыткой.',
+    es: '⏳ Otro usuario está realizando un pago. Espera 3 minutos antes de volver a intentarlo.',
   },
   supportButton: {
     fr: '💛 Soutien',
@@ -401,6 +401,19 @@ function paymentAmountFor(item) {
   if (Number.isFinite(saved) && saved > 0) return Math.round(saved);
   const price = Number(item.price);
   return Number.isFinite(price) && price > 0 ? eurToFrancs(price) : null;
+}
+
+// Expire le code affiché sur succes.html à la fin de la réservation. On ne
+// change le code que s'il s'agit toujours de celui de ce paiement : un code
+// déjà utilisé ou remplacé entre-temps ne doit pas être écrasé.
+function expirePaymentCode(itemId, code) {
+  const item = getItem(itemId);
+  if (!item || !code) return false;
+  if (String(item.code || '').toUpperCase() !== String(code).toUpperCase()) return false;
+  item.code = genCode();
+  item.updatedAt = new Date().toISOString();
+  persist();
+  return true;
 }
 // Change le taux de change € -> F CFA : retenu comme nouveau défaut ET
 // appliqué immédiatement (montant en francs recalculé) à TOUS les articles
@@ -865,6 +878,7 @@ module.exports = {
   AUTO_IA_THRESHOLD,
   getPricingSettings, setMethodPrice, setExchangeRate, setSupportRate, getUsdToXof, supportThanksMessage,
   paymentAmountFor,
+  expirePaymentCode,
   t,
   loadFromDb,
   listAll, listActive, getItem,

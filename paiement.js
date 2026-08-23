@@ -6,15 +6,16 @@
 //
 //   https://payin.moneyfusion.net/payment/{id}/{montant}/{nom}
 //
-// Confirmation du paiement : AUTOMATIQUE, sans intervention de l'admin.
+// Confirmation du paiement : l'arrivée sur succes.html confirme la
+// transaction, mais ne débloque pas automatiquement la stratégie dans
+// Telegram. Le client doit copier le code affiché puis le renvoyer au bot.
 // Money Fusion est configuré (côté Money Fusion, par l'admin du compte
 // Money Fusion — pas dans ce code) pour rediriger le client vers notre page
 // succes.html UNIQUEMENT une fois le paiement validé. Cette page interroge
 // GET /api/paiement/statut/:ref (voir server.js), qui marque alors le
 // paiement comme payé dès ce premier appel — l'arrivée sur succes.html EST
 // la preuve du paiement, il n'y a plus de bouton « Confirmer » côté admin.
-// Dès la confirmation, le code est envoyé automatiquement au client sur
-// Telegram (voir paidHandler, câblé dans bot.js).
+// Le code est affiché sur succes.html pendant la réservation de 3 minutes.
 'use strict';
 
 const crypto = require('crypto');
@@ -35,45 +36,78 @@ let lastErrorAt = null;
 
 
 // ---------------------------------------------------------------------------
-// Verrou temporaire par article (en mémoire, pas besoin de survivre à un
-// redémarrage) : dès qu'un acheteur clique « Payer » pour une stratégie, elle
-// est réservée pour lui seul pendant 3 minutes. Tant que la réservation est
-// active, personne d'autre ne peut lancer un paiement pour la MÊME stratégie
-// — ça évite que deux acheteurs se voient attribuer/afficher en même temps le
-// même code (celui-ci est unique et partagé tant qu'il n'a pas été consommé,
-// voir shop.redeem/unlockItem), ce qui aurait pu faire que succes.html
-// affiche à l'un un code déjà régénéré (donc invalide) entre-temps pour
-// l'autre. Si le même acheteur reclique, sa réservation est simplement
-// prolongée (jamais bloqué par son propre verrou).
+// Verrou global de la boutique (en mémoire, pas besoin de survivre à un
+// redémarrage) : dès qu'un acheteur clique « Payer » pour une stratégie,
+// aucun autre utilisateur ne peut lancer de paiement, même pour une autre
+// stratégie, pendant 3 minutes. Le même acheteur peut rouvrir son paiement.
 // ---------------------------------------------------------------------------
 const LOCK_MS = 3 * 60 * 1000; // 3 minutes
-const locks = new Map(); // itemId -> { userId, expiresAt }
+const GLOBAL_LOCK_KEY = '__shop_global__';
+const locks = new Map(); // verrou global -> { userId, expiresAt }
+const expiryTimers = new Map(); // ref -> timeout
+let expiredHandler = null;
 
-function getLock(itemId) {
-  const lock = locks.get(itemId);
+function getLock() {
+  const lock = locks.get(GLOBAL_LOCK_KEY);
   if (!lock) return null;
-  if (Date.now() > lock.expiresAt) { locks.delete(itemId); return null; }
+  if (Date.now() >= lock.expiresAt) { locks.delete(GLOBAL_LOCK_KEY); return null; }
   return lock;
 }
 
 // Tente de réserver l'article pour cet acheteur : renvoie le verrou obtenu,
 // ou null si un AUTRE acheteur le détient déjà (verrou toujours actif).
-function lockItem(itemId, userId) {
-  const existing = getLock(itemId);
+function lockItem(_itemId, userId) {
+  const existing = getLock();
   if (existing && existing.userId !== String(userId)) return null;
   const lock = { userId: String(userId), expiresAt: Date.now() + LOCK_MS };
-  locks.set(itemId, lock);
+  locks.set(GLOBAL_LOCK_KEY, lock);
   return lock;
 }
 
-function unlockItem(itemId) { locks.delete(itemId); }
+function unlockItem(_itemId) { locks.delete(GLOBAL_LOCK_KEY); }
+
+function setExpiredHandler(fn) { expiredHandler = fn; }
+
+async function expireRecord(ref) {
+  const record = records.get(ref);
+  if (!record || record.status === 'expired') return record;
+  if (record.expiresAt && Date.now() < record.expiresAt) return record;
+  const expiredCode = record.code;
+  record.status = 'expired';
+  record.code = null;
+  record.updatedAt = new Date().toISOString();
+  persist();
+  const lock = getLock();
+  if (!lock || lock.userId === String(record.userId)) unlockItem();
+  if (expiredHandler) {
+    try { await expiredHandler({ ...record, code: expiredCode }); } catch (e) {
+      console.error('Expiration du paiement :', e.message);
+    }
+  }
+  return record;
+}
+
+function scheduleExpiry(ref, expiresAt) {
+  if (!expiresAt) return;
+  const oldTimer = expiryTimers.get(ref);
+  if (oldTimer) clearTimeout(oldTimer);
+  const delay = Math.max(0, expiresAt - Date.now());
+  const timer = setTimeout(() => {
+    expiryTimers.delete(ref);
+    expireRecord(ref).catch((e) => console.error('Expiration du paiement :', e.message));
+  }, delay);
+  expiryTimers.set(ref, timer);
+}
 
 (function loadInitial() {
   try {
     const saved = store.read().paiement;
     if (saved && typeof saved === 'object') {
       if (Array.isArray(saved.records)) {
-        for (const r of saved.records) if (r && r.ref) records.set(r.ref, r);
+        for (const r of saved.records) if (r && r.ref) {
+          records.set(r.ref, r);
+          scheduleExpiry(r.ref, r.expiresAt);
+        }
       }
     }
   } catch (_) { /* ignore */ }
@@ -99,7 +133,10 @@ async function loadFromDb() {
     if (!raw) return false;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed.records)) {
-      for (const r of parsed.records) if (r && r.ref && !records.has(r.ref)) records.set(r.ref, r);
+      for (const r of parsed.records) if (r && r.ref && !records.has(r.ref)) {
+        records.set(r.ref, r);
+        scheduleExpiry(r.ref, r.expiresAt);
+      }
     }
     return true;
   } catch (_) { return false; }
@@ -135,8 +172,8 @@ function buildStaticLink(amountLocal, buyerName) {
 // montant attendu) et construit le lien de paiement direct — pas d'appel
 // réseau, tout est local et immédiat. Le code de la stratégie existe déjà
 // (généré à la création de l'article, voir shop.js) : il est simplement
-// envoyé au client une fois le paiement confirmé (automatiquement, voir
-// markPaidOnArrival plus bas).
+// affiché au client sur succes.html pendant la durée de la réservation ; le
+// déblocage Telegram se fait uniquement après saisie manuelle du code.
 // Retourne { ok, checkoutUrl, ref } ou { ok:false, error }.
 // ---------------------------------------------------------------------------
 async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
@@ -148,6 +185,8 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
 
   const name = buyerName || `Client Telegram ${userId}`;
   const checkoutUrl = buildStaticLink(item.payAmountLocal, name);
+  const lock = getLock();
+  const expiresAt = lock ? lock.expiresAt : Date.now() + LOCK_MS;
 
   const ref = shortRef();
   const record = {
@@ -161,11 +200,13 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
     buyerName: name,
     status: 'pending',
     code: null,
+    expiresAt,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
   records.set(ref, record);
   persist();
+  scheduleExpiry(ref, expiresAt);
   return { ok: true, checkoutUrl, ref };
 }
 
@@ -184,6 +225,7 @@ async function initiateSupportPayment({ userId, chatId, lang, buyerName, amountU
   }
   const name = buyerName || `Client Telegram ${userId}`;
   const checkoutUrl = buildStaticLink(amountLocal, name);
+  const expiresAt = Date.now() + LOCK_MS;
 
   const ref = shortRef();
   const record = {
@@ -198,11 +240,13 @@ async function initiateSupportPayment({ userId, chatId, lang, buyerName, amountU
     buyerName: name,
     status: 'pending',
     code: null,
+    expiresAt,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
   records.set(ref, record);
   persist();
+  scheduleExpiry(ref, expiresAt);
   return { ok: true, checkoutUrl, ref };
 }
 
@@ -223,7 +267,9 @@ async function markPaid(record) {
   record.status = 'paid';
   record.updatedAt = new Date().toISOString();
   persist();
-  unlockItem(record.itemId); // achat confirmé : le verrou n'a plus lieu d'être
+  // Le verrou reste actif pendant les 3 minutes prévues, même après
+  // confirmation du paiement. Cela empêche un autre utilisateur de payer
+  // pendant que le premier copie son code.
   if (paidHandler) {
     try { await paidHandler(record); } catch (e) { console.error('Paiement (handler) :', e.message); }
   }
@@ -234,7 +280,8 @@ function markFailed(record) {
   record.status = 'failed';
   record.updatedAt = new Date().toISOString();
   persist();
-  unlockItem(record.itemId); // paiement annulé/échoué : on libère l'article pour le prochain acheteur
+  // Même un paiement annulé ne libère pas la stratégie avant la fin des
+  // 3 minutes commencées au clic sur « Payer ».
 }
 
 // Confirmation AUTOMATIQUE : appelée par le serveur (voir server.js,
@@ -245,6 +292,9 @@ function markFailed(record) {
 async function markPaidOnArrival(ref) {
   const record = getRecord(ref);
   if (!record) return null;
+  if (record.expiresAt && Date.now() >= record.expiresAt) {
+    return expireRecord(ref);
+  }
   if (record.status === 'pending') await markPaid(record);
   return getRecord(ref);
 }
@@ -267,7 +317,7 @@ function attachCode(ref, code) {
 }
 
 module.exports = {
-  loadFromDb, setPaidHandler, configured, getConfig,
+  loadFromDb, setPaidHandler, setExpiredHandler, configured, getConfig,
   initiatePayment, initiateSupportPayment, getRecord, listPending, markPaidOnArrival, cancelPayment, attachCode,
   lockItem, getLock, unlockItem,
 };

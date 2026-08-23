@@ -776,7 +776,7 @@ app.post('/api/shop/:id/refresh-rate', (req, res) => {
 // configurer côté admin. Confirmation AUTOMATIQUE : dès que le navigateur
 // du client charge succes.html (atteint, côté Money Fusion, uniquement
 // après un paiement réellement validé), le paiement est marqué payé et le
-// code envoyé sur Telegram — voir paiement.markPaidOnArrival.
+// code affiché sur succes.html — voir paiement.markPaidOnArrival.
 // ---------------------------------------------------------------------------
 app.get('/api/paiement/config', (req, res) => {
   if (!requireAdmin(req, res)) return;
@@ -807,9 +807,9 @@ app.get('/api/paiement/pending', (req, res) => {
 // connecté au site) pour afficher le code. succes.html n'est atteinte,
 // côté Money Fusion, qu'après un paiement réellement validé (URL de succès
 // configurée sur le compte Money Fusion) — ce premier appel confirme donc
-// automatiquement le paiement (voir paiement.markPaidOnArrival), débloque
-// la stratégie et déclenche l'envoi du code sur Telegram, sans aucune
-// action de l'admin.
+// automatiquement le paiement (voir paiement.markPaidOnArrival) et affiche
+// le code pendant les 3 minutes ; la stratégie est débloquée uniquement
+// après saisie manuelle du code dans Telegram.
 app.get('/api/paiement/statut/:ref', async (req, res) => {
   const record = await paiement.markPaidOnArrival(req.params.ref);
   if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
@@ -823,6 +823,7 @@ app.get('/api/paiement/statut/:ref', async (req, res) => {
     amountUsd: record.amountUsd ?? null,
     buyerName: record.buyerName || null,
     userId: record.userId || null,
+    expiresAt: record.expiresAt || null,
   });
 });
 
