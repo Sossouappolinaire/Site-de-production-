@@ -1,77 +1,95 @@
-// paiement.js — Paiement en ligne (FusionPay / Money Fusion, moneyfusion.net)
-// pour la boutique de stratégies (shop.js). Quand l'acheteur tape sur le
-// bouton « 💳 Payer », on crée un lien de paiement FusionPay et on l'envoie
-// comme bouton URL dans Telegram. Une fois payé, FusionPay appelle notre
-// webhook côté serveur (confirmation fiable, indépendante du navigateur) :
-// on débloque alors automatiquement la stratégie, on envoie le code au
-// client directement dans Telegram, et la page succes.html (vers laquelle
-// FusionPay redirige le navigateur) affiche ce même code avec un bouton
-// « copier ».
+// paiement.js — Paiement en ligne via LIEN DIRECT Money Fusion (payin.moneyfusion.net),
+// SANS passer par l'API FusionPay. Le lien de paiement est construit à
+// partir d'un identifiant FIXE (id du compte Money Fusion, voir
+// LINK_BASE/LINK_ID ci-dessous), en y insérant juste le montant et le nom
+// du client :
 //
-// Conforme à la documentation officielle FusionPay (API Web) :
-// - initiation : POST sur l'URL d'API fournie par le tableau de bord
-//   (une seule URL complète, propre à chaque application créée) ;
-// - `article` est un tableau contenant UN SEUL objet {nom: prix} ;
-// - la réponse d'initiation est { statut, token, message, url } ;
-// - le statut peut être vérifié via GET
-//   https://www.pay.moneyfusion.net/paiementNotif/{token} ;
-// - le webhook envoie { event, personal_Info, tokenPay, ... } avec
-//   event = payin.session.pending | payin.session.completed | payin.session.cancelled,
-//   et peut être envoyé PLUSIEURS FOIS pour la même transaction (voir
-//   handleWebhook ci-dessous, qui ignore les notifications déjà traitées).
+//   https://payin.moneyfusion.net/payment/{id}/{montant}/{nom}
+//
+// Confirmation du paiement : AUTOMATIQUE, sans intervention de l'admin.
+// Money Fusion est configuré (côté Money Fusion, par l'admin du compte
+// Money Fusion — pas dans ce code) pour rediriger le client vers notre page
+// succes.html UNIQUEMENT une fois le paiement validé. Cette page interroge
+// GET /api/paiement/statut/:ref (voir server.js), qui marque alors le
+// paiement comme payé dès ce premier appel — l'arrivée sur succes.html EST
+// la preuve du paiement, il n'y a plus de bouton « Confirmer » côté admin.
+// Dès la confirmation, le code est envoyé automatiquement au client sur
+// Telegram (voir paidHandler, câblé dans bot.js).
 'use strict';
 
 const crypto = require('crypto');
 const store = require('./store');
 const db = require('./db');
 
-const STATUS_CHECK_BASE = 'https://www.pay.moneyfusion.net/paiementNotif';
+// Lien de paiement Money Fusion fixe, fourni par l'admin — base + identifiant
+// du compte, réutilisés pour chaque achat en changeant juste le montant et
+// le nom du client. Plus besoin de le coller/configurer depuis le panneau.
+const LINK_BASE = 'https://payin.moneyfusion.net/payment';
+const LINK_ID = '6a8abc79ff0cbef4d3e8dc38';
 
-// URL d'API FusionPay/Money Fusion — en dur (aucune variable Render requise),
-// comme les autres services de config.js. Réglable sans toucher au code via
-// FUSIONPAY_API_URL ou le panneau Boutique → Paiement (setConfig ci-dessous).
-const DEFAULT_FUSIONPAY_API_URL = 'https://pay.moneyfusion.net/Paiements_m/7da7654df194be93/pay/';
-
-const cfg = {
-  apiUrl: process.env.FUSIONPAY_API_URL || DEFAULT_FUSIONPAY_API_URL,
-  publicBaseUrl: '',  // URL publique de CE serveur (ex. https://mon-bot.onrender.com) — sert à construire return_url / webhook_url
-  webhookSecret: '',
-};
-
-const records = new Map(); // ref -> { ref, tokenPay, itemId, userId, chatId, lang, status, code, createdAt, updatedAt }
+const records = new Map(); // ref -> { ref, itemId, userId, chatId, lang, amount, buyerName, status, code, createdAt, updatedAt }
 
 let paidHandler = null; // enregistrée par bot.js : async (record) => {} — envoie le code au client sur Telegram
 let lastError = null;
 let lastErrorAt = null;
 
+
+// ---------------------------------------------------------------------------
+// Verrou temporaire par article (en mémoire, pas besoin de survivre à un
+// redémarrage) : dès qu'un acheteur clique « Payer » pour une stratégie, elle
+// est réservée pour lui seul pendant 3 minutes. Tant que la réservation est
+// active, personne d'autre ne peut lancer un paiement pour la MÊME stratégie
+// — ça évite que deux acheteurs se voient attribuer/afficher en même temps le
+// même code (celui-ci est unique et partagé tant qu'il n'a pas été consommé,
+// voir shop.redeem/unlockItem), ce qui aurait pu faire que succes.html
+// affiche à l'un un code déjà régénéré (donc invalide) entre-temps pour
+// l'autre. Si le même acheteur reclique, sa réservation est simplement
+// prolongée (jamais bloqué par son propre verrou).
+// ---------------------------------------------------------------------------
+const LOCK_MS = 3 * 60 * 1000; // 3 minutes
+const locks = new Map(); // itemId -> { userId, expiresAt }
+
+function getLock(itemId) {
+  const lock = locks.get(itemId);
+  if (!lock) return null;
+  if (Date.now() > lock.expiresAt) { locks.delete(itemId); return null; }
+  return lock;
+}
+
+// Tente de réserver l'article pour cet acheteur : renvoie le verrou obtenu,
+// ou null si un AUTRE acheteur le détient déjà (verrou toujours actif).
+function lockItem(itemId, userId) {
+  const existing = getLock(itemId);
+  if (existing && existing.userId !== String(userId)) return null;
+  const lock = { userId: String(userId), expiresAt: Date.now() + LOCK_MS };
+  locks.set(itemId, lock);
+  return lock;
+}
+
+function unlockItem(itemId) { locks.delete(itemId); }
+
 (function loadInitial() {
   try {
     const saved = store.read().paiement;
     if (saved && typeof saved === 'object') {
-      const savedCfg = { ...(saved.cfg || {}) };
-      // une ancienne sauvegarde avec apiUrl vide ne doit pas écraser la
-      // valeur en dur ci-dessus (ex. avant que ce correctif n'existe).
-      if (!savedCfg.apiUrl) delete savedCfg.apiUrl;
-      Object.assign(cfg, savedCfg);
       if (Array.isArray(saved.records)) {
         for (const r of saved.records) if (r && r.ref) records.set(r.ref, r);
       }
     }
   } catch (_) { /* ignore */ }
-  if (!cfg.webhookSecret) cfg.webhookSecret = crypto.randomBytes(16).toString('hex');
 })();
 
 function persist() {
   // on ne garde que les 500 derniers enregistrements (transactions récentes) —
   // pas besoin d'un historique illimité, juste de quoi retrouver un paiement
-  // récent (webhook en retard, page succes.html rechargée, etc.).
+  // récent (page succes.html rechargée...).
   const recent = [...records.values()]
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
     .slice(0, 500);
   records.clear();
   for (const r of recent) records.set(r.ref, r);
-  store.patch({ paiement: { cfg, records: recent } });
-  if (db.ready) db.setSetting('paiement_data', JSON.stringify({ cfg, records: recent })).catch(() => {});
+  store.patch({ paiement: { records: recent } });
+  if (db.ready) db.setSetting('paiement_data', JSON.stringify({ records: recent })).catch(() => {});
 }
 
 async function loadFromDb() {
@@ -80,11 +98,6 @@ async function loadFromDb() {
     const raw = await db.getSetting('paiement_data');
     if (!raw) return false;
     const parsed = JSON.parse(raw);
-    if (parsed.cfg) {
-      const dbCfg = { ...parsed.cfg };
-      if (!dbCfg.apiUrl) delete dbCfg.apiUrl; // idem loadInitial() : ne pas écraser la valeur en dur
-      Object.assign(cfg, dbCfg);
-    }
     if (Array.isArray(parsed.records)) {
       for (const r of parsed.records) if (r && r.ref && !records.has(r.ref)) records.set(r.ref, r);
     }
@@ -94,137 +107,123 @@ async function loadFromDb() {
 
 function setPaidHandler(fn) { paidHandler = fn; }
 
-function configured() { return !!(cfg.apiUrl && cfg.publicBaseUrl); }
+function configured() { return true; } // lien fixe (LINK_BASE/LINK_ID) : toujours prêt, rien à configurer.
 
 function getConfig() {
   return {
-    apiUrl: cfg.apiUrl,
-    publicBaseUrl: cfg.publicBaseUrl,
-    configured: configured(),
-    // dernière erreur d'initiation de paiement rencontrée (voir
-    // initiatePayment ci-dessous) : avant, seul un console.error côté
-    // serveur signalait un échec (ex. mauvaise URL d'API FusionPay, réponse
-    // invalide) — invisible pour l'admin, qui ne voyait que le client
-    // recevoir le message « envoie le code » à la place du bouton Payer.
+    configured: true,
+    // dernière erreur rencontrée lors de la construction d'un lien —
+    // affichée dans le panneau Boutique → Paiement pour ne pas dépendre
+    // uniquement des logs serveur.
     lastError,
     lastErrorAt,
   };
 }
 
-function setConfig({ apiUrl, publicBaseUrl } = {}) {
-  if (apiUrl != null) cfg.apiUrl = String(apiUrl).trim();
-  if (publicBaseUrl != null) cfg.publicBaseUrl = String(publicBaseUrl).trim().replace(/\/+$/, '');
-  persist();
-  return getConfig();
-}
-
 function shortRef() { return `pay_${crypto.randomBytes(6).toString('hex')}`; }
 
+// Construit le lien de paiement pour UN montant/nom donnés — même
+// identifiant fixe (LINK_ID) à chaque fois, seul le montant et le nom du
+// client changent dans l'URL.
+function buildStaticLink(amountLocal, buyerName) {
+  const name = encodeURIComponent(String(buyerName || 'Client').trim());
+  return `${LINK_BASE}/${LINK_ID}/${Math.round(amountLocal)}/${name}`;
+}
+
 // ---------------------------------------------------------------------------
-// Création d'un lien de paiement pour un article de la boutique (stratégie
-// ou déclencheur IA). Retourne { ok, checkoutUrl, ref } ou { ok:false, error }.
+// Prépare un achat : réserve un enregistrement local (ref, item, acheteur,
+// montant attendu) et construit le lien de paiement direct — pas d'appel
+// réseau, tout est local et immédiat. Le code de la stratégie existe déjà
+// (généré à la création de l'article, voir shop.js) : il est simplement
+// envoyé au client une fois le paiement confirmé (automatiquement, voir
+// markPaidOnArrival plus bas).
+// Retourne { ok, checkoutUrl, ref } ou { ok:false, error }.
 // ---------------------------------------------------------------------------
-async function initiatePayment({ item, userId, chatId, lang, buyerName, buyerPhone } = {}) {
-  if (!configured()) {
-    lastError = "Paiement non configuré (URL d'API / URL publique manquantes — voir Boutique → Paiement).";
+async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
+  if (!item || !Number.isFinite(item.payAmountLocal) || item.payAmountLocal <= 0) {
+    lastError = 'Cette stratégie n\'a pas de montant de lien configuré (voir Boutique → cet article → Montant du lien).';
     lastErrorAt = new Date().toISOString();
     return { ok: false, error: lastError };
   }
-  if (!item || !Number.isFinite(item.price) || item.price <= 0) {
-    lastError = 'Cette stratégie n\'a pas de prix valide (voir Boutique → cet article → Prix).';
-    lastErrorAt = new Date().toISOString();
-    return { ok: false, error: lastError };
-  }
+
+  const name = buyerName || `Client Telegram ${userId}`;
+  const checkoutUrl = buildStaticLink(item.payAmountLocal, name);
 
   const ref = shortRef();
   const record = {
     ref,
-    tokenPay: null,
+    kind: 'item',
     itemId: item.id,
     userId: String(userId),
     chatId: String(chatId),
     lang: lang || 'fr',
-    amount: item.price,
+    amount: item.payAmountLocal,
+    buyerName: name,
     status: 'pending',
     code: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+  records.set(ref, record);
+  persist();
+  return { ok: true, checkoutUrl, ref };
+}
 
-  // `article` : tableau contenant UN SEUL objet { "nom de l'article": prix }
-  // (format exact documenté par FusionPay — pas un tableau d'objets {nom,montant}).
-  const article = {};
-  article[item.aiName] = item.price;
-
-  const payload = {
-    totalPrice: item.price,
-    article: [article],
-    personal_Info: [{ ref, itemId: item.id, userId: String(userId) }],
-    numeroSend: buyerPhone || '',
-    nomclient: buyerName || `Client Telegram ${userId}`,
-    return_url: `${cfg.publicBaseUrl}/succes.html?ref=${ref}`,
-    webhook_url: `${cfg.publicBaseUrl}/api/paiement/webhook?key=${cfg.webhookSecret}`,
-  };
-
-  try {
-    const res = await fetch(cfg.apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) {
-      lastError = `Réponse invalide de FusionPay (HTTP ${res.status}).`;
-      lastErrorAt = new Date().toISOString();
-      return { ok: false, error: lastError };
-    }
-    // Réponse documentée : { statut: true, token, message, url }
-    if (!data.statut || !data.url) {
-      lastError = data.message || 'FusionPay n\'a renvoyé aucun lien de paiement.';
-      lastErrorAt = new Date().toISOString();
-      return { ok: false, error: lastError };
-    }
-
-    record.tokenPay = data.token || null;
-    records.set(ref, record);
-    persist();
-    return { ok: true, checkoutUrl: data.url, ref };
-  } catch (e) {
-    lastError = e.message;
+// ---------------------------------------------------------------------------
+// Paiement de « soutien » (don libre, sans stratégie associée) : le client
+// saisit un montant en $ dans le bot, on construit le même genre de lien
+// direct Money Fusion avec le montant converti en F CFA. Une fois confirmé
+// (arrivée sur succes.html), AUCUN code n'est envoyé — juste un message de
+// remerciement (voir shop.supportThanksMessage, branché dans bot.js).
+// ---------------------------------------------------------------------------
+async function initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal } = {}) {
+  if (!Number.isFinite(amountLocal) || amountLocal <= 0) {
+    lastError = 'Montant de soutien invalide.';
     lastErrorAt = new Date().toISOString();
     return { ok: false, error: lastError };
   }
+  const name = buyerName || `Client Telegram ${userId}`;
+  const checkoutUrl = buildStaticLink(amountLocal, name);
+
+  const ref = shortRef();
+  const record = {
+    ref,
+    kind: 'support',
+    itemId: null,
+    userId: String(userId),
+    chatId: String(chatId),
+    lang: lang || 'fr',
+    amount: amountLocal,
+    amountUsd,
+    buyerName: name,
+    status: 'pending',
+    code: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  records.set(ref, record);
+  persist();
+  return { ok: true, checkoutUrl, ref };
 }
 
 function getRecord(ref) { return records.get(ref) || null; }
 
-function findRecordByTokenOrRef({ ref, tokenPay } = {}) {
-  if (ref && records.has(ref)) return records.get(ref);
-  if (tokenPay) return [...records.values()].find((r) => r.tokenPay === tokenPay) || null;
-  return null;
-}
-
-// Interroge directement FusionPay pour l'état d'un paiement (GET
-// paiementNotif/{token}) — utilisée en secours si le webhook n'est jamais
-// arrivé (voir reconcile ci-dessous), pas comme mécanisme principal.
-async function checkPaymentStatus(token) {
-  try {
-    const res = await fetch(`${STATUS_CHECK_BASE}/${encodeURIComponent(token)}`);
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) return null;
-    return data.data || null; // { tokenPay, statut: 'paid'|'pending'|'failure'|'no paid', ... }
-  } catch (_) { return null; }
+function listPending() {
+  return [...records.values()]
+    .filter((r) => r.status === 'pending')
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
 // Marque une transaction payée et déclenche le handler (déblocage + envoi
-// Telegram) — appelée par le webhook ET par reconcile(), avec protection
-// contre un double traitement (FusionPay peut renvoyer plusieurs fois la
-// même notification, voir la doc « Gestion des notifications multiples »).
+// Telegram) — appelée par markPaidOnArrival (chargement de succes.html),
+// protégée contre un double appel (un paiement déjà confirmé n'est jamais
+// retraité, ex. si le client recharge la page).
 async function markPaid(record) {
-  if (record.status === 'paid') return; // déjà traité, on ignore (notification redondante)
+  if (record.status === 'paid') return; // déjà traité
   record.status = 'paid';
   record.updatedAt = new Date().toISOString();
   persist();
+  unlockItem(record.itemId); // achat confirmé : le verrou n'a plus lieu d'être
   if (paidHandler) {
     try { await paidHandler(record); } catch (e) { console.error('Paiement (handler) :', e.message); }
   }
@@ -235,92 +234,30 @@ function markFailed(record) {
   record.status = 'failed';
   record.updatedAt = new Date().toISOString();
   persist();
+  unlockItem(record.itemId); // paiement annulé/échoué : on libère l'article pour le prochain acheteur
 }
 
-// Le montant confirmé par FusionPay doit correspondre à ce qui a été demandé
-// à l'initiation (record.amount = item.price au moment de l'achat). Une
-// petite tolérance (1 centime) absorbe les arrondis flottants ; en dessous,
-// la notification est jugée suspecte et n'est PAS traitée comme un paiement
-// valide — mieux vaut un paiement à réconcilier manuellement qu'un
-// déblocage sur un montant insuffisant.
-const AMOUNT_TOLERANCE = 0.01;
-function amountMatches(record, data) {
-  const paidAmount = Number(data.Montant);
-  if (!Number.isFinite(paidAmount)) return true; // champ absent/illisible : on ne bloque pas sur une donnée qu'on ne sait pas lire
-  if (!Number.isFinite(record.amount)) return true; // rien à comparer côté enregistrement
-  return paidAmount >= record.amount - AMOUNT_TOLERANCE;
-}
-
-// ---------------------------------------------------------------------------
-// Webhook FusionPay (« Suivi des Transactions en Temps Réel ») : appelé côté
-// serveur par FusionPay lui-même, pas par le navigateur du client — c'est la
-// source de vérité, plus fiable que la redirection navigateur (return_url),
-// qui peut être fermée avant la fin.
-//
-// Structure reçue : { event, personal_Info, tokenPay, numeroSend, nomclient,
-// numeroTransaction, Montant, frais, return_url, webhook_url, createdAt }
-// event ∈ { payin.session.pending, payin.session.completed, payin.session.cancelled }
-// ---------------------------------------------------------------------------
-async function handleWebhook(query, body) {
-  if (!cfg.webhookSecret || query.key !== cfg.webhookSecret) {
-    return { ok: false, status: 401, error: 'Clé de webhook invalide.' };
-  }
-  const data = body || {};
-  const personal = Array.isArray(data.personal_Info) ? data.personal_Info[0] : (data.personal_Info || {});
-  const ref = personal && personal.ref;
-  const tokenPay = data.tokenPay || null;
-  const record = findRecordByTokenOrRef({ ref, tokenPay });
-  if (!record) return { ok: false, status: 404, error: 'Paiement introuvable (ref/tokenPay inconnu).' };
-  if (tokenPay && !record.tokenPay) record.tokenPay = tokenPay; // au cas où l'init n'avait pas encore reçu le token
-
-  const event = String(data.event || '').toLowerCase();
-  if (event === 'payin.session.completed') {
-    if (!amountMatches(record, data)) {
-      record.status = 'amount_mismatch';
-      record.expectedAmount = record.amount;
-      record.paidAmount = Number(data.Montant);
-      record.updatedAt = new Date().toISOString();
-      persist();
-      console.error(
-        `Paiement (montant incohérent) : ref=${record.ref} attendu=${record.amount} reçu=${data.Montant}`
-      );
-      return { ok: false, status: 409, error: 'Montant payé différent du montant attendu — non débloqué automatiquement.' };
-    }
-    await markPaid(record);
-  } else if (event === 'payin.session.cancelled') {
-    markFailed(record);
-  }
-  // payin.session.pending (ou événement inconnu) : simple accusé de réception,
-  // on ne change rien tant que le paiement n'est pas confirmé ou annulé.
-  return { ok: true, status: 200 };
-}
-
-// Filet de sécurité : si succes.html interroge un paiement encore « pending »
-// après un moment, on redemande nous-mêmes l'état à FusionPay au cas où le
-// webhook se serait perdu (réseau, redémarrage du serveur pendant l'appel...).
-async function reconcile(ref) {
+// Confirmation AUTOMATIQUE : appelée par le serveur (voir server.js,
+// GET /api/paiement/statut/:ref) dès que le navigateur du client charge
+// succes.html — cette page n'est atteinte, côté Money Fusion, qu'après un
+// paiement réellement validé (URL de succès configurée sur le compte Money
+// Fusion). Sans effet si déjà payé/échoué (jamais retraité deux fois).
+async function markPaidOnArrival(ref) {
   const record = getRecord(ref);
-  if (!record || record.status !== 'pending' || !record.tokenPay) return record;
-  const data = await checkPaymentStatus(record.tokenPay);
-  if (data && data.statut === 'paid') {
-    if (amountMatches(record, data)) {
-      await markPaid(record);
-    } else {
-      record.status = 'amount_mismatch';
-      record.expectedAmount = record.amount;
-      record.paidAmount = Number(data.Montant);
-      record.updatedAt = new Date().toISOString();
-      persist();
-      console.error(
-        `Paiement (montant incohérent, reconcile) : ref=${record.ref} attendu=${record.amount} reçu=${data.Montant}`
-      );
-    }
-  } else if (data && (data.statut === 'failure' || data.statut === 'no paid')) markFailed(record);
+  if (!record) return null;
+  if (record.status === 'pending') await markPaid(record);
   return getRecord(ref);
 }
 
+function cancelPayment(ref) {
+  const record = getRecord(ref);
+  if (!record) return { ok: false, error: 'Paiement introuvable.' };
+  markFailed(record);
+  return { ok: true, record: getRecord(ref) };
+}
+
 // Enregistre le code débloqué (appelé par le gestionnaire dans bot.js après
-// shop.redeem) pour que succes.html puisse l'afficher.
+// shop.redeem) pour que succes.html puisse l'afficher si un ref est présent.
 function attachCode(ref, code) {
   const record = records.get(ref);
   if (!record) return;
@@ -330,6 +267,7 @@ function attachCode(ref, code) {
 }
 
 module.exports = {
-  loadFromDb, setPaidHandler, configured, getConfig, setConfig,
-  initiatePayment, getRecord, handleWebhook, reconcile, attachCode,
+  loadFromDb, setPaidHandler, configured, getConfig,
+  initiatePayment, initiateSupportPayment, getRecord, listPending, markPaidOnArrival, cancelPayment, attachCode,
+  lockItem, getLock, unlockItem,
 };

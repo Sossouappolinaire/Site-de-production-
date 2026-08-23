@@ -1019,9 +1019,9 @@ function wireShop(b) {
 
   async function sendShopMenu(chatId, userId, lang) {
     const items = shop.listActive();
-    if (!items.length) return b.sendMessage(chatId, shop.t('noItems', lang));
     const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}${Number.isFinite(it.price) ? ' — ' + it.price + '€' : ''}`, callback_data: `shop:${it.id}` }]);
-    await b.sendMessage(chatId, shop.t('shopIntro', lang), { reply_markup: { inline_keyboard: rows } });
+    rows.push([{ text: shop.t('supportButton', lang), callback_data: 'support:start' }]);
+    await b.sendMessage(chatId, items.length ? shop.t('shopIntro', lang) : shop.t('noItems', lang), { reply_markup: { inline_keyboard: rows } });
   }
 
   b.on('callback_query', async (q) => {
@@ -1036,6 +1036,30 @@ function wireShop(b) {
         shop.setLang(userId, lang);
         await b.answerCallbackQuery(q.id, { text: shop.t('langSaved', lang) });
         await sendShopMenu(chatId, userId, lang);
+        return;
+      }
+      if (data === 'support:start') {
+        const lang = shop.getLang(userId) || 'fr';
+        shop.setPendingSupport(userId, true);
+        await b.answerCallbackQuery(q.id);
+        await b.sendMessage(chatId, shop.t('supportAskAmount', lang));
+        return;
+      }
+      if (data.startsWith('support:pay:')) {
+        const lang = shop.getLang(userId) || 'fr';
+        const amountUsd = Number(data.slice('support:pay:'.length));
+        await b.answerCallbackQuery(q.id);
+        if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
+        const rate = shop.getUsdToXof();
+        const amountLocal = Math.round(amountUsd * rate);
+        const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
+        const pay = await paiement.initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal });
+        if (pay.ok) {
+          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: pay.checkoutUrl }]];
+          await b.sendMessage(chatId, shop.t('supportPayIntro', lang), { reply_markup: { inline_keyboard: buttons } });
+          return;
+        }
+        console.error('Soutien (initiation) :', pay.error);
         return;
       }
       if (data.startsWith('shop:')) {
@@ -1056,20 +1080,56 @@ function wireShop(b) {
         }
         shop.setPendingCode(userId, itemId);
         await b.answerCallbackQuery(q.id);
-        // Bouton de paiement en ligne (paiement.js / FusionPay) : si le
-        // paiement est configuré, on propose de payer directement — le code
-        // est alors débloqué et envoyé automatiquement (webhook), sans que
-        // le client ait à le taper. La saisie manuelle d'un code reste
-        // possible en parallèle (ex. code donné par l'admin par un autre
-        // moyen), voir le handler 'message' plus bas.
-        if (paiement.configured() && Number.isFinite(item.price) && item.price > 0) {
+        // Lien de paiement direct Money Fusion (paiement.js, SANS appel API —
+        // voir commentaire en tête de ce fichier) : le lien est construit
+        // localement (id du modèle + montant + nom du client), pas de
+        // vérification automatique du paiement. La saisie manuelle d'un
+        // code reste possible en parallèle (ex. code donné par l'admin par
+        // un autre moyen), voir le handler 'message' plus bas.
+        if (paiement.configured() && Number.isFinite(item.payAmountLocal) && item.payAmountLocal > 0) {
+          // Verrou de 3 minutes sur CETTE stratégie (voir paiement.js) : tant
+          // qu'un autre acheteur a une réservation active dessus, on ne
+          // relance pas de nouveau paiement — ça évite que deux acheteurs
+          // se voient attribuer/afficher en même temps le même code (unique
+          // et partagé tant qu'il n'a pas été consommé), qui pourrait être
+          // régénéré pour l'un pendant que l'autre le croit encore valide.
+          const lock = paiement.lockItem(itemId, userId);
+          if (!lock) {
+            return b.sendMessage(chatId, shop.t('itemLocked', lang));
+          }
           const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
           const pay = await paiement.initiatePayment({ item, userId, chatId, lang, buyerName });
           if (pay.ok) {
-            return b.sendMessage(chatId, shop.t('payIntro', lang), {
-              reply_markup: { inline_keyboard: [[{ text: `💳 ${shop.t('payButton', lang)} — ${item.price}€`, url: pay.checkoutUrl }]] },
-            });
+            // Le code COURANT de la stratégie est réservé/affiché dès CE
+            // clic (pas seulement après confirmation admin) : c'est ce que
+            // le verrou ci-dessus sécurise — personne d'autre ne peut le
+            // faire régénérer entre-temps (paiement.unlockItem n'est appelé
+            // qu'une fois ce paiement confirmé ou annulé/échoué). Il
+            // correspond donc exactement au code qui sera consommé quand
+            // l'admin confirmera ce paiement précis (voir paidHandler plus bas).
+            paiement.attachCode(pay.ref, item.code);
+            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)} — ${item.price}€`, url: pay.checkoutUrl }]];
+            if (config.PUBLIC_URL) {
+              const firstName = q.from.first_name || '';
+              const lastName = q.from.last_name || '';
+              const extra = `&uid=${encodeURIComponent(userId)}&fn=${encodeURIComponent(firstName)}&ln=${encodeURIComponent(lastName)}`;
+              buttons.push([{ text: shop.t('viewCodeButton', lang), url: `${config.PUBLIC_URL}/succes.html?ref=${encodeURIComponent(pay.ref)}${extra}` }]);
+            }
+            await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
+            // 30s après avoir ouvert le lien de paiement, rappel : le client
+            // peut aussi taper directement un code déjà en sa possession
+            // (ex. donné par l'admin) — pas de vérification automatique du
+            // paiement en mode lien direct, donc ce message reste utile même
+            // après avoir cliqué sur Payer, tant que rien n'est débloqué.
+            setTimeout(() => {
+              if (shop.hasUnlocked(userId, itemId)) return; // déjà débloqué entre-temps, inutile de relancer
+              b.sendMessage(chatId, shop.t('askCode', lang)).catch((e) => {
+                console.error('Paiement (rappel code) :', e.message);
+              });
+            }, 30000);
+            return;
           }
+          paiement.unlockItem(itemId); // l'initiation a échoué : on relâche le verrou immédiatement
           console.error('Paiement (initiation) :', pay.error);
         }
         return b.sendMessage(chatId, shop.t('askCode', lang));
@@ -1107,6 +1167,24 @@ function wireShop(b) {
     if (!userId) return;
     const lang = shop.getLang(userId);
     if (!lang) return sendWelcome(msg.chat.id);
+
+    // Montant de soutien en $ attendu (bouton « Soutien » du menu) : on
+    // valide le nombre, on affiche l'équivalent en F CFA, et on propose un
+    // bouton « Payer » (voir callback support:pay:<montant> plus haut).
+    if (shop.getPendingSupport(userId)) {
+      const amountUsd = Number(String(msg.text).replace(',', '.').trim());
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+        return b.sendMessage(msg.chat.id, shop.t('supportAmountInvalid', lang));
+      }
+      shop.clearPendingSupport(userId);
+      const rate = shop.getUsdToXof();
+      const amountLocal = Math.round(amountUsd * rate);
+      const text = shop.t('supportAmountShown', lang)
+        .replace('{usd}', String(amountUsd))
+        .replace('{francs}', String(amountLocal));
+      const buttons = [[{ text: `💛 ${shop.t('payButton', lang)}`, callback_data: `support:pay:${amountUsd}` }]];
+      return b.sendMessage(msg.chat.id, text, { reply_markup: { inline_keyboard: buttons } });
+    }
 
     const pendingItemId = shop.getPendingCode(userId);
     if (pendingItemId) {
@@ -1218,12 +1296,24 @@ async function disconnectBot() {
 // principal (voir wireShop() et la vérification croisée ci-dessus/ci-dessous :
 // aucun des deux bots ne démarre si les deux tokens sont identiques).
 // ---------------------------------------------------------------------------
-// Paiement confirmé (webhook FusionPay, voir paiement.js) : débloque la
-// stratégie pour l'acheteur et lui envoie le détail + code automatiquement
-// dans Telegram, exactement comme une saisie de code manuelle réussie.
+// Paiement confirmé automatiquement (arrivée du client sur succes.html
+// après validation Money Fusion, voir paiement.js/markPaidOnArrival) :
+// - achat de stratégie (record.kind === 'item') : débloque la stratégie et
+//   envoie le détail + code automatiquement dans Telegram, exactement comme
+//   une saisie de code manuelle réussie.
+// - soutien (record.kind === 'support') : AUCUN code n'est envoyé, juste un
+//   message de remerciement personnalisé (voir shop.supportThanksMessage).
 // Enregistrée une seule fois (le handler regarde `shopBot` à l'appel, pas à
 // l'enregistrement, donc il fonctionne même si le bot redémarre entre-temps).
+// ---------------------------------------------------------------------------
 paiement.setPaidHandler(async (record) => {
+  if (record.kind === 'support') {
+    if (!shopBot) return;
+    try {
+      await shopBot.sendMessage(record.chatId, shop.supportThanksMessage(record, record.lang));
+    } catch (e) { console.error('Soutien (envoi Telegram après paiement) :', e.message); }
+    return;
+  }
   const item = shop.getItem(record.itemId);
   if (!item) return;
   const paidCode = item.code; // capturé AVANT le déblocage, qui régénère un nouveau code

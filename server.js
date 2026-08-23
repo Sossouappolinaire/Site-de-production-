@@ -683,22 +683,59 @@ app.get('/api/shop', (req, res) => {
       strategies: strategies.LIST.map((d) => ({ key: d.key, name: d.name, about: d.about, rate: (stats(d.key) || {}).rate ?? null })),
       ia: aiAuto.listStrategies(),
     },
+    pricing: shop.getPricingSettings(),
   });
+});
+
+// Modifie le tarif d'une méthode/palier de vente : 'strategy' (catalogue),
+// 'ia_100' (déclencheurs IA à 100% de réussite) ou 'ia_93' (93 à 99,99%).
+// Appliqué à tous les articles déjà publiés du palier concerné (avec le
+// montant en francs recalculé automatiquement) ET retenu comme nouveau
+// défaut pour les prochaines publications (voir shop.setMethodPrice).
+app.post('/api/shop/pricing', (req, res) => {
+  try {
+    const { method, price } = req.body || {};
+    const result = shop.setMethodPrice(method, price);
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Change le taux de change € -> F CFA utilisé pour calculer automatiquement
+// le montant en francs des liens de paiement Money Fusion. Appliqué à tous
+// les articles déjà publiés (montant recalculé) ET retenu comme nouveau
+// défaut pour les prochaines publications (voir shop.setExchangeRate).
+app.post('/api/shop/exchange-rate', (req, res) => {
+  try {
+    const { rate } = req.body || {};
+    const result = shop.setExchangeRate(rate);
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Change le taux de change $ -> F CFA utilisé pour le bouton « Soutien »
+// (dons libres, distincts des ventes de stratégies).
+app.post('/api/shop/support-rate', (req, res) => {
+  try {
+    const { rate } = req.body || {};
+    const result = shop.setSupportRate(rate);
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.post('/api/shop', async (req, res) => {
   try {
-    const { source, sourceKey, details, example, rate, realName, price } = req.body || {};
+    const { source, sourceKey, details, example, rate, realName, price, payAmountLocal } = req.body || {};
     const priceNum = Number.isFinite(price) ? price : null;
+    const payAmountNum = Number.isFinite(payAmountLocal) ? payAmountLocal : null;
     let item;
     if (source === 'strategy' && sourceKey) {
-      item = await shop.publishFromStrategy(sourceKey, { details, example, price: priceNum });
+      item = await shop.publishFromStrategy(sourceKey, { details, example, price: priceNum, payAmountLocal: payAmountNum });
     } else if (source === 'ia' && sourceKey) {
       const aiItem = aiAuto.listStrategies().find((s) => s.id === sourceKey || s.key === sourceKey);
       if (!aiItem) return res.status(404).json({ error: "Stratégie IA introuvable (peut-être expirée après 1h)." });
-      item = await shop.publishFromAiStrategy(aiItem, { details, example, price: priceNum });
+      item = await shop.publishFromAiStrategy(aiItem, { details, example, price: priceNum, payAmountLocal: payAmountNum });
     } else {
-      item = await shop.createItem({ source: 'custom', realName, details, example, rate: Number.isFinite(rate) ? rate : null, price: priceNum });
+      item = await shop.createItem({ source: 'custom', realName, details, example, rate: Number.isFinite(rate) ? rate : null, price: priceNum, payAmountLocal: payAmountNum });
     }
     res.json({ ok: true, item });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -735,39 +772,57 @@ app.post('/api/shop/:id/refresh-rate', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Paiement en ligne (FusionPay / Money Fusion) — voir paiement.js.
+// Paiement en ligne (Money Fusion) — voir paiement.js. Lien fixe, rien à
+// configurer côté admin. Confirmation AUTOMATIQUE : dès que le navigateur
+// du client charge succes.html (atteint, côté Money Fusion, uniquement
+// après un paiement réellement validé), le paiement est marqué payé et le
+// code envoyé sur Telegram — voir paiement.markPaidOnArrival.
 // ---------------------------------------------------------------------------
 app.get('/api/paiement/config', (req, res) => {
   if (!requireAdmin(req, res)) return;
   res.json(paiement.getConfig());
 });
 
-app.post('/api/paiement/config', (req, res) => {
+// Marque un paiement en attente comme annulé/échoué (ex. nettoyage manuel
+// d'une réservation abandonnée) sans envoyer de code.
+app.post('/api/paiement/cancel/:ref', (req, res) => {
   if (!requireAdmin(req, res)) return;
-  res.json(paiement.setConfig(req.body || {}));
+  const r = paiement.cancelPayment(req.params.ref);
+  if (!r.ok) return res.status(404).json(r);
+  res.json(r);
 });
 
-// Appelée par FusionPay lui-même (serveur-à-serveur) dès qu'un paiement est
-// confirmé — protégée par la clé secrète glissée dans l'URL du webhook
-// (voir paiement.js/initiatePayment), pas par une session.
-app.post('/api/paiement/webhook', async (req, res) => {
-  const r = await paiement.handleWebhook(req.query || {}, req.body || {});
-  res.status(r.status || (r.ok ? 200 : 400)).json(r);
+// Historique des transactions (lecture seule, pour info admin) — plus
+// besoin d'y confirmer quoi que ce soit, tout est automatique.
+app.get('/api/paiement/pending', (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const list = paiement.listPending().map((r) => {
+    const item = shop.getItem(r.itemId);
+    return { ...r, aiName: item ? item.aiName : null };
+  });
+  res.json({ items: list });
 });
 
 // Consultée par la page succes.html (navigateur de l'acheteur, jamais
-// connecté au site) pour afficher le code une fois le paiement confirmé.
+// connecté au site) pour afficher le code. succes.html n'est atteinte,
+// côté Money Fusion, qu'après un paiement réellement validé (URL de succès
+// configurée sur le compte Money Fusion) — ce premier appel confirme donc
+// automatiquement le paiement (voir paiement.markPaidOnArrival), débloque
+// la stratégie et déclenche l'envoi du code sur Telegram, sans aucune
+// action de l'admin.
 app.get('/api/paiement/statut/:ref', async (req, res) => {
-  // filet de sécurité : si le webhook n'est pas encore arrivé, on redemande
-  // nous-mêmes l'état à FusionPay avant de répondre (voir paiement.js/reconcile).
-  const record = await paiement.reconcile(req.params.ref);
+  const record = await paiement.markPaidOnArrival(req.params.ref);
   if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
-  const item = shop.getItem(record.itemId);
+  const item = record.itemId ? shop.getItem(record.itemId) : null;
   res.json({
     status: record.status,
-    code: record.status === 'paid' ? record.code : null,
+    kind: record.kind || 'item',
+    code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),
     aiName: item ? item.aiName : null,
     amount: record.amount,
+    amountUsd: record.amountUsd ?? null,
+    buyerName: record.buyerName || null,
+    userId: record.userId || null,
   });
 });
 

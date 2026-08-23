@@ -102,6 +102,13 @@ module.exports = {
   ADMIN_ID: Number(process.env.ADMIN_ID || 0),
   PORT: Number(process.env.PORT || 10000),
 
+  // URL publique du site déployé (utilisée pour construire le lien vers
+  // succes.html envoyé au client dans le bot boutique dès qu'il clique
+  // « Payer »). Render fournit RENDER_EXTERNAL_URL automatiquement ; sinon
+  // définir PUBLIC_URL à la main (ex. en local). Sans l'une des deux, le
+  // bouton « Voir mon code » n'est simplement pas envoyé.
+  PUBLIC_URL: (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, ''),
+
   // Base PostgreSQL Render (en dur — se connecte sans variable Render).
   DATABASE_URL: DB_URL,
   DB_INTERNAL,

@@ -124,6 +124,62 @@ const TEXTS = {
     ru: 'Оплатить',
     es: 'Pagar',
   },
+  viewCodeButton: {
+    fr: '🎟️ Voir mon code',
+    en: '🎟️ View my code',
+    ar: '🎟️ عرض رمزي',
+    ru: '🎟️ Посмотреть мой код',
+    es: '🎟️ Ver mi código',
+  },
+  itemLocked: {
+    fr: "⏳ Cette stratégie est en cours d'achat par quelqu'un d'autre. Réessaie dans quelques minutes.",
+    en: '⏳ This strategy is currently being purchased by someone else. Try again in a few minutes.',
+    ar: '⏳ يقوم شخص آخر بشراء هذه الاستراتيجية حاليًا. أعد المحاولة بعد بضع دقائق.',
+    ru: '⏳ Эту стратегию сейчас покупает кто-то другой. Повторите попытку через несколько минут.',
+    es: '⏳ Otra persona está comprando esta estrategia en este momento. Vuelve a intentarlo en unos minutos.',
+  },
+  supportButton: {
+    fr: '💛 Soutien',
+    en: '💛 Support',
+    ar: '💛 دعم',
+    ru: '💛 Поддержка',
+    es: '💛 Apoyo',
+  },
+  supportAskAmount: {
+    fr: '💛 Merci pour ton geste ! Indique le montant de ton soutien en dollars (ex. 50).',
+    en: '💛 Thank you for your support! Enter the amount of your support in dollars (e.g. 50).',
+    ar: '💛 شكرًا على دعمك! أدخل مبلغ دعمك بالدولار (مثال: 50).',
+    ru: '💛 Спасибо за поддержку! Укажите сумму поддержки в долларах (напр. 50).',
+    es: '💛 ¡Gracias por tu apoyo! Indica el monto de tu apoyo en dólares (ej. 50).',
+  },
+  supportAmountInvalid: {
+    fr: "❌ Montant invalide. Envoie juste un nombre en dollars (ex. 50).",
+    en: '❌ Invalid amount. Just send a number in dollars (e.g. 50).',
+    ar: '❌ مبلغ غير صالح. أرسل رقمًا فقط بالدولار (مثال: 50).',
+    ru: '❌ Неверная сумма. Отправьте просто число в долларах (напр. 50).',
+    es: '❌ Monto inválido. Envía solo un número en dólares (ej. 50).',
+  },
+  supportAmountShown: {
+    fr: '💰 {usd}$ = {francs} F CFA.\nClique sur le bouton ci-dessous pour payer ton soutien.',
+    en: '💰 {usd}$ = {francs} XOF.\nTap the button below to pay your support.',
+    ar: '💰 {usd}$ = {francs} فرنك إفريقي.\nاضغط على الزر أدناه لدفع دعمك.',
+    ru: '💰 {usd}$ = {francs} франков КФА.\nНажмите кнопку ниже, чтобы оплатить поддержку.',
+    es: '💰 {usd}$ = {francs} F CFA.\nToca el botón de abajo para pagar tu apoyo.',
+  },
+  supportPayIntro: {
+    fr: '💳 Clique sur le bouton ci-dessous pour finaliser ton soutien.',
+    en: '💳 Tap the button below to complete your support.',
+    ar: '💳 اضغط على الزر أدناه لإتمام دعمك.',
+    ru: '💳 Нажмите кнопку ниже, чтобы завершить поддержку.',
+    es: '💳 Toca el botón de abajo para completar tu apoyo.',
+  },
+  supportThanks: {
+    fr: '🙏 {buyerName}, Sossou Kouamé te remercie infiniment ! Tu as versé {usd}$ ({francs} F CFA) pour ton soutien. Merci du fond du cœur ❤️',
+    en: '🙏 {buyerName}, Sossou Kouamé thanks you infinitely! You gave {usd}$ ({francs} XOF) as support. Thank you from the bottom of my heart ❤️',
+    ar: '🙏 {buyerName}، سوسو كوامي يشكرك من كل قلبه! لقد دفعت {usd}$ ({francs} فرنك إفريقي) كدعم. شكرًا جزيلاً ❤️',
+    ru: '🙏 {buyerName}, Соссу Куаме бесконечно благодарит тебя! Ты внёс {usd}$ ({francs} франков КФА) в поддержку. Спасибо от всего сердца ❤️',
+    es: '🙏 {buyerName}, ¡Sossou Kouamé te lo agradece infinitamente! Diste {usd}$ ({francs} F CFA) de apoyo. Gracias de todo corazón ❤️',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -224,6 +280,7 @@ function t(key, lang) {
 const shop = {
   items: [],   // stratégies publiées dans la boutique
   users: {},   // { [telegramUserId]: { lang, unlocked: [itemId], pendingCode: itemId|null, activeItem: itemId|null } }
+  settings: {}, // { priceCatalog, priceIa } — tarifs par défaut, modifiables depuis le bouton « Modifier les prix »
 };
 
 (function loadInitial() {
@@ -232,14 +289,15 @@ const shop = {
     if (saved && typeof saved === 'object') {
       if (Array.isArray(saved.items)) shop.items = saved.items;
       if (saved.users && typeof saved.users === 'object') shop.users = saved.users;
+      if (saved.settings && typeof saved.settings === 'object') shop.settings = saved.settings;
     }
   } catch (_) { /* ignore */ }
 })();
 
 function persist() {
-  store.patch({ shop: { items: shop.items, users: shop.users } });
+  store.patch({ shop: { items: shop.items, users: shop.users, settings: shop.settings } });
   if (db.ready) {
-    db.setSetting('shop_data', JSON.stringify({ items: shop.items, users: shop.users })).catch(() => {});
+    db.setSetting('shop_data', JSON.stringify({ items: shop.items, users: shop.users, settings: shop.settings })).catch(() => {});
   }
 }
 
@@ -254,13 +312,14 @@ async function loadFromDb() {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed.items) && (parsed.items.length || !shop.items.length)) shop.items = parsed.items;
     if (parsed.users && typeof parsed.users === 'object') shop.users = { ...parsed.users, ...shop.users };
+    if (parsed.settings && typeof parsed.settings === 'object') shop.settings = { ...parsed.settings, ...shop.settings };
     return true;
   } catch (_) { return false; }
 }
 
 function user(id) {
   const key = String(id);
-  if (!shop.users[key]) shop.users[key] = { lang: null, unlocked: [], pendingCode: null, activeItem: null };
+  if (!shop.users[key]) shop.users[key] = { lang: null, unlocked: [], pendingCode: null, activeItem: null, pendingSupport: false };
   return shop.users[key];
 }
 
@@ -279,6 +338,12 @@ function clearPendingCode(id) { const u = shop.users[String(id)]; if (u) { u.pen
 function setActiveItem(id, itemId) { user(id).activeItem = itemId; persist(); }
 function getActiveItem(id) { const u = shop.users[String(id)]; return u ? u.activeItem : null; }
 
+// État « en attente de saisie d'un montant de soutien (en $) » — distinct du
+// pendingCode (achat d'une stratégie), pour le bouton « Soutien » du menu.
+function setPendingSupport(id, value) { user(id).pendingSupport = !!value; persist(); }
+function getPendingSupport(id) { const u = shop.users[String(id)]; return u ? !!u.pendingSupport : false; }
+function clearPendingSupport(id) { const u = shop.users[String(id)]; if (u) { u.pendingSupport = false; persist(); } }
+
 // ---------------------------------------------------------------------------
 // Génération : nom de code (IA) et code de paiement.
 // ---------------------------------------------------------------------------
@@ -288,16 +353,129 @@ function genCode() { return `BAC-${crypto.randomBytes(4).toString('hex').toUpper
 const NAME_A = ['Éclipse', 'Zénith', 'Alizée', 'Onyx', 'Météore', 'Vermeil', 'Cobalt', 'Solstice', 'Nébuleuse', 'Émeraude', 'Orage', 'Mirage'];
 const NAME_B = ['Dorée', 'Silencieuse', 'Boréale', 'Ultime', 'Discrète', 'Royale', 'Secrète', 'Nocturne', 'Rapide', 'Précise', 'Furtive', 'Éclatante'];
 
-// Tarifs par défaut selon l'origine de la stratégie : une stratégie du
-// catalogue (déjà existante, éprouvée) vaut 50€, un déclencheur IA vendu à
-// l'unité vaut 1,8€ (promo — 4€ hors promo). Utilisé si aucun prix n'est
-// fourni explicitement.
-const PRICE_CATALOG = 50;
-const PRICE_IA = 1.8; // promo en cours (prix normal habituel : 4€)
-function defaultPriceFor(source) {
-  if (source === 'strategy') return PRICE_CATALOG;
-  if (source === 'ia') return PRICE_IA;
+// Tarifs par défaut selon l'origine de la stratégie / le palier de taux de
+// réussite. Utilisés si aucun prix n'est fourni explicitement à la création.
+// Modifiables depuis le panneau « Modifier les prix par méthode » de la
+// boutique (voir setMethodPrice ci-dessous) — le nouveau tarif est alors à
+// la fois appliqué à TOUS les articles déjà publiés de ce type/palier et
+// retenu comme nouveau défaut pour les prochaines publications.
+// - Catalogue (stratégies existantes) : un seul tarif, 50€ par défaut.
+// - Déclencheurs IA : DEUX paliers selon le taux de réussite —
+//   100% de réussite -> 2€, de 93% à 99,99% -> 1,8€ (promo ; 4€ hors promo).
+const DEFAULT_PRICE_CATALOG = 50;
+const DEFAULT_PRICE_IA_100 = 2;
+const DEFAULT_PRICE_IA_93 = 1.8; // palier 93% à 99,99% — promo en cours (prix normal habituel : 4€)
+function getPriceCatalog() { return Number.isFinite(shop.settings.priceCatalog) ? shop.settings.priceCatalog : DEFAULT_PRICE_CATALOG; }
+function getPriceIa100() { return Number.isFinite(shop.settings.priceIa100) ? shop.settings.priceIa100 : DEFAULT_PRICE_IA_100; }
+function getPriceIa93() { return Number.isFinite(shop.settings.priceIa93) ? shop.settings.priceIa93 : DEFAULT_PRICE_IA_93; }
+// Tarif IA applicable pour un taux de réussite donné : palier 100% si le
+// taux atteint 100, palier 93-99,99% s'il est ≥ 93 (donc aussi utilisé en
+// repli pour une publication manuelle IA sans taux connu, ou en dessous
+// de 93 — l'admin reste libre de surcharger le prix à la main dans ce cas).
+function priceForIaRate(rate) {
+  if (Number.isFinite(rate) && rate >= 100) return getPriceIa100();
+  return getPriceIa93();
+}
+
+// Conversion € -> francs CFA (XOF) pour calculer automatiquement le montant
+// à intégrer dans le lien de paiement direct Money Fusion (payAmountLocal),
+// à partir du prix en €. Taux confirmé au départ par un lien réel fourni par
+// l'admin : https://payin.moneyfusion.net/payment/6a8abd93ff0cbef4d3e8f6a3/24000/Sossou%20Kouam%C3%A9
+// -> 24000 correspond à 50€, soit 24000 / 50 = 480 F/€. Ce taux est modifiable
+// par l'admin depuis le panneau boutique (voir setExchangeRate ci-dessous) —
+// dès qu'il change, TOUS les montants en francs déjà publiés sont recalculés.
+const DEFAULT_EUR_TO_XOF = 480;
+function getEurToXof() {
+  return Number.isFinite(shop.settings.eurToXof) ? shop.settings.eurToXof : DEFAULT_EUR_TO_XOF;
+}
+function eurToFrancs(price) {
+  return Number.isFinite(price) ? Math.round(price * getEurToXof()) : null;
+}
+// Change le taux de change € -> F CFA : retenu comme nouveau défaut ET
+// appliqué immédiatement (montant en francs recalculé) à TOUS les articles
+// déjà publiés qui ont un prix en € connu.
+function setExchangeRate(rate) {
+  const r = Number(rate);
+  if (!Number.isFinite(r) || r <= 0) throw new Error('Taux de change invalide.');
+  shop.settings.eurToXof = r;
+  let count = 0;
+  for (const item of shop.items) {
+    if (!Number.isFinite(item.price)) continue;
+    const francs = eurToFrancs(item.price);
+    if (francs == null) continue;
+    item.payAmountLocal = francs;
+    item.updatedAt = new Date().toISOString();
+    count += 1;
+  }
+  persist();
+  return { pricing: getPricingSettings(), updatedCount: count };
+}
+function defaultPayAmountFor(source, price) {
+  const francs = eurToFrancs(price);
+  if (francs != null) return francs;
+  return null; // prix inconnu (ex. 'custom' sans prix saisi) : à régler manuellement
+}
+function defaultPriceFor(source, rate) {
+  if (source === 'strategy') return getPriceCatalog();
+  if (source === 'ia') return priceForIaRate(rate);
   return null; // 'custom' : prix laissé au choix de l'admin
+}
+
+// Tarifs courants (catalogue + les deux paliers IA), à afficher dans le
+// panneau « Modifier les prix » de la boutique.
+function getPricingSettings() {
+  return { priceCatalog: getPriceCatalog(), priceIa100: getPriceIa100(), priceIa93: getPriceIa93(), eurToXof: getEurToXof(), usdToXof: getUsdToXof() };
+}
+
+// Taux de change $ -> F CFA (XOF) pour le bouton « Soutien » (dons libres,
+// distincts des ventes de stratégies). Modifiable depuis le panneau admin —
+// voir setSupportRate ci-dessous. Pas de valeur « confirmée » comme pour
+// EUR_TO_XOF : à vérifier/ajuster par l'admin selon le taux réel du jour.
+const DEFAULT_USD_TO_XOF = 600;
+function getUsdToXof() { return Number.isFinite(shop.settings.usdToXof) ? shop.settings.usdToXof : DEFAULT_USD_TO_XOF; }
+function setSupportRate(rate) {
+  const r = Number(rate);
+  if (!Number.isFinite(r) || r <= 0) throw new Error('Taux de change invalide.');
+  shop.settings.usdToXof = r;
+  persist();
+  return { pricing: getPricingSettings() };
+}
+
+// Message de remerciement envoyé au client dès que son paiement de soutien
+// est confirmé (voir bot.js/paidHandler, branché sur record.kind === 'support').
+function supportThanksMessage(record, lang) {
+  return t('supportThanks', lang)
+    .replace('{buyerName}', record.buyerName || 'Ami(e)')
+    .replace('{usd}', String(record.amountUsd))
+    .replace('{francs}', String(record.amount));
+}
+
+// Change le tarif d'une méthode/palier : retenu comme nouveau défaut pour
+// les prochaines publications ET appliqué immédiatement — avec conversion
+// automatique en francs pour le lien de paiement — à TOUS les articles déjà
+// publiés concernés :
+// - method 'strategy' : tous les articles du catalogue (source === 'strategy').
+// - method 'ia_100'    : déclencheurs IA à 100% de réussite (source === 'ia', rate === 100).
+// - method 'ia_93'     : déclencheurs IA de 93% à 99,99% (source === 'ia', rate < 100, incluant rate absent).
+function setMethodPrice(method, price) {
+  const p = Number(price);
+  if (!Number.isFinite(p) || p < 0) throw new Error('Prix invalide.');
+  const settingsKey = { strategy: 'priceCatalog', ia_100: 'priceIa100', ia_93: 'priceIa93' }[method];
+  if (!settingsKey) throw new Error('Méthode inconnue (attendu : strategy, ia_100 ou ia_93).');
+  shop.settings[settingsKey] = p;
+  const francs = eurToFrancs(p);
+  let count = 0;
+  for (const item of shop.items) {
+    if (item.source !== (method === 'strategy' ? 'strategy' : 'ia')) continue;
+    if (method === 'ia_100' && item.rate !== 100) continue;
+    if (method === 'ia_93' && item.rate === 100) continue;
+    item.price = p;
+    if (francs != null) item.payAmountLocal = francs;
+    item.updatedAt = new Date().toISOString();
+    count += 1;
+  }
+  persist();
+  return { pricing: getPricingSettings(), updatedCount: count };
 }
 function fallbackName() {
   return `${NAME_A[Math.floor(Math.random() * NAME_A.length)]} ${NAME_B[Math.floor(Math.random() * NAME_B.length)]}`;
@@ -353,9 +531,11 @@ function listAll() { return [...shop.items].sort((a, b) => (b.createdAt || '').l
 function listActive() { return listAll().filter((i) => i.active); }
 function getItem(id) { return shop.items.find((i) => i.id === id) || null; }
 
-async function createItem({ source = 'custom', sourceKey = null, realName = '', details = '', example = '', rate = null, price = null, auto = false } = {}) {
+async function createItem({ source = 'custom', sourceKey = null, realName = '', details = '', example = '', rate = null, price = null, payAmountLocal = null, auto = false } = {}) {
   const existingNames = shop.items.map((i) => i.aiName);
   const aiName = await generateAiName(existingNames);
+  const finalRate = Number.isFinite(rate) ? rate : null;
+  const finalPrice = Number.isFinite(price) ? price : defaultPriceFor(source, finalRate);
   const item = {
     id: `shop_${shortId()}`,
     source, // 'strategy' | 'ia' | 'custom'
@@ -364,8 +544,14 @@ async function createItem({ source = 'custom', sourceKey = null, realName = '', 
     aiName,
     details: String(details || ''),
     example: String(example || ''),
-    rate: Number.isFinite(rate) ? rate : null,
-    price: Number.isFinite(price) ? price : defaultPriceFor(source),
+    rate: finalRate,
+    price: finalPrice,
+    // montant à intégrer dans le lien de paiement direct Money Fusion (voir
+    // paiement.js) — distinct du prix affiché en € au client ; calculé
+    // automatiquement à partir du prix (voir eurToFrancs ci-dessus), à
+    // régler manuellement seulement si le prix est inconnu (ex. personnalisée
+    // sans prix saisi).
+    payAmountLocal: Number.isFinite(payAmountLocal) ? payAmountLocal : defaultPayAmountFor(source, finalPrice),
     auto: !!auto, // publiée automatiquement (déclencheur IA >93%) — voir syncAutoIaListings()
     code: genCode(),
     active: true,
@@ -382,7 +568,7 @@ async function createItem({ source = 'custom', sourceKey = null, realName = '', 
 function updateItem(id, patch = {}) {
   const item = getItem(id);
   if (!item) return null;
-  const allowed = ['details', 'example', 'rate', 'active', 'realName', 'aiName', 'price'];
+  const allowed = ['details', 'example', 'rate', 'active', 'realName', 'aiName', 'price', 'payAmountLocal'];
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(patch, k)) item[k] = patch[k];
   }
@@ -423,7 +609,7 @@ async function renameItem(id) {
 // taux courant est capturé en instantané (photographié au moment de la
 // publication) — un bouton « actualiser le taux » permet de le remettre à
 // jour plus tard sans changer le nom de code ni le code déjà distribué.
-function publishFromStrategy(key, { details = '', example = '', price = null } = {}) {
+function publishFromStrategy(key, { details = '', example = '', price = null, payAmountLocal = null } = {}) {
   const def = strategies.BY_KEY[key];
   if (!def) return null;
   const s = strategyStats(key);
@@ -435,13 +621,14 @@ function publishFromStrategy(key, { details = '', example = '', price = null } =
     example,
     rate: s && s.total ? s.rate : null,
     price,
+    payAmountLocal,
   });
 }
 
 // Publication depuis une stratégie créée par l'IA (pattern-miner / ai-auto) :
 // on COPIE le déclencheur/la cible/le taux au moment de la publication car
 // ces stratégies expirent automatiquement au bout d'1h côté ai-auto.js.
-function publishFromAiStrategy(aiItem, { details = '', example = '', price = null, auto = false } = {}) {
+function publishFromAiStrategy(aiItem, { details = '', example = '', price = null, payAmountLocal = null, auto = false } = {}) {
   if (!aiItem) return null;
   const autoText = [
     aiItem.trigger ? `Déclencheur : ${aiItem.trigger}` : null,
@@ -455,6 +642,7 @@ function publishFromAiStrategy(aiItem, { details = '', example = '', price = nul
     example,
     rate: Number.isFinite(aiItem.rate) ? aiItem.rate : null,
     price,
+    payAmountLocal,
     auto,
   });
 }
@@ -471,11 +659,14 @@ function refreshRateFromStrategy(id) {
 // Vente automatique des déclencheurs IA à plus de 93% de réussite — AUCUNE
 // configuration admin nécessaire : dès qu'un déclencheur créé par l'IA
 // (ai-auto.js / pattern-miner) dépasse 93% de réussite, il est publié tout
-// seul dans la boutique au prix courant PRICE_IA (nom de code + code de paiement générés comme
-// pour une publication manuelle). Dès que son taux redescend à 93% ou moins
-// — ou qu'il expire côté ai-auto.js (1h) — il disparaît automatiquement de
-// la boutique (désactivé, plus proposé aux acheteurs). Appelée à intervalle
-// régulier par bot.js (tick), avec la liste courante de aiAuto.listStrategies().
+// seul dans la boutique, au tarif du palier correspondant (100% -> palier
+// « ia_100 », 93 à 99,99% -> palier « ia_93 » — voir priceForIaRate), avec
+// le montant en francs recalculé automatiquement (nom de code + code de
+// paiement générés comme pour une publication manuelle). Dès que son taux
+// redescend à 93% ou moins — ou qu'il expire côté ai-auto.js (1h) — il
+// disparaît automatiquement de la boutique (désactivé, plus proposé aux
+// acheteurs). Appelée à intervalle régulier par bot.js (tick), avec la
+// liste courante de aiAuto.listStrategies().
 // ---------------------------------------------------------------------------
 const AUTO_IA_THRESHOLD = 93;
 
@@ -489,14 +680,26 @@ async function syncAutoIaListings(aiList) {
     if (!ia || !ia.id || !Number.isFinite(ia.rate) || ia.rate <= AUTO_IA_THRESHOLD) continue;
     const existing = shop.items.find((i) => i.source === 'ia' && i.auto && i.sourceKey === ia.id);
     if (existing) {
-      if (existing.rate !== ia.rate || !existing.active) {
+      const newPrice = priceForIaRate(ia.rate);
+      if (existing.rate !== ia.rate || !existing.active || existing.price !== newPrice) {
         existing.rate = ia.rate;
         existing.active = true;
+        // le taux a pu franchir le palier 93%/100% depuis la dernière
+        // synchro : le prix (et le montant en francs du lien de paiement)
+        // sont recalculés en conséquence, sauf si l'admin a lui-même changé
+        // le prix de cet article précis à un montant hors des deux paliers
+        // (auquel cas on respecte son choix).
+        const onKnownTier = existing.price === getPriceIa100() || existing.price === getPriceIa93();
+        if (onKnownTier && existing.price !== newPrice) {
+          existing.price = newPrice;
+          const francs = eurToFrancs(newPrice);
+          if (francs != null) existing.payAmountLocal = francs;
+        }
         existing.updatedAt = new Date().toISOString();
         changed = true;
       }
     } else {
-      await publishFromAiStrategy(ia, { auto: true, price: PRICE_IA });
+      await publishFromAiStrategy(ia, { auto: true, price: priceForIaRate(ia.rate) });
       changed = true; // createItem() a déjà persisté, mais on force la relecture ailleurs
     }
   }
@@ -648,7 +851,8 @@ async function fullPresentation(item, lang) {
 
 module.exports = {
   LANGS, LANG_CODES,
-  PRICE_CATALOG, PRICE_IA, AUTO_IA_THRESHOLD,
+  AUTO_IA_THRESHOLD,
+  getPricingSettings, setMethodPrice, setExchangeRate, setSupportRate, getUsdToXof, supportThanksMessage,
   t,
   loadFromDb,
   listAll, listActive, getItem,
@@ -658,6 +862,7 @@ module.exports = {
   getLang, setLang,
   setPendingCode, getPendingCode, clearPendingCode,
   setActiveItem, getActiveItem,
+  setPendingSupport, getPendingSupport, clearPendingSupport,
   redeem, hasUnlocked,
   explain, fullPresentation, translate,
   isUnderstoodMessage, closingMessage,
