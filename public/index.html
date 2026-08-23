@@ -672,6 +672,10 @@
       setNav('boutique');
       $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vente</span><h2 style="margin-top:7px">Boutique de stratégies</h2><p class="small">Publie une stratégie (du catalogue, créée par l'IA, ou personnalisée) : l'IA lui donne un nom de code sans rapport avec son vrai nom, et un code de paiement à usage unique est généré. Distribue ce code à l'acheteur — dans le bot Telegram, il choisit sa langue, sélectionne la stratégie par son nom de code, entre le code, et reçoit alors le détail complet traduit dans sa langue. <b>Vente automatique</b> : tout déclencheur créé par l'IA qui dépasse 93% de réussite est publié tout seul à 4€ (repéré par le badge « Auto »), et disparaît automatiquement dès que son taux redescend à 93% ou moins — aucune configuration nécessaire.</p></div>
         <button class="button small ghost" onclick="boutiquePage()">Actualiser</button></div>
+        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne (FusionPay / Money Fusion)</h3>
+          <p class="small">Une fois configuré, un bouton « Payer » apparaît automatiquement sous chaque stratégie dans le bot boutique — le client paie, et le code lui est envoyé automatiquement sur Telegram et sur la page succes.html. Colle ici le lien d'API de ton application créée sur <a href="https://moneyfusion.net" target="_blank" rel="noopener">moneyfusion.net</a> (menu « API de paiement »).</p>
+          <div id="paiementFields"><div class="loading">Chargement…</div></div>
+        </div>
         <div class="panel"><h3>Publier une nouvelle stratégie</h3>
           <div class="field"><label>Source</label><select id="shopSource" onchange="shopSourceChanged()">${shopSourceOptions()}</select></div>
           <div class="field"><label>Nom (référence interne, optionnel pour une source du catalogue/IA)</label><input id="shopRealName" placeholder="Ex. Stratégie ombre variante 2"></div>
@@ -690,6 +694,23 @@
         $('#shopSource').innerHTML = shopSourceOptions();
         const list = $('#shopList');
         list.innerHTML = shopCache.items.length ? shopCache.items.map(shopItemCard).join('') : '<div class="empty">Aucune stratégie publiée pour le moment.</div>';
+      } catch (e) { toast(e.message, 'error'); }
+      try {
+        const p = await api('/api/paiement/config');
+        $('#paiementFields').innerHTML = `
+          <div class="field"><label>URL d'API (fournie par le tableau de bord Money Fusion)</label><input id="payApiUrl" value="${esc(p.apiUrl || '')}" placeholder="https://www.pay.moneyfusion.net/xxxxx/yyyyy/pay/"></div>
+          <div class="field"><label>URL publique de ce serveur</label><input id="payPublicUrl" value="${esc(p.publicBaseUrl || '')}" placeholder="https://mon-bot.onrender.com"></div>
+          <p class="small">Statut : ${p.configured ? '<span class="tag good">Configuré</span>' : '<span class="tag bad">Non configuré — le bouton Payer restera masqué (saisie manuelle du code toujours possible)</span>'}</p>
+          <div class="toolbar"><button class="button primary" onclick="paiementSave()">Enregistrer</button></div>
+          <div id="paiementMsg"></div>`;
+      } catch (e) { $('#paiementFields').innerHTML = `<div class="empty">Impossible de charger la configuration.</div>`; }
+    }
+    async function paiementSave() {
+      const body = { apiUrl: val('payApiUrl'), publicBaseUrl: val('payPublicUrl') };
+      try {
+        await api('/api/paiement/config', 'POST', body);
+        toast('Configuration de paiement enregistrée.');
+        boutiquePage();
       } catch (e) { toast(e.message, 'error'); }
     }
     function shopSourceChanged() {
@@ -990,6 +1011,16 @@ Faites-en bon usage !
     async function removeChannel(key, mode) { try { await api(`/api/strategies/${key}/channel`, 'DELETE', { mode }); await refresh(); await strategyPage(key); } catch (e) { toast(e.message, 'error'); } }
     async function resetStrategy(key) { if (!confirm('Réinitialiser cette stratégie ?')) return; try { await api(`/api/strategies/${key}/reset`, 'POST', {}); await refresh(); await strategyPage(key); } catch(e) { toast(e.message, 'error'); } }
     async function testStrategy(key, mode) { try { const r = await api(`/api/strategies/${key}/test`, 'POST', { mode }); toast(`Message de test envoyé : ${(r.sent || []).join(', ')}`, ''); } catch(e) { toast(e.message, 'error'); } }
+    // Construit le badge de statut RÉEL d'un fournisseur IA : `configured`
+    // dit juste « une clé est présente », `quota` (résultat mis en cache du
+    // dernier test réseau réel, voir POST /api/ai/quota-check côté serveur)
+    // dit si elle est vraiment valide et si le quota/crédit est disponible.
+    function quotaBadge(configured, quota) {
+      if (!configured) return { cls: 'warn', text: 'Aucune clé configurée.' };
+      if (!quota) return { cls: 'warn', text: 'Clé présente, mais pas encore vérifiée — clique sur « Vérifier maintenant ».' };
+      return { cls: quota.ok ? '' : 'warn', text: quota.message };
+    }
+
     function aiPage() {
       setNav('ai'); const aiState = snapshot.ai || {}; const auto = aiState.auto || {};
       $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Analyse automatique</span><h2 style="margin-top:7px">Analyseur IA en temps réel</h2><p class="small">L’analyseur observe les jeux terminés en continu. Dès qu’il constate quelque chose, il l’écrit dans Résultats. Dès qu’il trouve ou crée une stratégie, elle part dans « Stratégies IA créées ».</p></div></div>
@@ -998,14 +1029,17 @@ Faites-en bon usage !
         <div class="split small"><span class="muted">Dernière analyse</span><b>${formatDate(auto.lastLocalAt)}</b><span class="muted">Stratégies créées</span><b>${(aiState.savedStrategies||[]).length}</b></div>
         ${auto.lastError ? `<div class="notice error">${esc(auto.lastError)}</div>` : ''}
         <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="runAuto()">Analyser maintenant</button><button class="button ghost" onclick="toggleAuto(${auto.running ? 'false' : 'true'})">${auto.running ? 'Mettre en pause' : 'Relancer'}</button></div><div id="aiMessage"></div></div>
-      <div class="panel"><h3>Clé Pollinations.ai</h3><div class="notice ${aiState.configured ? '' : 'warn'}">${aiState.configured ? 'Clé active depuis l’environnement · modèle ' + esc(aiState.model || 'openai') : 'Aucune clé distante configurée. Ajoute POLLINATIONS_API_KEY dans les variables d’environnement ou utilise le champ ci-dessous ; l’analyse locale continue de fonctionner sans clé.'}</div>
+      <div class="panel"><h3>Clé Pollinations.ai</h3><div class="notice ${quotaBadge(aiState.configured, aiState.quota && aiState.quota.pollinations).cls}">${quotaBadge(aiState.configured, aiState.quota && aiState.quota.pollinations).text}</div>
+        <div class="toolbar" style="margin-top:8px"><button class="button ghost" onclick="checkAiQuota()">Vérifier maintenant (toutes les clés)</button></div>
+        <p class="small" style="margin-top:6px">${aiState.quota && aiState.quota.checkedAt ? 'Dernière vérification réelle : ' + formatDate(aiState.quota.checkedAt) : ''}</p>
         <div class="field"><label>Remplacer la clé sans redéployer</label><input id="aiKey" type="password" autocomplete="off" placeholder="Clé Pollinations.ai"></div><button class="button ghost" onclick="saveAiKey()">Appliquer la clé</button>
         <div class="field" style="margin-top:16px"><label>Analyse ciblée (optionnel)</label><textarea id="aiObjective" placeholder="Ex. Compare les absences de costumes de la main du joueur."></textarea></div><button class="button orange" onclick="runAnalysis()">Analyse Pollinations.ai</button></div>
       <div class="panel"><h3>Clés Gemini / Groq (prioritaires)</h3><div class="notice small">Essayées avant Pollinations : si l’une échoue ou expire, l’autre prend le relais automatiquement. Laisse un champ vide pour ne pas utiliser ce fournisseur.</div>
-        <div class="notice ${aiState.geminiConfigured ? '' : 'warn'}" style="margin-top:10px">${aiState.geminiConfigured ? 'Gemini actif · modèle ' + esc(aiState.geminiModel || 'gemini-2.5-flash') : 'Aucune clé Gemini configurée.'}</div>
+        <div class="notice ${quotaBadge(aiState.geminiConfigured, aiState.quota && aiState.quota.gemini).cls}" style="margin-top:10px">${quotaBadge(aiState.geminiConfigured, aiState.quota && aiState.quota.gemini).text}</div>
         <div class="field"><label>Clé OpenRouter (par défaut)</label><input id="openrouterKey" type="password" autocomplete="off" placeholder="Clé OpenRouter (openrouter.ai)"></div><button class="button ghost" onclick="saveOpenrouterKey()">Appliquer la clé OpenRouter</button>
+        <div class="notice ${quotaBadge(aiState.openrouterConfigured, aiState.quota && aiState.quota.openrouter).cls}" style="margin-top:6px">${quotaBadge(aiState.openrouterConfigured, aiState.quota && aiState.quota.openrouter).text}</div>
         <div class="field"><label>Clé Google Gemini</label><input id="geminiKey" type="password" autocomplete="off" placeholder="Clé Gemini (aistudio.google.com)"></div><button class="button ghost" onclick="saveGeminiKey()">Appliquer la clé Gemini</button>
-        <div class="notice ${aiState.groqConfigured ? '' : 'warn'}" style="margin-top:16px">${aiState.groqConfigured ? 'Groq actif · modèle ' + esc(aiState.groqModel || 'openai/gpt-oss-120b') : 'Aucune clé Groq configurée.'}</div>
+        <div class="notice ${quotaBadge(aiState.groqConfigured, aiState.quota && aiState.quota.groq).cls}" style="margin-top:16px">${quotaBadge(aiState.groqConfigured, aiState.quota && aiState.quota.groq).text}</div>
         <div class="field"><label>Clé Groq</label><input id="groqKey" type="password" autocomplete="off" placeholder="Clé Groq (console.groq.com)"></div><button class="button ghost" onclick="saveGroqKey()">Appliquer la clé Groq</button></div></div>
       <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Résultats</span><h2 style="margin-top:7px">Ce que l’analyseur constate</h2></div></div>
       <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Découverte</span><h2 style="margin-top:7px">Nouvelles régularités trouvées</h2><p class="small">Au-delà des stratégies existantes : cartes précises suivies d’un costume (a+1, a+2, a+3), points du joueur, enchaînements, séquences de vainqueurs et journées qui se rejouent.</p></div><button class="button orange" onclick="loadPatterns()">Chercher de nouvelles stratégies</button></div>
@@ -1164,6 +1198,9 @@ Faites-en bon usage !
     async function saveOpenrouterKey() { try { const r = await api('/api/ai/key/openrouter', 'POST', { key: val('openrouterKey') }); await refresh(); aiPage(); toast(r.quota ? r.quota.message : 'Clé OpenRouter appliquée.', r.quota && !r.quota.ok ? 'error' : ''); } catch(e) { toast(e.message, 'error'); } }
     async function saveGeminiKey() { try { const r = await api('/api/ai/key/gemini', 'POST', { key: val('geminiKey') }); await refresh(); aiPage(); toast(r.quota ? r.quota.message : 'Clé Gemini appliquée.', r.quota && !r.quota.ok ? 'error' : ''); } catch(e) { toast(e.message, 'error'); } }
     async function saveGroqKey() { try { const r = await api('/api/ai/key/groq', 'POST', { key: val('groqKey') }); await refresh(); aiPage(); toast(r.quota ? r.quota.message : 'Clé Groq appliquée.', r.quota && !r.quota.ok ? 'error' : ''); } catch(e) { toast(e.message, 'error'); } }
+    // vérifie MAINTENANT (appel réseau réel côté serveur) la validité et le
+    // quota de chaque clé IA configurée — bouton « Vérifier maintenant ».
+    async function checkAiQuota() { try { await api('/api/ai/quota-check', 'POST', {}); await refresh(); aiPage(); toast('Vérification effectuée.'); } catch(e) { toast(e.message, 'error'); } }
     async function deleteAiStrategy(id) { try { await api('/api/ai/strategies/' + id, 'DELETE'); await refresh(); aiStrategiesPage(); } catch(e) { toast(e.message, 'error'); } }
 
     function preditPage() {
