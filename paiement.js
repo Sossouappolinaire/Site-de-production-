@@ -41,6 +41,8 @@ const cfg = {
 const records = new Map(); // ref -> { ref, tokenPay, itemId, userId, chatId, lang, status, code, createdAt, updatedAt }
 
 let paidHandler = null; // enregistrée par bot.js : async (record) => {} — envoie le code au client sur Telegram
+let lastError = null;
+let lastErrorAt = null;
 
 (function loadInitial() {
   try {
@@ -99,6 +101,13 @@ function getConfig() {
     apiUrl: cfg.apiUrl,
     publicBaseUrl: cfg.publicBaseUrl,
     configured: configured(),
+    // dernière erreur d'initiation de paiement rencontrée (voir
+    // initiatePayment ci-dessous) : avant, seul un console.error côté
+    // serveur signalait un échec (ex. mauvaise URL d'API FusionPay, réponse
+    // invalide) — invisible pour l'admin, qui ne voyait que le client
+    // recevoir le message « envoie le code » à la place du bouton Payer.
+    lastError,
+    lastErrorAt,
   };
 }
 
@@ -116,8 +125,16 @@ function shortRef() { return `pay_${crypto.randomBytes(6).toString('hex')}`; }
 // ou déclencheur IA). Retourne { ok, checkoutUrl, ref } ou { ok:false, error }.
 // ---------------------------------------------------------------------------
 async function initiatePayment({ item, userId, chatId, lang, buyerName, buyerPhone } = {}) {
-  if (!configured()) return { ok: false, error: "Paiement non configuré (URL d'API / URL publique manquantes — voir Boutique → Paiement)." };
-  if (!item || !Number.isFinite(item.price) || item.price <= 0) return { ok: false, error: 'Cette stratégie n\'a pas de prix valide.' };
+  if (!configured()) {
+    lastError = "Paiement non configuré (URL d'API / URL publique manquantes — voir Boutique → Paiement).";
+    lastErrorAt = new Date().toISOString();
+    return { ok: false, error: lastError };
+  }
+  if (!item || !Number.isFinite(item.price) || item.price <= 0) {
+    lastError = 'Cette stratégie n\'a pas de prix valide (voir Boutique → cet article → Prix).';
+    lastErrorAt = new Date().toISOString();
+    return { ok: false, error: lastError };
+  }
 
   const ref = shortRef();
   const record = {
@@ -157,11 +174,15 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName, buyerPho
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data) {
-      return { ok: false, error: `Réponse invalide de FusionPay (HTTP ${res.status}).` };
+      lastError = `Réponse invalide de FusionPay (HTTP ${res.status}).`;
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
     }
     // Réponse documentée : { statut: true, token, message, url }
     if (!data.statut || !data.url) {
-      return { ok: false, error: data.message || 'FusionPay n\'a renvoyé aucun lien de paiement.' };
+      lastError = data.message || 'FusionPay n\'a renvoyé aucun lien de paiement.';
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
     }
 
     record.tokenPay = data.token || null;
@@ -169,7 +190,9 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName, buyerPho
     persist();
     return { ok: true, checkoutUrl: data.url, ref };
   } catch (e) {
-    return { ok: false, error: e.message };
+    lastError = e.message;
+    lastErrorAt = new Date().toISOString();
+    return { ok: false, error: lastError };
   }
 }
 
