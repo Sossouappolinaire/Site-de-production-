@@ -30,6 +30,7 @@
 //    même canal, au choix.
 'use strict';
 
+const appConfig = require('./config');
 const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
@@ -824,7 +825,12 @@ async function processRepeat(tracker) {
     tracker.lastRepeatSource = pred.target;
     if (pred.status !== 'perdu' || !pred.suit) continue;
     const lead = tracker.repeat.lead;
-    const synth = { target: pred.target + lead, suit: pred.suit, kind: pred.kind || 'suit' };
+    const nextTarget = pred.target + lead;
+    // CORRECTIF (demande) : un jeu va de 1 à appConfig.MAX_GAME_NUMBER (1440)
+    // avant le retour à 1 (nouveau sabot) — une répétition calculée au-delà
+    // ne sera jamais jouée avant le rebouclage, on l'ignore.
+    if (nextTarget > appConfig.MAX_GAME_NUMBER) continue;
+    const synth = { target: nextTarget, suit: pred.suit, kind: pred.kind || 'suit' };
     await forwardRepeat(tracker, synth);
   }
 }

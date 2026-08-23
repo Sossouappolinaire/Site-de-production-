@@ -110,6 +110,20 @@ const TEXTS = {
     ru: 'Хотите, я объясню подробнее?',
     es: '¿Quieres que te explique más?',
   },
+  payIntro: {
+    fr: '💳 Clique sur le bouton ci-dessous pour payer et débloquer cette stratégie instantanément. Tu as déjà un code ? Envoie-le directement ici.',
+    en: '💳 Tap the button below to pay and unlock this strategy instantly. Already have a code? Send it directly here.',
+    ar: '💳 اضغط على الزر أدناه للدفع وفتح هذه الاستراتيجية فورًا. لديك رمز بالفعل؟ أرسله مباشرة هنا.',
+    ru: '💳 Нажмите на кнопку ниже, чтобы оплатить и мгновенно разблокировать эту стратегию. Уже есть код? Отправьте его прямо сюда.',
+    es: '💳 Toca el botón de abajo para pagar y desbloquear esta estrategia al instante. ¿Ya tienes un código? Envíalo directamente aquí.',
+  },
+  payButton: {
+    fr: 'Payer',
+    en: 'Pay',
+    ar: 'ادفع',
+    ru: 'Оплатить',
+    es: 'Pagar',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -276,9 +290,10 @@ const NAME_B = ['Dorée', 'Silencieuse', 'Boréale', 'Ultime', 'Discrète', 'Roy
 
 // Tarifs par défaut selon l'origine de la stratégie : une stratégie du
 // catalogue (déjà existante, éprouvée) vaut 50€, un déclencheur IA vendu à
-// l'unité vaut 4€. Utilisé si aucun prix n'est fourni explicitement.
+// l'unité vaut 1,8€ (promo — 4€ hors promo). Utilisé si aucun prix n'est
+// fourni explicitement.
 const PRICE_CATALOG = 50;
-const PRICE_IA = 4;
+const PRICE_IA = 1.8; // promo en cours (prix normal habituel : 4€)
 function defaultPriceFor(source) {
   if (source === 'strategy') return PRICE_CATALOG;
   if (source === 'ia') return PRICE_IA;
@@ -456,7 +471,7 @@ function refreshRateFromStrategy(id) {
 // Vente automatique des déclencheurs IA à plus de 93% de réussite — AUCUNE
 // configuration admin nécessaire : dès qu'un déclencheur créé par l'IA
 // (ai-auto.js / pattern-miner) dépasse 93% de réussite, il est publié tout
-// seul dans la boutique à 4€ (nom de code + code de paiement générés comme
+// seul dans la boutique au prix courant PRICE_IA (nom de code + code de paiement générés comme
 // pour une publication manuelle). Dès que son taux redescend à 93% ou moins
 // — ou qu'il expire côté ai-auto.js (1h) — il disparaît automatiquement de
 // la boutique (désactivé, plus proposé aux acheteurs). Appelée à intervalle
@@ -502,7 +517,9 @@ async function syncAutoIaListings(aiList) {
 }
 
 // ---------------------------------------------------------------------------
-// Achat / déblocage par code.
+// Achat / déblocage par code — utilisé pour la saisie manuelle ET pour un
+// paiement en ligne confirmé (paiement.js soumet alors le code courant de
+// l'article lui-même, exactement comme si le client l'avait tapé).
 // ---------------------------------------------------------------------------
 function redeem(userId, itemId, code) {
   const item = getItem(itemId);
@@ -530,6 +547,11 @@ function redeem(userId, itemId, code) {
   // vérifier que le code saisi est bien LE code courant et valide, il n'y a
   // plus besoin de gate sur un ancien `codeUsedBy` : correspondre au code
   // courant suffit à prouver que c'est un achat légitime et non rejoué.
+  unlockItem(item, userId);
+  return { ok: true, item };
+}
+
+function unlockItem(item, userId) {
   item.codeUsedBy = String(userId);
   item.codeUsedAt = new Date().toISOString();
   item.salesCount = (item.salesCount || 0) + 1;
@@ -541,11 +563,10 @@ function redeem(userId, itemId, code) {
   item.updatedAt = new Date().toISOString();
 
   const u = user(userId);
-  if (!u.unlocked.includes(itemId)) u.unlocked.push(itemId);
+  if (!u.unlocked.includes(item.id)) u.unlocked.push(item.id);
   u.pendingCode = null;
-  u.activeItem = itemId;
+  u.activeItem = item.id;
   persist();
-  return { ok: true, item };
 }
 
 function hasUnlocked(userId, itemId) {

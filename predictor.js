@@ -938,7 +938,14 @@ function suitForNumber(n) {
 }
 
 function nextTarget(current) {
+  // CORRECTIF (demande) : les jeux vont de 1 à config.MAX_GAME_NUMBER (1440)
+  // avant le retour à 1 (nouveau sabot). suitForNumber(n) est une formule
+  // purement mathématique sur n : elle répond « vrai » pour n'importe quel
+  // n, y compris au-delà de 1440, donc en fin de sabot la boucle pouvait
+  // retourner une cible qui ne sera jamais jouée avant le rebouclage. On
+  // arrête la recherche dès qu'on dépasse la borne au lieu de continuer.
   for (let n = current + config.LEAD; n < current + 40; n++) {
+    if (n > config.MAX_GAME_NUMBER) return null;
     if (suitForNumber(n)) return n;
   }
   return null;
@@ -1136,6 +1143,16 @@ function evaluate() {
     if (hit.target <= maxFinishedNumber()) {
       // le tour cible est déjà joué (bot lancé en retard) → on marque le
       // déclencheur comme consommé et on attend le suivant, sans rejouer le passé
+      if (trigKey) state.triggersDone[trigKey] = true;
+      continue;
+    }
+    // CORRECTIF (demande) : les jeux vont de 1 à config.MAX_GAME_NUMBER
+    // (1440) avant le retour à 1 (nouveau sabot). Une stratégie déclenchée
+    // en toute fin de sabot peut calculer une cible au-delà de cette borne
+    // (ex. 1442) qui ne sera jamais jouée avant le rebouclage : on l'ignore
+    // au lieu de publier une prédiction qui restera « en attente » pour
+    // toujours. Le déclencheur est marqué consommé, comme pour une cible déjà passée.
+    if (hit.target > config.MAX_GAME_NUMBER) {
       if (trigKey) state.triggersDone[trigKey] = true;
       continue;
     }

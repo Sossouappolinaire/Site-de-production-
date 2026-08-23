@@ -23,6 +23,7 @@ const afterLoss = require('./after-loss');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const shop = require('./shop');
+const paiement = require('./paiement');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
@@ -123,10 +124,15 @@ app.post('/api/auth/mail-config', async (req, res) => {
 });
 
 // --- verrou d'accès : tout le reste du site exige une session valide ------
-const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico']);
+const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/succes.html']);
+const PUBLIC_PAIEMENT_PATTERNS = [/^\/api\/paiement\/webhook$/, /^\/api\/paiement\/statut\/[^/]+$/];
 function isPublicPath(p) {
   if (PUBLIC_EXACT.has(p)) return true;
   if (p.startsWith('/api/auth/')) return true;
+  // webhook FusionPay (appel serveur-à-serveur) et consultation du statut
+  // depuis succes.html (navigateur de l'acheteur, jamais connecté au site) —
+  // protégés par leur propre clé/référence, pas par une session admin.
+  if (PUBLIC_PAIEMENT_PATTERNS.some((re) => re.test(p))) return true;
   return false;
 }
 app.use(async (req, res, next) => {
@@ -264,6 +270,12 @@ app.get('/api/state', async (req, res) => {
       geminiModel: config.GEMINI.MODEL,
       groqConfigured: ai.groqConfigured(),
       groqModel: config.GROQ.MODEL,
+      // Statut RÉEL du quota (appel réseau déjà effectué, mis en cache — voir
+      // ai.refreshQuotaStatus()) : `configured` ci-dessus ne dit que « une
+      // clé est présente », alors que `quota` dit « la clé a été testée et
+      // le quota/crédit existe (ou pas) ». null tant qu'aucun test n'a
+      // encore eu lieu (juste après un démarrage, avant la 1ère vérification).
+      quota: ai.getLastQuotaCheck(),
       auto: aiAuto.status(),
       lastAnalysis: state.aiAnalyses[0] || null,
       results: state.aiAnalyses.slice(0, 6),
@@ -722,6 +734,43 @@ app.post('/api/shop/:id/refresh-rate', (req, res) => {
   res.json({ ok: true, item });
 });
 
+// ---------------------------------------------------------------------------
+// Paiement en ligne (FusionPay / Money Fusion) — voir paiement.js.
+// ---------------------------------------------------------------------------
+app.get('/api/paiement/config', (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(paiement.getConfig());
+});
+
+app.post('/api/paiement/config', (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(paiement.setConfig(req.body || {}));
+});
+
+// Appelée par FusionPay lui-même (serveur-à-serveur) dès qu'un paiement est
+// confirmé — protégée par la clé secrète glissée dans l'URL du webhook
+// (voir paiement.js/initiatePayment), pas par une session.
+app.post('/api/paiement/webhook', async (req, res) => {
+  const r = await paiement.handleWebhook(req.query || {}, req.body || {});
+  res.status(r.status || (r.ok ? 200 : 400)).json(r);
+});
+
+// Consultée par la page succes.html (navigateur de l'acheteur, jamais
+// connecté au site) pour afficher le code une fois le paiement confirmé.
+app.get('/api/paiement/statut/:ref', async (req, res) => {
+  // filet de sécurité : si le webhook n'est pas encore arrivé, on redemande
+  // nous-mêmes l'état à FusionPay avant de répondre (voir paiement.js/reconcile).
+  const record = await paiement.reconcile(req.params.ref);
+  if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
+  const item = shop.getItem(record.itemId);
+  res.json({
+    status: record.status,
+    code: record.status === 'paid' ? record.code : null,
+    aiName: item ? item.aiName : null,
+    amount: record.amount,
+  });
+});
+
 app.get('/api/strategies/:key', (req, res) => {
   const payload = strategyPayload(req.params.key);
   if (!payload) return res.status(404).json({ error: 'Stratégie inconnue' });
@@ -805,11 +854,27 @@ app.get('/api/ai/status', (req, res) => {
     configured: ai.keyLooksValid(),
     model: config.POLLINATIONS.MODEL,
     baseUrl: config.POLLINATIONS.BASE_URL,
+    // voir commentaire équivalent dans /api/state : `configured` = clé
+    // présente, `quota` = résultat du dernier test réseau réel (mis en
+    // cache), rafraîchissable via POST /api/ai/quota-check.
+    quota: ai.getLastQuotaCheck(),
     auto: aiAuto.status(),
     lastAnalysis: state.aiAnalyses[0] || null,
     results: state.aiAnalyses.slice(0, 6),
     savedStrategies: state.aiStrategies,
   });
+});
+
+// vérifie MAINTENANT (appel réseau réel) la clé/le quota de chaque
+// fournisseur IA configuré, et met à jour le cache lu par /api/state et
+// /api/ai/status — bouton « Vérifier maintenant » de la page Analyseur IA.
+app.post('/api/ai/quota-check', async (req, res) => {
+  try {
+    const quota = await ai.refreshQuotaStatus();
+    res.json({ ok: true, quota });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
 });
 
 app.post('/api/ai/analyze', async (req, res) => {
@@ -1381,6 +1446,13 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     startLoop().then(() => {
       if (aiAuto.auto.enabled) aiAuto.start(persist);
       console.log('🤖 Analyseur IA temps réel démarré (clé environnement : ' + (ai.keyLooksValid() ? 'oui' : 'non configurée') + ')');
+      // vérification réelle (appel réseau) du quota de chaque clé IA
+      // configurée au démarrage, pour que le badge de la page Analyseur IA
+      // n'affiche pas juste « clé présente » mais bien « clé valide et
+      // quota disponible » dès l'ouverture du tableau de bord.
+      ai.refreshQuotaStatus().catch((error) => {
+        console.error('Vérification du quota IA au démarrage impossible :', error.message);
+      });
     }).catch((error) => {
       console.error('Initialisation impossible :', error.message);
     });

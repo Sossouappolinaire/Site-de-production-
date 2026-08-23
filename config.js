@@ -147,6 +147,11 @@ module.exports = {
   // Règles de prédiction.
   SUIT_BY_LAST_DIGIT: { 2: '♦️', 5: '❤️', 6: '♣️', 9: '♠️' },
   LEAD: 2,
+  // Un sabot/journée va du jeu n°1 au jeu n°1440 : au-delà, le numéro
+  // n'existera jamais avant le retour à 1 (nouveau sabot). Toute cible de
+  // prédiction calculée au-delà doit être ignorée plutôt que publiée pour
+  // un jeu qui ne se produira pas — voir nextTarget() dans predictor.js.
+  MAX_GAME_NUMBER: 1440,
   DEFAULT_HAND: 'joueur',
   DEFAULT_B: Number(process.env.B || 3),
   DEFAULT_MAX_R: Number(process.env.MAX_R || 2),

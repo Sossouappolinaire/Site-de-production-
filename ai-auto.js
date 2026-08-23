@@ -234,7 +234,7 @@ async function runRemote() {
     const result = await ai.analyze({
       games,
       pastDays,
-      objective: "Analyse automatique en temps réel : cherche aussi des régularités nouvelles (carte précise suivie d'un costume, égalité avec un point donné, forme de la main [nb de cartes joueur/banquier] avec un point donné, décalages a+1/a+2/a+3, répétition d'une journée déjà jouée). Ne propose ni enchaînement de costumes (chaîne) ni remplacement de costume conseillé pour une stratégie existante — ces deux types sont explicitement écartés.",
+      objective: "Analyse automatique en temps réel : cherche aussi des régularités nouvelles (carte précise À UNE POSITION PRÉCISE de la main suivie d'un costume, ex. 4❤️ en 2e position du banquier → ♦️ à a+2, égalité avec un point donné, forme de la main [nb de cartes joueur/banquier] avec un point donné, décalages a+1/a+2/a+3, répétition d'une journée déjà jouée). Ne propose ni enchaînement de costumes (chaîne) ni remplacement de costume conseillé pour une stratégie existante — ces deux types sont explicitement écartés.",
     });
     auto.lastRemoteAt = Date.now();
     auto.lastError = null;
@@ -269,6 +269,10 @@ function start(onChange) {
       .then(() => runRemote())
       .then((r) => { if (r && onChange) onChange(); })
       .catch((e) => { auto.lastError = e.message; auto.lastRemoteAt = Date.now(); });
+    // rafraîchit aussi le statut quota/validité des clés IA (voir
+    // ai.refreshQuotaStatus()) au même rythme, pour que le badge affiché
+    // sur la page Analyseur IA reste à jour sans attendre un clic manuel.
+    ai.refreshQuotaStatus().catch(() => {});
   };
   tickLocal();
   localTimer = setInterval(tickLocal, config.AI_LOCAL_INTERVAL_MS);

@@ -15,6 +15,7 @@ const afterLoss = require('./after-loss');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
 const shop = require('./shop');
+const paiement = require('./paiement');
 const {
   state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
@@ -442,7 +443,7 @@ function wire(b) {
     );
   });
 
-  b.onText(/^\/pred(?:ictions)?(?:\s+(\S+))?/, async (msg, m) => {
+  b.onText(/^\/pred(?:ictions)?\b(?:\s+(\S+))?$/, async (msg, m) => {
     if (!db.ready) return b.sendMessage(msg.chat.id, '🔴 Aucune base de données connectée (/setdb).');
     const sum = await db.predictionSummary(m[1]);
     if (!sum) return b.sendMessage(msg.chat.id, '⚠️ Date invalide. Exemple : /pred 2/04/2026');
@@ -985,7 +986,7 @@ function wire(b) {
     if (!ok) b.sendMessage(msg.chat.id, "❌ Échec de l'envoi (aucun token, aucun administrateur configuré, ou erreur — voir les logs).");
   });
 
-  b.onText(/^\/stats/, (msg) => {
+  b.onText(/^\/stats\b/, (msg) => {
     const s = stats();
     b.sendMessage(
       msg.chat.id,
@@ -1055,6 +1056,22 @@ function wireShop(b) {
         }
         shop.setPendingCode(userId, itemId);
         await b.answerCallbackQuery(q.id);
+        // Bouton de paiement en ligne (paiement.js / FusionPay) : si le
+        // paiement est configuré, on propose de payer directement — le code
+        // est alors débloqué et envoyé automatiquement (webhook), sans que
+        // le client ait à le taper. La saisie manuelle d'un code reste
+        // possible en parallèle (ex. code donné par l'admin par un autre
+        // moyen), voir le handler 'message' plus bas.
+        if (paiement.configured() && Number.isFinite(item.price) && item.price > 0) {
+          const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
+          const pay = await paiement.initiatePayment({ item, userId, chatId, lang, buyerName });
+          if (pay.ok) {
+            return b.sendMessage(chatId, shop.t('payIntro', lang), {
+              reply_markup: { inline_keyboard: [[{ text: `💳 ${shop.t('payButton', lang)} — ${item.price}€`, url: pay.checkoutUrl }]] },
+            });
+          }
+          console.error('Paiement (initiation) :', pay.error);
+        }
         return b.sendMessage(chatId, shop.t('askCode', lang));
       }
       await b.answerCallbackQuery(q.id);
@@ -1201,6 +1218,27 @@ async function disconnectBot() {
 // principal (voir wireShop() et la vérification croisée ci-dessus/ci-dessous :
 // aucun des deux bots ne démarre si les deux tokens sont identiques).
 // ---------------------------------------------------------------------------
+// Paiement confirmé (webhook FusionPay, voir paiement.js) : débloque la
+// stratégie pour l'acheteur et lui envoie le détail + code automatiquement
+// dans Telegram, exactement comme une saisie de code manuelle réussie.
+// Enregistrée une seule fois (le handler regarde `shopBot` à l'appel, pas à
+// l'enregistrement, donc il fonctionne même si le bot redémarre entre-temps).
+paiement.setPaidHandler(async (record) => {
+  const item = shop.getItem(record.itemId);
+  if (!item) return;
+  const paidCode = item.code; // capturé AVANT le déblocage, qui régénère un nouveau code
+  const r = shop.redeem(record.userId, record.itemId, paidCode);
+  if (!r.ok) return;
+  paiement.attachCode(record.ref, paidCode); // le code correspondant à CE paiement, affiché sur succes.html
+  if (!shopBot) return; // bot boutique non démarré : le client verra quand même le code sur succes.html
+  try {
+    await shopBot.sendMessage(record.chatId, shop.t('unlockedHeader', record.lang));
+    const text = await shop.fullPresentation(r.item, record.lang);
+    await shopBot.sendMessage(record.chatId, text);
+    await shopBot.sendMessage(record.chatId, shop.t('canAsk', record.lang));
+  } catch (e) { console.error('Paiement (envoi Telegram après paiement) :', e.message); }
+});
+
 async function startShopBot(token) {
   // Même garde-fou que startBot() ci-dessus, dans l'autre sens : rien n'est
   // persisté si le token entre en conflit avec celui du bot principal.
@@ -1923,6 +1961,7 @@ async function applyDbConfigs() {
   await predit.restoreFromDb();
   await afterLoss.restoreFromDb();
   await shop.loadFromDb();
+  await paiement.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
 }
 

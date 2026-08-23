@@ -18,6 +18,7 @@
 //  • Dès qu'une stratégie certifiée perd, elle est retirée automatiquement.
 'use strict';
 
+const appConfig = require('./config');
 const miner = require('./pattern-miner');
 const strategies = require('./strategies');
 const store = require('./store');
@@ -190,10 +191,29 @@ function cardTokens(game, hand) {
   return out;
 }
 
+// jeton (rang+costume) exactement à la position donnée (0 = 1ère carte, etc.)
+// dans la main indiquée, ou null si aucune carte à cette position.
+function cardTokenAt(game, hand, pos) {
+  const cards = hand === 'banquier' ? (game.bankerCards || []) : (game.playerCards || []);
+  const text = String(cards[pos] || '');
+  if (!text) return null;
+  const suit = SUITS.find((s) => text.includes(s.charAt(0)));
+  if (!suit) return null;
+  const rank = text.replace(suit, '').replace(/\uFE0F/g, '').trim() || '?';
+  return `${rank}${suit}`;
+}
+
 // la règle est-elle déclenchée par ce jeu ?
 function triggered(rule, game) {
   if (!rule || !game) return false;
-  if (rule.kind === 'carte') return cardTokens(game, rule.hand).has(rule.token);
+  if (rule.kind === 'carte') {
+    // règle avec position exacte du déclencheur (ex. « 4❤️ en 2e position du
+    // banquier ») : on exige la carte À CETTE position précise, pas ailleurs
+    // dans la main — sinon on retombe sur l'ancien comportement (présence
+    // n'importe où) pour les règles héritées sans position enregistrée.
+    if (rule.pos != null) return cardTokenAt(game, rule.hand, rule.pos) === rule.token;
+    return cardTokens(game, rule.hand).has(rule.token);
+  }
   if (rule.kind === 'point') return game.playerValue != null && Number(game.playerValue) === Number(rule.value);
   if (rule.kind === 'egalite') return game.winner === 'Égalité' && game.playerValue != null && Number(game.playerValue) === Number(rule.value);
   if (rule.kind === 'forme') {
@@ -220,7 +240,7 @@ function certifyDiscoveries() {
   const byId = new Map();
   for (const d of discoveries) {
     if (!d.rule) continue;
-    byId.set(`ia:${d.rule.kind}:${d.rule.hand}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`, d);
+    byId.set(`ia:${d.rule.kind}:${d.rule.hand}:${d.rule.pos ?? 'any'}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`, d);
   }
   // CORRECTIF : avant, seules les règles ENCORE au-dessus du seuil (85% par
   // défaut) étaient réévaluées ci-dessous (elles étaient filtrées AVANT).
@@ -243,7 +263,7 @@ function certifyDiscoveries() {
     (d) => d.rule && Number(d.rate) >= panel.minRate && Number(d.support || 0) >= panel.minSample,
   );
   for (const d of list) {
-    const id = `ia:${d.rule.kind}:${d.rule.hand}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`;
+    const id = `ia:${d.rule.kind}:${d.rule.hand}:${d.rule.pos ?? 'any'}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`;
     if (panel.retired.some((r) => r.id === id)) continue;
     if (panel.certified.some((c) => c.id === id)) continue; // déjà mise à jour ci-dessus
     panel.certified.push({
@@ -372,6 +392,10 @@ function makePredictions(games) {
       if (!triggered(entry.rule, g)) continue;
       const target = g.n + entry.rule.k;
       if (target <= last) continue; // le jeu cible est déjà joué
+      // CORRECTIF (demande) : un jeu va de 1 à appConfig.MAX_GAME_NUMBER (1440)
+      // avant le retour à 1 (nouveau sabot) — une cible calculée au-delà ne
+      // sera jamais jouée avant le rebouclage, on l'ignore.
+      if (target > appConfig.MAX_GAME_NUMBER) continue;
       if (panel.predictions.some((p) => p.source === entry.id && p.target === target)) continue;
       if (minGap > 0 && lastTarget != null && Math.abs(target - lastTarget) < minGap) {
         // numéro trop proche du dernier prédit : cette occurrence est

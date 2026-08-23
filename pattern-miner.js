@@ -76,23 +76,24 @@ function hasSuit(game, suit, hand = 'joueur') {
 // ---------------------------------------------------------------------------
 // 1) Carte précise (rang + costume) observée au jeu a → costume au jeu a+k
 // ---------------------------------------------------------------------------
+// Chaque carte est mesurée à SA position exacte dans la main (1ère/2e/3e
+// carte reçue), pas seulement « présente quelque part » — c'est ce qui
+// permet un déclencheur du type « 4❤️ en 2e position du banquier » plutôt
+// que « 4❤️ vu chez le banquier » sans précision.
 function mineCardRules(games) {
-  const buckets = new Map(); // clé -> { support, hits:{suit:count}, hand, token, k }
+  const buckets = new Map(); // clé -> { support, hits:{suit:count}, hand, pos, token, k }
   for (let i = 0; i < games.length; i += 1) {
     const g = games[i];
     for (const hand of ['joueur', 'banquier']) {
       const cards = hand === 'joueur' ? g.playerCards : g.bankerCards;
-      const tokens = new Set();
-      for (const card of cards) {
+      cards.forEach((card, posIdx) => {
         const parsed = parseCard(card);
-        if (parsed) tokens.add(parsed.token);
-      }
-      for (const token of tokens) {
+        if (!parsed) return;
         for (let k = 1; k <= MAX_OFFSET; k += 1) {
           const target = games[i + k];
           if (!target) continue;
-          const key = `${hand}|${token}|${k}`;
-          if (!buckets.has(key)) buckets.set(key, { hand, token, k, support: 0, hits: {}, hitPos: {} });
+          const key = `${hand}|${posIdx}|${parsed.token}|${k}`;
+          if (!buckets.has(key)) buckets.set(key, { hand, pos: posIdx, token: parsed.token, k, support: 0, hits: {}, hitPos: {} });
           const b = buckets.get(key);
           b.support += 1;
           for (const suit of SUITS) {
@@ -103,21 +104,23 @@ function mineCardRules(games) {
             b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
           }
         }
-      }
+      });
     }
   }
   return rankBuckets(buckets, (b, suit, rate) => {
+    const triggerPosTxt = posLabel(b.pos) ? ` (${posLabel(b.pos)})` : '';
     const pos = dominantPosLabel(b, suit);
     const posTxt = pos ? ` en ${pos}` : '';
     return {
       kind: 'carte',
-      finding: `Quand le ${b.hand} a ${b.token} au jeu a, ${suit} apparaît${posTxt} dans la main du joueur au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
+      finding: `Quand le ${b.hand} a ${b.token}${triggerPosTxt} au jeu a, ${suit} apparaît${posTxt} dans la main du joueur au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
       proposal: {
-        name: `${b.token} (${b.hand}) → ${suit}${posTxt} au jeu a+${b.k}`,
-        logic: `Dès que ${b.token} est vu dans la main du ${b.hand} au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k} (main du joueur).`,
-        trigger: `${b.token} présent dans la main du ${b.hand}`,
+        name: `${b.token}${triggerPosTxt} (${b.hand}) → ${suit}${posTxt} au jeu a+${b.k}`,
+        logic: `Dès que ${b.token} est vu${triggerPosTxt} dans la main du ${b.hand} au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k} (main du joueur).`,
+        trigger: `${b.token} vu${triggerPosTxt} dans la main du ${b.hand}`,
         target: `jeu a+${b.k}`,
         position: pos,
+        triggerPosition: posLabel(b.pos),
         suggestedLead: b.k,
         minimumSample: 20,
         evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%)${posTxt ? `, majoritairement${posTxt}` : ''}.`,
@@ -350,6 +353,10 @@ function rankBuckets(buckets, build, minRate = MIN_RATE) {
       const rule = {
         kind: built.kind, hand: b.hand || 'joueur', token: b.token,
         value: b.value != null ? b.value : null, k: b.k, suit,
+        // position exacte (0/1/2) du déclencheur dans la main — uniquement
+        // renseignée pour les règles « carte » (voir mineCardRules) ; null
+        // sinon, pour ne pas exiger une position sur les autres types.
+        pos: b.pos != null ? b.pos : null,
         // uniquement renseignés pour les règles « forme de la main »
         // (voir mineHandShapeRules) — null pour les autres kinds.
         pCount: b.pCount != null ? b.pCount : null,
