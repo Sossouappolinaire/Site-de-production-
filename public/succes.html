@@ -102,10 +102,10 @@
 
 <script>
   const params = new URLSearchParams(location.search);
-  const ref = params.get('ref');
-  const uid = params.get('uid');
-  const fn = params.get('fn');
-  const ln = params.get('ln');
+  let ref = params.get('ref');
+  let uid = params.get('uid');
+  let fn = params.get('fn');
+  let ln = params.get('ln');
   const $ = (id) => document.getElementById(id);
 
   function show(id) {
@@ -187,8 +187,17 @@
   }
 
   async function fetchStatus() {
-    if (!ref) { show('notfound'); return; }
     try {
+      if (!ref) {
+        const resolveRes = await fetch('/api/paiement/succes');
+        const resolved = await resolveRes.json();
+        if (!resolveRes.ok || !resolved.ref) throw new Error(resolved.error || 'Aucun paiement actif.');
+        ref = resolved.ref;
+        uid = resolved.userId || uid;
+        const names = String(resolved.buyerName || '').split(' ');
+        fn = fn || names.shift() || '';
+        ln = ln || names.join(' ');
+      }
       const res = await fetch(`/api/paiement/statut/${encodeURIComponent(ref)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Paiement introuvable.');
@@ -211,12 +220,8 @@
     }
   }
 
-  if (!ref) {
-    show('notfound');
-  } else {
-    $('identityBox').innerHTML = identityHtml();
-    show('ask');
-  }
+  $('identityBox').innerHTML = identityHtml();
+  show('ask');
 </script>
 </body>
 </html>
