@@ -95,17 +95,17 @@
 
     <div id="notfound" class="hidden">
       <div class="icon">🔎</div>
-      <h1>Aucun code à afficher</h1>
-      <p class="sub">Reviens sur Telegram, règle le paiement, puis ouvre « Voir mon code » depuis le message de paiement.</p>
+      <h1>Aucun paiement en cours</h1>
+      <p class="sub">Retourne sur Telegram, clique sur « Payer » dans le bot, puis reviens sur cette page une fois le paiement effectué.</p>
     </div>
   </div>
 
 <script>
   const params = new URLSearchParams(location.search);
   let ref = params.get('ref');
-  let uid = params.get('uid');
-  let fn = params.get('fn');
-  let ln = params.get('ln');
+  const uid = params.get('uid');
+  const fn = params.get('fn');
+  const ln = params.get('ln');
   const $ = (id) => document.getElementById(id);
 
   function show(id) {
@@ -177,6 +177,31 @@
     $('askMsg').classList.remove('hidden');
   }
 
+  // Cas normal avec le lien de succès FIXE Money Fusion (pas de ?ref= dans
+  // l'URL de retour) : on retrouve automatiquement, côté serveur, le client
+  // qui vient de payer (verrou global d'achat — une seule personne à la fois,
+  // voir paiement.currentActiveRecord), SANS rien lui faire saisir, puis on
+  // reconstruit et on ouvre le lien complet succes.html?ref=...&uid=...&fn=
+  // ...&ln=... (même format qu'avant) pour la suite normale de l'affichage.
+  async function autoDetect() {
+    show('pending');
+    try {
+      const res = await fetch('/api/paiement/actif');
+      const data = await res.json();
+      if (!res.ok || !data.ok) { show('notfound'); return; }
+      const target = new URLSearchParams({ ref: data.ref });
+      if (data.uid) target.set('uid', data.uid);
+      if (data.buyerName) {
+        const parts = String(data.buyerName).trim().split(/\s+/);
+        if (parts[0]) target.set('fn', parts[0]);
+        if (parts.length > 1) target.set('ln', parts.slice(1).join(' '));
+      }
+      location.replace(`${location.pathname}?${target.toString()}`);
+    } catch (e) {
+      show('notfound');
+    }
+  }
+
   // Le bouton de paiement est dans Telegram et ouvre directement Money
   // Fusion. Cette page ne sert qu'à afficher puis copier le code.
   async function viewCode() {
@@ -187,17 +212,8 @@
   }
 
   async function fetchStatus() {
+    if (!ref) { show('notfound'); return; }
     try {
-      if (!ref) {
-        const resolveRes = await fetch('/api/paiement/succes');
-        const resolved = await resolveRes.json();
-        if (!resolveRes.ok || !resolved.ref) throw new Error(resolved.error || 'Aucun paiement actif.');
-        ref = resolved.ref;
-        uid = resolved.userId || uid;
-        const names = String(resolved.buyerName || '').split(' ');
-        fn = fn || names.shift() || '';
-        ln = ln || names.join(' ');
-      }
       const res = await fetch(`/api/paiement/statut/${encodeURIComponent(ref)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Paiement introuvable.');
@@ -220,8 +236,12 @@
     }
   }
 
-  $('identityBox').innerHTML = identityHtml();
-  show('ask');
+  if (!ref) {
+    autoDetect();
+  } else {
+    $('identityBox').innerHTML = identityHtml();
+    show('ask');
+  }
 </script>
 </body>
 </html>
