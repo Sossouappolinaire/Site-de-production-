@@ -47,12 +47,9 @@
   <div class="card" id="card">
     <div id="ask" class="hidden">
       <div class="icon">🎟️</div>
-      <h1>Finalise ton paiement</h1>
+      <h1>Voici ton paiement</h1>
       <div class="identity" id="identityBox"></div>
-      <p class="sub">1. Appuie sur « Payer » pour aller régler sur Money Fusion.<br>2. Reviens ici et appuie sur « Voir mon code ».</p>
-      <a id="payLink" href="#" target="_blank" rel="noopener" style="display:block;text-decoration:none">
-        <button type="button" style="margin-bottom:10px">💳 Payer</button>
-      </a>
+      <p class="sub">Appuie sur « Voir mon code » pour afficher le code à copier dans Telegram.</p>
       <button id="askBtn" onclick="viewCode()">🎟️ Voir mon code</button>
       <div id="askMsg" class="msg err hidden"></div>
     </div>
@@ -67,9 +64,9 @@
       <div class="icon" id="paidIcon">🎟️</div>
       <h1 id="paidTitle">Voici ton code</h1>
       <div class="identity hidden" id="identityBoxPaid"></div>
-      <p class="sub" id="paidSub">Ce code est réservé pour toi pendant quelques minutes — copie-le et reviens sur Telegram si besoin.</p>
+      <p class="sub" id="paidSub">Copie-le, puis renvoie-le dans Telegram. Il restera valide 30 secondes après la copie.</p>
       <div class="code-box" id="codeBox"><span id="codeValue"></span><button onclick="copyCode()">📋 Copier</button></div>
-      <div id="copyMsg" class="msg ok hidden">Code copié !</div>
+      <div id="copyMsg" class="msg ok hidden">Code copié ! Il reste valide 30 secondes.</div>
     </div>
 
     <div id="thanks" class="hidden">
@@ -93,13 +90,13 @@
     <div id="expired" class="hidden">
       <div class="icon">⌛</div>
       <h1>Code expiré</h1>
-      <p class="sub">Les 3 minutes sont écoulées. Ce code n'est plus utilisable. Retourne sur Telegram pour lancer un nouveau paiement.</p>
+      <p class="sub">Les 30 secondes après la copie sont écoulées. Ce code n'est plus utilisable. Retourne sur Telegram pour lancer un nouveau paiement.</p>
     </div>
 
     <div id="notfound" class="hidden">
       <div class="icon">🔎</div>
       <h1>Aucun code à afficher</h1>
-      <p class="sub">Reviens sur Telegram, clique sur « Payer » depuis le message de paiement, puis reviens ici via « Voir mon code ».</p>
+      <p class="sub">Reviens sur Telegram, règle le paiement, puis ouvre « Voir mon code » depuis le message de paiement.</p>
     </div>
   </div>
 
@@ -109,7 +106,6 @@
   const uid = params.get('uid');
   const fn = params.get('fn');
   const ln = params.get('ln');
-  const payUrl = params.get('pay');
   const $ = (id) => document.getElementById(id);
 
   function show(id) {
@@ -140,17 +136,14 @@
     }, delay);
   }
 
-  // Une fois le code copié, la page n'a plus besoin de rester ouverte — elle
-  // efface le code affiché (pour ne pas laisser une info sensible traîner à
-  // l'écran) et se referme automatiquement. window.close() ne fonctionne pas
-  // dans tous les navigateurs mobiles (restriction du navigateur intégré à
-  // Telegram notamment) : en repli, on affiche un message invitant à fermer
-  // la page à la main.
+  // Une fois le code copié, la page n'a plus besoin de rester ouverte. Le
+  // serveur garde toutefois le code valide pendant 30 secondes afin de
+  // laisser le temps au client de revenir dans Telegram.
   function copyCode() {
     const text = $('codeValue').textContent;
     navigator.clipboard.writeText(text).then(() => {
-      if (expiryTimer) clearTimeout(expiryTimer); // le minuteur des 3 min n'a plus lieu d'être, on expire tout de suite
-      fetch(`/api/paiement/copie/${encodeURIComponent(ref)}`, { method: 'POST' }).catch(() => {}); // best-effort : la fermeture de la page ne doit pas en dépendre
+      if (expiryTimer) clearTimeout(expiryTimer);
+      fetch(`/api/paiement/copie/${encodeURIComponent(ref)}`, { method: 'POST' }).catch(() => {});
       $('copyMsg').classList.remove('hidden');
       setTimeout(() => {
         show('closed');
@@ -165,7 +158,7 @@
     const idHtml = identityHtml();
     $('identityBoxPaid').innerHTML = idHtml;
     $('identityBoxPaid').classList.toggle('hidden', !idHtml);
-    $('paidSub').textContent = "Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie.";
+    $('paidSub').textContent = "Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie. Il restera valide 30 secondes après la copie.";
     $('codeValue').textContent = code;
     $('codeBox').classList.remove('hidden');
     armExpiry(expiresAt);
@@ -184,14 +177,8 @@
     $('askMsg').classList.remove('hidden');
   }
 
-  // Appelé au clic sur « 🎟️ Voir mon code ». Contrairement à l'ancien
-  // système (Money Fusion redirigeant automatiquement avec la référence),
-  // le lien « Payer » pointe maintenant vers une page fixe par catégorie —
-  // c'est donc CE bouton, propre à cette réservation (ref dans l'URL), qui
-  // confirme le paiement et révèle le code. Cliquer sans avoir payé n'a pas
-  // de sens pour le client puisqu'il n'aurait de toute façon rien à coller
-  // dans Telegram ensuite : la stratégie reste verrouillée tant que le code
-  // n'est pas renvoyé au bot (voir bot.js).
+  // Le bouton de paiement est dans Telegram et ouvre directement Money
+  // Fusion. Cette page ne sert qu'à afficher puis copier le code.
   async function viewCode() {
     $('askMsg').classList.add('hidden');
     $('askBtn').disabled = true;
@@ -228,11 +215,6 @@
     show('notfound');
   } else {
     $('identityBox').innerHTML = identityHtml();
-    if (payUrl) {
-      $('payLink').href = payUrl;
-    } else {
-      $('payLink').classList.add('hidden'); // pas de lien transmis (ancien lien ouvert sans PUBLIC_URL) : seul « Voir mon code » reste utilisable
-    }
     show('ask');
   }
 </script>
