@@ -463,16 +463,32 @@ function verify(games) {
   const closed = [];
   for (const pred of panel.predictions) {
     if (pred.status !== 'en attente') continue;
+    if (pred.skipped == null) pred.skipped = 0;
     let checked = pred.target + pred.step;
     while (checked <= last) {
       const g = gameByNumber(games, checked);
-      // CORRECTIF : un tour absent, non terminé ou sans cartes lues (flux qui
-      // « saute ») est ignoré — il ne consomme PAS d'étape de rattrapage et ne
-      // peut donc plus provoquer une fausse perte.
+      // Un tour absent, non terminé ou sans cartes lues (flux qui « saute »)
+      // est ignoré — il ne consomme PAS d'étape de rattrapage et ne peut
+      // donc pas provoquer une fausse perte.
       if (!g || g.finished === false || g.complete === false || !suitsOf(g).length) {
         checked += 1;
+        pred.skipped += 1;
+        // CORRECTIF « prédictions IA jamais vérifiées » : sans plafond, une
+        // série de tours illisibles laissait la prédiction bloquée en
+        // « en attente » pour toujours — contrairement aux stratégies
+        // existantes (voir predictor.js verify()), qui annulent après 6
+        // tours illisibles d'affilée. On applique désormais la même règle
+        // ici plutôt que d'attendre indéfiniment.
+        if (pred.skipped > 6) {
+          pred.status = 'annulé';
+          pred.closedAt = new Date().toISOString();
+          pred.reasonClosed = 'Tours non lus dans le flux (données illisibles) — annulée automatiquement.';
+          closed.push(pred);
+          break;
+        }
         continue;
       }
+      pred.skipped = 0;
       if (suitsOf(g).includes(pred.suit)) {
         pred.status = 'gagné';
         pred.closedAt = new Date().toISOString();
@@ -496,6 +512,11 @@ function verify(games) {
       if (!entry) continue;
       if (pred.status === 'gagné') {
         entry.win += 1;
+      } else if (pred.status === 'annulé') {
+        // Annulée pour données illisibles (voir plus haut) : ce n'est PAS un
+        // échec réel de la stratégie — on ne la pénalise pas et on ne la
+        // retire pas, contrairement à une vraie perte ci-dessous.
+        continue;
       } else {
         entry.loss += 1;
         entry.rate = 0;
@@ -577,10 +598,14 @@ function predRow(p) {
 }
 
 function bilanOf(list) {
-  const done = list.filter((p) => p.status !== 'en attente');
+  // Les prédictions « annulé » (données illisibles, pas un vrai échec de la
+  // stratégie — voir verify() ci-dessus) sont exclues des statistiques,
+  // comme pour les stratégies existantes (predictor.js).
+  const done = list.filter((p) => p.status !== 'en attente' && p.status !== 'annulé');
   const win = done.filter((p) => p.status === 'gagné').length;
   const loss = done.length - win;
-  return { total: list.length, win, loss, pending: list.length - done.length, rate: done.length ? Math.round((win / done.length) * 100) : 0 };
+  const pending = list.filter((p) => p.status === 'en attente').length;
+  return { total: list.length, win, loss, pending, rate: done.length ? Math.round((win / done.length) * 100) : 0 };
 }
 
 function bilanText(entry, list) {

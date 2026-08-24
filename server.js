@@ -848,6 +848,27 @@ app.post('/api/paiement/copie/:ref', async (req, res) => {
   res.json({ ok: true, status: record.status });
 });
 
+// Réservation active EN CE MOMENT — consultée par succes.html à l'arrivée
+// sans ref (lien de succès Money Fusion fixe) pour retrouver automatiquement
+// le client qui vient de payer, sans rien lui faire saisir (voir
+// paiement.currentActiveRecord — s'appuie sur le verrou global d'achat).
+app.get('/api/paiement/actif', (req, res) => {
+  const record = paiement.currentActiveRecord();
+  if (!record) return res.status(404).json({ ok: false, error: 'Aucun paiement en cours actuellement.' });
+  res.json({ ok: true, ref: record.ref, uid: record.userId || null, buyerName: record.buyerName || null });
+});
+
+// Recherche du ref actif pour un ID Telegram — consultée par succes.html
+// quand la page est atteinte SANS ref dans l'URL (lien de succès Money
+// Fusion fixe). Ne marque rien comme payé : ne fait que reconstruire le
+// lien classique ?ref=...&uid=...&fn=...&ln=..., que le navigateur ouvre
+// ensuite lui-même (voir public/succes.html — lookupByUserId).
+app.get('/api/paiement/chercher/:userId', (req, res) => {
+  const record = paiement.findActiveRecordByUserId(req.params.userId);
+  if (!record) return res.status(404).json({ ok: false, error: "Aucun paiement en cours trouvé pour cet ID Telegram. Lance d'abord un paiement depuis le bot Telegram." });
+  res.json({ ok: true, ref: record.ref, buyerName: record.buyerName || null });
+});
+
 // Consultée par succes.html quand le client colle son ID Telegram et tape
 // « Je viens de payer » (le lien de paiement étant désormais fixe, Money
 // Fusion ne peut plus transmettre de référence dans l'URL de retour) — voir
@@ -861,6 +882,7 @@ app.post('/api/paiement/confirmer', async (req, res) => {
   const item = record.itemId ? shop.getItem(record.itemId) : null;
   res.json({
     ok: true,
+    ref: record.ref,
     status: record.status,
     kind: record.kind || 'item',
     code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),

@@ -320,11 +320,79 @@ async function markPaidOnArrival(ref) {
   return getRecord(ref);
 }
 
+// ---------------------------------------------------------------------------
+// Recherche (SANS marquer payé) de la réservation la plus récente pour un ID
+// Telegram donné — utilisée par succes.html pour reconstruire l'URL
+// classique (?ref=...&uid=...&fn=...&ln=...) à partir du seul ID Telegram
+// saisi par le client, puisque le lien de succès Money Fusion est fixe et ne
+// transmet pas de ref. La confirmation réelle du paiement a lieu ensuite,
+// comme d'habitude, au clic sur « Voir mon code » (voir markPaidOnArrival).
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Réservation ACTIVE en ce moment — utilisée par succes.html à l'arrivée
+// (sans ref dans l'URL, car le lien de succès Money Fusion est fixe) pour
+// retrouver automatiquement QUI est en train de payer, sans rien lui faire
+// saisir : grâce au verrou global (une seule personne peut payer un article
+// à la fois, voir lockItem/getLock plus haut), il n'y a jamais d'ambiguïté
+// pendant les 3 minutes qui suivent le clic sur « Payer » dans le bot.
+// Si aucun verrou d'article n'est actif (ex. don de soutien, non verrouillé),
+// on retombe sur la réservation « pending » la plus récente tout court.
+// ---------------------------------------------------------------------------
+function currentActiveRecord() {
+  const lock = getLock();
+  if (lock) {
+    const forLock = [...records.values()]
+      .filter((r) => r.status === 'pending' && r.userId === lock.userId && r.itemId === lock.itemId)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    if (forLock[0]) return forLock[0];
+  }
+  const anyPending = [...records.values()]
+    .filter((r) => r.status === 'pending')
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  return anyPending[0] || null;
+}
+
+function findActiveRecordByUserId(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return null;
+  const candidates = [...records.values()]
+    .filter((r) => r.userId === uid && r.status !== 'failed' && r.status !== 'expired')
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  return candidates[0] || null;
+}
+
 function cancelPayment(ref) {
   const record = getRecord(ref);
   if (!record) return { ok: false, error: 'Paiement introuvable.' };
   markFailed(record);
   return { ok: true, record: getRecord(ref) };
+}
+
+// ---------------------------------------------------------------------------
+// Confirmation MANUELLE par ID Telegram — utilisée depuis succes.html quand
+// la page est atteinte SANS référence. C'est le cas normal ici : le lien de
+// succès collé sur le compte Money Fusion est un lien FIXE, unique pour tout
+// le site, qui ne peut pas transporter un ?ref=... propre à chaque
+// transaction. Le client colle donc son ID Telegram sur succes.html ; on
+// retrouve sa réservation la plus récente (encore active) et on la confirme
+// exactement comme le ferait markPaidOnArrival avec un ref connu.
+// ---------------------------------------------------------------------------
+async function confirmByUserId(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return { ok: false, error: 'ID Telegram manquant.' };
+  const candidates = [...records.values()]
+    .filter((r) => r.userId === uid && r.status !== 'failed')
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const record = candidates[0];
+  if (!record) {
+    return { ok: false, error: "Aucun paiement en cours trouvé pour cet ID Telegram. Lance d'abord un paiement depuis le bot Telegram." };
+  }
+  const updated = await markPaidOnArrival(record.ref);
+  if (!updated) return { ok: false, error: 'Paiement introuvable.' };
+  if (updated.status === 'expired') {
+    return { ok: false, error: 'Ta réservation a expiré. Relance un paiement depuis le bot Telegram.' };
+  }
+  return { ok: true, record: updated };
 }
 
 // Enregistre le code débloqué (appelé par le gestionnaire dans bot.js après
@@ -340,5 +408,5 @@ function attachCode(ref, code) {
 module.exports = {
   loadFromDb, setPaidHandler, setExpiredHandler, configured, getConfig,
   initiatePayment, initiateSupportPayment, getRecord, listPending, markPaidOnArrival, cancelPayment, attachCode,
-  lockItem, getLock, unlockItem, expireAfterCopy,
+  lockItem, getLock, unlockItem, expireAfterCopy, confirmByUserId, findActiveRecordByUserId, currentActiveRecord,
 };
