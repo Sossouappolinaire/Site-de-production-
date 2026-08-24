@@ -1561,6 +1561,14 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   if (s.ready) {
     await auth.ensureAdminSeed();
     console.log('🔐 Compte admin vérifié/créé (' + auth.ADMIN_IDENTIFIER + ')');
+    // Le disque local (data.json) n'est PAS persistant sur Render gratuit :
+    // un redémarrage du conteneur (veille, redéploiement...) peut le vider.
+    // On recharge donc les réservations de paiement en attente depuis
+    // PostgreSQL (persistant) AVANT d'ouvrir le port, pour qu'un client qui
+    // revient sur succes.html juste après un redémarrage retrouve bien sa
+    // réservation au lieu de tomber sur « Aucun paiement en cours ».
+    const loaded = await paiement.loadFromDb();
+    console.log(loaded ? '💳 Réservations de paiement rechargées depuis la base' : '💳 Aucune réservation de paiement à recharger depuis la base');
   } else {
     console.error('⚠️ Le compte admin ne peut pas être créé tant que la base n\'est pas connectée — vérifiez DATABASE_URL sur Render.');
   }

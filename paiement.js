@@ -35,7 +35,7 @@ let lastErrorAt = null;
 // le même message d'attente — pour ne jamais changer de lien de paiement
 // en cours de réservation.
 // ---------------------------------------------------------------------------
-const LOCK_MS = 3 * 60 * 1000; // 3 minutes
+const LOCK_MS = 10 * 60 * 1000; // 10 minutes — laisse le temps au paiement mobile money (Money Fusion) de se confirmer avant expiration de la réservation
 const COPY_GRACE_MS = 30 * 1000; // 30 secondes après la copie
 const GLOBAL_LOCK_KEY = '__shop_global__';
 const locks = new Map(); // verrou global -> { userId, itemId, expiresAt }
