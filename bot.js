@@ -1017,14 +1017,11 @@ function wireShop(b) {
     await b.sendMessage(chatId, shop.t('welcome', 'fr'), { parse_mode: 'Markdown', reply_markup: langKeyboard() });
   }
 
-  // Construit le lien succes.html envoyé comme bouton « Payer » du bot : il
-  // transmet la référence de la réservation, l'identité du client (nom,
-  // prénom, ID Telegram) et le vrai lien de paiement Money Fusion (celui de
-  // la catégorie de l'article, encodé dans le paramètre `pay`) — c'est
-  // succes.html qui affiche ensuite le bouton « Payer » réel (vers ce lien)
-  // et le bouton « Voir mon code ».
+  // Construit le lien « Voir mon code » avec la référence de la réservation
+  // et l'identité du client. Le paiement, lui, est toujours ouvert directement
+  // avec le lien Money Fusion collé par l'administrateur dans la boutique.
   function successUrl(pay, from, userId) {
-    if (!config.PUBLIC_URL) return pay.checkoutUrl; // repli si PUBLIC_URL absent : lien Money Fusion direct
+    if (!config.PUBLIC_URL) return null;
     const firstName = from.first_name || '';
     const lastName = from.last_name || '';
     const params = new URLSearchParams({
@@ -1032,7 +1029,6 @@ function wireShop(b) {
       uid: String(userId),
       fn: firstName,
       ln: lastName,
-      pay: pay.checkoutUrl,
     });
     return `${config.PUBLIC_URL}/succes.html?${params.toString()}`;
   }
@@ -1093,12 +1089,12 @@ function wireShop(b) {
         const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
         const pay = await paiement.initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal });
         if (pay.ok) {
-          // Un seul bouton, qui ouvre succes.html (pas le lien Money Fusion
-          // directement) : c'est succes.html qui affiche ensuite le vrai
-          // bouton « Payer » (avec le lien reçu ici en paramètre) et le
-          // bouton « Voir mon code » — voir commentaire détaillé plus bas
-          // pour l'achat d'une stratégie.
-          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: successUrl(pay, q.from, userId) }]];
+          // Le paiement ouvre directement le lien Money Fusion configuré par
+          // l'administrateur. Le bouton de code est séparé et ne contient
+          // jamais de bouton de paiement.
+          const codeUrl = successUrl(pay, q.from, userId);
+          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: pay.checkoutUrl }]];
+          if (codeUrl) buttons.push([{ text: shop.t('viewCodeButton', lang), url: codeUrl }]);
           await b.sendMessage(chatId, shop.t('supportPayIntro', lang), { reply_markup: { inline_keyboard: buttons } });
           return;
         }
@@ -1176,16 +1172,12 @@ function wireShop(b) {
               if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
               paiement.attachCode(pay.ref, item.code);
             }, 10000);
-            // Un seul bouton Telegram, qui ouvre succes.html — PAS le lien
-            // Money Fusion directement. C'est succes.html qui affiche
-            // ensuite le vrai bouton « Payer » (vers le lien de la
-            // catégorie, transmis ici en paramètre) et le bouton « Voir mon
-            // code » : comme le lien Money Fusion est désormais FIXE
-            // (partagé par toute la catégorie), lui seul ne suffirait pas à
-            // identifier cette réservation précise au retour du client —
-            // c'est ce lien succes.html (avec la référence, le nom, le
-            // prénom et l'ID) qui le permet.
-            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: successUrl(pay, q.from, userId) }]];
+            // Le bouton Payer ouvre directement le lien Money Fusion collé
+            // dans la boutique par l'administrateur. Le bouton Voir mon code
+            // ouvre ensuite la page de succès, sans afficher de bouton Payer.
+            const codeUrl = successUrl(pay, q.from, userId);
+            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: pay.checkoutUrl }]];
+            if (codeUrl) buttons.push([{ text: shop.t('viewCodeButton', lang), url: codeUrl }]);
             await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
             // 30s après avoir ouvert le lien de paiement, rappel : le client
             // peut aussi taper directement un code déjà en sa possession

@@ -152,6 +152,13 @@ const TEXTS = {
     ru: 'Оплатить',
     es: 'Pagar',
   },
+  viewCodeButton: {
+    fr: '🎟️ Voir mon code',
+    en: '🎟️ View my code',
+    ar: '🎟️ عرض الرمز الخاص بي',
+    ru: '🎟️ Показать мой код',
+    es: '🎟️ Ver mi código',
+  },
   itemLocked: {
     fr: "⏳ Un autre utilisateur est en train d'effectuer un paiement. Merci de patienter 3 minutes avant de réessayer.",
     en: '⏳ Another user is currently making a payment. Please wait 3 minutes before trying again.',

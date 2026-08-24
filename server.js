@@ -839,12 +839,11 @@ app.get('/api/paiement/statut/:ref', async (req, res) => {
   });
 });
 
-// Consultée par succes.html dès que le client clique sur « 📋 Copier » : le
-// code est à usage unique, donc dès qu'il a été copié il est immédiatement
-// expiré/retiré (voir paiement.expireNow) — inutile d'attendre les 3
-// minutes restantes du minuteur normal.
+// Consultée par succes.html dès que le client clique sur « 📋 Copier » :
+// le code reste valide 30 secondes pour laisser le temps de le renvoyer
+// dans Telegram, puis il est remplacé automatiquement.
 app.post('/api/paiement/copie/:ref', async (req, res) => {
-  const record = await paiement.expireNow(req.params.ref);
+  const record = await paiement.expireAfterCopy(req.params.ref);
   if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
   res.json({ ok: true, status: record.status });
 });

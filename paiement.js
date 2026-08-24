@@ -7,15 +7,9 @@
 // Tous les articles d'une même catégorie partagent le même lien, collé une
 // fois par l'admin depuis le panneau Boutique.
 //
-// Comme le lien est identique pour toute une catégorie, Money Fusion ne
-// peut pas rediriger vers une URL différente par transaction : il redirige
-// toujours vers la même succes.html (URL fixe configurée dans chaque
-// produit Money Fusion), sans paramètre de référence. C'est pourquoi le bot
-// envoie EN PLUS un bouton « Voir mon code » qui, lui, pointe directement
-// vers succes.html avec la référence de CETTE réservation (ref, id
-// Telegram, nom, prénom) — c'est ce lien-là qui permet à succes.html de
-// retrouver la bonne transaction et d'afficher le code une fois que le
-// client confirme avoir payé.
+// Le bot ouvre directement ce lien pour le paiement. Il envoie aussi un
+// bouton séparé « Voir mon code », qui pointe vers succes.html avec la
+// référence de CETTE réservation (ref, identité et ID Telegram).
 'use strict';
 
 const crypto = require('crypto');
@@ -42,6 +36,7 @@ let lastErrorAt = null;
 // en cours de réservation.
 // ---------------------------------------------------------------------------
 const LOCK_MS = 3 * 60 * 1000; // 3 minutes
+const COPY_GRACE_MS = 30 * 1000; // 30 secondes après la copie
 const GLOBAL_LOCK_KEY = '__shop_global__';
 const locks = new Map(); // verrou global -> { userId, itemId, expiresAt }
 const expiryTimers = new Map(); // ref -> timeout
@@ -89,15 +84,22 @@ async function expireRecord(ref, force = false) {
   return record;
 }
 
-// Expiration IMMÉDIATE, déclenchée dès que le client a copié le code sur
-// succes.html (bouton « Copier ») — le code est à usage unique dès qu'il a
-// été vu/copié, inutile d'attendre les 3 minutes restantes. Annule le
-// minuteur programmé (scheduleExpiry) pour éviter un double traitement, puis
-// force l'expiration même si record.expiresAt n'est pas encore atteint.
-function expireNow(ref) {
-  const timer = expiryTimers.get(ref);
-  if (timer) { clearTimeout(timer); expiryTimers.delete(ref); }
-  return expireRecord(ref, true);
+// Après la copie, le code reste utilisable pendant 30 secondes afin de
+// laisser le temps au client de revenir dans Telegram et de l'envoyer au bot.
+// La première copie fixe le délai : recharger la page ne doit pas prolonger
+// indéfiniment la validité du code.
+function expireAfterCopy(ref) {
+  const record = records.get(ref);
+  if (!record || record.status === 'expired') return record;
+  if (record.status !== 'paid' || !record.code) return record;
+  if (record.copiedAt) return record;
+
+  record.copiedAt = new Date().toISOString();
+  record.expiresAt = Date.now() + COPY_GRACE_MS;
+  record.updatedAt = new Date().toISOString();
+  persist();
+  scheduleExpiry(ref, record.expiresAt);
+  return record;
 }
 
 function scheduleExpiry(ref, expiresAt) {
@@ -338,5 +340,5 @@ function attachCode(ref, code) {
 module.exports = {
   loadFromDb, setPaidHandler, setExpiredHandler, configured, getConfig,
   initiatePayment, initiateSupportPayment, getRecord, listPending, markPaidOnArrival, cancelPayment, attachCode,
-  lockItem, getLock, unlockItem, expireNow,
+  lockItem, getLock, unlockItem, expireAfterCopy,
 };
