@@ -1017,6 +1017,26 @@ function wireShop(b) {
     await b.sendMessage(chatId, shop.t('welcome', 'fr'), { parse_mode: 'Markdown', reply_markup: langKeyboard() });
   }
 
+  // Construit le lien succes.html envoyé comme bouton « Payer » du bot : il
+  // transmet la référence de la réservation, l'identité du client (nom,
+  // prénom, ID Telegram) et le vrai lien de paiement Money Fusion (celui de
+  // la catégorie de l'article, encodé dans le paramètre `pay`) — c'est
+  // succes.html qui affiche ensuite le bouton « Payer » réel (vers ce lien)
+  // et le bouton « Voir mon code ».
+  function successUrl(pay, from, userId) {
+    if (!config.PUBLIC_URL) return pay.checkoutUrl; // repli si PUBLIC_URL absent : lien Money Fusion direct
+    const firstName = from.first_name || '';
+    const lastName = from.last_name || '';
+    const params = new URLSearchParams({
+      ref: pay.ref,
+      uid: String(userId),
+      fn: firstName,
+      ln: lastName,
+      pay: pay.checkoutUrl,
+    });
+    return `${config.PUBLIC_URL}/succes.html?${params.toString()}`;
+  }
+
   async function sendShopMenu(chatId, userId, lang) {
     // Les stratégies déjà achetées par CET utilisateur ne réapparaissent
     // plus dans la liste principale — elles restent accessibles via le
@@ -1073,7 +1093,12 @@ function wireShop(b) {
         const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
         const pay = await paiement.initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal });
         if (pay.ok) {
-          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: pay.checkoutUrl }]];
+          // Un seul bouton, qui ouvre succes.html (pas le lien Money Fusion
+          // directement) : c'est succes.html qui affiche ensuite le vrai
+          // bouton « Payer » (avec le lien reçu ici en paramètre) et le
+          // bouton « Voir mon code » — voir commentaire détaillé plus bas
+          // pour l'achat d'une stratégie.
+          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: successUrl(pay, q.from, userId) }]];
           await b.sendMessage(chatId, shop.t('supportPayIntro', lang), { reply_markup: { inline_keyboard: buttons } });
           return;
         }
@@ -1105,7 +1130,7 @@ function wireShop(b) {
         // code reste possible en parallèle (ex. code donné par l'admin par
         // un autre moyen), voir le handler 'message' plus bas.
         const payAmountLocal = shop.paymentAmountFor(item);
-        if (paiement.configured() && Number.isFinite(payAmountLocal) && payAmountLocal > 0) {
+        {
           // Verrou de 3 minutes sur CETTE stratégie (voir paiement.js) : tant
           // qu'un autre acheteur a une réservation active dessus, on ne
           // relance pas de nouveau paiement — ça évite que deux acheteurs
@@ -1136,19 +1161,31 @@ function wireShop(b) {
             buyerName,
           });
           if (pay.ok) {
-            // Le code COURANT de la stratégie est réservé/affiché dès CE
-            // clic (pas seulement après confirmation admin) : c'est ce que
-            // le verrou ci-dessus sécurise — personne d'autre ne peut le
-            // faire régénérer entre-temps (paiement.unlockItem n'est appelé
-            // qu'une fois ce paiement confirmé ou annulé/échoué). Il
-            // correspond donc exactement au code qui sera consommé quand
-            // l'admin confirmera ce paiement précis (voir paidHandler plus bas).
-            paiement.attachCode(pay.ref, item.code);
-            // Un seul bouton « Payer » : succes.html n'est plus lié depuis le
-            // bot. C'est Money Fusion qui redirige l'acheteur vers cette page
-            // une fois le paiement validé (URL de succès configurée côté
-            // compte Money Fusion) — le bot n'ouvre jamais ce lien lui-même.
-            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)} — ${item.price}€`, url: pay.checkoutUrl }]];
+            // Le code COURANT de la stratégie est attaché à cette réservation
+            // avec 10s de délai (pas immédiatement au clic) : tant que ce
+            // délai n'est pas écoulé, succes.html affiche « code pas encore
+            // disponible » si le client clique trop vite sur « Voir mon
+            // code ». Passé les 10s, le code apparaît sur succes.html au
+            // clic sur ce bouton — jamais envoyé dans le chat Telegram. On
+            // revérifie juste avant l'attachement que CETTE réservation
+            // précise (pay.ref) est toujours active : si elle a expiré
+            // entre-temps (voir paiement.js — expireRecord, déclenché par le
+            // minuteur de 3 min posé à l'initiation), on n'attache rien.
+            setTimeout(() => {
+              const rec = paiement.getRecord(pay.ref);
+              if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
+              paiement.attachCode(pay.ref, item.code);
+            }, 10000);
+            // Un seul bouton Telegram, qui ouvre succes.html — PAS le lien
+            // Money Fusion directement. C'est succes.html qui affiche
+            // ensuite le vrai bouton « Payer » (vers le lien de la
+            // catégorie, transmis ici en paramètre) et le bouton « Voir mon
+            // code » : comme le lien Money Fusion est désormais FIXE
+            // (partagé par toute la catégorie), lui seul ne suffirait pas à
+            // identifier cette réservation précise au retour du client —
+            // c'est ce lien succes.html (avec la référence, le nom, le
+            // prénom et l'ID) qui le permet.
+            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: successUrl(pay, q.from, userId) }]];
             await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
             // 30s après avoir ouvert le lien de paiement, rappel : le client
             // peut aussi taper directement un code déjà en sa possession

@@ -125,7 +125,7 @@ app.post('/api/auth/mail-config', async (req, res) => {
 
 // --- verrou d'accès : tout le reste du site exige une session valide ------
 const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/succes.html']);
-const PUBLIC_PAIEMENT_PATTERNS = [/^\/api\/paiement\/webhook$/, /^\/api\/paiement\/statut\/[^/]+$/];
+const PUBLIC_PAIEMENT_PATTERNS = [/^\/api\/paiement\/webhook$/, /^\/api\/paiement\/statut\/[^/]+$/, /^\/api\/paiement\/copie\/[^/]+$/];
 function isPublicPath(p) {
   if (PUBLIC_EXACT.has(p)) return true;
   if (p.startsWith('/api/auth/')) return true;
@@ -722,6 +722,18 @@ app.post('/api/shop/support-rate', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// Colle le lien de paiement Money Fusion d'UNE catégorie ('strategy',
+// 'ia_100' ou 'ia_93') — lien complet copié tel quel depuis Money Fusion
+// (ex. https://payin.moneyfusion.net/payment/{id}/{prix}/{nom}), utilisé
+// ensuite pour TOUS les articles de cette catégorie.
+app.post('/api/shop/pay-link', (req, res) => {
+  try {
+    const { method, url } = req.body || {};
+    const result = shop.setPayLink(method, url);
+    res.json({ ok: true, pricing: result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.post('/api/shop', async (req, res) => {
   try {
     const { source, sourceKey, details, example, rate, realName, price, payAmountLocal } = req.body || {};
@@ -815,6 +827,41 @@ app.get('/api/paiement/statut/:ref', async (req, res) => {
   if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
   const item = record.itemId ? shop.getItem(record.itemId) : null;
   res.json({
+    status: record.status,
+    kind: record.kind || 'item',
+    code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),
+    aiName: item ? item.aiName : null,
+    amount: record.amount,
+    amountUsd: record.amountUsd ?? null,
+    buyerName: record.buyerName || null,
+    userId: record.userId || null,
+    expiresAt: record.expiresAt || null,
+  });
+});
+
+// Consultée par succes.html dès que le client clique sur « 📋 Copier » : le
+// code est à usage unique, donc dès qu'il a été copié il est immédiatement
+// expiré/retiré (voir paiement.expireNow) — inutile d'attendre les 3
+// minutes restantes du minuteur normal.
+app.post('/api/paiement/copie/:ref', async (req, res) => {
+  const record = await paiement.expireNow(req.params.ref);
+  if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
+  res.json({ ok: true, status: record.status });
+});
+
+// Consultée par succes.html quand le client colle son ID Telegram et tape
+// « Je viens de payer » (le lien de paiement étant désormais fixe, Money
+// Fusion ne peut plus transmettre de référence dans l'URL de retour) — voir
+// paiement.confirmByUserId.
+app.post('/api/paiement/confirmer', async (req, res) => {
+  const userId = req.body && req.body.userId ? String(req.body.userId).trim() : '';
+  if (!userId) return res.status(400).json({ ok: false, error: 'ID Telegram manquant.' });
+  const r = await paiement.confirmByUserId(userId);
+  if (!r.ok) return res.status(404).json(r);
+  const record = r.record;
+  const item = record.itemId ? shop.getItem(record.itemId) : null;
+  res.json({
+    ok: true,
     status: record.status,
     kind: record.kind || 'item',
     code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),

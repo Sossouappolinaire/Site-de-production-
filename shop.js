@@ -469,7 +469,52 @@ function defaultPriceFor(source, rate) {
 // Tarifs courants (catalogue + les deux paliers IA), à afficher dans le
 // panneau « Modifier les prix » de la boutique.
 function getPricingSettings() {
-  return { priceCatalog: getPriceCatalog(), priceIa100: getPriceIa100(), priceIa93: getPriceIa93(), eurToXof: getEurToXof(), usdToXof: getUsdToXof() };
+  return {
+    priceCatalog: getPriceCatalog(), priceIa100: getPriceIa100(), priceIa93: getPriceIa93(),
+    eurToXof: getEurToXof(), usdToXof: getUsdToXof(),
+    payLinkStrategy: getPayLink('strategy'), payLinkIa100: getPayLink('ia_100'), payLinkIa93: getPayLink('ia_93'),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Liens de paiement Money Fusion — un par catégorie, collés par l'admin
+// depuis le panneau Boutique (voir POST /api/shop/pay-link, server.js) :
+// - 'strategy' : les stratégies existantes (catalogue, source === 'strategy')
+// - 'ia_100'   : déclencheurs IA à 100% de réussite (source === 'ia', rate === 100)
+// - 'ia_93'    : déclencheurs IA de 93% à 99,99% (source === 'ia', rate !== 100)
+// TOUS les articles d'une même catégorie partagent le même lien — voir
+// categoryForItem/payLinkForItem ci-dessous.
+// ---------------------------------------------------------------------------
+const PAY_LINK_SETTINGS_KEY = { strategy: 'payLinkStrategy', ia_100: 'payLinkIa100', ia_93: 'payLinkIa93' };
+
+function getPayLink(method) {
+  const key = PAY_LINK_SETTINGS_KEY[method];
+  return (key && shop.settings[key]) || null;
+}
+
+function setPayLink(method, url) {
+  const key = PAY_LINK_SETTINGS_KEY[method];
+  if (!key) throw new Error('Catégorie inconnue (attendu : strategy, ia_100 ou ia_93).');
+  const clean = String(url || '').trim();
+  if (!clean) throw new Error('Lien de paiement vide.');
+  if (!/^https?:\/\//i.test(clean)) throw new Error('Le lien de paiement doit commencer par http:// ou https://');
+  shop.settings[key] = clean;
+  persist();
+  return getPricingSettings();
+}
+
+// Catégorie d'un article, utilisée pour choisir son lien de paiement.
+function categoryForItem(item) {
+  if (!item) return 'strategy';
+  if (item.source === 'ia') return item.rate === 100 ? 'ia_100' : 'ia_93';
+  return 'strategy';
+}
+
+// Lien de paiement Money Fusion à utiliser pour cet article (celui de sa
+// catégorie). Renvoie null si l'admin n'a pas encore collé de lien pour
+// cette catégorie.
+function payLinkForItem(item) {
+  return getPayLink(categoryForItem(item));
 }
 
 // Taux de change $ -> F CFA (XOF) pour le bouton « Soutien » (dons libres,
@@ -922,6 +967,7 @@ module.exports = {
   setActiveItem, getActiveItem,
   setPendingSupport, getPendingSupport, clearPendingSupport,
   redeem, hasUnlocked, listUnlocked,
+  getPayLink, setPayLink, categoryForItem, payLinkForItem,
   explain, fullPresentation, translate,
   isUnderstoodMessage, closingMessage,
 };

@@ -1,32 +1,27 @@
-// paiement.js — Paiement en ligne via LIEN DIRECT Money Fusion (payin.moneyfusion.net),
-// SANS passer par l'API FusionPay. Le lien de paiement est construit à
-// partir d'un identifiant FIXE (id du compte Money Fusion, voir
-// LINK_BASE/LINK_ID ci-dessous), en y insérant juste le montant et le nom
-// du client :
+// paiement.js — Paiement en ligne via des LIENS FIXES Money Fusion, un par
+// catégorie de vente (pages "boutique" créées manuellement sur le compte
+// Money Fusion, voir shop.getPayLink/setPayLink) :
+// - 'strategy' : les stratégies existantes (catalogue)
+// - 'ia_100'   : déclencheurs IA à 100% de réussite
+// - 'ia_93'    : déclencheurs IA de 93% à 99,99%
+// Tous les articles d'une même catégorie partagent le même lien, collé une
+// fois par l'admin depuis le panneau Boutique.
 //
-//   https://payin.moneyfusion.net/payment/{id}/{montant}/{nom}
-//
-// Confirmation du paiement : l'arrivée sur succes.html confirme la
-// transaction, mais ne débloque pas automatiquement la stratégie dans
-// Telegram. Le client doit copier le code affiché puis le renvoyer au bot.
-// Money Fusion est configuré (côté Money Fusion, par l'admin du compte
-// Money Fusion — pas dans ce code) pour rediriger le client vers notre page
-// succes.html UNIQUEMENT une fois le paiement validé. Cette page interroge
-// GET /api/paiement/statut/:ref (voir server.js), qui marque alors le
-// paiement comme payé dès ce premier appel — l'arrivée sur succes.html EST
-// la preuve du paiement, il n'y a plus de bouton « Confirmer » côté admin.
-// Le code est affiché sur succes.html pendant la réservation de 3 minutes.
+// Comme le lien est identique pour toute une catégorie, Money Fusion ne
+// peut pas rediriger vers une URL différente par transaction : il redirige
+// toujours vers la même succes.html (URL fixe configurée dans chaque
+// produit Money Fusion), sans paramètre de référence. C'est pourquoi le bot
+// envoie EN PLUS un bouton « Voir mon code » qui, lui, pointe directement
+// vers succes.html avec la référence de CETTE réservation (ref, id
+// Telegram, nom, prénom) — c'est ce lien-là qui permet à succes.html de
+// retrouver la bonne transaction et d'afficher le code une fois que le
+// client confirme avoir payé.
 'use strict';
 
 const crypto = require('crypto');
 const store = require('./store');
 const db = require('./db');
-
-// Lien de paiement Money Fusion fixe, fourni par l'admin — base + identifiant
-// du compte, réutilisés pour chaque achat en changeant juste le montant et
-// le nom du client. Plus besoin de le coller/configurer depuis le panneau.
-const LINK_BASE = 'https://payin.moneyfusion.net/payment';
-const LINK_ID = '6a8abd93ff0cbef4d3e8f6a3';
+const shop = require('./shop');
 
 const records = new Map(); // ref -> { ref, itemId, userId, chatId, lang, amount, buyerName, status, code, createdAt, updatedAt }
 
@@ -38,12 +33,17 @@ let lastErrorAt = null;
 // ---------------------------------------------------------------------------
 // Verrou global de la boutique (en mémoire, pas besoin de survivre à un
 // redémarrage) : dès qu'un acheteur clique « Payer » pour une stratégie,
-// aucun autre utilisateur ne peut lancer de paiement, même pour une autre
-// stratégie, pendant 3 minutes. Le même acheteur peut rouvrir son paiement.
+// aucun AUTRE utilisateur ne peut lancer de paiement, même pour une autre
+// stratégie, pendant 3 minutes. Le même acheteur peut rouvrir SA propre
+// réservation (même article) sans problème ; mais s'il clique par erreur
+// sur un AUTRE article pendant que son verrou est actif, cette tentative
+// est traitée exactement comme si c'était quelqu'un d'autre — bloquée avec
+// le même message d'attente — pour ne jamais changer de lien de paiement
+// en cours de réservation.
 // ---------------------------------------------------------------------------
 const LOCK_MS = 3 * 60 * 1000; // 3 minutes
 const GLOBAL_LOCK_KEY = '__shop_global__';
-const locks = new Map(); // verrou global -> { userId, expiresAt }
+const locks = new Map(); // verrou global -> { userId, itemId, expiresAt }
 const expiryTimers = new Map(); // ref -> timeout
 let expiredHandler = null;
 
@@ -54,12 +54,14 @@ function getLock() {
   return lock;
 }
 
-// Tente de réserver l'article pour cet acheteur : renvoie le verrou obtenu,
-// ou null si un AUTRE acheteur le détient déjà (verrou toujours actif).
-function lockItem(_itemId, userId) {
+// Tente de réserver CET article pour cet acheteur : renvoie le verrou
+// obtenu, ou null si un autre verrou est déjà actif — que ce soit un autre
+// utilisateur, OU CE MÊME utilisateur mais pour un autre article (traité
+// comme une personne différente, voir commentaire ci-dessus).
+function lockItem(itemId, userId) {
   const existing = getLock();
-  if (existing && existing.userId !== String(userId)) return null;
-  const lock = { userId: String(userId), expiresAt: Date.now() + LOCK_MS };
+  if (existing && (existing.userId !== String(userId) || existing.itemId !== String(itemId))) return null;
+  const lock = { userId: String(userId), itemId: String(itemId), expiresAt: Date.now() + LOCK_MS };
   locks.set(GLOBAL_LOCK_KEY, lock);
   return lock;
 }
@@ -68,10 +70,10 @@ function unlockItem(_itemId) { locks.delete(GLOBAL_LOCK_KEY); }
 
 function setExpiredHandler(fn) { expiredHandler = fn; }
 
-async function expireRecord(ref) {
+async function expireRecord(ref, force = false) {
   const record = records.get(ref);
   if (!record || record.status === 'expired') return record;
-  if (record.expiresAt && Date.now() < record.expiresAt) return record;
+  if (!force && record.expiresAt && Date.now() < record.expiresAt) return record;
   const expiredCode = record.code;
   record.status = 'expired';
   record.code = null;
@@ -85,6 +87,17 @@ async function expireRecord(ref) {
     }
   }
   return record;
+}
+
+// Expiration IMMÉDIATE, déclenchée dès que le client a copié le code sur
+// succes.html (bouton « Copier ») — le code est à usage unique dès qu'il a
+// été vu/copié, inutile d'attendre les 3 minutes restantes. Annule le
+// minuteur programmé (scheduleExpiry) pour éviter un double traitement, puis
+// force l'expiration même si record.expiresAt n'est pas encore atteint.
+function expireNow(ref) {
+  const timer = expiryTimers.get(ref);
+  if (timer) { clearTimeout(timer); expiryTimers.delete(ref); }
+  return expireRecord(ref, true);
 }
 
 function scheduleExpiry(ref, expiresAt) {
@@ -159,32 +172,31 @@ function getConfig() {
 
 function shortRef() { return `pay_${crypto.randomBytes(6).toString('hex')}`; }
 
-// Construit le lien de paiement pour UN montant/nom donnés — même
-// identifiant fixe (LINK_ID) à chaque fois, seul le montant et le nom du
-// client changent dans l'URL.
-function buildStaticLink(amountLocal, buyerName) {
-  const name = encodeURIComponent(String(buyerName || 'Client').trim());
-  return `${LINK_BASE}/${LINK_ID}/${Math.round(amountLocal)}/${name}`;
-}
-
 // ---------------------------------------------------------------------------
 // Prépare un achat : réserve un enregistrement local (ref, item, acheteur,
-// montant attendu) et construit le lien de paiement direct — pas d'appel
-// réseau, tout est local et immédiat. Le code de la stratégie existe déjà
-// (généré à la création de l'article, voir shop.js) : il est simplement
-// affiché au client sur succes.html pendant la durée de la réservation ; le
-// déblocage Telegram se fait uniquement après saisie manuelle du code.
+// montant attendu) et résout le lien de paiement Money Fusion de la
+// catégorie de cet article (voir shop.payLinkForItem — collé par l'admin,
+// un seul lien pour toute la catégorie). Le code de la stratégie existe
+// déjà (généré à la création de l'article, voir shop.js) : il est stocké
+// dans l'enregistrement pour être affiché sur succes.html une fois le
+// paiement confirmé ; le déblocage Telegram se fait uniquement après
+// saisie manuelle du code dans le bot.
 // Retourne { ok, checkoutUrl, ref } ou { ok:false, error }.
 // ---------------------------------------------------------------------------
 async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
-  if (!item || !Number.isFinite(item.payAmountLocal) || item.payAmountLocal <= 0) {
-    lastError = 'Cette stratégie n\'a pas de montant de lien configuré (voir Boutique → cet article → Montant du lien).';
+  if (!item) {
+    lastError = 'Article introuvable.';
+    lastErrorAt = new Date().toISOString();
+    return { ok: false, error: lastError };
+  }
+  const checkoutUrl = shop.payLinkForItem(item);
+  if (!checkoutUrl) {
+    lastError = `Aucun lien de paiement n'est configuré pour la catégorie « ${shop.categoryForItem(item)} » (voir Boutique → Paiement en ligne).`;
     lastErrorAt = new Date().toISOString();
     return { ok: false, error: lastError };
   }
 
   const name = buyerName || `Client Telegram ${userId}`;
-  const checkoutUrl = buildStaticLink(item.payAmountLocal, name);
   const lock = getLock();
   const expiresAt = lock ? lock.expiresAt : Date.now() + LOCK_MS;
 
@@ -196,7 +208,7 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
     userId: String(userId),
     chatId: String(chatId),
     lang: lang || 'fr',
-    amount: item.payAmountLocal,
+    amount: item.payAmountLocal ?? null,
     buyerName: name,
     status: 'pending',
     code: null,
@@ -212,10 +224,12 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
 
 // ---------------------------------------------------------------------------
 // Paiement de « soutien » (don libre, sans stratégie associée) : le client
-// saisit un montant en $ dans le bot, on construit le même genre de lien
-// direct Money Fusion avec le montant converti en F CFA. Une fois confirmé
-// (arrivée sur succes.html), AUCUN code n'est envoyé — juste un message de
-// remerciement (voir shop.supportThanksMessage, branché dans bot.js).
+// saisit un montant en $ dans le bot. Comme il n'y a pas de catégorie
+// d'article associée, on utilise par défaut le lien « stratégies
+// existantes » (le premier configuré par l'admin). Une fois confirmé
+// (clic sur « Voir mon code » sur succes.html), AUCUN code n'est envoyé —
+// juste un message de remerciement (voir shop.supportThanksMessage,
+// branché dans bot.js).
 // ---------------------------------------------------------------------------
 async function initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal } = {}) {
   if (!Number.isFinite(amountLocal) || amountLocal <= 0) {
@@ -223,8 +237,13 @@ async function initiateSupportPayment({ userId, chatId, lang, buyerName, amountU
     lastErrorAt = new Date().toISOString();
     return { ok: false, error: lastError };
   }
+  const checkoutUrl = shop.getPayLink('strategy') || shop.getPayLink('ia_93') || shop.getPayLink('ia_100');
+  if (!checkoutUrl) {
+    lastError = "Aucun lien de paiement n'est configuré (voir Boutique → Paiement en ligne).";
+    lastErrorAt = new Date().toISOString();
+    return { ok: false, error: lastError };
+  }
   const name = buyerName || `Client Telegram ${userId}`;
-  const checkoutUrl = buildStaticLink(amountLocal, name);
   const expiresAt = Date.now() + LOCK_MS;
 
   const ref = shortRef();
@@ -319,5 +338,5 @@ function attachCode(ref, code) {
 module.exports = {
   loadFromDb, setPaidHandler, setExpiredHandler, configured, getConfig,
   initiatePayment, initiateSupportPayment, getRecord, listPending, markPaidOnArrival, cancelPayment, attachCode,
-  lockItem, getLock, unlockItem,
+  lockItem, getLock, unlockItem, expireNow,
 };
