@@ -1017,22 +1017,6 @@ function wireShop(b) {
     await b.sendMessage(chatId, shop.t('welcome', 'fr'), { parse_mode: 'Markdown', reply_markup: langKeyboard() });
   }
 
-  // Construit le lien « Voir mon code » avec la référence de la réservation
-  // et l'identité du client. Le paiement, lui, est toujours ouvert directement
-  // avec le lien Money Fusion collé par l'administrateur dans la boutique.
-  function successUrl(pay, from, userId) {
-    if (!config.PUBLIC_URL) return null;
-    const firstName = from.first_name || '';
-    const lastName = from.last_name || '';
-    const params = new URLSearchParams({
-      ref: pay.ref,
-      uid: String(userId),
-      fn: firstName,
-      ln: lastName,
-    });
-    return `${config.PUBLIC_URL}/succes.html?${params.toString()}`;
-  }
-
   async function sendShopMenu(chatId, userId, lang) {
     // Les stratégies déjà achetées par CET utilisateur ne réapparaissent
     // plus dans la liste principale — elles restent accessibles via le
@@ -1089,12 +1073,7 @@ function wireShop(b) {
         const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
         const pay = await paiement.initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal });
         if (pay.ok) {
-          // Le paiement ouvre directement le lien Money Fusion configuré par
-          // l'administrateur. Le bouton de code est séparé et ne contient
-          // jamais de bouton de paiement.
-          const codeUrl = successUrl(pay, q.from, userId);
           const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: pay.checkoutUrl }]];
-          if (codeUrl) buttons.push([{ text: shop.t('viewCodeButton', lang), url: codeUrl }]);
           await b.sendMessage(chatId, shop.t('supportPayIntro', lang), { reply_markup: { inline_keyboard: buttons } });
           return;
         }
@@ -1172,12 +1151,7 @@ function wireShop(b) {
               if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
               paiement.attachCode(pay.ref, item.code);
             }, 10000);
-            // Le bouton Payer ouvre directement le lien Money Fusion collé
-            // dans la boutique par l'administrateur. Le bouton Voir mon code
-            // ouvre ensuite la page de succès, sans afficher de bouton Payer.
-            const codeUrl = successUrl(pay, q.from, userId);
             const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: pay.checkoutUrl }]];
-            if (codeUrl) buttons.push([{ text: shop.t('viewCodeButton', lang), url: codeUrl }]);
             await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
             // 30s après avoir ouvert le lien de paiement, rappel : le client
             // peut aussi taper directement un code déjà en sa possession

@@ -152,13 +152,6 @@ const TEXTS = {
     ru: 'Оплатить',
     es: 'Pagar',
   },
-  viewCodeButton: {
-    fr: '🎟️ Voir mon code',
-    en: '🎟️ View my code',
-    ar: '🎟️ عرض الرمز الخاص بي',
-    ru: '🎟️ Показать мой код',
-    es: '🎟️ Ver mi código',
-  },
   itemLocked: {
     fr: "⏳ Un autre utilisateur est en train d'effectuer un paiement. Merci de patienter 3 minutes avant de réessayer.",
     en: '⏳ Another user is currently making a payment. Please wait 3 minutes before trying again.',
@@ -359,7 +352,13 @@ function setLang(id, lang) {
   return true;
 }
 
-function setPendingCode(id, itemId) { user(id).pendingCode = itemId; user(id).activeItem = null; persist(); }
+function setPendingCode(id, itemId) {
+  const current = user(id);
+  current.pendingCode = itemId;
+  current.pendingSupport = false;
+  current.activeItem = null;
+  persist();
+}
 function getPendingCode(id) { const u = shop.users[String(id)]; return u ? u.pendingCode : null; }
 function clearPendingCode(id) { const u = shop.users[String(id)]; if (u) { u.pendingCode = null; persist(); } }
 
@@ -368,7 +367,15 @@ function getActiveItem(id) { const u = shop.users[String(id)]; return u ? u.acti
 
 // État « en attente de saisie d'un montant de soutien (en $) » — distinct du
 // pendingCode (achat d'une stratégie), pour le bouton « Soutien » du menu.
-function setPendingSupport(id, value) { user(id).pendingSupport = !!value; persist(); }
+function setPendingSupport(id, value) {
+  const current = user(id);
+  current.pendingSupport = !!value;
+  if (value) {
+    current.pendingCode = null;
+    current.activeItem = null;
+  }
+  persist();
+}
 function getPendingSupport(id) { const u = shop.users[String(id)]; return u ? !!u.pendingSupport : false; }
 function clearPendingSupport(id) { const u = shop.users[String(id)]; if (u) { u.pendingSupport = false; persist(); } }
 
