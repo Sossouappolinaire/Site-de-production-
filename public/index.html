@@ -260,7 +260,7 @@
       .hero, .two-col { grid-template-columns: 1fr; } .stat-grid { grid-template-columns: repeat(2,1fr); }
       .three-col { grid-template-columns: 1fr; } .shell { padding: 0 15px 52px; } .hero { padding-top: 40px; }
     }
-    /* ── Écran de démarrage : combat animé (3 s) puis image de marque (2 s) ── */
+    /* ── Écran de démarrage : livre qui s'ouvre (15 s) ── */
     #splash {
       position: fixed; inset: 0; z-index: 999;
       background: #05070d;
@@ -268,101 +268,86 @@
       cursor: pointer; overflow: hidden;
     }
     #splash.leaving { animation: splashOut 700ms ease forwards; }
-    .fight-intro { position: relative; width: 100%; height: 100%; overflow: hidden; }
-    /* phase 1 — combat, deux personnages qui se percutent (0 → ~3 s) */
-    .intro-combat { position: absolute; inset: 0;
-      background: radial-gradient(ellipse at center, #2a0a0a 0%, #0a0505 55%, #05070d 100%);
-      animation: combatPhaseOut 600ms ease 2500ms forwards; }
-    .arena-glow { position: absolute; inset: 0;
-      background: radial-gradient(circle at 50% 50%, rgba(255,90,30,.35), transparent 60%);
-      animation: arenaGlow 3000ms ease-in-out both; }
-    .fighter { position: absolute; top: 50%; left: 50%; font-size: 96px; line-height: 1;
-      filter: drop-shadow(0 0 18px rgba(0,0,0,.6)); animation-duration: 3000ms; animation-fill-mode: both; animation-timing-function: ease-in-out; }
-    .fighter-left { animation-name: fighterLeftIn; }
-    .fighter-right { animation-name: fighterRightIn; transform: scaleX(-1); }
-    .vs-text { position: absolute; top: 50%; left: 50%; font-size: 52px; font-weight: 900; letter-spacing: .05em;
-      background: linear-gradient(180deg,#ffe38a,#ff7a00); -webkit-background-clip: text; background-clip: text; color: transparent;
-      text-shadow: 0 0 26px rgba(255,138,0,.55); animation: vsIn 3000ms ease-in-out both; }
-    .clash-burst { position: absolute; top: 50%; left: 50%; font-size: 120px; animation: clashBurst 3000ms ease-in-out both; }
-    .combat-stamp { position: absolute; top: 50%; left: 50%; font-size: 54px; font-weight: 900; text-transform: uppercase;
-      letter-spacing: .06em; color: #ff3b3b; text-shadow: 0 0 18px rgba(255,59,59,.7), 0 0 40px rgba(255,59,59,.35);
-      animation: combatStamp 3000ms ease-in-out both; }
-    /* phase 2 — image de marque (public/splash.jpg), ~2 s */
-    .intro-image { position: absolute; inset: 0; opacity: 0; background: #05070d;
-      animation: imagePhaseIn 600ms ease 2600ms forwards; }
-    .intro-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .intro-image .veil { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 40%, rgba(5,7,13,.82) 100%); }
-    .flash-overlay { position: absolute; inset: 0; background: #fff; opacity: 0; animation: flashPulse 3000ms ease-in-out both; }
+    .book-intro { position: relative; width: 100%; height: 100%; overflow: hidden;
+      display: flex; align-items: center; justify-content: center; flex-direction: column;
+      background: radial-gradient(ellipse at center, #1a1030 0%, #0a0714 45%, #05070d 100%); }
+
+    /* phase 1 (0 → 3.5 s) — une étincelle d'IA traverse l'écran et « appelle » le livre */
+    .ai-orb { position: absolute; top: 26%; font-size: 46px; opacity: 0;
+      filter: drop-shadow(0 0 20px rgba(130,190,255,.85)) drop-shadow(0 0 40px rgba(130,90,255,.5));
+      animation: aiCall 3500ms ease both; }
+    .ai-orb .spark { display: inline-block; animation: sparkPulse 900ms ease-in-out infinite; }
+    @keyframes sparkPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+    @keyframes aiCall {
+      0%   { opacity: 0; transform: translate(240px, -30px) scale(.4) rotate(-10deg); }
+      22%  { opacity: 1; transform: translate(90px, -10px) scale(.95) rotate(4deg); }
+      50%  { opacity: 1; transform: translate(0, 0) scale(1.08) rotate(-4deg); }
+      72%  { opacity: 1; transform: translate(0, 0) scale(1) rotate(2deg); }
+      100% { opacity: 0; transform: translate(0, 6px) scale(.7) rotate(0deg); }
+    }
+
+    /* phase 2 (3.2 → 5 s) — le livre fermé apparaît puis s'ouvre */
+    .book-wrap { position: relative; margin-top: 34px; opacity: 0; animation: bookIn 700ms ease 2900ms forwards; }
+    @keyframes bookIn { to { opacity: 1; } }
+    .book { position: relative; width: 300px; height: 200px; perspective: 1800px; }
+    .book-base {
+      position: absolute; inset: 0; border-radius: 6px; background: #241610;
+      box-shadow: 0 30px 70px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.03);
+    }
+    .page {
+      position: absolute; top: 6px; bottom: 6px; width: calc(50% - 8px);
+      background: linear-gradient(180deg,#f7f0e2,#ecdfc7);
+      display: flex; align-items: center; justify-content: center; text-align: center;
+      padding: 16px; box-sizing: border-box;
+    }
+    .page-left { left: 6px; border-radius: 3px 0 0 3px; }
+    .page-right { right: 6px; border-radius: 0 3px 3px 0; }
+    .page-content { opacity: 0; animation: pageTextIn 900ms ease 5100ms forwards; }
+    .page-content .dev-name { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; font-weight: 700; color: #241610; letter-spacing: .01em; }
+    .page-content .dev-role { margin-top: 6px; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: #7a6a52; }
+    @keyframes pageTextIn { to { opacity: 1; } }
+    .cover {
+      position: absolute; top: 0; left: 0; width: 50%; height: 100%;
+      background: linear-gradient(135deg,#7a4a24,#3a2010 70%);
+      border-radius: 6px 0 0 6px; transform-origin: left center; backface-visibility: hidden;
+      box-shadow: 3px 0 14px rgba(0,0,0,.45);
+      display: flex; align-items: center; justify-content: center; z-index: 5;
+      animation: coverOpen 1300ms cubic-bezier(.4,0,.2,1) 3500ms forwards;
+    }
+    .cover-emblem { font-size: 30px; opacity: .85; filter: drop-shadow(0 0 8px rgba(0,0,0,.5)); }
+    @keyframes coverOpen { to { transform: rotateY(-172deg); box-shadow: -3px 0 14px rgba(0,0,0,.3); } }
+    .book-glow {
+      position: absolute; inset: -30px; border-radius: 16px; opacity: 0;
+      background: radial-gradient(ellipse at center, rgba(130,150,255,.35), transparent 70%);
+      animation: glowPulse 1600ms ease 3600ms forwards;
+    }
+    @keyframes glowPulse { 0% { opacity: 0; } 40% { opacity: 1; } 100% { opacity: .45; } }
+
     .skip-hint { position: absolute; bottom: 26px; left: 0; right: 0; text-align: center; color: #cfd4e2; font-size: 12px;
-      letter-spacing: .04em; opacity: 0; animation: skipHintIn 5000ms ease-in-out both; z-index: 5; }
-    @keyframes arenaGlow { 0% { opacity: .25; } 50% { opacity: .6; } 100% { opacity: .4; } }
-    @keyframes fighterLeftIn {
-      0%   { transform: translate(-170%, -50%) rotate(-18deg); opacity: 0; }
-      8%   { opacity: 1; }
-      16%  { transform: translate(-58%, -50%) rotate(-8deg); opacity: 1; }
-      38%  { transform: translate(-58%, -50%) rotate(-8deg); opacity: 1; }
-      46%  { transform: translate(-8%, -50%) rotate(6deg) scale(1.15); opacity: 1; }
-      50%  { transform: translate(-32%, -50%) rotate(-22deg) scale(.85); opacity: 0; }
-      100% { opacity: 0; }
-    }
-    @keyframes fighterRightIn {
-      0%   { transform: translate(70%, -50%) scaleX(-1) rotate(18deg); opacity: 0; }
-      8%   { opacity: 1; }
-      16%  { transform: translate(-42%, -50%) scaleX(-1) rotate(8deg); opacity: 1; }
-      38%  { transform: translate(-42%, -50%) scaleX(-1) rotate(8deg); opacity: 1; }
-      46%  { transform: translate(-92%, -50%) scaleX(-1) rotate(-6deg) scale(1.15); opacity: 1; }
-      50%  { transform: translate(-68%, -50%) scaleX(-1) rotate(22deg) scale(.85); opacity: 0; }
-      100% { opacity: 0; }
-    }
-    @keyframes vsIn {
-      0%, 14% { opacity: 0; transform: translate(-50%, -50%) scale(.2); }
-      18%  { opacity: 1; transform: translate(-50%, -50%) scale(1.25); }
-      22%  { transform: translate(-50%, -50%) scale(1); }
-      36%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-      40%  { opacity: 0; transform: translate(-50%, -50%) scale(.6); }
-      100% { opacity: 0; }
-    }
-    @keyframes clashBurst {
-      0%, 44% { opacity: 0; transform: translate(-50%, -50%) scale(.2); }
-      46%  { opacity: 1; transform: translate(-50%, -50%) scale(1.5); }
-      52%  { opacity: 0; transform: translate(-50%, -50%) scale(2.3); }
-      100% { opacity: 0; }
-    }
-    @keyframes flashPulse {
-      0% { opacity: 0; } 15% { opacity: .4; } 17% { opacity: 0; }
-      33% { opacity: 0; } 35% { opacity: .8; } 38% { opacity: 0; }
-      45% { opacity: 0; } 47% { opacity: 1; } 53% { opacity: 0; }
-      100% { opacity: 0; }
-    }
-    @keyframes combatStamp {
-      0%, 52% { opacity: 0; transform: translate(-50%, -50%) scale(3) rotate(-10deg); }
-      54%  { opacity: 1; transform: translate(-50%, -50%) scale(1.05) rotate(-6deg); }
-      58%  { transform: translate(-50%, -50%) scale(1) rotate(-6deg); }
-      100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-6deg); }
-    }
-    @keyframes combatPhaseOut { to { opacity: 0; visibility: hidden; } }
-    @keyframes imagePhaseIn { to { opacity: 1; } }
-    @keyframes skipHintIn { 0%, 88% { opacity: 0; } 100% { opacity: .7; } }
+      letter-spacing: .04em; opacity: 0; animation: skipHintIn 8000ms ease-in-out both; z-index: 5; }
+    @keyframes skipHintIn { 0%, 55% { opacity: 0; } 100% { opacity: .7; } }
     @keyframes splashOut { to { opacity: 0; visibility: hidden; pointer-events: none; } }
     body.no-scroll { overflow: hidden; }
   </style>
 </head>
 <body class="no-scroll">
   <div id="splash" onclick="closeSplash()">
-    <div class="fight-intro">
-      <div class="intro-combat">
-        <div class="arena-glow"></div>
-        <div class="fighter fighter-left">🥷</div>
-        <div class="fighter fighter-right">🤺</div>
-        <div class="vs-text">VS</div>
-        <div class="clash-burst">💥</div>
-        <div class="combat-stamp">COMBAT</div>
+    <div class="book-intro">
+      <div class="ai-orb"><span class="spark">✨</span></div>
+      <div class="book-wrap">
+        <div class="book-glow"></div>
+        <div class="book">
+          <div class="book-base"></div>
+          <div class="page page-left"></div>
+          <div class="page page-right">
+            <div class="page-content">
+              <div class="dev-name">Sossou Kouamé Appolinaire</div>
+              <div class="dev-role">Développeur</div>
+            </div>
+          </div>
+          <div class="cover"><div class="cover-emblem">📖</div></div>
+        </div>
       </div>
-      <div class="intro-image">
-        <img src="/splash.jpg" alt="Baccara Control Room">
-        <div class="veil"></div>
-      </div>
-      <div class="flash-overlay"></div>
       <div class="skip-hint">Touchez pour continuer</div>
     </div>
   </div>
@@ -392,7 +377,7 @@
   </header>
   <main id="app" class="shell"><div class="loading">Chargement du centre de contrôle...</div></main>
   <script>
-    // écran de démarrage : intro « combat » de 5 secondes (animation CSS),
+    // écran de démarrage : intro « livre » de 15 secondes (animation CSS),
     // puis fermeture (dès que l'intro ET le premier chargement des données
     // sont finis — pour ne jamais révéler un tableau de bord cassé).
     let firstRouteDone = false;
@@ -410,13 +395,13 @@
     (function () {
       const s = document.getElementById('splash');
       if (!s) return;
-      const INTRO_DURATION = 5000; // durée fixe de l'intro combat (ms)
+      const INTRO_DURATION = 15000; // durée fixe de l'intro « livre » (ms)
       function finish() {
         if (firstRouteDone) return closeSplash();
         const wait = setInterval(() => { if (firstRouteDone) { clearInterval(wait); closeSplash(); } }, 120);
       }
       setTimeout(finish, INTRO_DURATION);
-      setTimeout(closeSplash, 9000); // filet de sécurité
+      setTimeout(closeSplash, 19000); // filet de sécurité
     })();
 
     let snapshot = null;

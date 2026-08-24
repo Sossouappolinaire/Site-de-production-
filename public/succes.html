@@ -97,6 +97,11 @@
       <div class="icon">🔎</div>
       <h1>Aucun paiement en cours</h1>
       <p class="sub">Retourne sur Telegram, clique sur « Payer » dans le bot, puis reviens sur cette page une fois le paiement effectué.</p>
+      <p class="sub">Ou entre ton ID Telegram ci-dessous pour retrouver ton paiement (laisse vide pour utiliser l'ID par défaut) :</p>
+      <input id="uidInput" type="text" inputmode="numeric" placeholder="Ton ID Telegram"
+        style="width:100%; padding:11px 14px; border-radius:9px; border:1px solid #2c3140; background:#10131a; color:#e8e8ec; font-size:14px; margin-bottom:10px; box-sizing:border-box;">
+      <button id="findBtn" onclick="findByUserId()">🎟️ Voir mon code</button>
+      <div id="findMsg" class="msg err hidden"></div>
     </div>
   </div>
 
@@ -233,6 +238,58 @@
       show('ask');
       $('askBtn').disabled = false;
       showAskError('Erreur réseau, réessaie.');
+    }
+  }
+
+  // Solution de secours : recherche manuelle par ID Telegram, utilisée quand
+  // la détection automatique (autoDetect, ci-dessus) échoue — ex. si le
+  // serveur a redémarré entre le clic sur « Payer » et le retour ici (Render
+  // gratuit : disque non persistant). Reprend exactement la même API que le
+  // reste de la page (voir server.js — POST /api/paiement/confirmer).
+  // Si le champ est laissé vide : ID par défaut "100000", et un nom
+  // "Client N" généré localement (compteur conservé dans ce navigateur).
+  function nextDefaultClientName() {
+    const n = (parseInt(localStorage.getItem('defaultClientCounter') || '0', 10) || 0) + 1;
+    localStorage.setItem('defaultClientCounter', String(n));
+    return `Client ${n}`;
+  }
+
+  async function findByUserId() {
+    $('findMsg').classList.add('hidden');
+    let val = $('uidInput').value.trim();
+    let defaultName = null;
+    if (!val) {
+      val = '100000';
+      defaultName = nextDefaultClientName();
+    }
+    $('findBtn').disabled = true;
+    try {
+      const res = await fetch('/api/paiement/confirmer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: val }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        $('findMsg').textContent = data.error || "Aucun paiement en cours trouvé pour cet ID Telegram.";
+        $('findMsg').classList.remove('hidden');
+        $('findBtn').disabled = false;
+        return;
+      }
+      const target = new URLSearchParams({ ref: data.ref });
+      target.set('uid', val);
+      if (data.buyerName) {
+        const parts = String(data.buyerName).trim().split(/\s+/);
+        if (parts[0]) target.set('fn', parts[0]);
+        if (parts.length > 1) target.set('ln', parts.slice(1).join(' '));
+      } else if (defaultName) {
+        target.set('fn', defaultName);
+      }
+      location.replace(`${location.pathname}?${target.toString()}`);
+    } catch (e) {
+      $('findMsg').textContent = 'Erreur réseau, réessaie.';
+      $('findMsg').classList.remove('hidden');
+      $('findBtn').disabled = false;
     }
   }
 
