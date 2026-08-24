@@ -717,6 +717,16 @@
         boutiquePage();
       } catch (e) { toast(e.message, 'error'); }
     }
+    async function shopSavePayLink(method) {
+      const fieldId = method === 'strategy' ? 'payLinkStrategy' : method === 'ia_100' ? 'payLinkIa100' : 'payLinkIa93';
+      const url = val(fieldId).trim();
+      if (!url) return toast('Colle un lien de paiement.', 'error');
+      try {
+        const r = await api('/api/shop/pay-link', 'POST', { method, url });
+        shopCache.pricing = r.pricing;
+        toast('Lien de paiement enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
     async function shopSaveExchangeRate() {
       const rate = Number(val('shopExchangeRate'));
       if (!Number.isFinite(rate) || rate <= 0) return toast('Taux invalide.', 'error');
@@ -739,8 +749,8 @@
       setNav('boutique');
       $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vente</span><h2 style="margin-top:7px">Boutique de stratégies</h2><p class="small">Publie une stratégie (du catalogue, créée par l'IA, ou personnalisée) : l'IA lui donne un nom de code sans rapport avec son vrai nom, et un code de paiement à usage unique est généré. Distribue ce code à l'acheteur — dans le bot Telegram, il choisit sa langue, sélectionne la stratégie par son nom de code, entre le code, et reçoit alors le détail complet traduit dans sa langue. <b>Vente automatique</b> : tout déclencheur créé par l'IA qui dépasse 93% de réussite est publié tout seul à 4€ (repéré par le badge « Auto »), et disparaît automatiquement dès que son taux redescend à 93% ou moins — aucune configuration nécessaire.</p></div>
         <button class="button small ghost" onclick="boutiquePage()">Actualiser</button></div>
-        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne (lien direct Money Fusion)</h3>
-          <p class="small">Un bouton « Payer » apparaît sous chaque stratégie avec un lien de paiement direct (identifiant fixe, montant et nom du client remplacés). La confirmation est <b>automatique</b> : Money Fusion redirige le client vers la page succes.html uniquement après un paiement validé — c'est cette arrivée qui débloque la stratégie et envoie le code sur Telegram, sans aucune action de ta part.</p>
+        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne — un lien Money Fusion par catégorie</h3>
+          <p class="small">Colle ici le lien de paiement Money Fusion complet (ex. <code>https://payin.moneyfusion.net/payment/ID/PRIX/NOM</code>) pour chacune des 3 catégories — TOUS les articles de la catégorie utiliseront ce même lien. La redirection après paiement (<code>succes.html</code>) est déjà configurée côté Money Fusion, rien à faire ici pour ça.</p>
           <div id="paiementFields"><div class="loading">Chargement…</div></div>
         </div>
         <div class="panel" id="paiementPendingPanel"><h3>⏳ Paiements en attente de confirmation</h3>
@@ -771,8 +781,15 @@
       } catch (e) { toast(e.message, 'error'); }
       try {
         const p = await api('/api/paiement/config');
+        const pr = shopCache && shopCache.pricing ? shopCache.pricing : {};
         $('#paiementFields').innerHTML = `
-          <p class="small">Lien de paiement fixe, rien à configurer. La confirmation est <b>automatique</b> : dès que le client arrive sur la page succes.html (Money Fusion n'y redirige qu'après un paiement validé), le code lui est envoyé sur Telegram.</p>
+          <div class="field"><label>📦 Stratégies existantes (catalogue)</label><input id="payLinkStrategy" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkStrategy || '')}">
+            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('strategy')">Enregistrer</button></div></div>
+          <div class="field"><label>🤖 Déclencheur IA — 100% de réussite</label><input id="payLinkIa100" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa100 || '')}">
+            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_100')">Enregistrer</button></div></div>
+          <div class="field"><label>🤖 Déclencheur IA — 93% à 99,99%</label><input id="payLinkIa93" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa93 || '')}">
+            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_93')">Enregistrer</button></div></div>
+          <div id="payLinkMsg"></div>
           ${p.lastError ? `<div class="notice error">Dernier échec (${formatDate(p.lastErrorAt)}) : ${esc(p.lastError)}</div>` : ''}`;
       } catch (e) { $('#paiementFields').innerHTML = `<div class="empty">Impossible de charger le statut.</div>`; }
       try {

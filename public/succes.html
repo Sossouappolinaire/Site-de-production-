@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Paiement confirmé — Baccara Vend</title>
+<title>Paiement — Baccara Vend</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -20,6 +20,11 @@
   .icon { font-size: 40px; }
   .icon.spin { animation: spin 1s linear infinite; display: inline-block; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .identity {
+    background: #10131a; border: 1px solid #2c3140; border-radius: 9px;
+    padding: 12px 14px; margin: 0 0 20px; text-align: left; font-size: 13px; color: #c7cbd6; line-height: 1.7;
+  }
+  .identity b { color: #e8e8ec; }
   .code-box {
     display: flex; align-items: center; gap: 8px; background: #10131a; border: 1px solid #2c3140;
     border-radius: 9px; padding: 12px 14px; margin: 16px 0;
@@ -28,8 +33,10 @@
   button {
     padding: 11px 16px; border: none; border-radius: 9px;
     background: #5b7cff; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    width: 100%;
   }
   button:hover { background: #4a6bee; }
+  button:disabled { opacity: .6; cursor: default; }
   .msg { margin-top: 14px; font-size: 13px; padding: 10px 12px; border-radius: 8px; }
   .msg.err { background: #3a1a1f; color: #ff9aa6; }
   .msg.ok { background: #17301f; color: #8ef0a8; }
@@ -38,15 +45,28 @@
 </head>
 <body>
   <div class="card" id="card">
+    <div id="ask" class="hidden">
+      <div class="icon">🎟️</div>
+      <h1>Finalise ton paiement</h1>
+      <div class="identity" id="identityBox"></div>
+      <p class="sub">1. Appuie sur « Payer » pour aller régler sur Money Fusion.<br>2. Reviens ici et appuie sur « Voir mon code ».</p>
+      <a id="payLink" href="#" target="_blank" rel="noopener" style="display:block;text-decoration:none">
+        <button type="button" style="margin-bottom:10px">💳 Payer</button>
+      </a>
+      <button id="askBtn" onclick="viewCode()">🎟️ Voir mon code</button>
+      <div id="askMsg" class="msg err hidden"></div>
+    </div>
+
     <div id="pending">
       <div class="icon spin">⏳</div>
-      <h1>Récupération de ton code…</h1>
+      <h1>Chargement…</h1>
       <p class="sub">Merci de patienter un instant.</p>
     </div>
 
     <div id="paid" class="hidden">
       <div class="icon" id="paidIcon">🎟️</div>
       <h1 id="paidTitle">Voici ton code</h1>
+      <div class="identity hidden" id="identityBoxPaid"></div>
       <p class="sub" id="paidSub">Ce code est réservé pour toi pendant quelques minutes — copie-le et reviens sur Telegram si besoin.</p>
       <div class="code-box" id="codeBox"><span id="codeValue"></span><button onclick="copyCode()">📋 Copier</button></div>
       <div id="copyMsg" class="msg ok hidden">Code copié !</div>
@@ -76,7 +96,11 @@
       <p class="sub">Les 3 minutes sont écoulées. Ce code n'est plus utilisable. Retourne sur Telegram pour lancer un nouveau paiement.</p>
     </div>
 
-    <div id="errorBox" class="msg err hidden"></div>
+    <div id="notfound" class="hidden">
+      <div class="icon">🔎</div>
+      <h1>Aucun code à afficher</h1>
+      <p class="sub">Reviens sur Telegram, clique sur « Payer » depuis le message de paiement, puis reviens ici via « Voir mon code ».</p>
+    </div>
   </div>
 
 <script>
@@ -85,10 +109,23 @@
   const uid = params.get('uid');
   const fn = params.get('fn');
   const ln = params.get('ln');
+  const payUrl = params.get('pay');
   const $ = (id) => document.getElementById(id);
 
   function show(id) {
-    ['pending', 'paid', 'thanks', 'failed', 'closed', 'expired'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
+    ['ask', 'pending', 'paid', 'thanks', 'failed', 'closed', 'expired', 'notfound'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
+  }
+
+  function identityHtml() {
+    const rows = [];
+    if (ln) rows.push(`<div>👤 <b>Nom</b> : ${escapeHtml(ln)}</div>`);
+    if (fn) rows.push(`<div>👤 <b>Prénom</b> : ${escapeHtml(fn)}</div>`);
+    if (uid) rows.push(`<div>🆔 <b>ID Telegram</b> : ${escapeHtml(uid)}</div>`);
+    return rows.join('');
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   let expiryTimer = null;
@@ -112,6 +149,8 @@
   function copyCode() {
     const text = $('codeValue').textContent;
     navigator.clipboard.writeText(text).then(() => {
+      if (expiryTimer) clearTimeout(expiryTimer); // le minuteur des 3 min n'a plus lieu d'être, on expire tout de suite
+      fetch(`/api/paiement/copie/${encodeURIComponent(ref)}`, { method: 'POST' }).catch(() => {}); // best-effort : la fermeture de la page ne doit pas en dépendre
       $('copyMsg').classList.remove('hidden');
       setTimeout(() => {
         show('closed');
@@ -120,22 +159,13 @@
     });
   }
 
-  function showWaiting(code, aiName, expiresAt) {
-    // Le code est réservé pour cet acheteur et reste visible uniquement
-    // pendant la fenêtre de 3 minutes (voir bot.js/paiement.js).
-    $('paidIcon').textContent = '⏳';
-    $('paidTitle').textContent = aiName ? `Code réservé — ${aiName}` : 'Code réservé';
-    $('paidSub').textContent = "Ton code est prêt ci-dessous. Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie.";
-    $('codeValue').textContent = code;
-    $('codeBox').classList.remove('hidden');
-    armExpiry(expiresAt);
-    show('paid');
-  }
-
   function showPaid(code, aiName, expiresAt) {
     $('paidIcon').textContent = '✅';
-    $('paidTitle').textContent = aiName ? `Paiement confirmé — ${aiName}` : 'Paiement confirmé !';
-    $('paidSub').textContent = "Voici ton code. Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie.";
+    $('paidTitle').textContent = aiName ? `Voici ton code — ${aiName}` : 'Voici ton code';
+    const idHtml = identityHtml();
+    $('identityBoxPaid').innerHTML = idHtml;
+    $('identityBoxPaid').classList.toggle('hidden', !idHtml);
+    $('paidSub').textContent = "Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie.";
     $('codeValue').textContent = code;
     $('codeBox').classList.remove('hidden');
     armExpiry(expiresAt);
@@ -149,52 +179,62 @@
     show('thanks');
   }
 
-  async function poll(attempt = 0) {
-    if (!ref) {
-      // Pas de référence dans l'URL : lien ouvert sans passer par le bouton
-      // « Voir mon code » du bot — on ne peut rien afficher ici.
-      $('pending').querySelector('h1').textContent = 'Aucun code à afficher';
-      $('pending').querySelector('.sub').textContent = "Reviens sur Telegram et clique sur « Voir mon code » depuis le message de paiement.";
-      $('pending').querySelector('.icon').classList.remove('spin');
-      $('pending').querySelector('.icon').textContent = '🔎';
-      return;
-    }
+  function showAskError(text) {
+    $('askMsg').textContent = text;
+    $('askMsg').classList.remove('hidden');
+  }
+
+  // Appelé au clic sur « 🎟️ Voir mon code ». Contrairement à l'ancien
+  // système (Money Fusion redirigeant automatiquement avec la référence),
+  // le lien « Payer » pointe maintenant vers une page fixe par catégorie —
+  // c'est donc CE bouton, propre à cette réservation (ref dans l'URL), qui
+  // confirme le paiement et révèle le code. Cliquer sans avoir payé n'a pas
+  // de sens pour le client puisqu'il n'aurait de toute façon rien à coller
+  // dans Telegram ensuite : la stratégie reste verrouillée tant que le code
+  // n'est pas renvoyé au bot (voir bot.js).
+  async function viewCode() {
+    $('askMsg').classList.add('hidden');
+    $('askBtn').disabled = true;
+    show('pending');
+    await fetchStatus();
+  }
+
+  async function fetchStatus() {
+    if (!ref) { show('notfound'); return; }
     try {
       const res = await fetch(`/api/paiement/statut/${encodeURIComponent(ref)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Paiement introuvable.');
-      if (data.status === 'failed') {
-        show('failed');
-        return;
-      }
+      if (data.status === 'failed') { show('failed'); return; }
       if (data.status === 'expired') {
         $('codeValue').textContent = '';
         $('codeBox').classList.add('hidden');
         show('expired');
         return;
       }
-      if (data.kind === 'support') {
-        showThanks(data);
-        if (data.status !== 'paid' && attempt < 40) return setTimeout(() => poll(attempt + 1), 3000);
-        return;
-      }
-      if (data.code) {
-        if (data.status === 'paid') showPaid(data.code, data.aiName, data.expiresAt);
-        else showWaiting(data.code, data.aiName, data.expiresAt);
-        // le statut peut encore passer de pending à paid pendant que la page
-        // reste ouverte : on continue de vérifier en tâche de fond pour
-        // mettre à jour l'affichage, sans redémarrer le compteur de
-        // tentatives depuis le début.
-        if (data.status !== 'paid' && attempt < 40) return setTimeout(() => poll(attempt + 1), 3000);
-        return;
-      }
-      // code pas encore attaché (cas rare/ancien lien) : on retente.
-      if (attempt < 20) return setTimeout(() => poll(attempt + 1), 3000);
+      if (data.kind === 'support') { showThanks(data); return; }
+      if (data.code) { showPaid(data.code, data.aiName, data.expiresAt); return; }
+      show('ask');
+      $('askBtn').disabled = false;
+      showAskError("Code pas encore disponible — réessaie dans un instant.");
     } catch (e) {
-      if (attempt < 20) return setTimeout(() => poll(attempt + 1), 3000);
+      show('ask');
+      $('askBtn').disabled = false;
+      showAskError('Erreur réseau, réessaie.');
     }
   }
-  poll();
+
+  if (!ref) {
+    show('notfound');
+  } else {
+    $('identityBox').innerHTML = identityHtml();
+    if (payUrl) {
+      $('payLink').href = payUrl;
+    } else {
+      $('payLink').classList.add('hidden'); // pas de lien transmis (ancien lien ouvert sans PUBLIC_URL) : seul « Voir mon code » reste utilisable
+    }
+    show('ask');
+  }
 </script>
 </body>
 </html>
