@@ -125,7 +125,18 @@ app.post('/api/auth/mail-config', async (req, res) => {
 
 // --- verrou d'accès : tout le reste du site exige une session valide ------
 const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/succes.html']);
-const PUBLIC_PAIEMENT_PATTERNS = [/^\/api\/paiement\/webhook$/, /^\/api\/paiement\/statut\/[^/]+$/, /^\/api\/paiement\/copie\/[^/]+$/];
+const PUBLIC_PAIEMENT_PATTERNS = [
+  /^\/api\/paiement\/webhook$/,
+  /^\/api\/paiement\/statut\/[^/]+$/,
+  /^\/api\/paiement\/copie\/[^/]+$/,
+  // consultées par succes.html — navigateur de l'acheteur, JAMAIS connecté
+  // au site (session admin/utilisateur) : ces routes doivent rester
+  // publiques, comme statut/copie ci-dessus, sinon le bouton « Voir mon
+  // code » échoue systématiquement avec "Authentification requise."
+  /^\/api\/paiement\/actif$/,
+  /^\/api\/paiement\/chercher\/[^/]+$/,
+  /^\/api\/paiement\/confirmer$/,
+];
 function isPublicPath(p) {
   if (PUBLIC_EXACT.has(p)) return true;
   if (p.startsWith('/api/auth/')) return true;
