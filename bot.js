@@ -1036,6 +1036,25 @@ function wireShop(b) {
     await b.sendMessage(chatId, items.length ? shop.t('myItemsIntro', lang) : shop.t('noItemsUnlocked', lang), { reply_markup: { inline_keyboard: rows } });
   }
 
+  // Présentation d'une stratégie débloquée (code accepté, ou réouverture
+  // depuis « Mes stratégies ») + les deux boutons de suite : « Répondre-moi »
+  // (pose une question à l'IA sur cette stratégie) et « J'ai compris »
+  // (remerciement + conseil de formation, voir shop.closingMessage). La
+  // saisie libre au clavier reste TOUJOURS possible en parallèle (voir le
+  // handler 'message' plus bas, qui route déjà vers explain()/closingMessage
+  // selon le texte tapé) — les boutons ne font que rendre ces deux actions
+  // explicites, sans rien retirer à l'ancien fonctionnement au clavier.
+  async function sendUnlockedPresentation(chatId, userId, item, lang) {
+    shop.setActiveItem(userId, item.id);
+    const text = await shop.fullPresentation(item, lang);
+    await b.sendMessage(chatId, text);
+    const buttons = [[
+      { text: shop.t('askButton', lang), callback_data: `strategy:ask:${item.id}` },
+      { text: shop.t('understoodButton', lang), callback_data: `strategy:understood:${item.id}` },
+    ]];
+    await b.sendMessage(chatId, shop.t('canAsk', lang), { reply_markup: { inline_keyboard: buttons } });
+  }
+
   b.on('callback_query', async (q) => {
     try {
       const data = String(q.data || '');
@@ -1048,6 +1067,28 @@ function wireShop(b) {
         shop.setLang(userId, lang);
         await b.answerCallbackQuery(q.id, { text: shop.t('langSaved', lang) });
         await sendShopMenu(chatId, userId, lang);
+        return;
+      }
+      if (data.startsWith('strategy:ask:')) {
+        const itemId = data.slice('strategy:ask:'.length);
+        const lang = shop.getLang(userId) || 'fr';
+        shop.setActiveItem(userId, itemId); // garantit le routage vers l'IA (explain()) au prochain message tapé
+        await b.answerCallbackQuery(q.id);
+        await b.sendMessage(chatId, shop.t('askPrompt', lang));
+        return;
+      }
+      if (data.startsWith('strategy:understood:')) {
+        const itemId = data.slice('strategy:understood:'.length);
+        const item = shop.getItem(itemId);
+        const lang = shop.getLang(userId) || 'fr';
+        await b.answerCallbackQuery(q.id);
+        if (!item) return;
+        const closing = await shop.closingMessage(item, lang);
+        await b.sendMessage(chatId, closing);
+        // Explication détaillée du déclencheur (uniquement pour un
+        // déclencheur IA — voir shop.explainTrigger).
+        const explanation = shop.explainTrigger(item);
+        if (explanation) await b.sendMessage(chatId, explanation);
         return;
       }
       if (data === 'support:start') {
@@ -1090,11 +1131,8 @@ function wireShop(b) {
         }
         if (shop.hasUnlocked(userId, itemId)) {
           // déjà acheté : on rouvre directement le mode questions, sans redemander le code.
-          shop.setActiveItem(userId, itemId);
           await b.answerCallbackQuery(q.id);
-          const text = await shop.fullPresentation(item, lang);
-          await b.sendMessage(chatId, text);
-          return b.sendMessage(chatId, shop.t('canAsk', lang));
+          return sendUnlockedPresentation(chatId, userId, item, lang);
         }
         shop.setPendingCode(userId, itemId);
         await b.answerCallbackQuery(q.id);
@@ -1228,9 +1266,7 @@ function wireShop(b) {
       const r = shop.redeem(userId, pendingItemId, msg.text);
       if (r.ok) {
         await b.sendMessage(msg.chat.id, shop.t('unlockedHeader', lang));
-        const text = await shop.fullPresentation(r.item, lang);
-        await b.sendMessage(msg.chat.id, text);
-        return b.sendMessage(msg.chat.id, shop.t('canAsk', lang));
+        return sendUnlockedPresentation(msg.chat.id, userId, r.item, lang);
       }
       if (r.reason === 'used') return b.sendMessage(msg.chat.id, shop.t('codeUsed', lang));
       if (r.reason === 'inactive') return b.sendMessage(msg.chat.id, shop.t('itemInactive', lang));
@@ -1247,7 +1283,13 @@ function wireShop(b) {
         // renvoyer ça à l'IA de Q&A comme une question ordinaire.
         if (shop.isUnderstoodMessage(msg.text)) {
           const closing = await shop.closingMessage(item, lang);
-          return b.sendMessage(msg.chat.id, closing);
+          await b.sendMessage(msg.chat.id, closing);
+          // Explication détaillée du déclencheur (uniquement pour un
+          // déclencheur IA — voir shop.explainTrigger, retourne null pour
+          // une stratégie du catalogue existant, qui n'en a pas besoin).
+          const explanation = shop.explainTrigger(item);
+          if (explanation) await b.sendMessage(msg.chat.id, explanation);
+          return;
         }
         const answer = await shop.explain(item, msg.text, lang);
         return b.sendMessage(msg.chat.id, answer);

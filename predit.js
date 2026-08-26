@@ -16,6 +16,15 @@
 //    (ex. 2). Ensuite elle est mise en pause et le panneau attend une NOUVELLE
 //    stratégie certifiée pour continuer à prédire.
 //  • Dès qu'une stratégie certifiée perd, elle est retirée automatiquement.
+//  • FILTRE « PERTES RAPPROCHÉES » (optionnel, désactivé par défaut) : une
+//    fois activé, une prédiction n'est publiée sur le canal qu'APRÈS avoir
+//    observé une série de pertes rapprochées (même principe que le filtre de
+//    la stratégie « ombre », jamais nommé ainsi dans les messages envoyés à
+//    l'acheteur — voir shop.js). Tant que le filtre n'est pas armé, les
+//    prédictions restent suivies en interne (elles alimentent le compteur de
+//    pertes) mais ne partent jamais sur Telegram. Une victoire publiée
+//    referme le filtre. Voir panel.silentMode / silentLossTrigger /
+//    silentLossWindow / silentGate ci-dessous.
 'use strict';
 
 const appConfig = require('./config');
@@ -40,6 +49,19 @@ const panel = {
   minGap: 3,           // écart minimum (en numéro de jeu) exigé entre deux
                         // numéros prédits par le panneau ; un nouveau numéro
                         // trop proche du dernier numéro déjà prédit est bloqué
+  // ── Filtre « pertes rapprochées » (même principe que la stratégie « ombre »,
+  // jamais nommé ainsi dans les messages envoyés — voir shop.js/formation.js) ──
+  // Quand actif, une prédiction du panneau n'est PUBLIÉE qu'après confirmation :
+  // tant qu'aucune série de pertes rapprochées n'a été observée, les
+  // prédictions restent TRACKÉES en interne (elles alimentent le compteur)
+  // mais ne partent jamais sur Telegram. Dès que `silentLossTrigger` pertes
+  // tombent dans une fenêtre de `silentLossWindow` prédictions résolues,
+  // l'envoi s'active — et le reste actif jusqu'à la prochaine victoire
+  // publiée, qui referme le filtre (retour au silence).
+  silentMode: false,
+  silentLossTrigger: 2,  // nb de pertes rapprochées nécessaires pour activer l'envoi (1-5)
+  silentLossWindow: 3,   // écart max (en prédictions résolues) entre ces pertes (1-20)
+  silentGate: { armed: false, lossesInWindow: 0, sinceLastLoss: 0 }, // état runtime du filtre ci-dessus
   certified: [],       // règles IA actuellement au-dessus du seuil
   retired: [],         // règles retirées (perdues ou quota atteint)
   predictions: [],     // prédictions du panneau (les 200 dernières)
@@ -85,6 +107,9 @@ function configure(patch = {}) {
   if (patch.format !== undefined) panel.format = fmt.clampFormat(patch.format);
   if (patch.perStrategy !== undefined) panel.perStrategy = Math.max(1, Math.min(50, parseInt(patch.perStrategy, 10) || 1));
   if (patch.minGap !== undefined) panel.minGap = Math.max(0, Math.min(30, parseInt(patch.minGap, 10) || 0));
+  if (patch.silentMode !== undefined) panel.silentMode = !!patch.silentMode;
+  if (patch.silentLossTrigger !== undefined) panel.silentLossTrigger = Math.max(1, Math.min(5, parseInt(patch.silentLossTrigger, 10) || 2));
+  if (patch.silentLossWindow !== undefined) panel.silentLossWindow = Math.max(1, Math.min(20, parseInt(patch.silentLossWindow, 10) || 3));
   persist();
   return config();
 }
@@ -100,6 +125,9 @@ function config() {
     perStrategy: panel.perStrategy,
     requireCombo: panel.requireCombo,
     minGap: panel.minGap,
+    silentMode: panel.silentMode,
+    silentLossTrigger: panel.silentLossTrigger,
+    silentLossWindow: panel.silentLossWindow,
   };
 }
 
@@ -112,6 +140,7 @@ function persist() {
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
+    silentGate: panel.silentGate,
   };
   try { store.patch({ predit: config() }); } catch (_) {}
   if (db.ready) db.savePreditState(saved).catch((error) => { panel.lastError = error.message; });
@@ -143,6 +172,10 @@ async function restoreFromDb() {
     panel.maxR = Math.max(0, Math.min(5, parseInt(saved.config.maxR, 10) || 0));
     panel.format = fmt.clampFormat(saved.config.format);
     panel.perStrategy = Math.max(1, Math.min(50, parseInt(saved.config.perStrategy, 10) || 1));
+    panel.minGap = Math.max(0, Math.min(30, parseInt(saved.config.minGap, 10) || 0));
+    panel.silentMode = !!saved.config.silentMode;
+    panel.silentLossTrigger = Math.max(1, Math.min(5, parseInt(saved.config.silentLossTrigger, 10) || 2));
+    panel.silentLossWindow = Math.max(1, Math.min(20, parseInt(saved.config.silentLossWindow, 10) || 3));
   }
   if (Array.isArray(saved.certified)) panel.certified = saved.certified;
   if (Array.isArray(saved.retired)) panel.retired = saved.retired;
@@ -150,6 +183,13 @@ async function restoreFromDb() {
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
+  if (saved.silentGate && typeof saved.silentGate === 'object') {
+    panel.silentGate = {
+      armed: !!saved.silentGate.armed,
+      lossesInWindow: Number(saved.silentGate.lossesInWindow) || 0,
+      sinceLastLoss: Number(saved.silentGate.sinceLastLoss) || 0,
+    };
+  }
   purgeChainRules();
   return config();
 }
@@ -458,6 +498,35 @@ function gameByNumber(games, n) {
   return games.find((g) => g.n === n) || null;
 }
 
+// Met à jour le filtre « pertes rapprochées » (silentGate) à partir du
+// résultat d'UNE prédiction résolue — appelé pour TOUTES les prédictions
+// clôturées, qu'elles aient été publiées ou non : le filtre doit voir le
+// vrai historique complet pour détecter une série de pertes, pas seulement
+// ce qui a été montré publiquement. Une prédiction 'annulé' (données
+// illisibles) est ignorée, comme dans formation.js — ce n'est pas un vrai
+// résultat de jeu.
+function updateSilentGate(pred) {
+  if (pred.status !== 'gagné' && pred.status !== 'perdu') return;
+  const g = panel.silentGate;
+  const isLoss = pred.status === 'perdu';
+  if (g.armed) {
+    // une victoire referme le filtre (retour au silence) ; une perte
+    // pendant que l'envoi est déjà actif ne change rien, il reste actif.
+    if (!isLoss) { g.armed = false; g.lossesInWindow = 0; g.sinceLastLoss = 0; }
+    return;
+  }
+  const need = Math.max(1, Math.min(5, parseInt(panel.silentLossTrigger, 10) || 2));
+  const window = Math.max(1, Math.min(20, parseInt(panel.silentLossWindow, 10) || 3));
+  if (isLoss) {
+    g.lossesInWindow += 1;
+    g.sinceLastLoss = 0;
+    if (g.lossesInWindow >= need) g.armed = true;
+  } else if (g.lossesInWindow > 0) {
+    g.sinceLastLoss += 1;
+    if (g.sinceLastLoss > window) { g.lossesInWindow = 0; g.sinceLastLoss = 0; } // fenêtre dépassée → repart à zéro
+  }
+}
+
 function verify(games) {
   const last = lastFinishedNumber(games);
   const closed = [];
@@ -659,16 +728,44 @@ async function tick() {
     const games = orderedGames();
     if (games.length >= 12) certifyDiscoveries();
     const closed = verify(games);
-    for (const pred of closed) await update(pred);
+    for (const pred of closed) {
+      // Le filtre « pertes rapprochées » voit TOUJOURS le résultat réel,
+      // publié ou non (voir updateSilentGate ci-dessus) — sinon il ne
+      // pourrait jamais détecter une série de pertes restées silencieuses.
+      updateSilentGate(pred);
+      if (pred.messages.length) { await update(pred); continue; }
+      // Retenue EXPRÈS par le filtre « pertes rapprochées » (silentMode actif
+      // et pas encore armé au moment de sa création) : elle reste silencieuse
+      // par conception, on ne la publie pas a posteriori.
+      if (pred.silentHeld) continue;
+      // CORRECTIF « prédiction jamais vue » : une prédiction qui n'a JAMAIS
+      // été publiée avant sa résolution pour une AUTRE raison (ex.
+      // requireCombo actif et jamais confirmée par une 2ᵉ règle, ou un échec
+      // d'envoi Telegram passé inaperçu) était clôturée en silence par
+      // verify() ci-dessus — gagnée ou perdue, rien n'apparaissait jamais sur
+      // le canal. On publie désormais le résultat final dans ce cas : pour
+      // une prédiction jamais envoyée on utilise send() (pas update(), qui ne
+      // fait rien sans message existant), avec son statut déjà réglé
+      // (gagné/perdu) par verify() — le message affiche directement le
+      // résultat, jamais une prédiction « en attente » obsolète.
+      if (pred.status === 'gagné' || pred.status === 'perdu') await send(pred);
+      // une prédiction 'annulé' (données illisibles, voir verify() plus haut)
+      // jamais envoyée n'est PAS publiée a posteriori : ce n'est pas un vrai
+      // résultat de jeu, l'annoncer publiquement serait juste trompeur.
+    }
     const created = mergeCombos(makePredictions(games));
     // prédictions encore valables mais jamais publiées (canal absent, erreur
-    // Telegram, bot redémarré) : on retente l'envoi à chaque tour.
+    // Telegram, filtre pas encore armé, bot redémarré) : on retente l'envoi
+    // à chaque tour — c'est aussi ce qui permet à une prédiction retenue par
+    // le filtre « pertes rapprochées » de partir dès que celui-ci s'arme.
     const last = lastFinishedNumber(games);
     const unsent = panel.predictions.filter(
       (p) => p.status === 'en attente' && !p.messages.length && p.target > last && !created.includes(p),
     );
     for (const pred of [...created, ...unsent]) {
       if (panel.requireCombo && !pred.combo) continue;
+      if (panel.silentMode && !panel.silentGate.armed) { pred.silentHeld = true; continue; }
+      pred.silentHeld = false;
       if (pred.messages.length && !pred.resend) continue;
       pred.resend = false;
       // combo confirmé sur une prédiction DÉJÀ envoyée : on modifie le
@@ -754,6 +851,7 @@ function status() {
     ...config(),
     running: panel.enabled,
     formatPreview: fmt.formatPreview(panel.format, { maxR: panel.maxR }),
+    silentGate: { ...panel.silentGate },
     certified: panel.certified.map((c) => ({
       id: c.id, type: c.type, name: c.name, finding: c.finding, motif: c.motif || '',
       rate: c.rate, sample: c.sample, used: c.used || 0, quota: panel.perStrategy,

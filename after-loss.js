@@ -160,6 +160,11 @@ function sanitizeRepeat(input) {
   return {
     enabled: !!src.enabled,
     lead: Math.max(1, Math.min(50, parseInt(src.lead, 10) || 5)),
+    // 'meme'   : republie le MÊME costume que celui qui vient de perdre (comportement d'origine).
+    // 'miroir' : regarde le costume RÉELLEMENT sorti sur la main du joueur au
+    //            jeu perdu, et republie son miroir (❤️↔♦️, ♠️↔♣️ — voir
+    //            strategies.MIRROR), plutôt que de rejouer le costume raté.
+    mode: src.mode === 'miroir' ? 'miroir' : 'meme',
   };
 }
 
@@ -431,7 +436,7 @@ function adviceForTracker(tracker) {
 function relayText(tracker, pred) {
   const out = fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: pred.target,
-    suit: pred.suit,
+    suit: pred.suit || pred.card, // 'carte-banquier' : pas de costume, on affiche la carte
     strategy: tracker.name,
     maxR: panel.maxR,
     status: 'en attente',
@@ -462,7 +467,7 @@ function pushPending(tracker, pred, messages) {
     id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     trackerId: tracker.id,
     target: pred.target,
-    suit: pred.suit,
+    suit: pred.suit || pred.card, // 'carte-banquier' : pas de costume, on affiche la carte
     kind: pred.kind || 'suit',
     strategyName: tracker.name,
     format: effectiveFormat(tracker),
@@ -485,7 +490,7 @@ function editPending(entry, statusFr) {
   if (!bot) return;
   const out = fmt.renderMessage(entry.format, {
     gameNumber: entry.target,
-    suit: entry.suit,
+    suit: entry.suit || entry.card,
     strategy: entry.strategyName,
     maxR: entry.maxR,
     status: statusFr,
@@ -584,7 +589,14 @@ async function verifyPending() {
         }
         break; // le tour n'est pas encore joué : on réessaiera au prochain tick
       }
-      const won = entry.kind === 'parity' ? parityOf(g) === entry.suit : hasSuit(g, entry.suit);
+      // 'carte-banquier' : on vérifie la carte EXACTE dans la main du
+      // BANQUIER (entry.suit contient la carte, voir pushPending ci-dessus),
+      // pas un costume côté joueur comme les autres stratégies.
+      const won = entry.kind === 'parity'
+        ? parityOf(g) === entry.suit
+        : entry.kind === 'carte-banquier'
+          ? (g.banker || []).includes(entry.suit)
+          : hasSuit(g, entry.suit);
       if (won) {
         entry.status = 'gagné';
         entry.resolvedAt = Date.now();
@@ -650,7 +662,7 @@ async function forward(tracker, pred) {
       trackerId: tracker.id,
       trackerName: tracker.name,
       target: pred.target,
-      suit: pred.suit,
+      suit: pred.suit || pred.card, // 'carte-banquier' : pas de costume, on affiche la carte
       sentAt: Date.now(),
     });
     panel.history = panel.history.slice(0, 100);
@@ -814,7 +826,9 @@ async function forwardRepeat(tracker, synth) {
 
 // parcourt les prédictions déjà résolues de la stratégie suivie ; chaque
 // perte NON encore traitée pour la répétition déclenche l'envoi d'une
-// nouvelle prédiction (même costume, +lead), indépendamment des
+// nouvelle prédiction — soit le MÊME costume (mode 'meme', +lead), soit le
+// MIROIR du costume réellement sorti sur la main du joueur ce jeu-là (mode
+// 'miroir', voir sanitizeRepeat ci-dessus) — indépendamment des
 // déclencheurs rattrapage/perdue ci-dessus.
 async function processRepeat(tracker) {
   if (!tracker.repeat || !tracker.repeat.enabled) return;
@@ -824,13 +838,26 @@ async function processRepeat(tracker) {
     if (pred.status === 'en attente') break; // pas encore résolue, on la retraite au prochain tour
     tracker.lastRepeatSource = pred.target;
     if (pred.status !== 'perdu' || !pred.suit) continue;
+    let repeatSuit = pred.suit;
+    if (tracker.repeat.mode === 'miroir') {
+      // costume réellement sorti sur la main du JOUEUR au jeu perdu (celui
+      // qui a fait perdre la prédiction) — on prend la 1ère carte de la
+      // main dans l'ordre de distribution, en repli mémoire (state.games)
+      // si la partie n'est plus en base.
+      const g = state.games.get(pred.target);
+      const actualSuits = g ? strategies.suitsOf(g.playerSuits) : [];
+      const actualSuit = actualSuits[0] || null;
+      const mirror = actualSuit ? strategies.MIRROR[actualSuit] : null;
+      if (!mirror) continue; // jeu introuvable ou costume non reconnu → on ignore ce tour
+      repeatSuit = mirror;
+    }
     const lead = tracker.repeat.lead;
     const nextTarget = pred.target + lead;
     // CORRECTIF (demande) : un jeu va de 1 à appConfig.MAX_GAME_NUMBER (1440)
     // avant le retour à 1 (nouveau sabot) — une répétition calculée au-delà
     // ne sera jamais jouée avant le rebouclage, on l'ignore.
     if (nextTarget > appConfig.MAX_GAME_NUMBER) continue;
-    const synth = { target: nextTarget, suit: pred.suit, kind: pred.kind || 'suit' };
+    const synth = { target: nextTarget, suit: repeatSuit, kind: pred.kind || 'suit' };
     await forwardRepeat(tracker, synth);
   }
 }

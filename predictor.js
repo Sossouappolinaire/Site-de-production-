@@ -1164,13 +1164,18 @@ function evaluate() {
       kind: hit.kind,
       target: hit.target,
       suit: hit.suit ? (hit.kind === 'suit' ? normSuit(hit.suit) : hit.suit) : null,
+      // carte précise (rang+costume, ex. « 4❤️ ») — uniquement pour la
+      // stratégie « Carte disparue → retour banquier » (kind 'carte-banquier').
+      card: hit.card || null,
       cardsLabel: hit.cardsLabel || null,
       wantPlayer: hit.wantPlayer != null ? hit.wantPlayer : null,
       wantBanker: hit.wantBanker != null ? hit.wantBanker : null,
       label: hit.label || hit.suit || '',
       reason: hit.reason || '',
       meta: hit.meta || null,
-      hand: 'joueur',
+      // « carte-banquier » se vérifie sur la main du BANQUIER — toutes les
+      // autres stratégies restent sur la main du joueur (voir matches()).
+      hand: hit.kind === 'carte-banquier' ? 'banquier' : 'joueur',
       trigger: hit.trigger != null ? hit.trigger : null,
       from: source.number,
       step: 0,
@@ -1218,6 +1223,12 @@ function matches(pred, game) {
     if (pred.wantBanker != null && game.bankerCards !== pred.wantBanker) return false;
     return true;
   }
+  // « Carte disparue → retour banquier » : on vérifie la carte EXACTE
+  // (rang+costume) dans la main du BANQUIER, pas juste un costume dans la
+  // main du joueur comme les autres stratégies (voir strategies.js).
+  if (pred.kind === 'carte-banquier') {
+    return (game.banker || []).includes(pred.card);
+  }
   return hasSuit(game, pred.suit);
 }
 
@@ -1225,6 +1236,7 @@ function resultText(pred, game) {
   if (!game) return null;
   if (pred.kind === 'parity') return `joueur ${game.playerValue ?? '—'} (${parityOf(game) || '—'})`;
   if (pred.kind === 'cards') return `joueur ${game.playerCards}/banquier ${game.bankerCards}`;
+  if (pred.kind === 'carte-banquier') return `banquier ${(game.banker || []).join(' ') || '—'}`;
   return handSuits(game).join(' ');
 }
 
@@ -1304,7 +1316,10 @@ function predictionText(p) {
   const g = p.game || null;
   return fmt.renderMessage(p.format || state.format, {
     gameNumber: p.target,
-    suit: p.suit,
+    // pour « carte-banquier », p.suit est null : on affiche la carte exacte
+    // à la place (ex. « 4❤️ ») — les gabarits de tg-formats.js retombent
+    // simplement sur le texte fourni si ce n'est pas un costume reconnu.
+    suit: p.suit || p.card,
     cardsLabel: p.cardsLabel,
     strategy: p.strategyName || p.strategy,
     maxR: p.maxR != null ? p.maxR : state.maxR,
@@ -1525,8 +1540,9 @@ function predictionRow(p) {
     strategyName: p.strategyName || p.strategy,
     target: p.target,
     trigger: p.trigger != null ? p.trigger : null,
-    label: p.label || p.suit || '',
+    label: p.label || p.suit || p.card || '',
     suit: p.suit || null,
+    card: p.card || null,
     kind: p.kind,
     status: p.status,
     badge: p.badge,

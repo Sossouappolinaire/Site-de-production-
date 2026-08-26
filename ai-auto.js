@@ -56,6 +56,15 @@ function trackRate(item, rate) {
   return item;
 }
 
+function sanitizeOccurrences(list) {
+  if (!Array.isArray(list)) return null;
+  const clean = list
+    .filter((o) => o && Number.isFinite(o.from) && Number.isFinite(o.to))
+    .map((o) => ({ from: o.from, to: o.to, hit: !!o.hit }))
+    .slice(-30); // les 30 plus récentes suffisent pour l'explication client
+  return clean.length ? clean : null;
+}
+
 function saveProposal(proposal, origin = 'auto-local') {
   if (!proposal || !proposal.name) return null;
   const rate = proposalRate(proposal);
@@ -72,6 +81,11 @@ function saveProposal(proposal, origin = 'auto-local') {
   if (existing) {
     trackRate(existing, rate);
     existing.support = Number(proposal.support) || existing.support || null;
+    // historique concret des déclenchements (voir pattern-miner.js/mineCardRules)
+    // — rafraîchi à chaque mesure pour que le client voie les occurrences les
+    // plus récentes, pas seulement celles connues au moment de la création.
+    const occ = sanitizeOccurrences(proposal.occurrences);
+    if (occ) existing.occurrences = occ;
     if (rate < MIN_STRATEGY_RATE) {
       state.aiStrategies = (state.aiStrategies || []).filter((s) => s.id !== existing.id);
       if (db.ready) db.deleteAiStrategy(existing.id).catch(() => {});
@@ -93,6 +107,10 @@ function saveProposal(proposal, origin = 'auto-local') {
     rate,
     support: Number(proposal.support) || null,
     compatibleExisting: strategies.BY_KEY[proposal.compatibleExisting] ? proposal.compatibleExisting : null,
+    // uniquement présent pour les propositions du moteur LOCAL (voir
+    // pattern-miner.js) — les propositions de l'IA distante (Pollinations/
+    // Gemini/Groq) restent en texte libre, sans historique rejouable.
+    occurrences: sanitizeOccurrences(proposal.occurrences),
     origin,
     createdAt: new Date().toISOString(),
     active: false,

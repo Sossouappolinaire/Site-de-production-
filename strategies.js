@@ -15,9 +15,16 @@
 const config = require('./config');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
+// rangs des 13 valeurs d'une carte, dans l'ordre d'un jeu de 52 cartes —
+// utilisé par la stratégie « Carte disparue → retour banquier » ci-dessous.
+const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
 // table des inverses (Stratégie Dominant)
 const INVERSE = { '❤️': '♣️', '♣️': '❤️', '♦️': '♠️', '♠️': '♦️' };
+// table du « miroir » (demande admin, distincte de l'inverse ci-dessus) :
+// utilisée par la « répétition après perte » (after-loss.js, mode 'miroir')
+// — ❤️↔♦️ (les deux costumes rouges), ♠️↔♣️ (les deux costumes noirs).
+const MIRROR = { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' };
 
 // normalisation d'un costume : '❤' '♥' '♥️' → '❤️'
 function normSuit(s) {
@@ -359,6 +366,30 @@ function absenceStreaks(games, lastNumber, need) {
   return { rounds, missing };
 }
 
+// nombre de jeux consécutifs terminés, juste avant `number`, sans CETTE
+// carte précise (rang+costume, ex. « 4❤️ ») dans AUCUNE des deux mains —
+// même tolérance aux trous que absenceBefore() ci-dessus. Utilisé par la
+// stratégie « Carte disparue → retour banquier » (voir plus bas).
+function cardAbsenceBefore(games, number, token, max = 60, holeMax = 3) {
+  let count = 0;
+  let holes = 0;
+  for (let n = number - 1; n >= 1 && count < max; n--) {
+    const g = games.get(n);
+    if (!g || !g.finished) {
+      holes += 1;
+      if (holes > holeMax) break;
+      continue;
+    }
+    holes = 0;
+    const player = g.player || [];
+    const banker = g.banker || [];
+    if (!player.length && !banker.length) continue; // cartes non lisibles : ignoré
+    if (player.includes(token) || banker.includes(token)) break; // la carte était là
+    count += 1;
+  }
+  return count;
+}
+
 const absente = {
   key: 'absente',
   name: 'Carte absente (3 jeux)',
@@ -409,6 +440,81 @@ const absente = {
         rounds: res.rounds.map((r) => ({ number: r.number, player: r.ps, banker: r.bs })),
       },
     };
+  },
+};
+
+
+// ---------------------------------------------------------------------------
+// 5bis) Carte disparue → retour chez le banquier (demande admin)
+// ---------------------------------------------------------------------------
+// Règle : on surveille les 52 cartes (rang+costume) en silence. Dès qu'UNE
+// carte précise est ABSENTE des deux mains pendant `streak` jeux consécutifs
+// (3 par défaut) ET qu'elle réapparaît PRÉCISÉMENT chez le BANQUIER, on saute
+// un jeu et on prédit CETTE MÊME carte chez le banquier au jeu + `lead`
+// (2 par défaut = retour au jeu R, jeu R+1 sauté, prédiction sur R+2).
+// Vérification sur la main du BANQUIER (toutes les autres stratégies de ce
+// fichier vérifient la main du joueur) — voir predictor.js/matches(),
+// kind 'carte-banquier'.
+// Rattrapage : 1 par défaut (configurable comme pour toute stratégie via
+// maxR). PAS de mode silencieux 1 : ce mode est réservé à « ombre » et ne
+// s'affiche déjà que pour cette clé côté panneau (voir public/index.html,
+// `s.key === 'ombre'`) — aucune configuration supplémentaire à faire pour
+// l'exclure ici. Le déclencheur automatique générique (perte/rattrapage + N)
+// reste disponible, comme pour toute autre stratégie.
+const carteBanquier = {
+  key: 'carteBanquier',
+  name: 'Carte disparue → retour banquier',
+  about:
+    "On surveille les 52 cartes. Si une carte précise (rang+costume, ex. 4❤️) " +
+    "est ABSENTE des mains joueur ET banquier pendant 3 jeux consécutifs, puis " +
+    "réapparaît chez le BANQUIER, on saute 1 jeu et on prédit cette même carte " +
+    "chez le banquier au jeu +2. Vérification sur la main du BANQUIER, pas le " +
+    "joueur. Rattrapage : 1 par défaut. Le nombre de jeux consécutifs et le " +
+    "décalage sont réglables. Pas de mode silencieux pour cette stratégie.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: 1,     // rattrapage 1 maximum par défaut (demande admin)
+    b: 0,
+    lead: 2,     // retour au jeu R → jeu R+1 sauté → prédiction sur R+2
+    streak: 3,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const need = Math.max(2, Math.min(10, parseInt(cfg && cfg.streak, 10) || 3));
+    const lead = Math.max(1, parseInt(cfg && cfg.lead, 10) || 2);
+    const games = (ctx && ctx.games) || new Map();
+    const banker = game.banker || [];
+    if (!banker.length) return null;
+    // une seule carte retenue si plusieurs correspondent au jeu de retour :
+    // ordre déterministe rang (A,2..K) puis costume (♦️❤️♣️♠️), comme pour
+    // « absente » avec les costumes.
+    for (const rank of RANKS) {
+      for (const suit of SUITS) {
+        const token = `${rank}${suit}`;
+        if (!banker.includes(token)) continue;
+        const streak = cardAbsenceBefore(games, game.number, token, 60, 3);
+        if (streak < need) continue;
+        return {
+          kind: 'carte-banquier',
+          target: game.number + lead,
+          card: token,
+          label: token,
+          trigger: game.number,
+          reason:
+            `${token} absente des deux mains sur ${streak} jeux consécutifs ` +
+            `(jusqu'au #N${game.number - 1}) puis revenue chez le BANQUIER au ` +
+            `#N${game.number} → prédiction ${token} chez le banquier sur ` +
+            `#N${game.number + lead} (1 jeu sauté).`,
+          meta: { streak, from: game.number - streak, to: game.number },
+        };
+      }
+    }
+    return null;
   },
 };
 
@@ -579,7 +685,7 @@ const ombreJoueur = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, ombre, ombreJoueur];
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {
@@ -634,6 +740,6 @@ function catalog() {
 }
 
 module.exports = {
-  LIST, BY_KEY, SUITS, INVERSE, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
+  LIST, BY_KEY, SUITS, INVERSE, MIRROR, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
   normParity, triggerAt, triggerIndexOf, lastTriggerAtOrBefore, nextTriggerAfter, triggerSequence, varCounterAt,
 };

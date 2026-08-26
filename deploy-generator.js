@@ -333,6 +333,9 @@ function evaluate() {
       kind: hit.kind,
       target: hit.target,
       suit: hit.suit ? (hit.kind === 'suit' ? normSuit(hit.suit) : hit.suit) : null,
+      // carte précise (rang+costume) — uniquement pour « Carte disparue →
+      // retour banquier » (kind 'carte-banquier').
+      card: hit.card || null,
       cardsLabel: hit.cardsLabel || null,
       wantPlayer: hit.wantPlayer != null ? hit.wantPlayer : null,
       wantBanker: hit.wantBanker != null ? hit.wantBanker : null,
@@ -376,6 +379,10 @@ function matches(pred, game) {
     if (pred.wantBanker != null && game.bankerCards !== pred.wantBanker) return false;
     return true;
   }
+  // « Carte disparue → retour banquier » : carte exacte chez le BANQUIER.
+  if (pred.kind === 'carte-banquier') {
+    return (game.banker || []).includes(pred.card);
+  }
   return hasSuit(game, pred.suit);
 }
 
@@ -383,6 +390,7 @@ function resultText(pred, game) {
   if (!game) return null;
   if (pred.kind === 'parity') return \`joueur \${game.playerValue ?? '—'} (\${parityOf(game) || '—'})\`;
   if (pred.kind === 'cards') return \`joueur \${game.playerCards}/banquier \${game.bankerCards}\`;
+  if (pred.kind === 'carte-banquier') return \`banquier \${(game.banker || []).join(' ') || '—'}\`;
   return handSuits(game).join(' ');
 }
 

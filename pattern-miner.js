@@ -81,7 +81,7 @@ function hasSuit(game, suit, hand = 'joueur') {
 // permet un déclencheur du type « 4❤️ en 2e position du banquier » plutôt
 // que « 4❤️ vu chez le banquier » sans précision.
 function mineCardRules(games) {
-  const buckets = new Map(); // clé -> { support, hits:{suit:count}, hand, pos, token, k }
+  const buckets = new Map(); // clé -> { support, hits:{suit:count}, hand, pos, token, k, occ:[] }
   for (let i = 0; i < games.length; i += 1) {
     const g = games[i];
     for (const hand of ['joueur', 'banquier']) {
@@ -93,7 +93,7 @@ function mineCardRules(games) {
           const target = games[i + k];
           if (!target) continue;
           const key = `${hand}|${posIdx}|${parsed.token}|${k}`;
-          if (!buckets.has(key)) buckets.set(key, { hand, pos: posIdx, token: parsed.token, k, support: 0, hits: {}, hitPos: {} });
+          if (!buckets.has(key)) buckets.set(key, { hand, pos: posIdx, token: parsed.token, k, support: 0, hits: {}, hitPos: {}, occ: [] });
           const b = buckets.get(key);
           b.support += 1;
           for (const suit of SUITS) {
@@ -102,6 +102,15 @@ function mineCardRules(games) {
             b.hits[suit] = (b.hits[suit] || 0) + 1;
             b.hitPos[suit] = b.hitPos[suit] || {};
             b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
+          }
+          // occurrence CONCRÈTE (numéro de jeu réel, pas juste un compteur) —
+          // sert à répondre à l'acheteur « ce déclencheur a été utilisé pour
+          // prédire le jeu X » (voir shop.js/explainTrigger). On garde les
+          // 60 dernières par bucket : largement assez pour l'historique
+          // affiché au client, sans faire grossir l'objet indéfiniment.
+          if (Number.isFinite(g.number) && Number.isFinite(target.number)) {
+            b.occ.push({ from: g.number, to: target.number, suits: target.playerSuits || [] });
+            if (b.occ.length > 60) b.occ.shift();
           }
         }
       });
@@ -126,6 +135,9 @@ function mineCardRules(games) {
         evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%)${posTxt ? `, majoritairement${posTxt}` : ''}.`,
         risks: "Régularité observée sur un échantillon court : à laisser tourner en mode silencieux avant publication.",
         compatibleExisting: 'costume',
+        // historique concret des déclenchements (jeu a → jeu a+k, résultat) —
+        // voir commentaire sur b.occ ci-dessus.
+        occurrences: b.occ.map((o) => ({ from: o.from, to: o.to, hit: o.suits.includes(suit) })),
       },
     };
   });

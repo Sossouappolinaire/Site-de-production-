@@ -142,6 +142,84 @@ function findingText(name, events, rates) {
 // ---------------------------------------------------------------------------
 const SUIT_RETURN_MAX_N = 5;
 
+// ---------------------------------------------------------------------------
+// « Miroir du costume réellement sorti après une perte » (demande admin) :
+// pour chaque prédiction PERDUE, on regarde quel costume est VRAIMENT sorti
+// sur la main du joueur ce jeu-là (1ère carte de la main), on prend son
+// miroir (❤️↔♦️, ♠️↔♣️ — voir strategies.MIRROR), et on vérifie si CE
+// costume miroir apparaît ensuite sur la main du joueur au jeu +1 à +5.
+// Sert à comparer objectivement cette approche à « suitReturnAfterLoss »
+// (rejouer le costume raté lui-même) avant de l'activer en production
+// (voir after-loss.js, tracker.repeat.mode = 'miroir').
+// ---------------------------------------------------------------------------
+async function mirrorAfterLoss(predictions) {
+  const losses = (predictions || []).filter(
+    (p) => p && p.status === 'perdu' && p.suit && Number.isFinite(Number(p.target))
+  );
+  if (!losses.length) return null;
+
+  const targets = losses.map((p) => Number(p.target));
+  const minG = Math.min(...targets);
+  const maxG = Math.max(...targets) + SUIT_RETURN_MAX_N;
+
+  const suitsByNumber = new Map();
+  if (db.ready) {
+    try {
+      const rows = await db.gamesInRange(minG, maxG);
+      for (const r of rows) suitsByNumber.set(Number(r.number), r.player_suits || []);
+    } catch (_) { /* repli mémoire ci-dessous */ }
+  }
+  if (!suitsByNumber.size) {
+    for (const g of state.games.values()) {
+      if (g.number >= minG && g.number <= maxG) suitsByNumber.set(g.number, g.playerSuits || []);
+    }
+  }
+  if (!suitsByNumber.size) return null;
+
+  const perN = Array.from({ length: SUIT_RETURN_MAX_N }, () => ({ hits: 0, support: 0 }));
+  let usable = 0;
+  for (const p of losses) {
+    const t = Number(p.target);
+    const actualSuits = strategiesLib.suitsOf(suitsByNumber.get(t) || []);
+    const actualSuit = actualSuits[0];
+    const mirror = actualSuit ? strategiesLib.MIRROR[actualSuit] : null;
+    if (!mirror) continue; // jeu du déclencheur pas (encore) connu, ou costume non reconnu
+    usable += 1;
+    for (let n = 1; n <= SUIT_RETURN_MAX_N; n += 1) {
+      const suits = suitsByNumber.get(t + n);
+      if (suits === undefined) continue;
+      perN[n - 1].support += 1;
+      if (strategiesLib.suitsOf(suits).includes(mirror)) perN[n - 1].hits += 1;
+    }
+  }
+  if (!usable) return null;
+  const rates = perN
+    .map((e, i) => ({ n: i + 1, support: e.support, hits: e.hits, rate: pct(e.hits, e.support) }))
+    .filter((r) => r.support > 0);
+  if (!rates.length) return null;
+
+  const qualifying = rates.filter((r) => r.support >= MIN_SUPPORT);
+  const best = qualifying.length
+    ? qualifying.reduce((acc, r) => (r.rate > acc.rate ? r : acc))
+    : rates.slice().sort((a, b) => b.support - a.support)[0];
+
+  return { totalLosses: losses.length, usable, rates, best, reliable: qualifying.length > 0 };
+}
+
+function mirrorAfterLossFinding(name, mirror) {
+  if (!mirror || !mirror.best) return null;
+  const b = mirror.best;
+  const detail = mirror.rates.length > 1
+    ? ` Détail par décalage : ${mirror.rates.map((r) => `+${r.n} → ${r.rate}% (${r.hits}/${r.support})`).join(' · ')}.`
+    : '';
+  return (
+    `Sur ${mirror.usable} perte(s) exploitable(s) pour « ${name} », le MIROIR du costume réellement sorti ` +
+    `(❤️↔♦️, ♠️↔♣️) réapparaît sur la main du joueur au jeu +${b.n} dans ${b.rate}% des cas (${b.hits}/${b.support} observations)` +
+    `${mirror.reliable ? '' : ' — échantillon encore faible, à confirmer'}.${detail}`
+  );
+}
+
+
 async function suitReturnAfterLoss(predictions) {
   const losses = (predictions || []).filter(
     (p) => p && p.status === 'perdu' && p.suit && Number.isFinite(Number(p.target))
@@ -270,18 +348,43 @@ function silentModeFinding(name, silent) {
   return `En simulant le mode silencieux (confirmation par ${silent.lossTrigger} perte(s) rapprochée(s), fenêtre de ${silent.lossWindow}) sur « ${name} », ${silent.avoided} perte(s) sur ${silent.totalLosses} (${silent.avoidedRate}%) seraient restées silencieuses au lieu d'être envoyées publiquement — les ${silent.stillLost} autre(s) seraient quand même parties.`;
 }
 
+// Même constat que silentModeFinding() ci-dessus, mais formulé pour
+// l'ACHETEUR final (message de fin d'achat envoyé depuis le bot, voir
+// shop.js — formationFindingsFor/closingMessage) : jamais le nom technique
+// « mode silencieux » (terminologie interne du panneau admin), seulement le
+// comportement conseillé en langage clair — jouer dès le rattrapage suivant,
+// ou attendre une confirmation (une 2ᵉ perte rapprochée) avant de rejouer.
+function silentModeFindingCustomer(name, silent) {
+  if (!silent) return null;
+  if (!silent.avoided) {
+    return `Sur « ${name} », attendre une confirmation supplémentaire après une perte n'aurait évité aucune des ${silent.totalLosses} perte(s) observée(s) : mieux vaut rejouer dès le rattrapage suivant plutôt que patienter.`;
+  }
+  return `Sur « ${name} », attendre qu'une 2ᵉ perte rapprochée confirme le signal avant de rejouer aurait évité ${silent.avoided} perte(s) sur ${silent.totalLosses} (${silent.avoidedRate}%) — mais les ${silent.stillLost} autre(s) seraient quand même survenue(s). À toi de voir si tu préfères jouer directement après un rattrapage, ou patienter un peu pour plus de sécurité.`;
+}
+
 async function buildEntry(key, name, list, silentCfg) {
   const { events, doneCount } = troubleRuns(list);
   const rates = chainRates(events);
   const best = bestFormation(rates);
   const suitReturn = await suitReturnAfterLoss(list);
+  const mirror = await mirrorAfterLoss(list);
   const silent = simulateSilentMode(list, silentCfg);
 
   const findings = findingText(name, events, rates);
   const suitReturnLine = suitReturnFinding(name, suitReturn);
   if (suitReturnLine) findings.push(suitReturnLine);
+  const mirrorLine = mirrorAfterLossFinding(name, mirror);
+  if (mirrorLine) findings.push(mirrorLine);
   const silentLine = silentModeFinding(name, silent);
   if (silentLine) findings.push(silentLine);
+
+  // Constat destiné à l'ACHETEUR (bot, message de fin d'achat) : mêmes
+  // observations que ci-dessus, mais sans jamais nommer « mode silencieux ».
+  const customerFindings = findingText(name, events, rates);
+  if (suitReturnLine) customerFindings.push(suitReturnLine);
+  if (mirrorLine) customerFindings.push(mirrorLine);
+  const silentLineCustomer = silentModeFindingCustomer(name, silent);
+  if (silentLineCustomer) customerFindings.push(silentLineCustomer);
 
   return {
     key,
@@ -293,8 +396,10 @@ async function buildEntry(key, name, list, silentCfg) {
     support: best ? best.support : 0,
     reliable: !!best,
     findings,
+    customerFindings,
     rates,
     suitReturn,
+    mirror,
     silentModeBacktest: silent,
   };
 }

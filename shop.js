@@ -13,7 +13,7 @@ const store = require('./store');
 const db = require('./db');
 const ai = require('./ai-analyzer');
 const strategies = require('./strategies');
-const { stats: strategyStats } = require('./predictor');
+const { stats: strategyStats, state: predictorState } = require('./predictor');
 const formation = require('./formation');
 
 // ---------------------------------------------------------------------------
@@ -116,6 +116,27 @@ const TEXTS = {
     ar: '💬 يمكنك الآن طرح أي سؤال حول هذه الاستراتيجية، وسأشرحها لك بالتفصيل.',
     ru: '💬 Теперь вы можете задать любой вопрос об этой стратегии, я подробно объясню.',
     es: '💬 Ahora puedes hacerme cualquier pregunta sobre esta estrategia, te la explicaré en detalle.',
+  },
+  askButton: {
+    fr: '🗣️ Répondre-moi',
+    en: '🗣️ Answer me',
+    ar: '🗣️ أجبني',
+    ru: '🗣️ Ответь мне',
+    es: '🗣️ Respóndeme',
+  },
+  understoodButton: {
+    fr: "✅ J'ai compris",
+    en: '✅ I understand',
+    ar: '✅ لقد فهمت',
+    ru: '✅ Я понял(а)',
+    es: '✅ Lo he entendido',
+  },
+  askPrompt: {
+    fr: '✍️ Écris ta question ci-dessous, je réponds tout de suite.',
+    en: '✍️ Type your question below, I will answer right away.',
+    ar: '✍️ اكتب سؤالك أدناه، سأجيب فورًا.',
+    ru: '✍️ Напишите свой вопрос ниже, я отвечу сразу.',
+    es: '✍️ Escribe tu pregunta abajo, respondo enseguida.',
   },
   langSaved: {
     fr: '✅ Langue enregistrée : Français.',
@@ -270,8 +291,8 @@ async function formationFindingsFor(item) {
   else if (item.sourceKey === 'predit') key = 'predit';
   if (!key) return null;
   const entry = list.find((s) => s.key === key);
-  if (!entry || !entry.findings || !entry.findings.length) return null;
-  return entry.findings.join(' ');
+  if (!entry || !entry.customerFindings || !entry.customerFindings.length) return null;
+  return entry.customerFindings.join(' ');
 }
 
 async function closingMessage(item, lang) {
@@ -635,7 +656,7 @@ function listAll() { return [...shop.items].sort((a, b) => (b.createdAt || '').l
 function listActive() { return listAll().filter((i) => i.active); }
 function getItem(id) { return shop.items.find((i) => i.id === id) || null; }
 
-async function createItem({ source = 'custom', sourceKey = null, realName = '', details = '', example = '', rate = null, price = null, payAmountLocal = null, auto = false } = {}) {
+async function createItem({ source = 'custom', sourceKey = null, realName = '', details = '', example = '', rate = null, price = null, payAmountLocal = null, auto = false, occurrences = null } = {}) {
   const existingNames = shop.items.map((i) => i.aiName);
   const aiName = await generateAiName(existingNames);
   const finalRate = Number.isFinite(rate) ? rate : null;
@@ -657,6 +678,10 @@ async function createItem({ source = 'custom', sourceKey = null, realName = '', 
     // sans prix saisi).
     payAmountLocal: Number.isFinite(payAmountLocal) ? payAmountLocal : defaultPayAmountFor(source, finalPrice),
     auto: !!auto, // publiée automatiquement (déclencheur IA >93%) — voir syncAutoIaListings()
+    // historique concret des déclenchements de ce déclencheur (uniquement
+    // pour les articles issus du moteur IA LOCAL, voir pattern-miner.js) —
+    // sert à l'explication envoyée au client après achat (explainTrigger).
+    occurrences: Array.isArray(occurrences) && occurrences.length ? occurrences : null,
     code: genCode(),
     active: true,
     codeUsedBy: null,
@@ -748,7 +773,47 @@ function publishFromAiStrategy(aiItem, { details = '', example = '', price = nul
     price,
     payAmountLocal,
     auto,
+    occurrences: aiItem.occurrences,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Explication envoyée au client après achat (bouton « Compris » / demande
+// explicite) : UNIQUEMENT pour un déclencheur IA (source === 'ia') — une
+// stratégie du catalogue existant n'en a pas besoin, elle a déjà ses propres
+// statistiques et le constat Formation habituel (voir formationFindingsFor).
+// Donne, jeu par jeu, l'historique réel des déclenchements de CE
+// déclencheur précis (voir pattern-miner.js/mineCardRules → occurrences),
+// avec le nom du/des canal(aux) où les prédictions du bot sont publiées.
+// ---------------------------------------------------------------------------
+function explainTrigger(item) {
+  if (!item || item.source !== 'ia') return null; // pas nécessaire pour le catalogue existant
+
+  const channelNames = (predictorState.channels || [])
+    .filter((c) => (predictorState.activeChannels || []).includes(c.id))
+    .map((c) => c.title || String(c.id));
+  const channelText = channelNames.length ? channelNames.join(', ') : 'aucun canal actif pour le moment';
+
+  const occ = Array.isArray(item.occurrences) ? item.occurrences : [];
+  if (!occ.length) {
+    // Cas normal juste après la découverte du déclencheur, ou pour une
+    // proposition venue de l'IA distante (texte libre, sans historique
+    // rejouable — voir ai-auto.js/saveProposal) : on reste honnête plutôt
+    // que d'inventer des chiffres.
+    return (
+      `Ce déclencheur (${item.realName || item.aiName}) a été détecté par l'analyseur, ` +
+      `mais son historique jeu par jeu n'est pas encore disponible pour l'affichage détaillé. ` +
+      `Les prédictions confirmées sont publiées dans : ${channelText}.`
+    );
+  }
+
+  const lines = occ.map((o) => `• Jeu ${o.from} → a ciblé le jeu ${o.to} → ${o.hit ? '✅ confirmé' : '❌ raté'}`);
+  const wins = occ.filter((o) => o.hit).length;
+  return (
+    `Déclencheur : ${item.realName || item.aiName}\n` +
+    `Historique réel (${occ.length} déclenchement(s), ${wins}/${occ.length} confirmés) — publié dans : ${channelText}\n\n` +
+    lines.join('\n')
+  );
 }
 
 function refreshRateFromStrategy(id) {
@@ -785,6 +850,11 @@ async function syncAutoIaListings(aiList) {
     const existing = shop.items.find((i) => i.source === 'ia' && i.auto && i.sourceKey === ia.id);
     if (existing) {
       const newPrice = priceForIaRate(ia.rate);
+      // historique concret des déclenchements (voir pattern-miner.js) —
+      // rafraîchi à chaque synchro pour rester à jour dans l'explication
+      // envoyée au client (voir explainTrigger ci-dessous).
+      const newOcc = Array.isArray(ia.occurrences) && ia.occurrences.length ? ia.occurrences : null;
+      if (newOcc) { existing.occurrences = newOcc; changed = true; }
       if (existing.rate !== ia.rate || !existing.active || existing.price !== newPrice) {
         existing.rate = ia.rate;
         existing.active = true;
@@ -968,6 +1038,7 @@ module.exports = {
   LANGS, LANG_CODES,
   AUTO_IA_THRESHOLD,
   getPricingSettings, setMethodPrice, setExchangeRate, setSupportRate, getUsdToXof, supportThanksMessage,
+  explainTrigger,
   paymentAmountFor,
   expirePaymentCode,
   t,
