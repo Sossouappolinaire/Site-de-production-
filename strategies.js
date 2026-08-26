@@ -15,9 +15,6 @@
 const config = require('./config');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
-// rangs des 13 valeurs d'une carte, dans l'ordre d'un jeu de 52 cartes —
-// utilisé par la stratégie « Carte disparue → retour banquier » ci-dessous.
-const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
 // table des inverses (Stratégie Dominant)
 const INVERSE = { '❤️': '♣️', '♣️': '❤️', '♦️': '♠️', '♠️': '♦️' };
@@ -366,30 +363,6 @@ function absenceStreaks(games, lastNumber, need) {
   return { rounds, missing };
 }
 
-// nombre de jeux consécutifs terminés, juste avant `number`, sans CETTE
-// carte précise (rang+costume, ex. « 4❤️ ») dans AUCUNE des deux mains —
-// même tolérance aux trous que absenceBefore() ci-dessus. Utilisé par la
-// stratégie « Carte disparue → retour banquier » (voir plus bas).
-function cardAbsenceBefore(games, number, token, max = 60, holeMax = 3) {
-  let count = 0;
-  let holes = 0;
-  for (let n = number - 1; n >= 1 && count < max; n--) {
-    const g = games.get(n);
-    if (!g || !g.finished) {
-      holes += 1;
-      if (holes > holeMax) break;
-      continue;
-    }
-    holes = 0;
-    const player = g.player || [];
-    const banker = g.banker || [];
-    if (!player.length && !banker.length) continue; // cartes non lisibles : ignoré
-    if (player.includes(token) || banker.includes(token)) break; // la carte était là
-    count += 1;
-  }
-  return count;
-}
-
 const absente = {
   key: 'absente',
   name: 'Carte absente (3 jeux)',
@@ -445,39 +418,47 @@ const absente = {
 
 
 // ---------------------------------------------------------------------------
-// 5bis) Carte disparue → retour chez le banquier (demande admin)
+// 5bis) Prédiction dans l'ombre (Banquier) — retour d'un costume sur la main
+// du BANQUIER uniquement (demande admin)
 // ---------------------------------------------------------------------------
-// Règle : on surveille les 52 cartes (rang+costume) en silence. Dès qu'UNE
-// carte précise est ABSENTE des deux mains pendant `streak` jeux consécutifs
-// (3 par défaut) ET qu'elle réapparaît PRÉCISÉMENT chez le BANQUIER, on saute
-// un jeu et on prédit CETTE MÊME carte chez le banquier au jeu + `lead`
-// (2 par défaut = retour au jeu R, jeu R+1 sauté, prédiction sur R+2).
-// Vérification sur la main du BANQUIER (toutes les autres stratégies de ce
-// fichier vérifient la main du joueur) — voir predictor.js/matches(),
-// kind 'carte-banquier'.
-// Rattrapage : 1 par défaut (configurable comme pour toute stratégie via
-// maxR). PAS de mode silencieux 1 : ce mode est réservé à « ombre » et ne
-// s'affiche déjà que pour cette clé côté panneau (voir public/index.html,
-// `s.key === 'ombre'`) — aucune configuration supplémentaire à faire pour
-// l'exclure ici. Le déclencheur automatique générique (perte/rattrapage + N)
-// reste disponible, comme pour toute autre stratégie.
+// Règle identique à « Prédiction dans l'ombre (Joueur) » mais inversée :
+// on surveille en silence les 4 costumes de la main du BANQUIER UNIQUEMENT
+// (le joueur n'entre jamais en compte). Dès qu'un costume est absent de la
+// main du banquier pendant AU MOINS `absence` jeux consécutifs (4 par
+// défaut), il passe en état « surveillé ». Aucune prédiction n'est émise
+// pendant l'absence : le bot attend son RETOUR sur la main du banquier,
+// aussi longtemps qu'il faut. Le jeu où il RÉAPPARAÎT devient le
+// déclencheur : on prédit ce même costume chez le BANQUIER au jeu
+// déclencheur + `lead` (4 par défaut), vérifié sur la main du banquier +
+// rattrapages configurés.
+//   ❤️ absent (banquier) aux jeux 1-2-3 → rien … ❤️ revient au jeu 7 →
+//   prédiction ❤️ chez le banquier sur le jeu 11 (7 + 4).
+// Vérification sur la main du BANQUIER (kind 'suit-banquier', voir
+// predictor.js/matches()). Pas de mode silencieux 1 : ce mode reste réservé
+// à « ombre » (voir public/index.html, `s.key === 'ombre'`) — rien à
+// exclure ici, cette stratégie n'a jamais eu ce bloc dans le panneau. Le
+// déclencheur automatique générique (perte/rattrapage + N) reste disponible.
 const carteBanquier = {
   key: 'carteBanquier',
   name: 'Carte disparue → retour banquier',
   about:
-    "On surveille les 52 cartes. Si une carte précise (rang+costume, ex. 4❤️) " +
-    "est ABSENTE des mains joueur ET banquier pendant 3 jeux consécutifs, puis " +
-    "réapparaît chez le BANQUIER, on saute 1 jeu et on prédit cette même carte " +
-    "chez le banquier au jeu +2. Vérification sur la main du BANQUIER, pas le " +
-    "joueur. Rattrapage : 1 par défaut. Le nombre de jeux consécutifs et le " +
-    "décalage sont réglables. Pas de mode silencieux pour cette stratégie.",
+    "Surveillance silencieuse des 4 costumes de la main du BANQUIER " +
+    "uniquement (le joueur n'est jamais pris en compte). Un costume absent " +
+    "de la main du banquier pendant au moins 3 jeux consécutifs (réglable) " +
+    "est mis sous surveillance. Aucune prédiction n'est émise pendant " +
+    "l'absence : le bot attend son RETOUR sur la main du banquier, aussi " +
+    "longtemps qu'il faut. Le jeu du retour devient le déclencheur et le " +
+    "même costume est prédit chez le BANQUIER au jeu +4 (réglable). " +
+    "Exemple : ❤️ absent de la main du banquier aux jeux 1 à 3, retour au " +
+    "jeu 7 → prédiction ❤️ chez le banquier sur le jeu 11. Pas de mode " +
+    "silencieux pour cette stratégie.",
   defaults: {
     enabled: true,
     format: config.DEFAULT_FORMAT,
-    maxR: 1,     // rattrapage 1 maximum par défaut (demande admin)
+    maxR: config.DEFAULT_MAX_R,
     b: 0,
-    lead: 2,     // retour au jeu R → jeu R+1 sauté → prédiction sur R+2
-    streak: 3,
+    lead: 4,
+    absence: 3,
     template: null,
     channels: [],
   },
@@ -485,36 +466,31 @@ const carteBanquier = {
   source: 'finished',
   detect(game, cfg, ctx) {
     if (!game || !game.finished) return null;
-    const need = Math.max(2, Math.min(10, parseInt(cfg && cfg.streak, 10) || 3));
-    const lead = Math.max(1, parseInt(cfg && cfg.lead, 10) || 2);
     const games = (ctx && ctx.games) || new Map();
-    const banker = game.banker || [];
-    if (!banker.length) return null;
-    // une seule carte retenue si plusieurs correspondent au jeu de retour :
-    // ordre déterministe rang (A,2..K) puis costume (♦️❤️♣️♠️), comme pour
-    // « absente » avec les costumes.
-    for (const rank of RANKS) {
-      for (const suit of SUITS) {
-        const token = `${rank}${suit}`;
-        if (!banker.includes(token)) continue;
-        const streak = cardAbsenceBefore(games, game.number, token, 60, 3);
-        if (streak < need) continue;
-        return {
-          kind: 'carte-banquier',
-          target: game.number + lead,
-          card: token,
-          label: token,
-          trigger: game.number,
-          reason:
-            `${token} absente des deux mains sur ${streak} jeux consécutifs ` +
-            `(jusqu'au #N${game.number - 1}) puis revenue chez le BANQUIER au ` +
-            `#N${game.number} → prédiction ${token} chez le banquier sur ` +
-            `#N${game.number + lead} (1 jeu sauté).`,
-          meta: { streak, from: game.number - streak, to: game.number },
-        };
-      }
+    const need = Math.max(1, Math.min(30, parseInt(cfg && cfg.absence, 10) || 3));
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 4));
+    const scope = 'banquier'; // fixe : uniquement la main du banquier, jamais le joueur
+    const present = SUITS.filter((s) => suitPresent(game, s, scope));
+    if (!present.length) return null;
+    let best = null;
+    for (const suit of present) {
+      const gap = absenceBefore(games, game.number, suit, scope);
+      if (gap >= need && (!best || gap > best.gap)) best = { suit, gap };
     }
-    return null;
+    if (!best) return null;
+    return {
+      kind: 'suit-banquier',
+      target: game.number + lead,
+      suit: best.suit,
+      label: best.suit,
+      trigger: game.number,
+      reason:
+        `${best.suit} absent de la main du BANQUIER pendant ${best.gap} jeux consécutifs ` +
+        `(#N${game.number - best.gap} → #N${game.number - 1}), retour au jeu ` +
+        `#N${game.number} → prédiction ${best.suit} chez le banquier sur ` +
+        `#N${game.number + lead} (+${lead})`,
+      meta: { absence: best.gap, need, lead, scope, returnedAt: game.number },
+    };
   },
 };
 
@@ -533,6 +509,7 @@ function suitPresent(g, suit, scope) {
   const ps = suitsOf(g.playerSuits);
   const bs = suitsOf(g.bankerSuits);
   if (scope === 'joueur') return ps.includes(suit);
+  if (scope === 'banquier') return bs.includes(suit);
   return ps.includes(suit) || bs.includes(suit);
 }
 

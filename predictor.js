@@ -933,6 +933,20 @@ function hasSuit(game, suit) {
   return handSuits(game).includes(want);
 }
 
+// équivalents côté BANQUIER — utilisés par la stratégie « Carte disparue →
+// retour banquier » (kind 'suit-banquier'), qui se vérifie sur la main du
+// banquier plutôt que celle du joueur (voir matches()/resultText()).
+function bankerHandSuits(game) {
+  if (!game) return [];
+  return strategies.suitsOf(game.bankerSuits);
+}
+
+function hasSuitBanker(game, suit) {
+  const want = normSuit(suit);
+  if (!want) return false;
+  return bankerHandSuits(game).includes(want);
+}
+
 function suitForNumber(n) {
   return strategies.suitForNumber(n);
 }
@@ -1163,7 +1177,7 @@ function evaluate() {
       strategyName: def.name,
       kind: hit.kind,
       target: hit.target,
-      suit: hit.suit ? (hit.kind === 'suit' ? normSuit(hit.suit) : hit.suit) : null,
+      suit: hit.suit ? (hit.kind === 'suit' || hit.kind === 'suit-banquier' ? normSuit(hit.suit) : hit.suit) : null,
       // carte précise (rang+costume, ex. « 4❤️ ») — uniquement pour la
       // stratégie « Carte disparue → retour banquier » (kind 'carte-banquier').
       card: hit.card || null,
@@ -1173,9 +1187,11 @@ function evaluate() {
       label: hit.label || hit.suit || '',
       reason: hit.reason || '',
       meta: hit.meta || null,
-      // « carte-banquier » se vérifie sur la main du BANQUIER — toutes les
-      // autres stratégies restent sur la main du joueur (voir matches()).
-      hand: hit.kind === 'carte-banquier' ? 'banquier' : 'joueur',
+      // « carte-banquier » (ancien format) et « suit-banquier » (stratégie
+      // « Carte disparue → retour banquier ») se vérifient sur la main du
+      // BANQUIER — toutes les autres stratégies restent sur la main du
+      // joueur (voir matches()).
+      hand: hit.kind === 'carte-banquier' || hit.kind === 'suit-banquier' ? 'banquier' : 'joueur',
       trigger: hit.trigger != null ? hit.trigger : null,
       from: source.number,
       step: 0,
@@ -1229,6 +1245,11 @@ function matches(pred, game) {
   if (pred.kind === 'carte-banquier') {
     return (game.banker || []).includes(pred.card);
   }
+  // « Carte disparue → retour banquier » (nouvelle version) : costume
+  // vérifié sur la main du BANQUIER, pas celle du joueur.
+  if (pred.kind === 'suit-banquier') {
+    return hasSuitBanker(game, pred.suit);
+  }
   return hasSuit(game, pred.suit);
 }
 
@@ -1237,6 +1258,7 @@ function resultText(pred, game) {
   if (pred.kind === 'parity') return `joueur ${game.playerValue ?? '—'} (${parityOf(game) || '—'})`;
   if (pred.kind === 'cards') return `joueur ${game.playerCards}/banquier ${game.bankerCards}`;
   if (pred.kind === 'carte-banquier') return `banquier ${(game.banker || []).join(' ') || '—'}`;
+  if (pred.kind === 'suit-banquier') return bankerHandSuits(game).join(' ') || '—';
   return handSuits(game).join(' ');
 }
 

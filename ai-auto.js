@@ -12,6 +12,7 @@ const db = require('./db');
 const { state } = require('./predictor');
 const cumulative = require('./cumulative');
 const advisor = require('./strategy-advisor');
+const formation = require('./formation');
 
 const auto = {
   enabled: config.AI_AUTO_ENABLED !== false,
@@ -287,6 +288,12 @@ function start(onChange) {
       .then(() => runRemote())
       .then((r) => { if (r && onChange) onChange(); })
       .catch((e) => { auto.lastError = e.message; auto.lastRemoteAt = Date.now(); });
+    // formation (constat « après une perte/rattrapage, N prédictions
+    // validées d'affilée ») : recalculée sur ce même cycle (~3 min) plutôt
+    // que sur le cycle local (15 s), car son moteur interroge plusieurs
+    // fois la base par stratégie (retour du costume, miroir, backtest du
+    // mode silencieux) — inutile de la relancer aussi souvent que l'avis.
+    formation.run({ remote: false }).catch(() => {});
     // rafraîchit aussi le statut quota/validité des clés IA (voir
     // ai.refreshQuotaStatus()) au même rythme, pour que le badge affiché
     // sur la page Analyseur IA reste à jour sans attendre un clic manuel.
