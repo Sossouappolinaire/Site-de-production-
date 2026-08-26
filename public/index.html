@@ -1307,6 +1307,12 @@ Faites-en bon usage !
             </div>
             <div class="field"><label>Nombre de prédictions par stratégie créée</label><input id="preditPerStrategy" type="number" min="1" max="50" value="${esc(String(p.perStrategy ?? 2))}"><p class="small">Exemple : 2 → une stratégie certifiée prédit 2 fois quand son déclencheur est trouvé, puis le panneau attend une nouvelle stratégie (priorité aux 100%).</p></div>
             <label class="check"><input id="preditCombo" type="checkbox" ${p.requireCombo ? 'checked' : ''}> N’envoyer que les signaux confirmés par deux stratégies certifiées</label>
+            <label class="check" style="margin-top:10px"><input id="preditSilent" type="checkbox" ${p.silentMode ? 'checked' : ''}> N’envoyer qu’après confirmation par pertes rapprochées (filtre « pertes rapprochées »)</label>
+            <p class="small">Tant qu’aucune série de pertes rapprochées n’est observée, les prédictions restent suivies en interne mais ne partent pas sur le canal. Dès qu’assez de pertes rapprochées tombent, l’envoi s’active jusqu’à la prochaine victoire publiée.${p.silentGate ? ` <b>État actuel : ${p.silentGate.armed ? 'envoi actif' : `silencieux (${p.silentGate.lossesInWindow || 0}/${p.silentLossTrigger ?? 2} perte(s) comptée(s))`}</b>` : ''}</p>
+            <div class="two-col" style="margin-top:10px">
+              <div class="field"><label>Pertes rapprochées nécessaires</label><input id="preditSilentTrigger" type="number" min="1" max="5" value="${esc(String(p.silentLossTrigger ?? 2))}"></div>
+              <div class="field"><label>Écart maximum entre ces pertes (prédictions)</label><input id="preditSilentWindow" type="number" min="1" max="20" value="${esc(String(p.silentLossWindow ?? 3))}"></div>
+            </div>
             <div class="notice" style="margin-top:14px"><b>Aperçu du format ${esc(String(p.format ?? 1))}</b><pre style="white-space:pre-wrap;margin:8px 0 0">${esc(p.formatPreview || '')}</pre></div>
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="savePredit()">Enregistrer</button></div></div>
         </div>
@@ -1321,7 +1327,7 @@ Faites-en bon usage !
         ${retired.length ? `<section class="section"><div class="section-head"><div><span class="eyebrow">Retirées</span><h2 style="margin-top:7px">Stratégies sorties du panneau</h2></div></div><div class="panel">${retired.map(r => `<div class="notice warn"><b>${esc(r.name)}</b> — ${esc(r.reason || '')} <span class="muted">${formatDate(r.retiredAt)}</span></div>`).join('')}</div></section>` : ''}`;
     }
     async function savePredit() {
-      try { await api('/api/predit/config', 'POST', { enabled: $('#preditEnabled')?.checked, requireCombo: $('#preditCombo')?.checked, minRate: val('preditMinRate'), minSample: val('preditSample'), maxR: val('preditMaxR'), format: val('preditFormat'), perStrategy: val('preditPerStrategy'), channels: ids(val('preditChannel')) }); await refresh(); preditPage(); toast('Panneau Prédit enregistré.'); }
+      try { await api('/api/predit/config', 'POST', { enabled: $('#preditEnabled')?.checked, requireCombo: $('#preditCombo')?.checked, silentMode: $('#preditSilent')?.checked, silentLossTrigger: val('preditSilentTrigger'), silentLossWindow: val('preditSilentWindow'), minRate: val('preditMinRate'), minSample: val('preditSample'), maxR: val('preditMaxR'), format: val('preditFormat'), perStrategy: val('preditPerStrategy'), channels: ids(val('preditChannel')) }); await refresh(); preditPage(); toast('Panneau Prédit enregistré.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function savePreditChannel() {
@@ -1355,15 +1361,21 @@ Faites-en bon usage !
       return out;
     }
     function afterLossRepeatRow(prefix, repeat) {
-      const r = repeat || { enabled: false, lead: 5 };
-      return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0">
-        <label class="check" style="flex:1"><input id="${prefix}-repeat-on" type="checkbox" ${r.enabled ? 'checked' : ''}> Même costume après une perte</label>
+      const r = repeat || { enabled: false, lead: 5, mode: 'meme' };
+      return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <label class="check" style="flex:1;min-width:180px"><input id="${prefix}-repeat-on" type="checkbox" ${r.enabled ? 'checked' : ''}> Republier un costume après une perte</label>
+        <div class="field" style="max-width:220px;margin:0"><label style="font-size:11px">Costume à republier</label>
+          <select id="${prefix}-repeat-mode">
+            <option value="meme" ${r.mode !== 'miroir' ? 'selected' : ''}>Le même costume qui a perdu</option>
+            <option value="miroir" ${r.mode === 'miroir' ? 'selected' : ''}>Le miroir du costume réellement sorti (❤️↔♦️, ♠️↔♣️)</option>
+          </select>
+        </div>
         <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Décalage (+N jeux)</label><input id="${prefix}-repeat-lead" type="number" min="1" max="50" value="${esc(String(r.lead || 5))}"></div>
       </div>
-      <p class="small muted" style="margin:6px 0 0">Dès qu'une prédiction de cette stratégie est perdue, prédit le même costume N jeux plus loin (ex. +5 ou +10). Indépendant des déclencheurs ci-dessus.</p>`;
+      <p class="small muted" style="margin:6px 0 0">Dès qu'une prédiction de cette stratégie est perdue, republie un costume N jeux plus loin (ex. +5 ou +10) : soit le même costume raté, soit le miroir de celui réellement sorti sur la main du joueur ce jeu-là. Indépendant des déclencheurs ci-dessus.</p>`;
     }
     function readAfterLossRepeat(prefix) {
-      return { enabled: !!$(`#${prefix}-repeat-on`)?.checked, lead: val(`${prefix}-repeat-lead`) };
+      return { enabled: !!$(`#${prefix}-repeat-on`)?.checked, lead: val(`${prefix}-repeat-lead`), mode: val(`${prefix}-repeat-mode`) };
     }
     // options du sélecteur « canal du site » : la même liste que la page
     // Canaux (voir siteChannelsView côté serveur), avec une option vide pour
