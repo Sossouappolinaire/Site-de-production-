@@ -271,7 +271,7 @@ function triggered(rule, game) {
 // base de données, puisque panel.predictions est réenregistré en entier par
 // persist()/db.savePreditState()).
 function dropPredictionsFor(id) {
-  panel.predictions = panel.predictions.filter((p) => !p.sources.some((s) => s.id === id));
+  panel.predictions = panel.predictions.filter((p) => !(p.sources || []).some((s) => s.id === id));
 }
 
 function certifyDiscoveries() {
@@ -533,21 +533,27 @@ function verify(games) {
   for (const pred of panel.predictions) {
     if (pred.status !== 'en attente') continue;
     if (pred.skipped == null) pred.skipped = 0;
-    let checked = pred.target + pred.step;
-    while (checked <= last) {
-      const g = gameByNumber(games, checked);
-      // Un tour absent, non terminé ou sans cartes lues (flux qui « saute »)
-      // est ignoré — il ne consomme PAS d'étape de rattrapage et ne peut
-      // donc pas provoquer une fausse perte.
-      if (!g || g.finished === false || g.complete === false || !suitsOf(g).length) {
-        checked += 1;
+    // CORRECTIF « prédictions IA mal vérifiées » : le curseur de lecture est
+    // désormais MÉMORISÉ sur la prédiction. Avant, chaque passage repartait
+    // de `target + step`, si bien qu'un jeu déjà contrôlé au tour précédent
+    // (lorsqu'un tour du milieu avait été sauté faute de données) était
+    // recompté une seconde fois : un rattrapage était consommé pour rien et
+    // la prédiction était déclarée perdue trop tôt (ou gagnée sur le mauvais
+    // jeu). On avance maintenant un curseur unique, jamais réévalué.
+    if (pred.cursor == null || pred.cursor < pred.target) pred.cursor = pred.target + (pred.step || 0);
+    while (pred.cursor <= last) {
+      const g = gameByNumber(games, pred.cursor);
+      // Tour déjà présent mais PAS ENCORE TERMINÉ : on ne le saute pas, on
+      // attend simplement le prochain passage. Le sauter reviendrait à
+      // vérifier la prédiction sur le mauvais numéro de jeu.
+      if (g && (g.finished === false || g.complete === false)) break;
+      // Tour absent du flux ou sans cartes lisibles : ignoré, il ne consomme
+      // PAS d'étape de rattrapage et ne peut donc pas provoquer une fausse
+      // perte. Au-delà de 6 tours illisibles consécutifs, la prédiction est
+      // annulée (même règle que predictor.js) au lieu de rester bloquée.
+      if (!g || !suitsOf(g).length) {
+        pred.cursor += 1;
         pred.skipped += 1;
-        // CORRECTIF « prédictions IA jamais vérifiées » : sans plafond, une
-        // série de tours illisibles laissait la prédiction bloquée en
-        // « en attente » pour toujours — contrairement aux stratégies
-        // existantes (voir predictor.js verify()), qui annulent après 6
-        // tours illisibles d'affilée. On applique désormais la même règle
-        // ici plutôt que d'attendre indéfiniment.
         if (pred.skipped > 6) {
           pred.status = 'annulé';
           pred.closedAt = new Date().toISOString();
@@ -560,18 +566,20 @@ function verify(games) {
       pred.skipped = 0;
       if (suitsOf(g).includes(pred.suit)) {
         pred.status = 'gagné';
+        pred.hitOn = pred.cursor;
         pred.closedAt = new Date().toISOString();
         closed.push(pred);
         break;
       }
       if (pred.step >= pred.maxR) {
         pred.status = 'perdu';
+        pred.lastCheckedGame = pred.cursor;
         pred.closedAt = new Date().toISOString();
         closed.push(pred);
         break;
       }
-      pred.step += 1;
-      checked += 1;
+      pred.step += 1;   // un rattrapage réellement consommé sur un tour lisible
+      pred.cursor += 1;
     }
   }
   // une règle certifiée qui perd sort immédiatement du panneau
