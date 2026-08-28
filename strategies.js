@@ -708,6 +708,18 @@ function defaultsFor(key) {
     shadowChannels: [],
     publishedChannelInfos: [],
     shadowChannelInfos: [],
+    // --- Ajustement automatique par l'IA (commun à TOUTES les stratégies) ---
+    // Désactivé par défaut : la stratégie prédit alors normalement, selon sa
+    // seule logique (voir strategies.js). Si activé, et UNIQUEMENT pour les
+    // stratégies qui prédisent un COSTUME (kind 'suit' / 'suit-banquier'),
+    // predictor.js compare — au moment de chaque nouvelle prédiction — le
+    // taux de réussite récent du costume que la stratégie s'apprête à jouer
+    // avec celui des 3 autres costumes pour CETTE MÊME stratégie. Si un autre
+    // costume affiche un net avantage (échantillon et écart suffisants), il
+    // est substitué automatiquement (voir aiSuitOverride() dans predictor.js).
+    // Sans quoi (bouton désactivé, ou stratégie sans costume comme « Match nul »
+    // ou « Pair/Impair »), rien ne change : comportement normal.
+    aiAuto: false,
     ...JSON.parse(JSON.stringify(s.defaults)),
   };
 }

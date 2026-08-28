@@ -179,7 +179,20 @@ async function restoreFromDb() {
   }
   if (Array.isArray(saved.certified)) panel.certified = saved.certified;
   if (Array.isArray(saved.retired)) panel.retired = saved.retired;
-  if (Array.isArray(saved.predictions)) panel.predictions = saved.predictions.slice(0, 200);
+  if (Array.isArray(saved.predictions)) {
+    // CORRECTIF (même règle qu'ailleurs) : au redémarrage, on ne rejette pas
+    // les entrées encore « en attente » au-delà de 200 — seules les entrées
+    // déjà résolues sont plafonnées.
+    const keep = [];
+    let resolvedCount = 0;
+    for (const p of saved.predictions) {
+      if (p.status === 'en attente' || resolvedCount < 200) {
+        keep.push(p);
+        if (p.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    panel.predictions = keep;
+  }
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
@@ -468,7 +481,21 @@ function makePredictions(games) {
       break;
     }
   }
-  panel.predictions = panel.predictions.slice(0, 200);
+  // CORRECTIF (identique à predictor.js) : ne jamais tronquer une prédiction
+  // encore « en attente » — sinon son message Telegram reste bloqué sans
+  // vérification pour toujours. Seul le nombre de prédictions déjà RÉSOLUES
+  // est plafonné à 200 (les plus récentes conservées en priorité).
+  if (panel.predictions.length > 200) {
+    const keep = [];
+    let resolvedCount = 0;
+    for (const p of panel.predictions) {
+      if (p.status === 'en attente' || resolvedCount < 200) {
+        keep.push(p);
+        if (p.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    panel.predictions = keep;
+  }
   return created;
 }
 

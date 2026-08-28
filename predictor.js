@@ -188,6 +188,10 @@ function setStrategyConfig(key, patch = {}) {
   // un seul token API pour toute l'application (réglages) : plus de token par stratégie
   delete next.token;
   if (patch.bilan !== undefined) next.bilan = !!patch.bilan;
+  // ajustement automatique par l'IA (voir strategies.js/defaultsFor) : simple
+  // interrupteur, effectif seulement pour les stratégies à costume (voir
+  // aiSuitOverride() plus bas, appelée depuis evaluate()).
+  if (patch.aiAuto !== undefined) next.aiAuto = !!patch.aiAuto;
   state.strategies[key] = next;
   // ⚠️ Chaque mode possède ses PROPRES réglages : on ne remet à zéro l'état
   // d'un mode que si l'une de SES valeurs a réellement changé. Un simple
@@ -1107,6 +1111,49 @@ function bumpCounters(round) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Ajustement automatique par l'IA (voir strategies.js/defaultsFor, champ
+// `aiAuto`, désactivé par défaut) — UNIQUEMENT pour les stratégies qui
+// prédisent un COSTUME (kind 'suit' ou 'suit-banquier' — Match nul et
+// Pair/Impair n'en ont pas, ce réglage n'a alors aucun effet pour elles).
+//
+// Principe : à partir de l'historique RÉEL des prédictions déjà résolues de
+// CETTE stratégie (state.predictions, gagné/perdu uniquement — annulé exclu),
+// on calcule le taux de réussite obtenu pour chacun des 4 costumes. Si le
+// costume que la stratégie s'apprête à jouer a un taux nettement inférieur à
+// un autre costume — échantillon suffisant des deux côtés — on substitue ce
+// dernier. Sinon (pas assez de recul, ou aucun autre costume nettement
+// meilleur), la stratégie prédit normalement, costume inchangé.
+const AI_AUTO_MIN_SAMPLE = 5;  // observations minimum par costume comparé
+const AI_AUTO_MIN_EDGE = 15;   // avance minimum (points de %) exigée pour basculer
+
+function suitPerformance(key) {
+  const rates = {};
+  for (const s of SUITS) {
+    const list = state.predictions.filter(
+      (p) => p.strategy === key && p.suit === s && (p.status === 'gagné' || p.status === 'perdu'),
+    );
+    const win = list.filter((p) => p.status === 'gagné').length;
+    rates[s] = { win, total: list.length, rate: list.length ? Math.round((win / list.length) * 100) : null };
+  }
+  return rates;
+}
+
+function aiSuitOverride(key, hit) {
+  const rates = suitPerformance(key);
+  const current = rates[hit.suit];
+  const currentRate = current && current.total >= AI_AUTO_MIN_SAMPLE ? current.rate : 0;
+  let best = null;
+  for (const s of SUITS) {
+    if (s === hit.suit) continue;
+    const r = rates[s];
+    if (!r || r.total < AI_AUTO_MIN_SAMPLE) continue;
+    if (!best || r.rate > best.rate) best = { suit: s, ...r };
+  }
+  if (!best || best.rate - currentRate < AI_AUTO_MIN_EDGE) return null;
+  return best;
+}
+
 function onFinished(round) {
   state.lastFinished = round;
   state.history.unshift(round);
@@ -1150,6 +1197,25 @@ function evaluate() {
       continue;
     }
     if (!hit) continue;
+    // ajustement automatique par l'IA (voir aiSuitOverride ci-dessus) : ne
+    // s'applique que si le bouton est activé pour CETTE stratégie et que le
+    // signal détecté est bien un costume (les autres kinds — parity, cards —
+    // n'ont rien à substituer).
+    if (cfg.aiAuto && (hit.kind === 'suit' || hit.kind === 'suit-banquier')) {
+      const better = aiSuitOverride(def.key, hit);
+      if (better) {
+        const fromSuit = hit.suit;
+        const fromLabel = hit.label || hit.suit;
+        const fromRate = suitPerformance(def.key)[fromSuit]?.rate ?? 0;
+        hit = {
+          ...hit,
+          suit: better.suit,
+          label: better.suit,
+          reason: `${hit.reason} · 🤖 IA : ${fromLabel} remplacé par ${better.suit} ` +
+            `(${better.rate}% sur ${better.total} contre ${fromRate}% pour ${fromLabel})`,
+        };
+      }
+    }
     if (state.predictions.some((p) => p.strategy === def.key && p.target === hit.target)) continue;
     // règle 1 : un jeu déclencheur n'est traité qu'une seule fois
     const trigKey = hit.trigger != null ? `${def.key}:${hit.trigger}` : null;
@@ -1215,7 +1281,26 @@ function evaluate() {
     state.predictions.unshift(pred);
     out.push(pred);
   }
-  state.predictions = state.predictions.slice(0, 300);
+  // CORRECTIF MAJEUR « prédiction bloquée sans vérification » : l'ancien
+  // `state.predictions.slice(0, 300)` coupait le tableau SANS regarder si une
+  // prédiction encore « en attente » se trouvait au-delà de la 300ᵉ place —
+  // elle disparaissait alors du tableau AVANT sa résolution, et son message
+  // Telegram restait figé sur « ⏳ En attente du résultat... » pour toujours,
+  // le bot ne la revoyant plus jamais dans verify(). Désormais on garde TOUTE
+  // prédiction « en attente », quelle que soit sa position, et on ne plafonne
+  // à 300 que le nombre de prédictions déjà RÉSOLUES (gagné/perdu/annulé) —
+  // en partant des plus récentes, comme avant.
+  if (state.predictions.length > 300) {
+    const keep = [];
+    let resolvedCount = 0;
+    for (const p of state.predictions) {
+      if (p.status === 'en attente' || resolvedCount < 300) {
+        keep.push(p);
+        if (p.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    state.predictions = keep;
+  }
   return out;
 }
 
@@ -1741,6 +1826,7 @@ module.exports = {
   nextTarget,
   handSuits,
   hasSuit,
+  hasSuitBanker,
   predictionText,
   predictionMessage,
   liveText,

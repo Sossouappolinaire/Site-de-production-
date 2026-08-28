@@ -35,7 +35,7 @@ const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
-const { state, setStrategyConfig, hasSuit, parityOf, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
+const { state, setStrategyConfig, hasSuit, hasSuitBanker, parityOf, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
 
@@ -295,7 +295,22 @@ function applySaved(saved) {
     }));
   }
   if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
-  if (Array.isArray(saved.pendingMessages)) panel.pendingMessages = saved.pendingMessages.slice(-200);
+  if (Array.isArray(saved.pendingMessages)) {
+    // CORRECTIF (même règle qu'ailleurs) : au redémarrage, on ne rejette pas
+    // les entrées encore « en attente » au-delà de 200 — seules les entrées
+    // déjà résolues sont plafonnées (tableau construit par push(), donc en
+    // partant de la fin, les plus récentes en priorité).
+    const keep = [];
+    let resolvedCount = 0;
+    for (let i = saved.pendingMessages.length - 1; i >= 0; i--) {
+      const e = saved.pendingMessages[i];
+      if (e.status === 'en attente' || resolvedCount < 200) {
+        keep.unshift(e);
+        if (e.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    panel.pendingMessages = keep;
+  }
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
@@ -480,9 +495,24 @@ function pushPending(tracker, pred, messages) {
     createdAt: Date.now(),
     resolvedAt: null,
   });
-  // on garde une fenêtre large (200) : largement de quoi couvrir le temps
-  // que met un rattrapage à se vérifier, sans grossir indéfiniment.
-  panel.pendingMessages = panel.pendingMessages.slice(-200);
+  // CORRECTIF (identique à predictor.js/predit.js) : ne jamais couper une
+  // entrée encore « en attente » — sinon son message Telegram reste bloqué
+  // sans vérification pour toujours. On garde TOUTE entrée en attente, et on
+  // plafonne à 200 seulement le nombre d'entrées déjà RÉSOLUES (les plus
+  // récentes conservées en priorité — le tableau grandit par push(), donc en
+  // partant de la fin).
+  if (panel.pendingMessages.length > 200) {
+    const keep = [];
+    let resolvedCount = 0;
+    for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
+      const e = panel.pendingMessages[i];
+      if (e.status === 'en attente' || resolvedCount < 200) {
+        keep.unshift(e);
+        if (e.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    panel.pendingMessages = keep;
+  }
 }
 
 function editPending(entry, statusFr) {
@@ -589,14 +619,18 @@ async function verifyPending() {
         }
         break; // le tour n'est pas encore joué : on réessaiera au prochain tick
       }
-      // 'carte-banquier' : on vérifie la carte EXACTE dans la main du
-      // BANQUIER (entry.suit contient la carte, voir pushPending ci-dessus),
-      // pas un costume côté joueur comme les autres stratégies.
+      // 'carte-banquier' (ancien format, carte exacte) et 'suit-banquier'
+      // (stratégie « Carte disparue → retour banquier » actuelle, costume) se
+      // vérifient tous deux sur la main du BANQUIER — toutes les autres
+      // stratégies restent sur la main du joueur (entry.suit contient la
+      // carte ou le costume selon le cas, voir pushPending ci-dessus).
       const won = entry.kind === 'parity'
         ? parityOf(g) === entry.suit
         : entry.kind === 'carte-banquier'
           ? (g.banker || []).includes(entry.suit)
-          : hasSuit(g, entry.suit);
+          : entry.kind === 'suit-banquier'
+            ? hasSuitBanker(g, entry.suit)
+            : hasSuit(g, entry.suit);
       if (won) {
         entry.status = 'gagné';
         entry.resolvedAt = Date.now();
