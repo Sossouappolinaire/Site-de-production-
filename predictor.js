@@ -1491,6 +1491,39 @@ function parityRuntime() {
 }
 
 // ---------------------------------------------------------------------------
+// Compteur d'avancement de la dizaine en cours — stratégie « Comptage par
+// dizaine » (voir strategies.js/dizaine). Purement informatif pour le
+// panneau admin : le déclenchement réel ne dépend QUE de game.number % 10,
+// recalculé à froid à chaque tour (voir dizaine.detect), donc ce compteur
+// n'influence jamais la prédiction elle-même — il sert juste à visualiser
+// où on en est. Entièrement dérivé de state.lastFinished (aucun état à
+// maintenir à part, donc aucun risque de désynchronisation) : repart de 0 à
+// chaque nouvelle dizaine, et affiche bien 0/10 juste après le tour
+// déclencheur (#N10, #N20…) où la prédiction vient d'être envoyée.
+function dizaineCounterView() {
+  const cfg = state.strategies.dizaine || strategies.defaultsFor('dizaine');
+  const lead = Math.max(1, Math.min(20, parseInt(cfg.lead, 10) || 4));
+  const last = state.lastFinished ? state.lastFinished.number : 0;
+  let decadeStart;
+  let count;
+  if (last <= 0) {
+    decadeStart = 1;
+    count = 0;
+  } else if (last % 10 === 0) {
+    // dizaine tout juste bouclée à l'instant : la prédiction vient d'être
+    // envoyée (ou tentée) pour #N(last+lead) — on remet le compteur à 0 et
+    // on bascule déjà sur la dizaine suivante.
+    decadeStart = last + 1;
+    count = 0;
+  } else {
+    decadeStart = Math.floor((last - 1) / 10) * 10 + 1;
+    count = last - decadeStart + 1;
+  }
+  const decadeEnd = decadeStart + 9;
+  return { count, of: 10, decadeStart, decadeEnd, nextTarget: decadeEnd + lead, lead };
+}
+
+// ---------------------------------------------------------------------------
 // Bilan envoyé sur Telegram quand le jeu reprend
 // ---------------------------------------------------------------------------
 function bilanText(key, list) {
@@ -1862,6 +1895,6 @@ module.exports = {
   noteClosed,
   queueFloor,
   shadowRuntime,
-  syncCostume,
+  dizaineCounterView,
   pullCostume,
 };

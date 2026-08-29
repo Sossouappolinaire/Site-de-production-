@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const store = require('./store');
 const db = require('./db');
 const shop = require('./shop');
+const config = require('./config');
 
 const records = new Map(); // ref -> { ref, itemId, userId, chatId, lang, amount, buyerName, status, code, createdAt, updatedAt }
 
@@ -191,21 +192,44 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
     lastErrorAt = new Date().toISOString();
     return { ok: false, error: lastError };
   }
-  const checkoutUrl = shop.payLinkForItem(item);
-  if (!checkoutUrl) {
-    lastError = `Aucun lien de paiement n'est configuré pour la catégorie « ${shop.categoryForItem(item)} » (voir Boutique → Paiement en ligne).`;
-    lastErrorAt = new Date().toISOString();
-    return { ok: false, error: lastError };
+  const provider = shop.getPaymentProvider(); // 'fusion' (défaut) ou 'sebpay' — choix admin, voir shop.js
+  const ref = shortRef();
+  let checkoutUrl;
+  if (provider === 'sebpay') {
+    // SebPay n'a pas de lien fixe : le client donne son numéro/opérateur sur
+    // NOTRE page (voir sebpay.js, public/pay-sebpay.html), qui lance
+    // elle-même l'encaissement. Le code n'est attaché qu'à la confirmation
+    // RÉELLE du webhook (voir confirmSebpayPayment plus bas), jamais par un
+    // minuteur aveugle comme pour Money Fusion ci-dessous.
+    if (!config.PUBLIC_URL) {
+      lastError = "URL publique du site non configurée (PUBLIC_URL) : impossible de générer le lien de paiement SebPay.";
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
+    }
+    const keys = shop.getSebpayKeys();
+    if (!keys.publicKey || !keys.secretKey) {
+      lastError = "Clés API SebPay non configurées (voir Boutique → Paiement).";
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
+    }
+    checkoutUrl = `${config.PUBLIC_URL}/pay-sebpay.html?ref=${ref}`;
+  } else {
+    checkoutUrl = shop.payLinkForItem(item);
+    if (!checkoutUrl) {
+      lastError = `Aucun lien de paiement n'est configuré pour la catégorie « ${shop.categoryForItem(item)} » (voir Boutique → Paiement en ligne).`;
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
+    }
   }
 
   const name = buyerName || `Client Telegram ${userId}`;
   const lock = getLock();
   const expiresAt = lock ? lock.expiresAt : Date.now() + LOCK_MS;
 
-  const ref = shortRef();
   const record = {
     ref,
     kind: 'item',
+    provider,
     itemId: item.id,
     userId: String(userId),
     chatId: String(chatId),
@@ -221,7 +245,7 @@ async function initiatePayment({ item, userId, chatId, lang, buyerName } = {}) {
   records.set(ref, record);
   persist();
   scheduleExpiry(ref, expiresAt);
-  return { ok: true, checkoutUrl, ref };
+  return { ok: true, checkoutUrl, ref, provider };
 }
 
 // ---------------------------------------------------------------------------
@@ -239,19 +263,37 @@ async function initiateSupportPayment({ userId, chatId, lang, buyerName, amountU
     lastErrorAt = new Date().toISOString();
     return { ok: false, error: lastError };
   }
-  const checkoutUrl = shop.getPayLink('strategy') || shop.getPayLink('ia_93') || shop.getPayLink('ia_100');
-  if (!checkoutUrl) {
-    lastError = "Aucun lien de paiement n'est configuré (voir Boutique → Paiement en ligne).";
-    lastErrorAt = new Date().toISOString();
-    return { ok: false, error: lastError };
+  const provider = shop.getPaymentProvider();
+  const ref = shortRef();
+  let checkoutUrl;
+  if (provider === 'sebpay') {
+    if (!config.PUBLIC_URL) {
+      lastError = "URL publique du site non configurée (PUBLIC_URL) : impossible de générer le lien de paiement SebPay.";
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
+    }
+    const keys = shop.getSebpayKeys();
+    if (!keys.publicKey || !keys.secretKey) {
+      lastError = "Clés API SebPay non configurées (voir Boutique → Paiement).";
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
+    }
+    checkoutUrl = `${config.PUBLIC_URL}/pay-sebpay.html?ref=${ref}`;
+  } else {
+    checkoutUrl = shop.getPayLink('strategy') || shop.getPayLink('ia_93') || shop.getPayLink('ia_100');
+    if (!checkoutUrl) {
+      lastError = "Aucun lien de paiement n'est configuré (voir Boutique → Paiement en ligne).";
+      lastErrorAt = new Date().toISOString();
+      return { ok: false, error: lastError };
+    }
   }
   const name = buyerName || `Client Telegram ${userId}`;
   const expiresAt = Date.now() + LOCK_MS;
 
-  const ref = shortRef();
   const record = {
     ref,
     kind: 'support',
+    provider,
     itemId: null,
     userId: String(userId),
     chatId: String(chatId),
@@ -268,7 +310,7 @@ async function initiateSupportPayment({ userId, chatId, lang, buyerName, amountU
   records.set(ref, record);
   persist();
   scheduleExpiry(ref, expiresAt);
-  return { ok: true, checkoutUrl, ref };
+  return { ok: true, checkoutUrl, ref, provider };
 }
 
 function getRecord(ref) { return records.get(ref) || null; }
@@ -316,6 +358,13 @@ async function markPaidOnArrival(ref) {
   if (record.expiresAt && Date.now() >= record.expiresAt) {
     return expireRecord(ref);
   }
+  // CORRECTIF SebPay : contrairement à Money Fusion (lien de succès FIXE,
+  // atteint côté Fusion uniquement après paiement réellement validé), la
+  // simple arrivée sur la page ne prouve RIEN pour SebPay — seul le webhook
+  // signé (voir confirmSebpayPayment ci-dessous, déclenché depuis
+  // server.js) peut confirmer un paiement SebPay. On renvoie juste l'état
+  // courant, que succes.html continue de sonder normalement en attendant.
+  if (record.provider === 'sebpay') return record;
   if (record.status === 'pending') await markPaid(record);
   return getRecord(ref);
 }
@@ -405,8 +454,57 @@ function attachCode(ref, code) {
   persist();
 }
 
+// ---------------------------------------------------------------------------
+// SebPay — appelées uniquement depuis server.js (voir routes /api/sebpay/*).
+// ---------------------------------------------------------------------------
+
+// Après l'appel réussi à sebpay.createCollection() (voir
+// public/pay-sebpay.html → POST /api/sebpay/collect/:ref, server.js) : trace
+// la transaction sur l'enregistrement, à titre informatif (affiché dans le
+// panneau admin Boutique → Paiement) — n'affecte pas le statut, seul le
+// webhook confirme réellement.
+function attachSebpayTransaction(ref, { transactionId, phone, operator, providerLink } = {}) {
+  const record = records.get(ref);
+  if (!record) return null;
+  record.sebpayTransactionId = transactionId || null;
+  record.sebpayPhone = phone || null;
+  record.sebpayOperator = operator || null;
+  record.sebpayProviderLink = providerLink || null; // ex. lien de redirection Wave
+  record.updatedAt = new Date().toISOString();
+  persist();
+  return record;
+}
+
+// Confirmation RÉELLE d'un paiement SebPay — déclenchée UNIQUEMENT par le
+// webhook SebPay une fois sa signature HMAC vérifiée (voir
+// sebpay.verifyWebhookSignature et server.js — POST /api/sebpay/webhook).
+// C'est ICI, et seulement ici, que le code de la stratégie est attaché pour
+// un paiement SebPay — jamais par un minuteur aveugle comme pour Money
+// Fusion (voir bot.js, purchase flow). `status === 'pending'` protège contre
+// un double webhook (SebPay peut renvoyer la même notification plusieurs
+// fois — voir doc « idempotence »).
+async function confirmSebpayPayment(ref) {
+  const record = getRecord(ref);
+  if (!record || record.provider !== 'sebpay') return null;
+  if (record.status !== 'pending') return record; // déjà traité : jamais retraité deux fois
+  if (record.kind === 'item' && record.itemId) {
+    const item = shop.getItem(record.itemId);
+    if (item) record.code = item.code;
+  }
+  await markPaid(record);
+  return getRecord(ref);
+}
+
+function failSebpayPayment(ref) {
+  const record = getRecord(ref);
+  if (!record || record.provider !== 'sebpay') return null;
+  markFailed(record);
+  return getRecord(ref);
+}
+
 module.exports = {
   loadFromDb, setPaidHandler, setExpiredHandler, configured, getConfig,
   initiatePayment, initiateSupportPayment, getRecord, listPending, markPaidOnArrival, cancelPayment, attachCode,
   lockItem, getLock, unlockItem, expireAfterCopy, confirmByUserId, findActiveRecordByUserId, currentActiveRecord,
+  attachSebpayTransaction, confirmSebpayPayment, failSebpayPayment,
 };

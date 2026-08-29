@@ -24,18 +24,24 @@ const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const shop = require('./shop');
 const paiement = require('./paiement');
+const sebpay = require('./sebpay');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
   strategyGames, bilanText, gameCategories, gateView, shadowRuntime,
-  predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock,
+  predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock, dizaineCounterView,
   announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, addSiteChannelMessage, siteChannelFeed,
 } = require('./predictor');
 const { startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
 
 const app = express();
 app.set('trust proxy', 1); // Render est derrière un proxy HTTPS : nécessaire pour les cookies "secure"
-app.use(express.json());
+// `verify` conserve le corps BRUT de chaque requête (req.rawBody) EN PLUS du
+// JSON parsé habituel (req.body, inchangé partout ailleurs) — nécessaire
+// pour vérifier la signature HMAC du webhook SebPay (voir sebpay.js —
+// verifyWebhookSignature exige le texte brut, un JSON.parse+stringify ne
+// redonnerait pas exactement les mêmes octets que ceux signés par SebPay).
+app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // ---------------------------------------------------------------------------
 // Sessions stockées en base Postgres (table "user_sessions", créée toute
@@ -124,7 +130,7 @@ app.post('/api/auth/mail-config', async (req, res) => {
 });
 
 // --- verrou d'accès : tout le reste du site exige une session valide ------
-const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/succes.html']);
+const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/succes.html', '/pay-sebpay.html']);
 const PUBLIC_PAIEMENT_PATTERNS = [
   /^\/api\/paiement\/webhook$/,
   /^\/api\/paiement\/statut\/[^/]+$/,
@@ -136,6 +142,14 @@ const PUBLIC_PAIEMENT_PATTERNS = [
   /^\/api\/paiement\/actif$/,
   /^\/api\/paiement\/chercher\/[^/]+$/,
   /^\/api\/paiement\/confirmer$/,
+  // consultées par pay-sebpay.html (navigateur de l'acheteur, jamais
+  // connecté) et par le webhook SebPay lui-même (serveur-à-serveur, protégé
+  // par sa propre signature HMAC — voir sebpay.verifyWebhookSignature —
+  // jamais par une session admin).
+  /^\/api\/sebpay\/info\/[^/]+$/,
+  /^\/api\/sebpay\/operators$/,
+  /^\/api\/sebpay\/collect\/[^/]+$/,
+  /^\/api\/sebpay\/webhook$/,
 ];
 function isPublicPath(p) {
   if (PUBLIC_EXACT.has(p)) return true;
@@ -578,6 +592,7 @@ function strategyPayload(key) {
     sendError: state.sendErrors ? state.sendErrors[d.key] || null : null,
     gate: gateView(d.key),
     shadow: d.key === 'ombre' ? shadowRuntime() : null,
+    dizaineCounter: d.key === 'dizaine' ? dizaineCounterView() : null,
     live: strategyGames(d.key, 12),
     stats: stats(d.key),
     preview: {
@@ -745,6 +760,27 @@ app.post('/api/shop/pay-link', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// Choix admin du fournisseur de paiement ACTIF pour tout le catalogue —
+// 'fusion' (lien fixe collé par catégorie) ou 'sebpay' (API Mobile Money,
+// voir sebpay.js/paiement.js) — voir panneau Boutique → Paiement.
+app.post('/api/shop/payment-provider', (req, res) => {
+  try {
+    const provider = shop.setPaymentProvider(req.body && req.body.provider);
+    res.json({ ok: true, provider, pricing: shop.getPricingSettings() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Enregistre les clés API SebPay (X-Public-Key/X-Secret-Key) + pays/devise
+// par défaut — la clé secrète n'est JAMAIS renvoyée en clair ensuite (voir
+// shop.getPricingSettings — seulement `sebpaySecretKeySet: true/false`).
+app.post('/api/shop/sebpay-keys', (req, res) => {
+  try {
+    const { publicKey, secretKey, country, currency } = req.body || {};
+    const result = shop.setSebpayKeys({ publicKey, secretKey, country, currency });
+    res.json({ ok: true, publicKey: result.publicKey, secretKeySet: !!result.secretKey, country: result.country, currency: result.currency });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.post('/api/shop', async (req, res) => {
   try {
     const { source, sourceKey, details, example, rate, realName, price, payAmountLocal } = req.body || {};
@@ -904,6 +940,125 @@ app.post('/api/paiement/confirmer', async (req, res) => {
     userId: record.userId || null,
     expiresAt: record.expiresAt || null,
   });
+});
+
+// ---------------------------------------------------------------------------
+// SebPay — second fournisseur de paiement Mobile Money au choix de l'admin
+// (voir shop.getPaymentProvider/setPaymentProvider, sebpay.js). Contrairement
+// à Money Fusion (lien fixe collé par l'admin), le client donne son
+// numéro/opérateur sur notre propre page public/pay-sebpay.html, qui appelle
+// ces routes. Toutes publiques (le client n'est jamais connecté au site) —
+// la sécurité tient à la référence `ref` (générée aléatoirement côté
+// serveur, voir paiement.shortRef) et à la vérification de signature sur le
+// webhook plus bas.
+// ---------------------------------------------------------------------------
+
+// Consultée par pay-sebpay.html au chargement : montant à payer, devise et
+// nom de la stratégie, pour affichage — ne révèle jamais les clés API.
+app.get('/api/sebpay/info/:ref', (req, res) => {
+  const record = paiement.getRecord(req.params.ref);
+  if (!record || record.provider !== 'sebpay') return res.status(404).json({ ok: false, error: 'Paiement introuvable.' });
+  if (record.status !== 'pending') return res.status(410).json({ ok: false, error: 'Ce paiement n\'est plus actif.' });
+  const item = record.itemId ? shop.getItem(record.itemId) : null;
+  const keys = shop.getSebpayKeys();
+  res.json({
+    ok: true,
+    amount: record.amount,
+    currency: keys.currency,
+    country: keys.country,
+    itemName: item ? item.aiName : (record.kind === 'support' ? 'Soutien' : null),
+    buyerName: record.buyerName || null,
+    userId: record.userId || null,
+  });
+});
+
+// Liste des opérateurs Mobile Money disponibles (avec `otp_required` par
+// opérateur, voir https://new.sebpay.bj/fr/docs/otp) — relayée depuis notre
+// serveur pour ne jamais exposer les clés API au navigateur du client.
+app.get('/api/sebpay/operators', async (req, res) => {
+  const keys = shop.getSebpayKeys();
+  const r = await sebpay.getOperators(req.query.country || keys.country);
+  if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
+  res.json({ ok: true, operators: r.data });
+});
+
+// Lance (ou finalise, si otpCode fourni) l'encaissement SebPay pour cette
+// réservation. Deux passages possibles côté opérateurs qui l'exigent (voir
+// docs OTP) : 1) sans otpCode → si l'opérateur choisi l'exige, on répond
+// needsOtp + le code USSD à composer, SANS appeler /collections ; 2) avec
+// otpCode → on appelle réellement /collections.
+app.post('/api/sebpay/collect/:ref', async (req, res) => {
+  const record = paiement.getRecord(req.params.ref);
+  if (!record || record.provider !== 'sebpay') return res.status(404).json({ ok: false, error: 'Paiement introuvable.' });
+  if (record.status !== 'pending') return res.status(410).json({ ok: false, error: 'Ce paiement n\'est plus actif.' });
+  const phone = String((req.body && req.body.phone) || '').trim();
+  const operator = String((req.body && req.body.operator) || '').trim();
+  const otpCode = req.body && req.body.otpCode ? String(req.body.otpCode).trim() : null;
+  if (!phone || !operator) return res.status(400).json({ ok: false, error: 'Numéro de téléphone et opérateur requis.' });
+
+  const keys = shop.getSebpayKeys();
+  if (!otpCode) {
+    const ops = await sebpay.getOperators(keys.country);
+    if (ops.ok) {
+      const list = Array.isArray(ops.data) ? ops.data : (ops.data && ops.data.operators) || [];
+      const found = list.find((o) => o.slug === operator || o.code === operator);
+      if (found && found.otp_required) {
+        return res.json({ ok: true, needsOtp: true, ussdCode: found.ussd_code || null });
+      }
+    }
+  }
+
+  const callbackUrl = `${config.PUBLIC_URL}/api/sebpay/webhook`;
+  const r = await sebpay.createCollection({
+    amount: record.amount,
+    currency: keys.currency,
+    phone,
+    operator,
+    country: keys.country,
+    externalReference: record.ref,
+    callbackUrl,
+    otpCode,
+  });
+  if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
+  paiement.attachSebpayTransaction(record.ref, {
+    transactionId: r.data.transaction_id,
+    phone,
+    operator,
+    providerLink: r.data.provider_link || null,
+  });
+  res.json({ ok: true, transactionId: r.data.transaction_id, providerLink: r.data.provider_link || null, status: r.data.status || 'pending' });
+});
+
+// Webhook SebPay — appelé par SebPay (jamais par le navigateur du client)
+// dès qu'un paiement change de statut. Signature HMAC-SHA256 obligatoire
+// (en-tête X-SebPay-Signature, voir sebpay.verifyWebhookSignature) sur le
+// corps BRUT (req.rawBody, voir express.json({verify}) plus haut) : un
+// webhook sans signature valide n'est JAMAIS traité, quoi qu'il prétende.
+// Répond 200 en moins de 5s comme l'exige la doc, même en cas d'erreur de
+// traitement (pour éviter un déluge de réémissions), sauf signature invalide
+// (401, volontairement, pour que ça reste visible dans les logs SebPay).
+app.post('/api/sebpay/webhook', async (req, res) => {
+  const signature = req.get('X-SebPay-Signature');
+  const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+  if (!sebpay.verifyWebhookSignature(raw, signature)) {
+    console.error('Webhook SebPay : signature invalide, ignoré.');
+    return res.status(401).json({ ok: false, error: 'Signature invalide.' });
+  }
+  try {
+    const body = req.body || {};
+    const ref = body.external_reference;
+    if (!ref) return res.status(200).json({ ok: true }); // rien à faire, mais on répond 200 (idempotence)
+    if (body.status === 'approved') {
+      await paiement.confirmSebpayPayment(ref);
+    } else if (body.status === 'rejected') {
+      paiement.failSebpayPayment(ref);
+    }
+    // statut intermédiaire (pending) : rien à faire, SebPay renverra un
+    // webhook final plus tard.
+  } catch (e) {
+    console.error('Webhook SebPay (traitement) :', e.message);
+  }
+  res.status(200).json({ ok: true });
 });
 
 app.get('/api/strategies/:key', (req, res) => {

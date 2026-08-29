@@ -1184,11 +1184,18 @@ function wireShop(b) {
             // précise (pay.ref) est toujours active : si elle a expiré
             // entre-temps (voir paiement.js — expireRecord, déclenché par le
             // minuteur de 3 min posé à l'initiation), on n'attache rien.
-            setTimeout(() => {
-              const rec = paiement.getRecord(pay.ref);
-              if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
-              paiement.attachCode(pay.ref, item.code);
-            }, 10000);
+            // UNIQUEMENT pour Money Fusion (lien fixe, confirmation par
+            // simple arrivée sur succes.html) : pour SebPay, le code n'est
+            // attaché qu'à la confirmation RÉELLE du webhook (voir
+            // paiement.confirmSebpayPayment, server.js — POST
+            // /api/sebpay/webhook), jamais par ce minuteur aveugle.
+            if (pay.provider !== 'sebpay') {
+              setTimeout(() => {
+                const rec = paiement.getRecord(pay.ref);
+                if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
+                paiement.attachCode(pay.ref, item.code);
+              }, 10000);
+            }
             const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: pay.checkoutUrl }]];
             await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
             // 30s après avoir ouvert le lien de paiement, rappel : le client

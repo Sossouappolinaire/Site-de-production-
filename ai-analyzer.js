@@ -591,7 +591,7 @@ async function analyze({ games = [], date = null, objective = '', pastDays = [] 
         minimumSample: 20,
         evidence: 'ce que les données montrent, position du costume incluse',
         risks: 'risques et limites',
-        compatibleExisting: 'costume|dominant|matchnul|parite|absente|ombre|null',
+        compatibleExisting: 'costume|dominant|matchnul|parite|absente|carteBanquier|ombre|ombreJoueur|dizaine|null',
       }],
       nextChecks: ['contrôles à faire sur les prochains jeux'],
     },

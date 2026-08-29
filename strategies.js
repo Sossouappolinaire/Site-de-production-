@@ -662,7 +662,80 @@ const ombreJoueur = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur];
+// ---------------------------------------------------------------------------
+// 9) Comptage par dizaine — costume faible (demande admin)
+// ---------------------------------------------------------------------------
+// Découpage du sabot en tranches de 10 jeux (#N1-10, #N11-20, #N21-30…).
+// Dès qu'un jeu se termine sur un multiple de 10 (déclencheur, ex. #N10), on
+// compte, sur les 10 jeux qui viennent de s'écouler (#N1 à #N10), combien de
+// fois chacun des 4 costumes est apparu dans la main du JOUEUR (chaque carte
+// compte, pas juste présence/absence). Le costume le PLUS RARE de cette
+// dizaine (le « costume faible ») est prédit sur le 4ᵉ jeu de la dizaine
+// SUIVANTE, c'est-à-dire déclencheur + 4 (réglable) — ex. dizaine #N1-10 →
+// prédiction sur #N14. En cas d'égalité entre plusieurs costumes les plus
+// rares, ordre déterministe ♦️❤️♣️♠️ (comme pour « absente »).
+const dizaine = {
+  key: 'dizaine',
+  name: 'Comptage par dizaine — costume faible',
+  about:
+    "Découpe le sabot en tranches de 10 jeux. À la fin de chaque dizaine " +
+    "(#N10, #N20, #N30…), compte combien de fois chacun des 4 costumes est " +
+    "apparu dans la main du JOUEUR sur ces 10 jeux, et retient le costume le " +
+    "PLUS RARE (« costume faible »). Ce costume est prédit sur le 4ᵉ jeu de " +
+    "la dizaine suivante (déclencheur + 4, réglable) — ex. dizaine #N1 à " +
+    "#N10 → prédiction sur #N14. Nécessite au moins 6 des 10 jeux lisibles " +
+    "pour un comptage fiable, sinon aucune prédiction n'est émise pour cette " +
+    "dizaine.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 4,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    if (game.number % 10 !== 0) return null; // déclencheur uniquement en fin de dizaine (#N10, #N20…)
+    const start = game.number - 9;
+    if (start < 1) return null; // pas assez de recul pour la toute première dizaine
+    const games = (ctx && ctx.games) || new Map();
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 4));
+    const counts = { '♦️': 0, '❤️': 0, '♣️': 0, '♠️': 0 };
+    let readable = 0;
+    for (let n = start; n <= game.number; n++) {
+      const g = games.get(n);
+      if (!g || !g.finished) continue;
+      const suits = suitsOf(g.playerSuits);
+      if (!suits.length) continue;
+      readable += 1;
+      for (const s of suits) if (counts[s] !== undefined) counts[s] += 1;
+    }
+    if (readable < 6) return null; // dizaine trop peu lisible : comptage jugé pas assez fiable
+    let weak = null;
+    for (const s of SUITS) {
+      if (!weak || counts[s] < counts[weak]) weak = s;
+    }
+    const detail = SUITS.map((s) => `${s}:${counts[s]}`).join(' ');
+    return {
+      kind: 'suit',
+      target: game.number + lead,
+      suit: weak,
+      label: weak,
+      trigger: game.number,
+      reason:
+        `Dizaine #N${start} à #N${game.number} (${readable}/10 jeux lisibles) — ` +
+        `comptage main JOUEUR ${detail} → costume le plus rare : ${weak} → ` +
+        `prédiction sur #N${game.number + lead} (+${lead})`,
+      meta: { start, end: game.number, readable, counts, lead },
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

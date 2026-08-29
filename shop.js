@@ -508,6 +508,11 @@ function getPricingSettings() {
     priceCatalog: getPriceCatalog(), priceIa100: getPriceIa100(), priceIa93: getPriceIa93(),
     eurToXof: getEurToXof(), usdToXof: getUsdToXof(),
     payLinkStrategy: getPayLink('strategy'), payLinkIa100: getPayLink('ia_100'), payLinkIa93: getPayLink('ia_93'),
+    paymentProvider: getPaymentProvider(),
+    sebpayPublicKey: getSebpayKeys().publicKey,
+    sebpaySecretKeySet: !!getSebpayKeys().secretKey, // jamais la clé en clair vers l'admin, juste "définie ou pas"
+    sebpayCountry: getSebpayKeys().country,
+    sebpayCurrency: getSebpayKeys().currency,
   };
 }
 
@@ -550,6 +555,47 @@ function categoryForItem(item) {
 // cette catégorie.
 function payLinkForItem(item) {
   return getPayLink(categoryForItem(item));
+}
+
+// ---------------------------------------------------------------------------
+// Fournisseur de paiement actif — l'admin choisit entre Money Fusion (lien
+// fixe collé par catégorie, voir ci-dessus) et SebPay (API Mobile Money,
+// voir sebpay.js/paiement.js). Un seul actif à la fois pour TOUT le
+// catalogue — voir POST /api/shop/payment-provider, server.js, et le
+// panneau Boutique → Paiement, public/index.html.
+// ---------------------------------------------------------------------------
+function getPaymentProvider() {
+  return shop.settings.paymentProvider === 'sebpay' ? 'sebpay' : 'fusion'; // 'fusion' par défaut
+}
+
+function setPaymentProvider(provider) {
+  const clean = String(provider || '').trim();
+  if (clean !== 'fusion' && clean !== 'sebpay') throw new Error("Fournisseur inconnu (attendu : fusion ou sebpay).");
+  shop.settings.paymentProvider = clean;
+  persist();
+  return clean;
+}
+
+// Clés API SebPay (X-Public-Key / X-Secret-Key, voir sebpay.js) — saisies
+// par l'admin, jamais codées en dur. `secretKey` n'est renvoyée à
+// l'interface admin que masquée (voir server.js), jamais en clair une fois
+// enregistrée.
+function getSebpayKeys() {
+  return {
+    publicKey: shop.settings.sebpayPublicKey || '',
+    secretKey: shop.settings.sebpaySecretKey || '',
+    country: shop.settings.sebpayCountry || 'BJ',
+    currency: shop.settings.sebpayCurrency || 'XOF',
+  };
+}
+
+function setSebpayKeys({ publicKey, secretKey, country, currency }) {
+  if (publicKey !== undefined) shop.settings.sebpayPublicKey = String(publicKey || '').trim();
+  if (secretKey !== undefined) shop.settings.sebpaySecretKey = String(secretKey || '').trim();
+  if (country !== undefined) shop.settings.sebpayCountry = String(country || 'BJ').trim().toUpperCase();
+  if (currency !== undefined) shop.settings.sebpayCurrency = String(currency || 'XOF').trim().toUpperCase();
+  persist();
+  return getSebpayKeys();
 }
 
 // Taux de change $ -> F CFA (XOF) pour le bouton « Soutien » (dons libres,
@@ -1053,6 +1099,7 @@ module.exports = {
   setPendingSupport, getPendingSupport, clearPendingSupport,
   redeem, hasUnlocked, listUnlocked,
   getPayLink, setPayLink, categoryForItem, payLinkForItem,
+  getPaymentProvider, setPaymentProvider, getSebpayKeys, setSebpayKeys,
   explain, fullPresentation, translate,
   isUnderstoodMessage, closingMessage,
 };

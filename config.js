@@ -127,6 +127,14 @@ module.exports = {
   POLLINATIONS_BASE_URL: `${POLLINATIONS.BASE_URL}/v1`,
   POLLINATIONS_MODEL: POLLINATIONS.MODEL,
 
+  // SebPay (paiement Mobile Money, second fournisseur au choix de l'admin à
+  // côté de Money Fusion — voir shop.js/getPaymentProvider et paiement.js).
+  // Racine de l'API : POST {SEBPAY_API_URL}/api/v1/collections etc.
+  SEBPAY_API_URL: process.env.SEBPAY_API_URL || 'https://newapi.sebpay.bj',
+  // Ces deux valeurs par défaut sont vides — l'admin les saisit depuis le
+  // panneau Boutique → Paiement (stockées via store.js, pas ici en dur, car
+  // propres à chaque déploiement/compte).
+
   // Fournisseurs IA prioritaires (avec clé), utilisés avant Pollinations.
   // OPENROUTER est le service PAR DÉFAUT (essayé en premier).
   OPENROUTER,
