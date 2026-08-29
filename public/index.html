@@ -717,6 +717,29 @@
         toast('Lien de paiement enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
+    async function shopSavePaymentProvider() {
+      const provider = val('paymentProvider');
+      try {
+        const r = await api('/api/shop/payment-provider', 'POST', { provider });
+        shopCache.pricing = r.pricing;
+        toast(provider === 'sebpay' ? 'SebPay activé — vérifie que les clés API sont bien renseignées ci-dessous.' : 'Money Fusion activé.');
+        boutiquePage();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function shopSaveSebpayKeys() {
+      const publicKey = val('sebpayPublicKey').trim();
+      const secretKey = val('sebpaySecretKey').trim(); // vide = ne pas changer (voir server.js)
+      const country = val('sebpayCountry').trim() || 'BJ';
+      const currency = val('sebpayCurrency').trim() || 'XOF';
+      if (!publicKey) return toast('Colle au moins la clé publique SebPay.', 'error');
+      try {
+        const body = { publicKey, country, currency };
+        if (secretKey) body.secretKey = secretKey;
+        await api('/api/shop/sebpay-keys', 'POST', body);
+        toast('Clés SebPay enregistrées.');
+        boutiquePage();
+      } catch (e) { toast(e.message, 'error'); }
+    }
     async function shopSaveExchangeRate() {
       const rate = Number(val('shopExchangeRate'));
       if (!Number.isFinite(rate) || rate <= 0) return toast('Taux invalide.', 'error');
@@ -739,8 +762,8 @@
       setNav('boutique');
       $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vente</span><h2 style="margin-top:7px">Boutique de stratégies</h2><p class="small">Publie une stratégie (du catalogue, créée par l'IA, ou personnalisée) : l'IA lui donne un nom de code sans rapport avec son vrai nom, et un code de paiement à usage unique est généré. Distribue ce code à l'acheteur — dans le bot Telegram, il choisit sa langue, sélectionne la stratégie par son nom de code, entre le code, et reçoit alors le détail complet traduit dans sa langue. <b>Vente automatique</b> : tout déclencheur créé par l'IA qui dépasse 93% de réussite est publié tout seul à 4€ (repéré par le badge « Auto »), et disparaît automatiquement dès que son taux redescend à 93% ou moins — aucune configuration nécessaire.</p></div>
         <button class="button small ghost" onclick="boutiquePage()">Actualiser</button></div>
-        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne — un lien Money Fusion par catégorie</h3>
-          <p class="small">Colle ici le lien de paiement Money Fusion complet (ex. <code>https://payin.moneyfusion.net/payment/ID/PRIX/NOM</code>) pour chacune des 3 catégories — TOUS les articles de la catégorie utiliseront ce même lien. La redirection après paiement (<code>succes.html</code>) est déjà configurée côté Money Fusion, rien à faire ici pour ça.</p>
+        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne</h3>
+          <p class="small">Choisis le fournisseur de paiement actif pour <b>toute la boutique</b> — un seul actif à la fois.</p>
           <div id="paiementFields"><div class="loading">Chargement…</div></div>
         </div>
         <div class="panel" id="paiementPendingPanel"><h3>⏳ Paiements en attente de confirmation</h3>
@@ -772,14 +795,34 @@
       try {
         const p = await api('/api/paiement/config');
         const pr = shopCache && shopCache.pricing ? shopCache.pricing : {};
+        const provider = pr.paymentProvider || 'fusion';
         $('#paiementFields').innerHTML = `
-          <div class="field"><label>📦 Stratégies existantes (catalogue)</label><input id="payLinkStrategy" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkStrategy || '')}">
-            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('strategy')">Enregistrer</button></div></div>
-          <div class="field"><label>🤖 Déclencheur IA — 100% de réussite</label><input id="payLinkIa100" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa100 || '')}">
-            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_100')">Enregistrer</button></div></div>
-          <div class="field"><label>🤖 Déclencheur IA — 93% à 99,99%</label><input id="payLinkIa93" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa93 || '')}">
-            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_93')">Enregistrer</button></div></div>
-          <div id="payLinkMsg"></div>
+          <div class="field"><label>Fournisseur actif</label>
+            <select id="paymentProvider" onchange="shopSavePaymentProvider()">
+              <option value="fusion" ${provider === 'fusion' ? 'selected' : ''}>Money Fusion — lien fixe par catégorie</option>
+              <option value="sebpay" ${provider === 'sebpay' ? 'selected' : ''}>SebPay — Mobile Money (API, numéro + opérateur)</option>
+            </select>
+          </div>
+          <div id="fusionFields" style="${provider === 'fusion' ? '' : 'display:none'}">
+            <p class="small">Colle ici le lien de paiement Money Fusion complet (ex. <code>https://payin.moneyfusion.net/payment/ID/PRIX/NOM</code>) pour chacune des 3 catégories — TOUS les articles de la catégorie utiliseront ce même lien. La redirection après paiement (<code>succes.html</code>) est déjà configurée côté Money Fusion, rien à faire ici pour ça.</p>
+            <div class="field"><label>📦 Stratégies existantes (catalogue)</label><input id="payLinkStrategy" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkStrategy || '')}">
+              <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('strategy')">Enregistrer</button></div></div>
+            <div class="field"><label>🤖 Déclencheur IA — 100% de réussite</label><input id="payLinkIa100" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa100 || '')}">
+              <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_100')">Enregistrer</button></div></div>
+            <div class="field"><label>🤖 Déclencheur IA — 93% à 99,99%</label><input id="payLinkIa93" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa93 || '')}">
+              <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_93')">Enregistrer</button></div></div>
+            <div id="payLinkMsg"></div>
+          </div>
+          <div id="sebpayFields" style="${provider === 'sebpay' ? '' : 'display:none'}">
+            <p class="small">Le client donne son numéro et son opérateur Mobile Money sur une page dédiée (<code>pay-sebpay.html</code>) — le code lui est révélé automatiquement une fois le paiement confirmé par SebPay (webhook), pas de lien à coller par catégorie ici.</p>
+            <div class="field"><label>🔑 Clé publique (X-Public-Key)</label><input id="sebpayPublicKey" placeholder="pk_live_… ou pk_test_…" value="${esc(pr.sebpayPublicKey || '')}"></div>
+            <div class="field"><label>🔒 Clé secrète (X-Secret-Key)</label><input id="sebpaySecretKey" type="password" placeholder="${pr.sebpaySecretKeySet ? '••••••••  (déjà enregistrée — laisser vide pour ne pas la changer)' : 'sk_live_… ou sk_test_…'}"></div>
+            <div class="field"><label>🌍 Pays</label><input id="sebpayCountry" placeholder="BJ" value="${esc(pr.sebpayCountry || 'BJ')}"></div>
+            <div class="field"><label>💰 Devise</label><input id="sebpayCurrency" placeholder="XOF" value="${esc(pr.sebpayCurrency || 'XOF')}"></div>
+            <p class="small">Callback webhook à renseigner (automatique) : <code>${esc((typeof location !== 'undefined' ? location.origin : '') + '/api/sebpay/webhook')}</code></p>
+            <div class="toolbar"><button class="button primary" onclick="shopSaveSebpayKeys()">Enregistrer les clés SebPay</button></div>
+            <div id="sebpayKeysMsg"></div>
+          </div>
           ${p.lastError ? `<div class="notice error">Dernier échec (${formatDate(p.lastErrorAt)}) : ${esc(p.lastError)}</div>` : ''}`;
       } catch (e) { $('#paiementFields').innerHTML = `<div class="empty">Impossible de charger le statut.</div>`; }
       try {
@@ -1033,10 +1076,13 @@ Faites-en bon usage !
           ${s.key === 'ombre' ? `<div class="three-col"><div class="field"><label>Absence minimum</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Périmètre</label><select id="cfgScope"><option value="tous" ${c.scope !== 'joueur' ? 'selected' : ''}>Joueur + banquier</option><option value="joueur" ${c.scope === 'joueur' ? 'selected' : ''}>Joueur uniquement</option></select></div></div>` : ''}
           ${s.key === 'ombreJoueur' ? `<div class="field"><label>Absence minimum (jeux sans le costume sur la main du joueur)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><p class="small">Périmètre fixe : main du joueur uniquement (le banquier n'est jamais pris en compte).</p>` : ''}
           ${s.key === 'carteBanquier' ? `<div class="field"><label>Absence minimum (jeux sans le costume sur la main du banquier)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 3}"></div><p class="small">Périmètre fixe : main du banquier uniquement (le joueur n'est jamais pris en compte). Pas de mode silencieux pour cette stratégie.</p>` : ''}
+          ${s.key === 'dizaine' && s.dizaineCounter ? (() => { const dc = s.dizaineCounter; return `<div class="field"><label>📊 Compteur de la dizaine en cours</label>
+            <div class="panel" style="margin-top:6px"><div class="split"><b>${dc.count}/10 jeux comptés</b><span class="tag">#N${dc.decadeStart} → #N${dc.decadeEnd}</span></div>
+            <p class="small">Se remet à 0 juste après l'envoi de la prédiction du jeu #N${dc.decadeEnd} (déclencheur). Prochaine prédiction visée : <b>#N${dc.nextTarget}</b> (+${dc.lead}).</p></div></div>`; })() : ''}
           ${s.key === 'dominant' ? `<div class="three-col"><div class="field"><label>Écart minimum entre 2 prédictions (jeux)</label><input id="cfgGap" type="number" min="1" max="20" value="${c.gap ?? 3}"></div></div><p class="small">Un déclencheur au jeu N est ignoré si le costume à prédire est apparu sur la main du joueur dans 2 jeux consécutifs parmi N-2, N-1 et N (N-2+N-1, ou N-1+N), ou si l'écart avec la dernière prédiction « dominant » est inférieur à cette valeur.</p>` : ''}
           <div class="field"><label>Format du message</label><p class="small">Les 89 formats complets sont accessibles depuis le bouton Formats.</p></div><label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <label class="check" style="margin-top:10px"><input id="cfgAiAuto" type="checkbox" ${c.aiAuto ? 'checked' : ''}> 🤖 Ajustement automatique par l'IA</label>
-          <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier'].includes(s.key)
+          <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine'].includes(s.key)
             ? "Désactivé (par défaut) : la stratégie prédit normalement. Activé : avant chaque envoi, l'IA compare le taux de réussite récent du costume que la stratégie s'apprête à jouer avec celui des 3 autres costumes POUR CETTE STRATÉGIE. Si un autre costume affiche un net avantage (échantillon et écart suffisants), il est substitué automatiquement — le motif de la prédiction indique alors clairement la substitution."
             : "Cette stratégie ne prédit pas de costume : ce réglage n'a aucun effet ici (laissez-le désactivé)."}</p>
           <div class="toolbar" style="margin-top:18px"><button class="button primary" onclick="saveStrategy('${s.key}')">Enregistrer les réglages</button><button class="button ghost" onclick="resetStrategy('${s.key}')">Réinitialiser</button><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester le canal</button>${s.key === 'ombre' ? '' : `<button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester canal silencieux</button>`}</div><div id="strategyMessage"></div></div>
