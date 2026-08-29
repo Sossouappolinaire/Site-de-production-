@@ -680,11 +680,13 @@ const dizaine = {
   about:
     "Découpe le sabot en tranches de 10 jeux. À la fin de chaque dizaine " +
     "(#N10, #N20, #N30…), compte combien de fois chacun des 4 costumes est " +
-    "apparu dans la main du JOUEUR sur ces 10 jeux, et retient le costume le " +
-    "PLUS RARE (« costume faible »). Ce costume est prédit sur le 4ᵉ jeu de " +
-    "la dizaine suivante (déclencheur + 4, réglable) — ex. dizaine #N1 à " +
-    "#N10 → prédiction sur #N14. Nécessite au moins 6 des 10 jeux lisibles " +
-    "pour un comptage fiable, sinon aucune prédiction n'est émise pour cette " +
+    "apparu dans la main du JOUEUR sur ces 10 jeux — comptage « vote » : un " +
+    "costume compte 1 seule fois par main, même s'il apparaît sur 2 cartes " +
+    "(ex. ♦️♦️❤️ → 1♦️ + 1❤️, jamais 2♦️) — et retient le costume le PLUS " +
+    "RARE (« costume faible »). Ce costume est prédit sur le 4ᵉ jeu de la " +
+    "dizaine suivante (déclencheur + 4, réglable) — ex. dizaine #N1 à #N10 " +
+    "→ prédiction sur #N14. Nécessite au moins 6 des 10 jeux lisibles pour " +
+    "un comptage fiable, sinon aucune prédiction n'est émise pour cette " +
     "dizaine.",
   defaults: {
     enabled: true,
@@ -709,8 +711,8 @@ const dizaine = {
     for (let n = start; n <= game.number; n++) {
       const g = games.get(n);
       if (!g || !g.finished) continue;
-      const suits = suitsOf(g.playerSuits);
-      if (!suits.length) continue;
+      const suits = new Set(suitsOf(g.playerSuits)); // comptage "vote" : un costume ne compte qu'UNE fois par main, même s'il apparaît sur 2 cartes (ex. ♦️♦️❤️ → 1♦️ + 1❤️)
+      if (!suits.size) continue;
       readable += 1;
       for (const s of suits) if (counts[s] !== undefined) counts[s] += 1;
     }
