@@ -737,7 +737,186 @@ const dizaine = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine];
+// ---------------------------------------------------------------------------
+// 10) Costume faible sur 2 cartes (miroir) — demande admin
+// ---------------------------------------------------------------------------
+// Filtre obligatoire : joueur 2 cartes ET banquier 2 cartes (mains « naturelles »,
+// sans 3ᵉ carte). On regroupe les 4 costumes de ces 4 cartes par COULEUR
+// (rouge : ❤️+♦️ / noir : ♠️+♣️) et on repère la couleur MINORITAIRE. Le
+// costume faible est celui de cette couleur minoritaire qui est réellement
+// apparu (le plus souvent si les deux costumes de cette couleur sont
+// présents) — ex. joueur ❤️❤️, banquier ♣️♦️ → rouge 3 (❤️❤️♦️), noir 1 (♣️)
+// → couleur faible = noir → costume faible = ♣️ (seul costume noir présent).
+// On prédit alors le MIROIR (même couleur) de ce costume faible — ici ♠️,
+// miroir de ♣️ — sur la main du JOUEUR au tour +2 (réglable).
+function weakSuitOf(fourSuits) {
+  const count = { '♦️': 0, '❤️': 0, '♣️': 0, '♠️': 0 };
+  for (const s of fourSuits) if (count[s] != null) count[s] += 1;
+  const red = count['❤️'] + count['♦️'];
+  const black = count['♠️'] + count['♣️'];
+  if (red === black) return { count, red, black, weak: null, reason: `rouge ${red} / noir ${black} : égalité, aucun signal` };
+  const [a, b] = red < black ? ['❤️', '♦️'] : ['♠️', '♣️'];
+  let weak;
+  if (count[a] > count[b]) weak = a;
+  else if (count[b] > count[a]) weak = b;
+  else weak = fourSuits.find((s) => s === a || s === b) || null; // égalité au sein de la couleur faible : on garde le 1er apparu
+  return { count, red, black, weak, reason: `rouge ${red} / noir ${black} → costume faible : ${weak}` };
+}
+
+const costumeFaible = {
+  key: 'costumeFaible',
+  name: 'Costume faible sur 2 cartes (miroir)',
+  about:
+    "Filtre obligatoire : joueur 2 cartes ET banquier 2 cartes (mains " +
+    "naturelles, sans 3ᵉ carte). On regroupe les 4 costumes des 4 cartes par " +
+    "couleur (rouge ❤️+♦️ / noir ♠️+♣️) et on retient la couleur MINORITAIRE. " +
+    "Le costume faible est celui, parmi les 2 costumes de cette couleur, qui " +
+    "est réellement apparu (le plus présent en cas des 2). On prédit ensuite " +
+    "le MIROIR de ce costume faible (❤️↔♦️, ♠️↔♣️) sur la main du JOUEUR au " +
+    "tour +2 (réglable) — ex. joueur ❤️❤️ / banquier ♣️♦️ → rouge 3, noir 1 " +
+    "→ costume faible ♣️ → prédiction ♠️. Aucune prédiction si les 2 couleurs " +
+    "sont à égalité.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 2,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    if (game.playerCards !== 2 || game.bankerCards !== 2) return null; // filtre obligatoire : mains naturelles des 2 côtés
+    const four = [...suitsOf(game.playerSuits), ...suitsOf(game.bankerSuits)];
+    if (four.length !== 4) return null;
+    const { weak, reason } = weakSuitOf(four);
+    if (!weak) return null;
+    const suit = MIRROR[weak];
+    if (!suit) return null;
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 2));
+    return {
+      kind: 'suit',
+      target: game.number + lead,
+      suit,
+      label: suit,
+      trigger: game.number,
+      reason:
+        `Jeu #N${game.number} — joueur ${four.slice(0, 2).join('')} / banquier ${four.slice(2).join('')} — ` +
+        `${reason} → miroir : ${suit} → prédiction sur #N${game.number + lead} (+${lead})`,
+      meta: { fourSuits: four, weak, lead },
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// 11) Collecte IA — relais des meilleures stratégies existantes (demande admin)
+// ---------------------------------------------------------------------------
+// Ne détecte RIEN par elle-même : à chaque jeu terminé, elle regarde si une
+// AUTRE stratégie vient d'émettre une prédiction sur ce même jeu déclencheur
+// (voir ctx.predictions, injecté par predictor.js/evaluate() — cette
+// stratégie DOIT rester la DERNIÈRE de LIST pour que toutes les autres aient
+// déjà pu être évaluées sur ce même jeu avant elle, voir evaluate()). Si
+// cette stratégie source a actuellement un CONSEIL DE FORMATION établi
+// (formation.js : un « conseil » — combien de prédictions rejouer d'affilée
+// après une perte/rattrapage — a pu être dégagé avec un échantillon
+// suffisant), la Collecte copie EXACTEMENT la même prédiction
+// (costume/carte/parité, MÊME JEU CIBLE — donc le même décalage a+n que la
+// source a elle-même déjà calculé, quel qu'il soit : a+1, a+3, a+n…) sous
+// son propre nom, avec son propre canal. IMPORTANT : ni le taux de réussite
+// des stratégies existantes, ni celui de l'Avis IA (strategy-advisor.js),
+// n'entrent en jeu ici — seul compte le conseil de formation APPLIQUÉ. S'il
+// y a plusieurs sources avec un conseil établi sur le même jeu déclencheur,
+// celle dont la formation est la plus établie (série conseillée la plus
+// longue, puis à égalité l'échantillon le plus large — ctx.formationInfo,
+// voir predictor.js) est retenue, jamais celle qui affiche le meilleur %.
+// Le nombre de RATTRAPAGES envoyés avec la prédiction relayée n'est pas non
+// plus un réglage indépendant de la Collecte : il suit exactement le N que
+// la Formation a établi pour la stratégie source (formationInfo.length —
+// combien de prédictions il faut rejouer d'affilée après une perte/
+// rattrapage pour cette stratégie), voir hit.maxR ci-dessous et predictor.js.
+const collecte = {
+  key: 'collecte',
+  name: 'Collecte IA — meilleures stratégies',
+  about:
+    "Ne détecte rien par elle-même : elle surveille en continu le conseil " +
+    "de Formation (formation.js) des autres stratégies — combien de " +
+    "prédictions rejouer d'affilée après une perte/rattrapage. Dès qu'une " +
+    "stratégie a un conseil de formation ÉTABLI et APPLIQUÉ, la Collecte " +
+    "copie EXACTEMENT sa prédiction (costume, carte, ou parité selon le cas " +
+    "— même jeu cible, donc le MÊME décalage a+n déjà calculé par la " +
+    "source) sous son propre nom. Le nombre de rattrapages envoyés suit " +
+    "aussi le conseil de Formation de la source (le N établi), jamais un " +
+    "réglage indépendant. S'il y a plusieurs sources avec un conseil établi " +
+    "sur le même jeu déclencheur, la formation la plus établie (série la " +
+    "plus longue, puis échantillon le plus large) est retenue — jamais un " +
+    "taux de réussite, ni celui des stratégies existantes ni celui de " +
+    "l'Avis IA. Pas de réglage de costume ou d'absence ici : seuls le " +
+    "format et le canal de diffusion se règlent, comme le reste hérite " +
+    "directement de la stratégie source.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const predictions = (ctx && ctx.predictions) || [];
+    const bestKeys = (ctx && ctx.bestKeys) || new Set();
+    if (!bestKeys.size) return null; // aucune stratégie jugée fiable pour l'instant : rien à relayer
+    const candidates = predictions.filter(
+      (p) => p.strategy !== 'collecte' && p.trigger === game.number && bestKeys.has(p.strategy),
+    );
+    if (!candidates.length) return null;
+    // Départage par la FORMATION (conseil établi), jamais par un taux : on
+    // garde la série conseillée la plus longue, et à égalité l'échantillon
+    // (support) le plus large. bestRates n'est conservé que pour l'afficher
+    // à titre informatif dans le message ci-dessous.
+    const formationInfo = (ctx && ctx.formationInfo) || {};
+    const bestRates = (ctx && ctx.bestRates) || {};
+    let source = candidates[0];
+    for (const c of candidates) {
+      const cur = formationInfo[c.strategy] || { length: 0, support: 0 };
+      const best = formationInfo[source.strategy] || { length: 0, support: 0 };
+      if (cur.length > best.length || (cur.length === best.length && cur.support > best.support)) source = c;
+    }
+    const srcFormation = formationInfo[source.strategy];
+    // Le nombre de rattrapages de LA prédiction relayée suit le N établi par
+    // la Formation pour la stratégie source (srcFormation.length) — jamais
+    // le réglage maxR indépendant de la Collecte. Repli sur cfg.maxR
+    // uniquement si, cas limite, aucune longueur de formation n'est connue
+    // pour cette source (ne devrait pas arriver : bestKeys exige déjà un
+    // conseil de formation établi pour entrer dans les candidats).
+    const maxR = srcFormation && srcFormation.length > 0 ? srcFormation.length : cfg.maxR;
+    return {
+      kind: source.kind,
+      target: source.target,
+      suit: source.suit || null,
+      card: source.card || null,
+      cardsLabel: source.cardsLabel || null,
+      wantPlayer: source.wantPlayer != null ? source.wantPlayer : null,
+      wantBanker: source.wantBanker != null ? source.wantBanker : null,
+      label: source.label || source.suit || source.card || '',
+      trigger: game.number,
+      maxR,
+      reason:
+        `Relais de « ${source.strategyName || source.strategy} » (conseil de formation appliqué` +
+        `${srcFormation ? ` : ${srcFormation.length} validation(s) d'affilée conseillée(s) sur ${srcFormation.support} observation(s) → ${maxR} rattrapage(s) suivi(s)` : ''}` +
+        `${bestRates[source.strategy] != null ? `, ${bestRates[source.strategy]}% à titre indicatif` : ''}) — ` +
+        `même prédiction copiée (même décalage a+n que la source) : ${source.reason || ''}`,
+      meta: { sourceStrategy: source.strategy, sourceRef: source.id || null },
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, costumeFaible, collecte];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

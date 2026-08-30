@@ -1167,6 +1167,72 @@ function onFinished(round) {
 // ---------------------------------------------------------------------------
 // Prédiction : toutes les stratégies actives sont évaluées
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Stratégies actuellement jugées FIABLES — utilisé par la stratégie
+// « Collecte IA » (voir strategies.js/collecte) pour savoir QUELLES sources
+// relayer, et avec quel nombre de rattrapages. Require() PARESSEUX (à
+// l'intérieur de la fonction, pas en tête de fichier) : formation.js
+// requiert lui-même predictor.js (pour `state`) — un require() en tête de
+// predictor.js créerait un cycle (predictor.js → formation.js → predictor.js
+// encore en cours de chargement, exports incomplets). Appelé ici, bien après
+// le démarrage complet de l'appli, ce risque n'existe plus : le module est
+// déjà entièrement chargé et mis en cache par Node.
+// NOTE IMPORTANTE : la sélection ne se base PLUS sur un taux de réussite (ni
+// celui de l'Avis IA/strategy-advisor.js, ni un seuil de % côté Formation).
+// Seule compte la Formation (formation.js) : « reliable » veut dire qu'un
+// CONSEIL (une formation — combien de prédictions rejouer d'affilée après
+// une perte/rattrapage) a pu être établi avec un échantillon suffisant. Le
+// taux (`f.rate`) n'est conservé ici qu'à titre INFORMATIF (affiché dans le
+// message « reason » de la Collecte), jamais utilisé pour choisir ou classer
+// les sources — voir aussi collecte.detect() dans strategies.js qui départage
+// désormais par la formation (longueur de la série conseillée / échantillon)
+// et non par un pourcentage.
+function bestStrategyKeys() {
+  const keys = new Set();
+  const rates = {};
+  const formationInfo = {};
+  try {
+    const formation = require('./formation');
+    for (const f of formation.runtime.strategies || []) {
+      if (f.reliable) { // un conseil de formation existe et s'applique à cette stratégie — peu importe son taux
+        keys.add(f.key);
+        rates[f.key] = f.rate; // informatif uniquement
+        formationInfo[f.key] = { length: f.formationLength || 0, support: f.support || 0 };
+      }
+    }
+  } catch (_) { /* formation pas encore chargée/calculée : on continue avec ce qu'on a */ }
+  return { keys, rates, formationInfo };
+}
+
+// « Prédit (IA) » (predit.js) est une stratégie IA à part entière, mais elle
+// vit HORS de strategies.LIST (son propre panneau, son propre stockage —
+// predit.panel.predictions — voir predit.js) : ses prédictions n'atterrissent
+// donc jamais dans state.predictions. Sans ce pont, la Collecte ne pourrait
+// JAMAIS la relayer, même quand la Formation la juge fiable (formation.js
+// calcule pourtant bien un conseil pour la clé 'predit', voir formation.js/run).
+// On la traduit ici dans le même format que les prédictions classiques, pour
+// que collecte.detect() (strategies.js) puisse la traiter EXACTEMENT comme
+// n'importe quelle autre stratégie source. Require() PARESSEUX pour la même
+// raison que formation.js/strategy-advisor.js : predit.js requiert lui-même
+// predictor.js (pour `state`) en tête de fichier — un require() en tête de
+// predictor.js créerait un cycle.
+function preditAsPredictions() {
+  try {
+    const predit = require('./predit');
+    return (predit.panel.predictions || []).map((p) => ({
+      strategy: 'predit',
+      strategyName: 'Prédit (IA)',
+      kind: 'suit',
+      suit: p.suit,
+      label: p.suit,
+      trigger: p.trigger,
+      target: p.target,
+      reason: p.motif || '',
+      id: p.id,
+    }));
+  } catch (_) { return []; } // predit pas encore chargé : rien à ajouter pour l'instant
+}
+
 function evaluate() {
   initStrategies();
   syncCostume();
@@ -1178,6 +1244,7 @@ function evaluate() {
     ? [...state.freshFinished].sort((a, b) => a.number - b.number)
     : state.lastFinished ? [state.lastFinished] : [];
   state.freshFinished = [];
+  const { keys: bestKeys, rates: bestRates, formationInfo } = bestStrategyKeys();
   const jobs = [];
   for (const def of strategies.LIST) {
     const cfg = state.strategies[def.key];
@@ -1191,7 +1258,15 @@ function evaluate() {
   for (const [def, cfg, source] of jobs) {
     let hit = null;
     try {
-      hit = def.detect(source, cfg, { counters: state.counters, games: state.games, predictions: state.predictions });
+      // TOUTES les stratégies doivent pouvoir être collectées par la
+      // Collecte IA, y compris « Prédit (IA) » (predit.js) qui vit hors de
+      // strategies.LIST : on étend uniquement SA vue des prédictions
+      // (jamais celle des autres stratégies, pour ne rien changer à leur
+      // propre logique de gap/anti-doublon).
+      const predictionsForDetect = def.key === 'collecte'
+        ? state.predictions.concat(preditAsPredictions())
+        : state.predictions;
+      hit = def.detect(source, cfg, { counters: state.counters, games: state.games, predictions: predictionsForDetect, bestKeys, bestRates, formationInfo });
     } catch (e) {
       state.lastError = `${def.key}: ${e.message}`;
       continue;
@@ -1261,7 +1336,13 @@ function evaluate() {
       trigger: hit.trigger != null ? hit.trigger : null,
       from: source.number,
       step: 0,
-      maxR: cfg.maxR,
+      // hit.maxR (optionnel) permet à une stratégie de FIXER elle-même le
+      // nombre de rattrapages de LA prédiction envoyée, au lieu d'hériter du
+      // réglage fixe cfg.maxR de la stratégie. Utilisé par « Collecte IA »
+      // (strategies.js/collecte) : le nombre de rattrapages suit le conseil
+      // de Formation (formationLength) de la stratégie SOURCE relayée,
+      // jamais un réglage indépendant de la Collecte.
+      maxR: hit.maxR != null ? hit.maxR : cfg.maxR,
       counter: hit.counter != null ? hit.counter : null,
       b: cfg.b || 0,
       format: hit.format || cfg.format,
