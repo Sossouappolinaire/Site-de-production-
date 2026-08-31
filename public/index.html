@@ -371,6 +371,7 @@
         <a href="#/ai-created" data-nav="ai-created">Créé par moi avec IA</a>
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
+        <a href="#/formation" data-nav="formation">Formation</a>
         <a href="#/diagnostics" data-nav="settings">Envois</a>
         <a href="#/database" data-nav="database">Base de données</a>
         <a href="#/formats" data-nav="formats">Formats</a>
@@ -578,6 +579,7 @@
         ${card('#/ai-created', '🤖', 'Créé par moi avec IA', `${aiCreatedCount} stratégie(s) personnelle(s)`)}
         ${card('#/predit', '🔮', 'Prédit IA', `${(snapshot.predit?.activeCount || 0)} stratégie(s) certifiée(s)`)}
         ${card('#/after-loss', '↩️', 'Prédiction après perte', `${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)`)}
+        ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
       </div>
@@ -1313,13 +1315,53 @@ Faites-en bon usage !
     async function loadFormation() {
       const box = $('#aiFormation'); if (!box) return;
       try {
-        const r = await api('/api/formation');
-        const list = r.strategies || [];
+        const [r, relay] = await Promise.all([api('/api/formation'), api('/api/formation/relay').catch(() => null)]);
+        const formByKey = {};
+        (r.strategies || []).forEach(s => { formByKey[s.key] = s; });
+        const relayByKey = {};
+        ((relay && relay.strategies) || []).forEach(s => { relayByKey[s.key] = s; });
+        // la liste affichée = toutes les stratégies proposées par le relais
+        // (stratégies classiques + Prédit + celles créées par l’IA), enrichies
+        // des chiffres de formation quand ils existent.
+        const list = (relay && relay.strategies || []).length
+          ? relay.strategies.map(rs => Object.assign(
+              { key: rs.key, name: rs.name, findings: [], reliable: false, rate: 0, formationLength: 0, troubleEvents: 0 },
+              formByKey[rs.key] || {}, { name: rs.name }))
+          : (r.strategies || []);
         if (!list.length) { box.innerHTML = '<div class="empty">Aucune donnée pour l’instant.</div>'; return; }
-        box.innerHTML = list.map(s => `<div class="panel" style="margin-bottom:12px"><div class="split"><b>${esc(s.name)}</b><span class="tag ${s.reliable ? (s.rate >= 75 ? 'good' : 'warn') : ''}">${s.reliable ? `Formation de ${esc(String(s.formationLength))} · ${esc(String(s.rate))}%` : 'échantillon insuffisant'} · ${esc(String(s.troubleEvents))} incident(s)</span></div>
-          ${s.findings.length ? `<ul class="small">${s.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : `<p class="small muted">Pas encore assez de pertes/rattrapages observés pour cette stratégie (minimum ${esc(String(r.minSupport || 5))} incidents).</p>`}</div>`).join('')
+        const head = relay ? `<div class="panel" style="margin-bottom:12px"><div class="split"><b>📢 Envoi de la formation dans le canal</b><span class="tag">${esc(String(relay.sentCount || 0))} envoi(s)</span></div>
+          <p class="small">Coche une stratégie ci-dessous : après une perte, le bot lit la formation de cette stratégie (ex. « attendre 2 prédictions avant de jouer »), laisse passer ce nombre de prédictions, puis publie la prédiction confirmée (jeu + costume, sûr à 99%) dans le canal. Si elle est gagnée, il envoie « Bingo, Sossou Kouamé l’avait déjà dit ». Chaque stratégie a son propre message et un nom de code sans rapport avec sa logique. Si la case n’est PAS cochée, le bot envoie après chaque perte : « Écrivez à l’administrateur pour prendre la formation de comment jouer à cette stratégie ».</p>
+          <div class="field"><label>Canal Telegram de la formation</label><input id="formationRelayChannel" placeholder="-1001234567890 ou @moncanal" value="${esc((relay.channels || []).join(', '))}"></div>
+          <div class="toolbar"><button class="button primary" onclick="saveFormationRelayChannel()">Enregistrer le canal</button></div>
+          ${relay.lastError ? `<div class="notice warn">${esc(relay.lastError)}</div>` : ''}</div>` : '';
+        box.innerHTML = head + list.map(s => {
+          const rl = relayByKey[s.key];
+          const etat = rl && rl.pending ? `en attente du résultat du jeu N°${esc(String(rl.pending.target))}`
+            : rl && rl.armed ? 'prochaine prédiction = celle à publier'
+            : rl && rl.counting ? `décompte : ${esc(String(rl.seen))}/${esc(String(rl.needed))} prédiction(s) laissée(s) passer`
+            : 'en veille (attend une perte)';
+          return `<div class="panel" style="margin-bottom:12px"><div class="split"><b>${esc(s.name)}${rl && rl.codeName ? ` <span class="tag">nom de code : ${esc(rl.codeName)}</span>` : ''}${rl && rl.ai ? ' <span class="tag">créée par l’IA</span>' : ''}</b><span class="tag ${s.reliable ? (s.rate >= 75 ? 'good' : 'warn') : ''}">${s.reliable ? `Formation de ${esc(String(s.formationLength))} · ${esc(String(s.rate))}%` : 'échantillon insuffisant'} · ${esc(String(s.troubleEvents))} incident(s)</span></div>
+          ${s.findings.length ? `<ul class="small">${s.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : `<p class="small muted">Pas encore assez de pertes/rattrapages observés pour cette stratégie (minimum ${esc(String(r.minSupport || 5))} incidents).</p>`}
+          ${rl ? `<label class="small" style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" ${rl.enabled ? 'checked' : ''} onchange="toggleFormationRelay('${esc(s.key)}', this.checked)"> Envoyer la formation de cette stratégie dans le canal</label>
+          <div class="field" style="margin-top:8px"><label>Canal propre à cette stratégie (facultatif)</label><input id="formationRelayChan-${esc(s.key)}" placeholder="Laisser vide pour utiliser le canal ci-dessus" value="${esc((rl.channels || []).join(', '))}" onchange="saveFormationRelayStrategyChannel('${esc(s.key)}')"></div>
+          <p class="small muted">État : ${etat} · ${esc(String(rl.sentCount || 0))} message(s) envoyé(s).</p>` : ''}</div>`;
+        }).join('')
           + (r.remote ? `<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(r.remote.title || 'Avis Pollinations.ai')}</b><span class="tag">${formatDate(r.remoteAt)}</span></div><p class="small">${esc(r.remote.observation || '')}</p>${r.remote.meilleureStrategie ? `<div class="notice">Formation la plus exploitable selon l’IA : <b>${esc(r.remote.meilleureStrategie)}</b></div>` : ''}${(r.remote.findings || []).length ? `<ul class="small">${r.remote.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}${r.remote.risks ? `<p class="small muted">${esc(r.remote.risks)}</p>` : ''}</div>` : '');
       } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+    }
+    async function toggleFormationRelay(key, enabled) {
+      try { await api('/api/formation/relay/strategy', 'POST', { key, enabled }); toast(enabled ? 'Formation envoyée dans le canal pour cette stratégie.' : 'Envoi désactivé pour cette stratégie.'); await loadFormation(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveFormationRelayStrategyChannel(key) {
+      const el = $('#formationRelayChan-' + key); if (!el) return;
+      try { await api('/api/formation/relay/strategy', 'POST', { key, channels: el.value }); toast('Canal enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveFormationRelayChannel() {
+      const el = $('#formationRelayChannel'); if (!el) return;
+      try { await api('/api/formation/relay/config', 'POST', { channels: el.value, enabled: true }); toast('Canal de la formation enregistré.'); await loadFormation(); }
+      catch (e) { toast(e.message, 'error'); }
     }
     async function runFormation(remote) { const box = $('#aiFormation'); if (box) box.innerHTML = '<div class="loading">Analyse en cours…</div>'; try { await api('/api/formation/run', 'POST', { remote: !!remote }); await loadFormation(); toast('Formation mise à jour.'); } catch(e) { toast(e.message, 'error'); } }
     function renderAiQaEntry(e) {
@@ -1870,7 +1912,14 @@ Faites-en bon usage !
     async function saveProposal(proposal) { try { await api('/api/ai/strategies', 'POST', { proposal }); await refresh(); toast('Plan de stratégie enregistré, désactivé par sécurité.'); } catch(e) { toast(e.message, 'error'); } }
     async function formatsPage() { setNav('formats'); $('#app').innerHTML = '<div class="loading">Chargement des formats…</div>'; try { const r = await api('/api/formats'); $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Bibliothèque Telegram</span><h2 style="margin-top:7px">Formats de prédiction</h2><p class="small">${r.count} formats affichés avec leur aperçu réel.</p></div><input id="formatSearch" style="max-width:250px" placeholder="Rechercher un format..." oninput="filterFormats()"></div><div id="formatGrid" class="format-grid">${r.formats.map(f => `<article class="format-card" data-search="${esc(`${f.id} ${f.label} ${f.preview}`.toLowerCase())}"><b>FORMAT ${f.id}</b><pre>${esc(f.preview)}</pre></article>`).join('')}</div>`; } catch(e) { toast(e.message, 'error'); } }
     function filterFormats() { const q = val('formatSearch').toLowerCase(); document.querySelectorAll('.format-card').forEach(c => c.style.display = c.dataset.search.includes(q) ? '' : 'none'); }
-    function settingsPage() { setNav('settings'); const bot = snapshot.bot || {}, shopBot = snapshot.shopBot || {}, db = snapshot.db || {}; $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Système</span><h2 style="margin-top:7px">Configuration générale</h2><p class="small">Les réglages de chaque stratégie restent dans sa propre fiche.</p></div></div><div class="two-col"><div class="panel"><h3>Bot Telegram</h3><div class="notice ${bot.tokenSet ? '' : 'warn'}">${bot.tokenSet ? `Token enregistré : ${esc(bot.tokenMasked || 'masqué')}` : 'Aucun token Telegram configuré.'}</div><div class="field"><label>Token du bot</label><input id="botToken" type="password" autocomplete="off" placeholder="Coller le token Telegram pour le remplacer"></div><div class="field"><label>ID administrateur</label><input id="adminId" type="number" value="${esc(bot.adminId || '')}"></div><div class="field"><label>ID du canal principal</label><input id="mainChannel" placeholder="-1001234567890 ou @moncanal" value="${esc((snapshot.channels || []).filter(c => c.active).map(c => c.id).join(', '))}"></div><div class="toolbar"><button class="button primary" onclick="saveBot()">Enregistrer et redémarrer</button><button class="button orange" onclick="saveMainChannel()">Vérifier le canal et envoyer un message</button>${bot.tokenSet ? `<button class="button danger" onclick="disconnectBot()">Déconnecter / supprimer le token</button>` : ''}</div><div id="settingsMessage"></div></div><div class="panel"><h3>Bot de la boutique</h3><p class="small">Token API totalement séparé du bot principal — utilisé UNIQUEMENT pour /boutique, la langue, la saisie du code de paiement et les questions sur la stratégie achetée.</p><div class="notice ${shopBot.tokenSet ? '' : 'warn'}">${shopBot.tokenSet ? `Token enregistré : ${esc(shopBot.tokenMasked || 'masqué')}${shopBot.username ? ' — @' + esc(shopBot.username) : ''}` : 'Aucun token configuré pour la boutique.'}</div>${shopBot.error ? `<div class="notice warn">${esc(shopBot.error)}</div>` : ''}<div class="field"><label>Token du bot boutique</label><input id="shopBotToken" type="password" autocomplete="off" placeholder="Coller le token Telegram dédié à la boutique"></div><div class="toolbar"><button class="button primary" onclick="saveShopBot()">Enregistrer et redémarrer</button>${shopBot.tokenSet ? `<button class="button danger" onclick="disconnectShopBot()">Déconnecter / supprimer le token</button>` : ''}</div><div id="shopBotMessage"></div></div><div class="panel"><h3>Base de données</h3><div class="notice ${db.ready ? '' : 'warn'}">${db.ready ? 'PostgreSQL connectée et prête.' : 'Base non connectée : le bot peut fonctionner avec l’historique en mémoire.'}</div><div class="field"><label>DATABASE_URL (optionnel)</label><input id="dbUrl" type="password" autocomplete="off" placeholder="URL PostgreSQL Render"></div><button class="button ghost" onclick="saveDb()">Connecter la base</button><p class="small" style="margin-top:15px">Sur Render, préfère la variable d’environnement <code>DATABASE_URL</code>.</p></div></div><div class="section"><div class="panel"><h3>Sécurité — accès au tableau de bord</h3><div class="notice ${snapshot.mail && snapshot.mail.configured ? '' : 'warn'}">${snapshot.mail && snapshot.mail.configured ? `Envoi des codes via Brevo, expéditeur : ${esc(snapshot.mail.from || '(non défini)')}` : "Aucune clé API Brevo configurée pour l'envoi des codes de confirmation."}</div><div class="field"><label>Clé API Brevo</label><input id="mailApiKey" type="password" autocomplete="off" placeholder="xkeysib-xxxxxxxxxxxxxxxx"></div><div class="field"><label>Adresse expéditrice</label><input id="mailFrom" type="text" autocomplete="off" placeholder="Baccara Bot <votre.adresse@gmail.com>"></div><div class="toolbar"><button class="button primary" onclick="saveMailConfig()">Enregistrer (une seule fois)</button><button class="button ghost" onclick="doLogout()">Se déconnecter</button></div><p class="small" style="margin-top:15px">Créez une clé API gratuite sur <a href="https://app.brevo.com/settings/keys/api" target="_blank" rel="noopener">app.brevo.com (Settings &gt; SMTP &amp; API)</a>. Contrairement à Resend, aucun domaine à vérifier : validez simplement l'adresse expéditrice une fois dans Brevo (Settings &gt; Senders) — un compte Gmail existant convient. Une fois validée, elle peut envoyer vers n'importe quelle adresse Gmail destinataire.</p><div id="mailMessage"></div></div></div><div class="section"><div class="panel"><h3>Réglages globaux historiques</h3><div class="three-col"><div class="field"><label>Compteur B</label><input id="globalB" type="number" min="1" value="${snapshot.b}"></div><div class="field"><label>Rattrapages</label><input id="globalR" type="number" min="0" max="9" value="${snapshot.maxR}"></div><div class="field"><label>Format par défaut</label><input id="globalF" type="number" min="1" max="${snapshot.formatCount}" value="${snapshot.format}"></div></div><button class="button primary" onclick="saveGlobals()">Enregistrer les réglages globaux</button>  </div></div>`; }
+    function settingsPage() { setNav('settings'); const bot = snapshot.bot || {}, shopBot = snapshot.shopBot || {}, db = snapshot.db || {}; $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Système</span><h2 style="margin-top:7px">Configuration générale</h2><p class="small">Les réglages de chaque stratégie restent dans sa propre fiche.</p></div></div><div class="two-col"><div class="panel"><h3>Bot Telegram</h3><div class="notice ${bot.tokenSet ? '' : 'warn'}">${bot.tokenSet ? `Token enregistré : ${esc(bot.tokenMasked || 'masqué')}` : 'Aucun token Telegram configuré.'}</div><div class="field"><label>Token du bot</label><input id="botToken" type="password" autocomplete="off" placeholder="Coller le token Telegram pour le remplacer"></div><div class="field"><label>ID administrateur</label><input id="adminId" type="number" value="${esc(bot.adminId || '')}"></div><div class="field"><label>ID du canal principal</label><input id="mainChannel" placeholder="-1001234567890 ou @moncanal" value="${esc((snapshot.channels || []).filter(c => c.active).map(c => c.id).join(', '))}"></div><div class="toolbar"><button class="button primary" onclick="saveBot()">Enregistrer et redémarrer</button><button class="button orange" onclick="saveMainChannel()">Vérifier le canal et envoyer un message</button>${bot.tokenSet ? `<button class="button danger" onclick="disconnectBot()">Déconnecter / supprimer le token</button>` : ''}</div><div id="settingsMessage"></div></div><div class="panel"><h3>Bot de la boutique</h3><p class="small">Token API totalement séparé du bot principal — utilisé UNIQUEMENT pour /boutique, la langue, la saisie du code de paiement et les questions sur la stratégie achetée.</p><div class="notice ${shopBot.tokenSet ? '' : 'warn'}">${shopBot.tokenSet ? `Token enregistré : ${esc(shopBot.tokenMasked || 'masqué')}${shopBot.username ? ' — @' + esc(shopBot.username) : ''}` : 'Aucun token configuré pour la boutique.'}</div>${shopBot.error ? `<div class="notice warn">${esc(shopBot.error)}</div>` : ''}<div class="field"><label>Token du bot boutique</label><input id="shopBotToken" type="password" autocomplete="off" placeholder="Coller le token Telegram dédié à la boutique"></div><div class="toolbar"><button class="button primary" onclick="saveShopBot()">Enregistrer et redémarrer</button>${shopBot.tokenSet ? `<button class="button danger" onclick="disconnectShopBot()">Déconnecter / supprimer le token</button>` : ''}</div><div id="shopBotMessage"></div></div><div class="panel"><h3>Base de données</h3><div class="notice ${db.ready ? '' : 'warn'}">${db.ready ? 'PostgreSQL connectée et prête.' : 'Base non connectée : le bot peut fonctionner avec l’historique en mémoire.'}</div><div class="field"><label>DATABASE_URL (optionnel)</label><input id="dbUrl" type="password" autocomplete="off" placeholder="URL PostgreSQL Render"></div><button class="button ghost" onclick="saveDb()">Connecter la base</button><p class="small" style="margin-top:15px">Sur Render, préfère la variable d’environnement <code>DATABASE_URL</code>.</p></div></div><div class="section"><div class="panel"><h3>Sécurité — accès au tableau de bord</h3><div class="notice ${snapshot.mail && snapshot.mail.configured ? '' : 'warn'}">${snapshot.mail && snapshot.mail.configured ? `Envoi des codes via Brevo, expéditeur : ${esc(snapshot.mail.from || '(non défini)')}` : "Aucune clé API Brevo configurée pour l'envoi des codes de confirmation."}</div><div class="field"><label>Clé API Brevo</label><input id="mailApiKey" type="password" autocomplete="off" placeholder="xkeysib-xxxxxxxxxxxxxxxx"></div><div class="field"><label>Adresse expéditrice</label><input id="mailFrom" type="text" autocomplete="off" placeholder="Baccara Bot <votre.adresse@gmail.com>"></div><div class="toolbar"><button class="button primary" onclick="saveMailConfig()">Enregistrer (une seule fois)</button><button class="button ghost" onclick="doLogout()">Se déconnecter</button></div><p class="small" style="margin-top:15px">Créez une clé API gratuite sur <a href="https://app.brevo.com/settings/keys/api" target="_blank" rel="noopener">app.brevo.com (Settings &gt; SMTP &amp; API)</a>. Contrairement à Resend, aucun domaine à vérifier : validez simplement l'adresse expéditrice une fois dans Brevo (Settings &gt; Senders) — un compte Gmail existant convient. Une fois validée, elle peut envoyer vers n'importe quelle adresse Gmail destinataire.</p><div id="mailMessage"></div></div></div><div class="section"><div class="panel"><h3>Compteur — Taux Miroir (joueur &amp; banquier)</h3><p class="small">Compte, carte par carte, le costume du joueur ET du banquier séparément, et publie le résultat dans le canal Telegram ci-dessous après chaque jeu terminé (le même message est mis à jour, pas de spam). Remise à zéro automatique à chaque heure pile.</p><div class="field"><label>ID du canal Telegram</label><input id="mirrorChannelId" type="text" autocomplete="off" placeholder="-1001234567890" value="${esc(snapshot.mirrorCounter ? snapshot.mirrorCounter.channelId || '' : '')}"></div><div class="toolbar"><button class="button primary" onclick="saveMirrorChannel()">Enregistrer le canal</button><button class="button ghost" onclick="testMirrorCounter()">Envoyer un aperçu maintenant</button></div><div id="mirrorMessage"></div><p class="small" style="margin-top:15px">Depuis le dernier reset : ${snapshot.mirrorCounter ? snapshot.mirrorCounter.games || 0 : 0} jeu(x) comptabilisé(s).</p></div></div><div class="section"><div class="panel"><h3>Réglages globaux historiques</h3><div class="three-col"><div class="field"><label>Compteur B</label><input id="globalB" type="number" min="1" value="${snapshot.b}"></div><div class="field"><label>Rattrapages</label><input id="globalR" type="number" min="0" max="9" value="${snapshot.maxR}"></div><div class="field"><label>Format par défaut</label><input id="globalF" type="number" min="1" max="${snapshot.formatCount}" value="${snapshot.format}"></div></div><button class="button primary" onclick="saveGlobals()">Enregistrer les réglages globaux</button></div></div><div class="section"><div class="panel"><h3>💬 Message de perte + formation VIP</h3><p class="small">Envoyé automatiquement dans le canal, EN PLUS du ❌, dès qu'une prédiction (stratégie existante, « Prédit IA », ou relais « après perte ») se solde par une perte — pour renvoyer l'abonné vers l'administrateur (remboursement) et lui rappeler la formation VIP.</p>
+      <label class="check"><input id="lossNoticeEnabled" type="checkbox" ${snapshot.lossNotice && snapshot.lossNotice.enabled ? 'checked' : ''}> Activer ce message automatique</label>
+      <div class="field"><label>Message de perte</label><textarea id="lossNoticeMessage" rows="3">${esc(snapshot.lossNotice ? snapshot.lossNotice.message : '')}</textarea></div>
+      <div class="field"><label>Rappel formation VIP (texte)</label><textarea id="lossNoticeVipText" rows="2">${esc(snapshot.lossNotice ? snapshot.lossNotice.vipText : '')}</textarea></div>
+      <div class="field"><label>Lien formation VIP (optionnel)</label><input id="lossNoticeVipLink" placeholder="https://t.me/..." value="${esc(snapshot.lossNotice ? snapshot.lossNotice.vipLink : '')}"></div>
+      <div class="toolbar"><button class="button primary" onclick="saveLossNotice()">Enregistrer</button></div>
+      <div id="lossNoticeMessage2"></div>
+    </div></div>`; }
     async function saveBot() { try { if (val('botToken')) await api('/api/bot/token', 'POST', { token: val('botToken') }); await api('/api/bot/admin', 'POST', { adminId: val('adminId') }); await refresh(); settingsPage(); toast('Configuration Telegram enregistrée.'); } catch(e) { toast(e.message, 'error'); } }
     async function disconnectBot() {
       if (!confirm('Déconnecter le bot principal ? Le token sera supprimé et le bot ne répondra plus sur Telegram jusqu\'à ce qu\'un nouveau token soit configuré.')) return;
@@ -1891,8 +1940,22 @@ Faites-en bon usage !
     }
     async function saveDb() { try { await api('/api/db', 'POST', { url: val('dbUrl') }); await refresh(); settingsPage(); toast('Base connectée.'); } catch(e) { toast(e.message, 'error'); } }
     async function saveMailConfig() { try { await api('/api/auth/mail-config', 'POST', { apiKey: val('mailApiKey'), from: val('mailFrom') }); await refresh(); settingsPage(); toast("Clé Brevo enregistrée."); } catch(e) { toast(e.message, 'error'); } }
+    async function saveMirrorChannel() { try { await api('/api/mirror-counter/channel', 'POST', { channelId: val('mirrorChannelId') }); await refresh(); settingsPage(); toast('Canal du compteur enregistré.'); } catch(e) { toast(e.message, 'error'); } }
+    async function testMirrorCounter() { try { await api('/api/mirror-counter/test', 'POST', {}); toast('Aperçu envoyé dans le canal.'); } catch(e) { toast(e.message, 'error'); } }
     async function doLogout() { try { await api('/api/auth/logout', 'POST', {}); } catch(e) {} window.location.href = '/login.html'; }
     async function saveGlobals() { try { await api('/api/setb', 'POST', { b: val('globalB') }); await api('/api/setmaxr', 'POST', { maxR: val('globalR') }); await api('/api/setformat', 'POST', { format: val('globalF') }); await refresh(); settingsPage(); toast('Réglages globaux enregistrés.'); } catch(e) { toast(e.message, 'error'); } }
+    async function saveLossNotice() {
+      try {
+        await api('/api/loss-notice', 'POST', {
+          enabled: $('#lossNoticeEnabled')?.checked,
+          message: val('lossNoticeMessage'),
+          vipText: val('lossNoticeVipText'),
+          vipLink: val('lossNoticeVipLink'),
+        });
+        await refresh();
+        toast('Message de perte enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
 
     // ---------------------------------------------------------------------
     // Réparation IA (Groq) : diagnostic -> correction automatique avec
@@ -2005,6 +2068,66 @@ Faites-en bon usage !
       bar.innerHTML = '<a class="home-back" href="#/">⬅ Retour à l\'accueil</a>';
       app.prepend(bar);
     }
+
+    // ---------------------------------------------------------------------
+    // Bouton « Formation » : rassemble TOUTES les formations, une par
+    // stratégie, chacune avec sa PROPRE configuration d'envoi (titre,
+    // contenu, canal) séparée des autres.
+    // ---------------------------------------------------------------------
+    async function formationPage() {
+      setNav('formation');
+      $('#app').innerHTML = '<div class="loading">Chargement des formations…</div>';
+      try {
+        const [relay, stats] = await Promise.all([
+          api('/api/formation/relay'),
+          api('/api/formation').catch(() => ({ strategies: [] })),
+        ]);
+        const statOf = (key) => (stats.strategies || []).find(s => s.key === key) || null;
+        const cards = (relay.strategies || []).map(s => {
+          const st = statOf(s.key);
+          const badge = st && st.reliable
+            ? `<span class="tag good">Formation de ${esc(String(st.formationLength))} · ${esc(String(st.rate))}%</span>`
+            : `<span class="tag">Formation par défaut</span>`;
+          return `<div class="panel" style="margin-bottom:14px">
+            <div class="split"><b>${esc(s.name)} <span class="tag">nom de code : ${esc(s.codeName || '')}</span>${s.ai ? ' <span class="tag">créée par l’IA</span>' : ''}</b>${badge}</div>
+            <div class="field" style="margin-top:10px"><label>Titre de la formation</label><input id="fmT-${esc(s.key)}" value="${esc(s.title || '')}" placeholder="Formation « ${esc(s.codeName || '')} »"></div>
+            <div class="field"><label>Contenu de la formation${s.custom ? '' : ' (généré automatiquement — modifiable)'}</label><textarea id="fmC-${esc(s.key)}" rows="7">${esc(s.lesson || '')}</textarea></div>
+            <div class="field"><label>Canal d’envoi de CETTE formation</label><input id="fmCh-${esc(s.key)}" value="${esc((s.channels || []).join(', '))}" placeholder="Laisser vide pour le canal général ci-dessus"></div>
+            <label class="small" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmA-${esc(s.key)}" ${s.autoSend ? 'checked' : ''}> Envoyer automatiquement cette formation après chaque perte</label>
+            <div class="toolbar" style="margin-top:10px"><button class="button primary" onclick="saveFormationLesson('${esc(s.key)}')">Enregistrer</button><button class="button orange" onclick="sendFormationLesson('${esc(s.key)}')">Envoyer dans le canal</button></div>
+            <p class="small muted" style="margin-top:8px">${esc(String(s.manualSentCount || 0))} envoi(s) manuel(s)${s.lastManualAt ? ' · dernier : ' + esc(formatDate(s.lastManualAt)) : ''}</p>
+          </div>`;
+        }).join('');
+        $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Formation</span><h2 style="margin-top:7px">Toutes les formations, stratégie par stratégie</h2><p class="small">Chaque stratégie (y compris « Prédit » et celles créées par l’IA) possède sa formation et sa configuration d’envoi propre : titre, contenu et canal indépendants.</p></div><button class="button ghost" onclick="formationPage()">Actualiser</button></div>
+        <div class="panel" style="margin-bottom:16px"><div class="split"><b>Canal général de repli</b><span class="tag">${esc(String(relay.sentCount || 0))} envoi(s)</span></div>
+        <p class="small">Utilisé pour les stratégies dont le canal propre est vide.</p>
+        <div class="field"><label>Canal Telegram général</label><input id="fmGlobalChan" value="${esc((relay.channels || []).join(', '))}" placeholder="-1001234567890 ou @moncanal"></div>
+        <div class="toolbar"><button class="button primary" onclick="saveFormationGlobalChannel()">Enregistrer le canal général</button></div></div>
+        ${cards || '<div class="notice warn">Aucune stratégie disponible.</div>'}`;
+      } catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+    }
+    async function saveFormationGlobalChannel() {
+      const el = $('#fmGlobalChan'); if (!el) return;
+      try { await api('/api/formation/relay/config', 'POST', { channels: el.value, enabled: true }); toast('Canal général enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveFormationLesson(key) {
+      try {
+        await api('/api/formation/relay/strategy', 'POST', {
+          key,
+          title: ($('#fmT-' + key) || {}).value || '',
+          text: ($('#fmC-' + key) || {}).value || '',
+          channels: ($('#fmCh-' + key) || {}).value || '',
+          autoSend: !!(($('#fmA-' + key) || {}).checked),
+        });
+        toast('Formation enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function sendFormationLesson(key) {
+      try { await saveFormationLesson(key); await api('/api/formation/relay/send', 'POST', { key }); toast('Formation envoyée dans le canal.'); await formationPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
     async function route() {
       try {
         await refresh();
@@ -2022,6 +2145,7 @@ Faites-en bon usage !
         else if (h === '#/boutique') await boutiquePage();
         else if (h === '#/predit') preditPage();
         else if (h === '#/after-loss') afterLossPage();
+        else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
         else if (h === '#/diagnostics') await diagnosticsPage();
         else if (h === '#/database') await databasePage();
