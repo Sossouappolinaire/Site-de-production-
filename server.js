@@ -18,13 +18,16 @@ const advisor = require('./strategy-advisor');
 const aiQa = require('./ai-qa');
 const aiRepair = require('./ai-repair');
 const formation = require('./formation');
+const formationRelay = require('./formation-relay');
 const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const shop = require('./shop');
 const paiement = require('./paiement');
+const mirrorCounter = require('./mirror-counter');
 const sebpay = require('./sebpay');
+const lossNotice = require('./loss-notice');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
@@ -334,6 +337,11 @@ app.get('/api/state', async (req, res) => {
     stats: stats(),
     uptime: Date.now() - state.startedAt,
     mail: await auth.mailerStatus(),
+    mirrorCounter: {
+      channelId: mirrorCounter.getChannel(),
+      games: mirrorCounter.state.games,
+    },
+    lossNotice: lossNotice.getSettings(),
   });
 });
 
@@ -698,6 +706,36 @@ app.get('/api/strategies', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Compteur « Taux Miroir » — costume du joueur ET du banquier, carte par
+// carte, publié dans un canal Telegram configuré une fois (bouton
+// « Compteur » du tableau de bord). Reset automatique à chaque heure pile.
+// ---------------------------------------------------------------------------
+app.get('/api/mirror-counter', (req, res) => {
+  res.json({
+    channelId: mirrorCounter.getChannel(),
+    player: mirrorCounter.state.player,
+    banker: mirrorCounter.state.banker,
+    games: mirrorCounter.state.games,
+    sinceAt: mirrorCounter.state.sinceAt,
+    preview: mirrorCounter.buildMessage(state.live ? state.live.number : null),
+  });
+});
+
+app.post('/api/mirror-counter/channel', (req, res) => {
+  const id = mirrorCounter.setChannel(req.body && req.body.channelId);
+  res.json({ ok: true, channelId: id });
+});
+
+app.post('/api/mirror-counter/test', async (req, res) => {
+  try {
+    await mirrorCounter.publish(state.live ? state.live.number : null);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Boutique — publication de stratégies vendues avec code de paiement.
 // Lecture accessible à tout compte connecté (GET), écriture réservée à
 // l'administrateur (voir le middleware générique plus haut : USER_WRITE_*).
@@ -778,6 +816,21 @@ app.post('/api/shop/sebpay-keys', (req, res) => {
     const { publicKey, secretKey, country, currency } = req.body || {};
     const result = shop.setSebpayKeys({ publicKey, secretKey, country, currency });
     res.json({ ok: true, publicKey: result.publicKey, secretKeySet: !!result.secretKey, country: result.country, currency: result.currency });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Message de perte + rappel formation VIP, envoyé automatiquement dans le
+// canal dès qu'une prédiction (stratégie existante, « Prédit IA », ou relais
+// « après perte ») se solde par une perte (voir loss-notice.js, bot.js —
+// updateResult, predit.js — update, after-loss.js — editPending).
+app.get('/api/loss-notice', (req, res) => {
+  res.json({ ok: true, settings: lossNotice.getSettings() });
+});
+app.post('/api/loss-notice', (req, res) => {
+  try {
+    const { enabled, message, vipText, vipLink } = req.body || {};
+    const result = lossNotice.setSettings({ enabled, message, vipText, vipLink });
+    res.json({ ok: true, settings: result });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -1405,6 +1458,29 @@ app.get('/api/formation', async (req, res) => {
 app.post('/api/formation/run', async (req, res) => {
   const remote = !!(req.body && req.body.remote);
   res.json(await formation.run({ remote }));
+});
+
+// --- Formation : envoi dans le canal (case à cocher par stratégie) --------
+app.get('/api/formation/relay', (req, res) => res.json(formationRelay.status()));
+
+app.post('/api/formation/relay/config', (req, res) => {
+  res.json(formationRelay.configure(req.body || {}));
+});
+
+app.post('/api/formation/relay/strategy', (req, res) => {
+  try {
+    res.json(formationRelay.setStrategy((req.body || {}).key, req.body || {}));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/formation/relay/send', async (req, res) => {
+  try {
+    res.json(await formationRelay.sendLesson((req.body || {}).key));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/formation/relay/scan', async (req, res) => {
+  res.json(await formationRelay.tick());
 });
 
 // --- « Réparation IA » : l'IA (Groq) identifie les problèmes du projet, les

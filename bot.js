@@ -12,10 +12,14 @@ const aiQa = require('./ai-qa');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
+const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
 const shop = require('./shop');
 const paiement = require('./paiement');
+const mirrorCounter = require('./mirror-counter');
+const dataTransfer = require('./data-transfer');
+const lossNotice = require('./loss-notice');
 const {
   state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
@@ -209,7 +213,10 @@ const HELP =
   '/derniers [n] — derniers jeux enregistrés\n' +
   '/jeu <numéro> — fiche complète d\'un jeu\n' +
   '/pred [date] — prédictions enregistrées + taux\n' +
-  '/sql <SELECT ...> — requête de lecture seule';
+  '/sql <SELECT ...> — requête de lecture seule\n\n' +
+  '*Export / Import*\n' +
+  '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA)\n' +
+  '/importer — puis envoie un fichier .xlsx (ou envoie-le directement, sans /importer) pour restaurer la configuration';
 
 function settingsText() {
   return (
@@ -267,6 +274,61 @@ function wire(b) {
   b.onText(/^\/(aide|help)/, (msg) =>
     b.sendMessage(msg.chat.id, HELP, { parse_mode: 'Markdown' })
   );
+
+  // ---------------------------------------------------------------------
+  // Export / import complet de la configuration (tokens, canaux, format,
+  // configuration de chaque stratégie, stratégies créées par l'IA,
+  // historique des analyses IA) en un classeur Excel — réservé à
+  // l'administrateur : le fichier contient les tokens API en clair.
+  // ---------------------------------------------------------------------
+  b.onText(/^\/exporter\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    try {
+      const buffer = dataTransfer.exportBuffer();
+      const filename = `baccara-config-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      await b.sendDocument(
+        msg.chat.id,
+        buffer,
+        { caption: '📦 Export complet de la configuration (tokens, canaux, stratégies, stratégies IA, analyses IA).' },
+        { filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+      );
+    } catch (e) {
+      await b.sendMessage(msg.chat.id, `❌ Export impossible : ${e.message}`);
+    }
+  });
+
+  b.onText(/^\/importer\b/, (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    b.sendMessage(
+      msg.chat.id,
+      "📥 Envoie maintenant le fichier .xlsx à importer (ou envoie-le directement à tout moment, sans passer par /importer)."
+    );
+  });
+
+  // n'importe quel document .xlsx envoyé par l'administrateur déclenche
+  // l'import — pas besoin d'avoir tapé /importer juste avant.
+  b.on('message', async (msg) => {
+    if (!msg.document) return;
+    if (!isAdmin(msg)) return; // silencieux : un compte non-admin n'a même pas confirmation que la fonctionnalité existe
+    const name = String(msg.document.file_name || '');
+    if (!/\.xlsx$/i.test(name)) return; // ignore les autres pièces jointes
+    try {
+      const link = await b.getFileLink(msg.document.file_id);
+      const resp = await fetch(link);
+      if (!resp.ok) throw new Error(`Téléchargement du fichier impossible (HTTP ${resp.status}).`);
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const report = dataTransfer.importBuffer(buffer);
+      persist();
+      if (db.ready) await saveConfigsToDb();
+      const lines = ['✅ Import terminé.'];
+      if (report.applied.length) lines.push(`Appliqué : ${report.applied.join(', ')}`);
+      if (report.skipped.length) lines.push(`Feuilles absentes dans ce fichier (ignorées, réglages actuels conservés) : ${report.skipped.join(', ')}`);
+      lines.push("⚠️ Si le token du bot a changé, redémarre la connexion (Réglages → Bot Telegram → Enregistrer et redémarrer).");
+      await b.sendMessage(msg.chat.id, lines.join('\n'));
+    } catch (e) {
+      await b.sendMessage(msg.chat.id, `❌ Import impossible : ${e.message}`);
+    }
+  });
 
   // /jeu SEUL = jeu en cours ; /jeu <n> est traité plus bas (fiche d'un jeu de la base)
   b.onText(/^\/(?:live|encours)\b|^\/jeu(?:@\w+)?\s*$/, (msg) =>
@@ -1828,6 +1890,16 @@ async function updateResult(pred) {
       try { await sender.sendMessage(m.chatId, text, { reply_to_message_id: m.messageId, ...(parse_mode ? { parse_mode } : {}) }); } catch (_) {}
     }
   }
+  // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
+  // dans CES MÊMES canaux — pour TOUTE stratégie, existante comme IA (voir
+  // aussi predit.js/update() pour le panneau « Prédit IA »). Réglable/
+  // désactivable depuis Système → Message de perte.
+  if (pred.status === 'perdu' && pred.messages.length && lossNotice.getSettings().enabled) {
+    const noticeText = lossNotice.buildText();
+    for (const m of pred.messages) {
+      try { await sender.sendMessage(m.chatId, noticeText); } catch (_) {}
+    }
+  }
 }
 
 // Reconnexion automatique de la base : si elle n'est pas joignable au démarrage
@@ -1959,6 +2031,11 @@ async function tick() {
     // panneau « Prédiction après perte » : relais de la prochaine prédiction
     // d'une stratégie suivie (existante ou IA) après N pertes consécutives.
     await afterLoss.tick();
+
+    // panneau « Formation » : pour chaque stratégie cochée, lecture de la
+    // formation après une perte, puis publication de la prédiction confirmée
+    // (et du « Bingo » si elle est gagnée) dans le canal configuré.
+    await formationRelay.tick();
   } catch (e) {
     state.lastError = e.message;
   } finally {
@@ -2130,6 +2207,8 @@ async function applyDbConfigs() {
   await afterLoss.restoreFromDb();
   await shop.loadFromDb();
   await paiement.loadFromDb();
+  await mirrorCounter.loadFromDb();
+  await lossNotice.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
 }
 
@@ -2169,8 +2248,35 @@ async function startLoop() {
   predit.setSender(senderFor);
   afterLoss.restore();
   afterLoss.setSender(senderFor);
+  formationRelay.restore();
+  formationRelay.setSender(senderFor);
+  // Compteur « Taux Miroir » : édite le même message à chaque jeu terminé
+  // (voir setOnFinished ci-dessous) plutôt que d'en renvoyer un nouveau —
+  // retombe sur un nouvel envoi si l'édition échoue (message trop
+  // vieux/supprimé côté Telegram) ou après chaque reset horaire.
+  mirrorCounter.setSender(async (channelId, text, messageId) => {
+    const sender = senderFor();
+    if (!sender) throw new Error('Aucun token API configuré dans les réglages.');
+    if (messageId) {
+      try {
+        await sender.editMessageText(text, { chat_id: channelId, message_id: messageId });
+        return messageId;
+      } catch (e) {
+        // message trop vieux/supprimé, ou contenu strictement identique
+        // (Telegram répond alors "message is not modified") : dans les deux
+        // cas on retente un envoi neuf plutôt que de laisser tomber.
+      }
+    }
+    const msg = await sender.sendMessage(channelId, text);
+    return msg.message_id;
+  });
+  mirrorCounter.scheduleHourlyReset();
   // base de données : chaque jeu terminé est archivé par date
-  setOnFinished((round) => { if (db.ready) db.saveGame(round); });
+  setOnFinished((round) => {
+    if (db.ready) db.saveGame(round);
+    mirrorCounter.bump(round);
+    mirrorCounter.publish(round.number).catch((e) => console.error('Compteur (Taux Miroir) :', e.message));
+  });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
   setOnShoeReset((reason, seq) => sendShoeReport(reason, seq));

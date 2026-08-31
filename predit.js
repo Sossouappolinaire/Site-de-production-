@@ -34,6 +34,7 @@ const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
 const { state } = require('./predictor');
+const lossNotice = require('./loss-notice');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
 
@@ -684,6 +685,15 @@ async function update(pred) {
         ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}),
       });
     } catch (_) {}
+  }
+  // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
+  // dans CES MÊMES canaux — identique à bot.js/updateResult() pour les
+  // stratégies existantes, ici pour les prédictions « Prédit IA ».
+  if (pred.status === 'perdu' && lossNotice.getSettings().enabled) {
+    const noticeText = lossNotice.buildText();
+    for (const m of pred.messages) {
+      try { await bot.sendMessage(m.chatId, noticeText); } catch (_) {}
+    }
   }
 }
 

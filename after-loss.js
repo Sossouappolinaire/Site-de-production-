@@ -36,6 +36,7 @@ const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
 const { state, setStrategyConfig, hasSuit, hasSuitBanker, parityOf, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
+const lossNotice = require('./loss-notice');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
 
@@ -533,6 +534,15 @@ function editPending(entry, statusFr) {
     }).catch(() => {
       // le message a pu être supprimé du canal entre-temps : pas bloquant
     });
+  }
+  // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
+  // dans CES MÊMES canaux — identique à bot.js/updateResult() et
+  // predit.js/update(), ici pour le relais « après perte ».
+  if (statusFr === 'perdu' && lossNotice.getSettings().enabled) {
+    const noticeText = lossNotice.buildText();
+    for (const m of entry.messages) {
+      bot.sendMessage(m.chatId, noticeText).catch(() => {});
+    }
   }
 }
 

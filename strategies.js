@@ -853,9 +853,14 @@ const collecte = {
     "sur le même jeu déclencheur, la formation la plus établie (série la " +
     "plus longue, puis échantillon le plus large) est retenue — jamais un " +
     "taux de réussite, ni celui des stratégies existantes ni celui de " +
-    "l'Avis IA. Pas de réglage de costume ou d'absence ici : seuls le " +
-    "format et le canal de diffusion se règlent, comme le reste hérite " +
-    "directement de la stratégie source.",
+    "l'Avis IA. La stratégie « Carte disparue → retour banquier » et la " +
+    "stratégie « Pair/Impair » ne sont JAMAIS relayées : la Collecte ne " +
+    "prédit et ne vérifie QUE des costumes ('suit') pour le joueur, jamais " +
+    "le banquier (suit-banquier), une parité (parity) ou un nombre de " +
+    "cartes (cards). Deux prédictions de la Collecte ne peuvent jamais " +
+    "tomber à moins de 3 jeux d'écart l'une de l'autre. Pas de réglage de " +
+    "costume ou d'absence ici : seuls le format et le canal de diffusion " +
+    "se règlent, comme le reste hérite directement de la stratégie source.",
   defaults: {
     enabled: true,
     format: config.DEFAULT_FORMAT,
@@ -872,7 +877,19 @@ const collecte = {
     const bestKeys = (ctx && ctx.bestKeys) || new Set();
     if (!bestKeys.size) return null; // aucune stratégie jugée fiable pour l'instant : rien à relayer
     const candidates = predictions.filter(
-      (p) => p.strategy !== 'collecte' && p.trigger === game.number && bestKeys.has(p.strategy),
+      (p) => p.strategy !== 'collecte'
+        // la Collecte ne prédit et ne vérifie QUE des COSTUMES pour le
+        // JOUEUR (kind 'suit') : ça exclut automatiquement, quel que soit
+        // leur taux ou leur formation établie —
+        //  • « Carte disparue → retour banquier » (kind 'suit-banquier',
+        //    ancien format 'carte-banquier') : prédit/vérifie le banquier ;
+        //  • « Pair/Impair » (parite, kind 'parity') : ne prédit pas un
+        //    costume, mais la parité de la somme ;
+        //  • « Match nul » (matchnul, kind 'cards') : prédit un nombre de
+        //    cartes, pas un costume.
+        && p.kind === 'suit'
+        && p.trigger === game.number
+        && bestKeys.has(p.strategy),
     );
     if (!candidates.length) return null;
     // Départage par la FORMATION (conseil établi), jamais par un taux : on
@@ -895,6 +912,17 @@ const collecte = {
     // pour cette source (ne devrait pas arriver : bestKeys exige déjà un
     // conseil de formation établi pour entrer dans les candidats).
     const maxR = srcFormation && srcFormation.length > 0 ? srcFormation.length : cfg.maxR;
+
+    // écart minimum de 3 jeux entre deux prédictions Collecte : si le jeu
+    // cible retenu tombe à moins de 3 jeux de la dernière prédiction déjà
+    // relayée par la Collecte (quelle que soit sa source ou son statut),
+    // on ne relaie pas cette occurrence — même si la source elle-même a un
+    // conseil de formation établi.
+    const lastTarget = predictions
+      .filter((p) => p.strategy === 'collecte')
+      .reduce((max, p) => (max == null || p.target > max ? p.target : max), null);
+    if (lastTarget != null && Math.abs(source.target - lastTarget) < 3) return null;
+
     return {
       kind: source.kind,
       target: source.target,
