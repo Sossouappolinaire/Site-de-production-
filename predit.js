@@ -42,7 +42,7 @@ const panel = {
   enabled: true,
   channels: [],        // canaux Telegram du panneau
   minSample: 6,        // observations minimum pour certifier une règle
-  minRate: 85,          // taux de réussite minimum accepté (réglable 50-100 ; 100 = parfait, prioritaire)
+  minRate: 98,          // taux de réussite minimum accepté (réglable 50-100 ; 100 = parfait, prioritaire)
   maxR: 1,             // rattrapages autorisés sur une prédiction du panneau
   format: 1,           // format de prédiction utilisé pour les messages
   perStrategy: 2,      // nombre de prédictions autorisées par stratégie créée
@@ -101,7 +101,11 @@ function configure(patch = {}) {
   if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
   if (patch.minRate !== undefined) {
     const v = parseInt(patch.minRate, 10);
-    panel.minRate = Math.max(50, Math.min(100, Number.isFinite(v) ? v : 85));
+    // CORRECTIF (demande admin) : seuil PLANCHER remonté à 98% (au lieu de
+    // 50%) — trop de règles peu fiables généraient trop de pertes sur les
+    // prédictions IA. Un déclencheur en dessous de 98% n'est plus jamais
+    // certifié ni utilisé, quoi que l'admin saisisse ici.
+    panel.minRate = Math.max(98, Math.min(100, Number.isFinite(v) ? v : 98));
   }
   if (patch.minSample !== undefined) panel.minSample = Math.max(3, Math.min(60, parseInt(patch.minSample, 10) || 6));
   if (patch.maxR !== undefined) panel.maxR = Math.max(0, Math.min(5, parseInt(patch.maxR, 10) || 0));
@@ -168,11 +172,11 @@ async function restoreFromDb() {
     panel.enabled = saved.config.enabled !== false;
     panel.requireCombo = !!saved.config.requireCombo;
     panel.channels = parseChannels(saved.config.channels);
-    panel.minRate = Math.max(50, Math.min(100, parseInt(saved.config.minRate, 10) || 85));
+    panel.minRate = Math.max(98, Math.min(100, parseInt(saved.config.minRate, 10) || 98));
     panel.minSample = Math.max(3, Math.min(60, parseInt(saved.config.minSample, 10) || 6));
     panel.maxR = Math.max(0, Math.min(5, parseInt(saved.config.maxR, 10) || 0));
     panel.format = fmt.clampFormat(saved.config.format);
-    panel.perStrategy = Math.max(1, Math.min(50, parseInt(saved.config.perStrategy, 10) || 1));
+    panel.perStrategy = Math.max(1, Math.min(50, parseInt(saved.config.perStrategy, 10) || 2));
     panel.minGap = Math.max(0, Math.min(30, parseInt(saved.config.minGap, 10) || 0));
     panel.silentMode = !!saved.config.silentMode;
     panel.silentLossTrigger = Math.max(1, Math.min(5, parseInt(saved.config.silentLossTrigger, 10) || 2));
@@ -288,7 +292,46 @@ function dropPredictionsFor(id) {
   panel.predictions = panel.predictions.filter((p) => !(p.sources || []).some((s) => s.id === id));
 }
 
+// ---------------------------------------------------------------------------
+// Durée de vie des déclencheurs certifiés (demande admin) — deux règles :
+//   1) TTL général : un déclencheur certifié expire de toute façon au bout
+//      d'1h, même s'il n'a jamais perdu — un motif trop ancien n'est plus
+//      forcément d'actualité (voir purgeExpiredCertified, appelée à CHAQUE
+//      certifyDiscoveries()).
+//   2) Purge après perte : dès qu'UNE prédiction du panneau perd, on
+//      considère tout le stock de déclencheurs comme potentiellement
+//      périmé — on retire IMMÉDIATEMENT tous ceux certifiés il y a plus de
+//      10 minutes, pas seulement celui qui a perdu (voir purgeAfterLoss,
+//      appelée depuis verify() ci-dessous). Seuls les tout derniers motifs
+//      (< 10 min) survivent : le panneau doit alors en trouver de nouveaux.
+// ---------------------------------------------------------------------------
+const CERTIFIED_MAX_AGE_MS = 60 * 60 * 1000;   // 1h : durée de vie maximale, quoi qu'il arrive
+const LOSS_PURGE_FRESH_MS = 10 * 60 * 1000;    // 10 min : seuls les déclencheurs plus récents survivent à une perte
+
+function purgeExpiredCertified() {
+  const now = Date.now();
+  for (const entry of [...panel.certified]) {
+    const certifiedAt = entry.certifiedAt ? new Date(entry.certifiedAt).getTime() : now;
+    const age = now - certifiedAt;
+    if (age > CERTIFIED_MAX_AGE_MS) {
+      retire(entry, `Expiré : certifiée il y a plus d'1h (${Math.round(age / 60000)} min).`);
+    }
+  }
+}
+
+function purgeAfterLoss() {
+  const now = Date.now();
+  for (const entry of [...panel.certified]) {
+    const certifiedAt = entry.certifiedAt ? new Date(entry.certifiedAt).getTime() : now;
+    const age = now - certifiedAt;
+    if (age > LOSS_PURGE_FRESH_MS) {
+      retire(entry, `Retirée après une perte ailleurs dans le panneau : certifiée il y a ${Math.round(age / 60000)} min (> 10 min de fraîcheur exigée).`);
+    }
+  }
+}
+
 function certifyDiscoveries() {
+  purgeExpiredCertified();
   const found = miner.mine(state.history || [], { lead: 2 });
   const discoveries = found.discoveries || [];
   const byId = new Map();
@@ -611,6 +654,7 @@ function verify(games) {
     }
   }
   // une règle certifiée qui perd sort immédiatement du panneau
+  let anyLoss = false;
   for (const pred of closed) {
     for (const src of pred.sources) {
       const entry = panel.certified.find((c) => c.id === src.id);
@@ -626,6 +670,7 @@ function verify(games) {
         entry.loss += 1;
         entry.rate = 0;
         retire(entry, `Prédiction perdue sur le jeu #N${pred.target} : la règle passe sous le seuil de ${panel.minRate}%.`);
+        anyLoss = true;
         continue;
       }
       // quota atteint : la stratégie sort du service, on attend une nouvelle
@@ -636,6 +681,11 @@ function verify(games) {
       }
     }
   }
+  // dès qu'UNE perte a été enregistrée dans ce lot : on purge tout le reste
+  // du stock de déclencheurs (voir purgeAfterLoss ci-dessus), pas seulement
+  // celui qui a perdu — ne survivent que les déclencheurs certifiés depuis
+  // moins de 10 minutes.
+  if (anyLoss) purgeAfterLoss();
   return closed;
 }
 

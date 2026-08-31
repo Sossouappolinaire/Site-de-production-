@@ -1,20 +1,29 @@
 // loss-notice.js — message automatique envoyé dans le MÊME canal qu'une
 // prédiction dès qu'elle se solde par une perte (❌) — pour TOUTE stratégie,
 // existante comme « Prédit IA » (voir bot.js/updateResult et
-// predit.js/update, les deux seuls points d'appel). Prévient les abonnés et
-// les renvoie vers l'administrateur pour être remboursés, avec un rappel de
-// la formation VIP sur comment jouer avec ce bot. Le texte est entièrement
-// réglable depuis le panneau admin (Système → Message de perte), jamais codé
-// en dur côté appelant.
+// predit.js/update, les deux seuls points d'appel). Invite les abonnés à
+// suivre la formation VIP et à contacter l'administrateur pour l'intégrer.
+// Le texte est entièrement réglable depuis le panneau admin (Système →
+// Message de perte), jamais codé en dur côté appelant.
 'use strict';
 
 const store = require('./store');
 const db = require('./db');
 
 const DEFAULT_MESSAGE =
+  '📘 Pensez à suivre la formation VIP pour apprendre à bien jouer avec ce bot.\n' +
+  "Écrivez à l'administrateur pour intégrer le VIP.";
+const DEFAULT_VIP_TEXT = '';
+
+// Ancien texte par défaut (avant la demande admin de le simplifier) — encore
+// présent en base/sur disque sur les déploiements existants qui n'avaient
+// jamais touché ce réglage. On le détecte au démarrage pour le remplacer
+// automatiquement par le nouveau, sans intervention manuelle (voir
+// purgeLegacyMessage() ci-dessous, appelée par load() et loadFromDb()).
+const LEGACY_MESSAGE =
   '❌ Une perte a été enregistrée sur cette prédiction.\n' +
   "Écrivez à l'administrateur pour être remboursé(e).";
-const DEFAULT_VIP_TEXT =
+const LEGACY_VIP_TEXT =
   '📘 Pensez à suivre la formation VIP pour apprendre à bien jouer avec ce bot.';
 
 const settings = {
@@ -24,11 +33,24 @@ const settings = {
   vipLink: '', // optionnel : lien vers le canal/le contenu de la formation VIP
 };
 
+// Remplace automatiquement l'ancien message (encore chargé depuis une
+// sauvegarde antérieure) par le nouveau — appelée après CHAQUE chargement
+// (local ou base), jamais côté écriture manuelle (setSettings) : un admin
+// qui a lui-même personnalisé son texte n'est jamais écrasé, seul l'ANCIEN
+// texte par défaut exact est reconnu et remplacé.
+function purgeLegacyMessage() {
+  let changed = false;
+  if (settings.message === LEGACY_MESSAGE) { settings.message = DEFAULT_MESSAGE; changed = true; }
+  if (settings.vipText === LEGACY_VIP_TEXT) { settings.vipText = DEFAULT_VIP_TEXT; changed = true; }
+  return changed;
+}
+
 function load() {
   try {
     const saved = store.read();
     if (saved && saved.lossNotice) Object.assign(settings, saved.lossNotice);
   } catch (_) { /* aucune sauvegarde locale encore : valeurs par défaut conservées */ }
+  if (purgeLegacyMessage()) persist();
 }
 load();
 
@@ -40,6 +62,7 @@ async function loadFromDb() {
     const raw = await db.getSetting('loss_notice');
     if (raw) Object.assign(settings, JSON.parse(raw));
   } catch (_) { /* rien en base pour l'instant : valeurs actuelles conservées */ }
+  if (purgeLegacyMessage()) persist();
 }
 
 function persist() {
