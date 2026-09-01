@@ -170,6 +170,69 @@ function sanitizeRepeat(input) {
 }
 
 // ---------------------------------------------------------------------------
+// Option « série de même costume » (indépendante des déclencheurs et de la
+// répétition après perte) : on surveille les prédictions de la stratégie
+// suivie ; dès que `count` prédictions CONSÉCUTIVES portent le MÊME costume
+// (ex. 794♦️, 810♦️, 815♦️ avec count = 3), le bot publie automatiquement
+// `nj` nouvelles prédictions de ce même costume, espacées de `n` jeux à
+// partir du dernier jeu de la série (a + n, a + 2n, …).
+// Exemple : count = 3, n = 4, nj = 4 → après 815♦️ : 819♦️, 823♦️, 827♦️,
+// 831♦️. Nombre de rattrapage et format sont propres à cette option
+// (vides = réglages du panneau / de la stratégie).
+// ---------------------------------------------------------------------------
+function sanitizeStreak(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : fmt.clampFormat(src.format);
+  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
+  return {
+    enabled: !!src.enabled,
+    count: Math.max(2, Math.min(10, parseInt(src.count, 10) || 3)),
+    n: Math.max(1, Math.min(50, parseInt(src.n, 10) || 4)),
+    nj: Math.max(1, Math.min(20, parseInt(src.nj, 10) || 4)),
+    maxR: maxRRaw,
+    format: fmtRaw,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Option « comptage dizaine » (indépendante des autres options) :
+//   • On surveille les prédictions de la stratégie suivie ; dès que `count`
+//     prédictions CONSÉCUTIVES portent le MÊME costume (ex. 134♦️, 144♦️,
+//     154♦️ avec count = 3), on lance une session de comptage.
+//   • 1ʳᵉ prédiction de la session : dernier jeu de la série + `n`
+//     (ex. 154 + 8 = 162♦️).
+//   • Ensuite, on ATTEND que la prédiction précédente soit vérifiée
+//     (gagnée/perdue) avant de publier la suivante, à +`ni` (ex. 172♦️,
+//     182♦️, 192♦️ avec ni = 10).
+//   • La session s'arrête après `nk` prédictions publiées (ex. Nk = 4), puis
+//     le panneau attend une nouvelle série pour repartir.
+//   • Nombre de rattrapage et format sont propres à cette option (vides =
+//     réglages du panneau / de la stratégie).
+// ---------------------------------------------------------------------------
+function sanitizeDecade(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : fmt.clampFormat(src.format);
+  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
+  return {
+    enabled: !!src.enabled,
+    count: Math.max(2, Math.min(10, parseInt(src.count, 10) || 3)),
+    n: Math.max(1, Math.min(100, parseInt(src.n, 10) || 8)),
+    ni: Math.max(1, Math.min(100, parseInt(src.ni, 10) || 10)),
+    nk: Math.max(1, Math.min(20, parseInt(src.nk, 10) || 4)),
+    maxR: maxRRaw,
+    format: fmtRaw,
+  };
+}
+
+function sanitizeDecadeSession(input) {
+  if (!input || typeof input !== 'object') return null;
+  const last = parseInt(input.last, 10);
+  const sent = parseInt(input.sent, 10);
+  if (!Number.isFinite(last) || !input.suit) return null;
+  return { suit: input.suit, last, sent: Number.isFinite(sent) ? sent : 1, startedAt: input.startedAt || Date.now() };
+}
+
+// ---------------------------------------------------------------------------
 // Canal(x) et format PROPRES à une stratégie suivie — facultatifs. Une
 // stratégie sans réglage propre utilise le canal/format du panneau (comme
 // avant). Ça permet d'envoyer chaque stratégie suivie dans un canal
@@ -279,6 +342,11 @@ function applySaved(saved) {
       // proche : envoi dès la prédiction suivante après une perte).
       triggers: t.triggers ? sanitizeTriggers(t.triggers) : defaultTriggers(),
       repeat: sanitizeRepeat(t.repeat),
+      streak: sanitizeStreak(t.streak),
+      decade: sanitizeDecade(t.decade),
+      lastDecadeEnd: Number.isFinite(Number(t.lastDecadeEnd)) ? Number(t.lastDecadeEnd) : 0,
+      decadeSession: sanitizeDecadeSession(t.decadeSession),
+      lastStreakEnd: Number.isFinite(Number(t.lastStreakEnd)) ? Number(t.lastStreakEnd) : 0,
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: sanitizeTrackerFormat(t.format),
@@ -335,8 +403,10 @@ function addTracker(key, triggers, repeat, extra = {}) {
   if (!opt) throw new Error("Stratégie inconnue pour le suivi « après perte »");
   const clean = sanitizeTriggers(triggers);
   const cleanRepeat = sanitizeRepeat(repeat);
-  if (!cleanRepeat.enabled && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
-    throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte ».");
+  const cleanStreak = sanitizeStreak(extra.streak);
+  const cleanDecade = sanitizeDecade(extra.decade);
+  if (!cleanRepeat.enabled && !cleanStreak.enabled && !cleanDecade.enabled && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
+    throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte », « série de même costume » ou « comptage dizaine ».");
   }
   // La stratégie suivie doit être ACTIVE pour produire de nouvelles
   // prédictions (voir evaluate() dans predictor.js, qui ignore les
@@ -351,6 +421,12 @@ function addTracker(key, triggers, repeat, extra = {}) {
     name: opt.name,
     triggers: clean,
     repeat: cleanRepeat,
+    streak: cleanStreak,
+    decade: cleanDecade,
+    lastDecadeEnd: currentMaxTarget(opt.key),
+    decadeSession: null,
+    // on ne rejoue pas les séries déjà terminées au moment de l'ajout.
+    lastStreakEnd: currentMaxTarget(opt.key),
     // canal(x) et format propres à cette stratégie ; vides → hérite du
     // canal/format global du panneau (voir effectiveChannels/effectiveFormat).
     channels: parseChannels(extra.channels),
@@ -382,8 +458,10 @@ function updateTracker(id, patch = {}) {
   if (patch.triggers !== undefined) {
     const clean = sanitizeTriggers(patch.triggers);
     const willHaveRepeat = patch.repeat !== undefined ? sanitizeRepeat(patch.repeat).enabled : tracker.repeat.enabled;
-    if (!willHaveRepeat && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
-      throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte ».");
+    const willHaveStreak = patch.streak !== undefined ? sanitizeStreak(patch.streak).enabled : !!(tracker.streak && tracker.streak.enabled);
+    const willHaveDecade = patch.decade !== undefined ? sanitizeDecade(patch.decade).enabled : !!(tracker.decade && tracker.decade.enabled);
+    if (!willHaveRepeat && !willHaveStreak && !willHaveDecade && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
+      throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte », « série de même costume » ou « comptage dizaine ».");
     }
     tracker.triggers = clean;
     // un changement de réglages annule un décompte en cours, pour repartir
@@ -397,6 +475,18 @@ function updateTracker(id, patch = {}) {
   }
   if (patch.repeat !== undefined) {
     tracker.repeat = sanitizeRepeat(patch.repeat);
+  }
+  if (patch.streak !== undefined) {
+    tracker.streak = sanitizeStreak(patch.streak);
+    // on repart des séries À VENIR après un changement de réglage.
+    tracker.lastStreakEnd = currentMaxTarget(tracker.key);
+  }
+  if (patch.decade !== undefined) {
+    tracker.decade = sanitizeDecade(patch.decade);
+    // changement de réglage : on annule la session en cours et on repart des
+    // séries À VENIR.
+    tracker.decadeSession = null;
+    tracker.lastDecadeEnd = currentMaxTarget(tracker.key);
   }
   if (patch.channels !== undefined) {
     tracker.channels = parseChannels(patch.channels);
@@ -584,6 +674,10 @@ setOnShoeReset(() => {
     t.armedSeen = 0;
     t.armed = false;
     t.armedAt = null;
+    // « comptage dizaine » : la session visait l'ancien sabot.
+    t.decadeSession = null;
+    t.lastDecadeEnd = 0;
+    t.lastStreakEnd = 0;
   }
   let cancelled = 0;
   for (const entry of panel.pendingMessages) {
@@ -809,17 +903,28 @@ function adviceForRepeat(tracker, lead) {
 }
 
 async function forwardRepeat(tracker, synth) {
+  return forwardSynth(tracker, synth, {
+    label: `${tracker.name} — même costume après perte (+${tracker.repeat.lead})`,
+    historyName: `${tracker.name} (répétition)`,
+  });
+}
+
+// envoi générique d'une prédiction SYNTHÉTIQUE (répétition après perte,
+// série de même costume) — même canaux/format/vérification qu'un relais
+// normal, seul le libellé de stratégie (et éventuellement le format et le
+// nombre de rattrapage) change.
+async function forwardSynth(tracker, synth, opts = {}) {
   const targetChannels = effectiveChannels(tracker);
   const siteChannelId = effectiveSiteChannelId(tracker);
   if (!targetChannels.length && !siteChannelId) {
     panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni Telegram, ni canal du site, sur la stratégie ou le panneau)`;
     return false;
   }
-  const out = fmt.renderMessage(effectiveFormat(tracker), {
+  const out = fmt.renderMessage(opts.format !== undefined && opts.format !== null ? fmt.clampFormat(opts.format) : effectiveFormat(tracker), {
     gameNumber: synth.target,
     suit: synth.suit,
-    strategy: `${tracker.name} — même costume après perte (+${tracker.repeat.lead})`,
-    maxR: panel.maxR,
+    strategy: opts.label || tracker.name,
+    maxR: (opts.maxR !== undefined && opts.maxR !== null) ? opts.maxR : panel.maxR,
     status: 'en attente',
     rattrapage: 0,
   }, null);
@@ -854,7 +959,7 @@ async function forwardRepeat(tracker, synth) {
     tracker.lastSentAt = Date.now();
     panel.history.unshift({
       trackerId: tracker.id,
-      trackerName: `${tracker.name} (répétition)`,
+      trackerName: opts.historyName || tracker.name,
       target: synth.target,
       suit: synth.suit,
       sentAt: Date.now(),
@@ -906,6 +1011,119 @@ async function processRepeat(tracker) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// « Série de même costume » : dès que `count` prédictions consécutives de la
+// stratégie suivie portent le même costume, on publie `nj` nouvelles
+// prédictions de ce costume, espacées de `n` jeux (a+n, a+2n, …) à partir du
+// dernier jeu de la série.
+// ---------------------------------------------------------------------------
+function detectStreaks(list, count) {
+  const out = [];
+  let run = [];
+  for (const p of list) {
+    const suit = p.suit || null;
+    if (!suit) { run = []; continue; }
+    if (run.length && run[run.length - 1].suit === suit) run.push(p);
+    else run = [p];
+    if (run.length === count) {
+      out.push({ suit, end: run[run.length - 1].target, members: run.map((x) => x.target) });
+      run = []; // on repart à zéro : une même série ne déclenche qu'une fois
+    }
+  }
+  return out;
+}
+
+async function processStreak(tracker) {
+  const st = tracker.streak;
+  if (!st || !st.enabled) return;
+  const list = trackerPredictions(tracker.key);
+  const streaks = detectStreaks(list, st.count);
+  for (const s of streaks) {
+    if (s.end <= (tracker.lastStreakEnd || 0)) continue;
+    tracker.lastStreakEnd = s.end;
+    for (let i = 1; i <= st.nj; i++) {
+      const target = s.end + (st.n * i);
+      if (target > appConfig.MAX_GAME_NUMBER) break;
+      const synth = { target, suit: s.suit, kind: 'suit' };
+      await forwardSynth(tracker, synth, {
+        label: `${tracker.name} — série de ${st.count} ${s.suit} (+${st.n})`,
+        historyName: `${tracker.name} (série ${st.count}× même costume)`,
+        format: st.format,
+        maxR: st.maxR,
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// « Comptage dizaine » — voir sanitizeDecade() plus haut pour la règle.
+// ---------------------------------------------------------------------------
+function lastKnownGameNumber() {
+  let max = 0;
+  for (const n of state.games.keys()) { const v = Number(n); if (Number.isFinite(v) && v > max) max = v; }
+  return max;
+}
+
+// une cible relayée est considérée VÉRIFIÉE quand son message de suivi n'est
+// plus « en attente » (voir verifyPending). Repli (aucun message suivi, ex.
+// canal du site uniquement) : le jeu et ses rattrapages ont été joués.
+function decadeTargetVerified(tracker, target, maxR) {
+  for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
+    const e = panel.pendingMessages[i];
+    if (e.trackerId === tracker.id && e.target === target) return e.status !== 'en attente';
+  }
+  return lastKnownGameNumber() >= target + Math.max(0, maxR || 0);
+}
+
+async function processDecade(tracker) {
+  const dc = tracker.decade;
+  if (!dc || !dc.enabled) return;
+  const maxR = (dc.maxR !== undefined && dc.maxR !== null) ? dc.maxR : panel.maxR;
+  const label = (suit) => `${tracker.name} — comptage dizaine ${suit} (+${dc.ni})`;
+
+  // 1) session en cours : on ne publie la suivante qu'APRÈS vérification de
+  //    la précédente, jusqu'à atteindre Nk prédictions.
+  const s = tracker.decadeSession;
+  if (s) {
+    if (s.sent >= dc.nk) { tracker.decadeSession = null; return; }
+    if (!decadeTargetVerified(tracker, s.last, maxR)) return; // on attend le résultat
+    const target = s.last + dc.ni;
+    if (target > appConfig.MAX_GAME_NUMBER) { tracker.decadeSession = null; return; }
+    const ok = await forwardSynth(tracker, { target, suit: s.suit, kind: 'suit' }, {
+      label: label(s.suit),
+      historyName: `${tracker.name} (comptage dizaine ${s.sent + 1}/${dc.nk})`,
+      format: dc.format,
+      maxR: dc.maxR,
+    });
+    if (!ok) return; // échec d'envoi : on retentera au prochain tour
+    s.last = target;
+    s.sent += 1;
+    if (s.sent >= dc.nk) tracker.decadeSession = null;
+    return;
+  }
+
+  // 2) pas de session : on cherche une nouvelle série de `count` prédictions
+  //    consécutives du même costume.
+  const list = trackerPredictions(tracker.key);
+  const streaks = detectStreaks(list, dc.count);
+  for (const st of streaks) {
+    if (st.end <= (tracker.lastDecadeEnd || 0)) continue;
+    tracker.lastDecadeEnd = st.end;
+    const first = st.end + dc.n;
+    if (first > appConfig.MAX_GAME_NUMBER) continue;
+    const ok = await forwardSynth(tracker, { target: first, suit: st.suit, kind: 'suit' }, {
+      label: `${tracker.name} — comptage dizaine ${st.suit} (série de ${dc.count}, +${dc.n})`,
+      historyName: `${tracker.name} (comptage dizaine 1/${dc.nk})`,
+      format: dc.format,
+      maxR: dc.maxR,
+    });
+    if (!ok) continue;
+    tracker.decadeSession = { suit: st.suit, last: first, sent: 1, startedAt: Date.now() };
+    if (dc.nk <= 1) tracker.decadeSession = null;
+    return; // une seule session à la fois
+  }
+}
+
 let busy = false;
 async function tick() {
   if (busy || !panel.enabled) return panel;
@@ -914,6 +1132,8 @@ async function tick() {
     for (const tracker of panel.trackers) {
       await processTracker(tracker);
       await processRepeat(tracker);
+      await processStreak(tracker);
+      await processDecade(tracker);
     }
     // CORRECTIF : sans cet appel, les messages déjà relayés restaient
     // « ⌛ en attente » pour toujours — voir le commentaire sur verifyPending.
@@ -1078,6 +1298,11 @@ function status() {
       name: t.name,
       triggers: t.triggers,
       repeat: t.repeat,
+      streak: t.streak || sanitizeStreak(null),
+      lastStreakEnd: t.lastStreakEnd || 0,
+      decade: t.decade || sanitizeDecade(null),
+      lastDecadeEnd: t.lastDecadeEnd || 0,
+      decadeSession: t.decadeSession || null,
       channels: t.channels,
       siteChannelId: t.siteChannelId,
       format: t.format,

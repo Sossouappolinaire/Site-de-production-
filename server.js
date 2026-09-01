@@ -1732,6 +1732,8 @@ app.post('/api/after-loss/trackers', async (req, res) => {
       channels: req.body && req.body.channels,
       siteChannelId: req.body && req.body.siteChannelId,
       format: req.body && req.body.format,
+      streak: req.body && req.body.streak,
+      decade: req.body && req.body.decade,
     });
     // la stratégie suivie a été activée automatiquement par addTracker() —
     // on persiste ce changement comme le fait la route /api/strategies/:key,
