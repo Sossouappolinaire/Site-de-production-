@@ -1500,6 +1500,65 @@ Faites-en bon usage !
     function readAfterLossRepeat(prefix) {
       return { enabled: !!$(`#${prefix}-repeat-on`)?.checked, lead: val(`${prefix}-repeat-lead`), mode: val(`${prefix}-repeat-mode`) };
     }
+    // « Série de même costume » : count prédictions consécutives du même
+    // costume → nj nouvelles prédictions espacées de n jeux (a+n, a+2n, …).
+    function afterLossStreakRow(prefix, streak, formatCount) {
+      const s = streak || { enabled: false, count: 3, n: 4, nj: 4, maxR: null, format: null };
+      const maxR = (s.maxR === null || s.maxR === undefined) ? '' : s.maxR;
+      const format = (s.format === null || s.format === undefined) ? '' : s.format;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <label class="check" style="flex:1;min-width:200px"><input id="${prefix}-streak-on" type="checkbox" ${s.enabled ? 'checked' : ''}> Série de même costume → nouvelles prédictions</label>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Prédits consécutifs même costume</label><input id="${prefix}-streak-count" type="number" min="2" max="10" value="${esc(String(s.count || 3))}"></div>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Écart n (a+n)</label><input id="${prefix}-streak-n" type="number" min="1" max="50" value="${esc(String(s.n || 4))}"></div>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Nombre de prédits Nj</label><input id="${prefix}-streak-nj" type="number" min="1" max="20" value="${esc(String(s.nj || 4))}"></div>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Rattrapage (optionnel)</label><input id="${prefix}-streak-maxR" type="number" min="0" max="9" value="${esc(String(maxR))}" placeholder="panneau"></div>
+        <div class="field" style="max-width:120px;margin:0"><label style="font-size:11px">Format (optionnel)</label><input id="${prefix}-streak-format" type="number" min="1" max="${esc(String(formatCount || 88))}" value="${esc(String(format))}" placeholder="panneau"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Exemple : 3 prédits consécutifs du même costume (794♦️, 810♦️, 815♦️) avec n = 4 et Nj = 4 → le bot publie 819♦️, 823♦️, 827♦️, 831♦️. Indépendant des déclencheurs ci-dessus.</p>`;
+    }
+    function readAfterLossStreak(prefix) {
+      const maxR = val(`${prefix}-streak-maxR`);
+      const format = val(`${prefix}-streak-format`);
+      return {
+        enabled: !!$(`#${prefix}-streak-on`)?.checked,
+        count: val(`${prefix}-streak-count`),
+        n: val(`${prefix}-streak-n`),
+        nj: val(`${prefix}-streak-nj`),
+        maxR: maxR === '' ? null : maxR,
+        format: format === '' ? null : format,
+      };
+    }
+    // « Comptage dizaine » : count prédictions consécutives du même costume →
+    // 1ʳᵉ prédiction à +n, puis les suivantes à +ni UNE PAR UNE (après
+    // vérification de la précédente), jusqu'à Nk prédictions.
+    function afterLossDecadeRow(prefix, decade, formatCount) {
+      const d = decade || { enabled: false, count: 3, n: 8, ni: 10, nk: 4, maxR: null, format: null };
+      const maxR = (d.maxR === null || d.maxR === undefined) ? '' : d.maxR;
+      const format = (d.format === null || d.format === undefined) ? '' : d.format;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <label class="check" style="flex:1;min-width:200px"><input id="${prefix}-decade-on" type="checkbox" ${d.enabled ? 'checked' : ''}> Stratégie comptage dizaine</label>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Prédits consécutifs même costume</label><input id="${prefix}-decade-count" type="number" min="2" max="10" value="${esc(String(d.count || 3))}"></div>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Écart n (1ʳᵉ prédit)</label><input id="${prefix}-decade-n" type="number" min="1" max="100" value="${esc(String(d.n || 8))}"></div>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Écart ni (suivants)</label><input id="${prefix}-decade-ni" type="number" min="1" max="100" value="${esc(String(d.ni || 10))}"></div>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Nombre de prédits Nk</label><input id="${prefix}-decade-nk" type="number" min="1" max="20" value="${esc(String(d.nk || 4))}"></div>
+        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Rattrapage (optionnel)</label><input id="${prefix}-decade-maxR" type="number" min="0" max="9" value="${esc(String(maxR))}" placeholder="panneau"></div>
+        <div class="field" style="max-width:120px;margin:0"><label style="font-size:11px">Format (optionnel)</label><input id="${prefix}-decade-format" type="number" min="1" max="${esc(String(formatCount || 88))}" value="${esc(String(format))}" placeholder="panneau"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Exemple : 134♦️, 144♦️, 154♦️ (count = 3) avec n = 8, ni = 10, Nk = 4 → le bot prédit 162♦️, puis attend le résultat de 162 avant de publier 172♦️, puis 182♦️, puis 192♦️, et s'arrête jusqu'à la prochaine série.</p>`;
+    }
+    function readAfterLossDecade(prefix) {
+      const maxR = val(`${prefix}-decade-maxR`);
+      const format = val(`${prefix}-decade-format`);
+      return {
+        enabled: !!$(`#${prefix}-decade-on`)?.checked,
+        count: val(`${prefix}-decade-count`),
+        n: val(`${prefix}-decade-n`),
+        ni: val(`${prefix}-decade-ni`),
+        nk: val(`${prefix}-decade-nk`),
+        maxR: maxR === '' ? null : maxR,
+        format: format === '' ? null : format,
+      };
+    }
     // options du sélecteur « canal du site » : la même liste que la page
     // Canaux (voir siteChannelsView côté serveur), avec une option vide pour
     // « aucun » (n'envoie que sur Telegram, comportement d'origine).
@@ -1554,6 +1613,8 @@ Faites-en bon usage !
             <div id="opt-result-${esc(t.id)}"></div>
             ${afterLossTriggerRows('trk-' + t.id, t.triggers)}
             ${afterLossRepeatRow('trk-' + t.id, t.repeat)}
+            ${afterLossStreakRow('trk-' + t.id, t.streak, snapshot.formatCount)}
+            ${afterLossDecadeRow('trk-' + t.id, t.decade, snapshot.formatCount)}
             ${afterLossChannelFormatRow('trk-' + t.id, t)}
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
@@ -1565,6 +1626,8 @@ Faites-en bon usage !
         <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
         ${afterLossTriggerRows('new', { perdue: { enabled: true, n: 0 } })}
         ${afterLossRepeatRow('new', { enabled: false, lead: 5 })}
+        ${afterLossStreakRow('new', null, snapshot.formatCount)}
+        ${afterLossDecadeRow('new', null, snapshot.formatCount)}
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
@@ -1572,15 +1635,19 @@ Faites-en bon usage !
       const key = val('newTrackerKey');
       const triggers = readAfterLossTriggers('new');
       const repeat = readAfterLossRepeat('new');
+      const streak = readAfterLossStreak('new');
+      const decade = readAfterLossDecade('new');
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
-      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, channels, siteChannelId, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, streak, decade, channels, siteChannelId, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function updateAfterLossTriggers(id) {
       const triggers = readAfterLossTriggers('trk-' + id);
       const repeat = readAfterLossRepeat('trk-' + id);
+      const streak = readAfterLossStreak('trk-' + id);
+      const decade = readAfterLossDecade('trk-' + id);
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, streak, decade, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function optimizeAfterLossTracker(id) {
