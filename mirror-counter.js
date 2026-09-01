@@ -9,14 +9,26 @@
 
 const store = require('./store');
 const db = require('./db');
+// normSuit() = normalisation canonique unique du projet (❤️, pas ♥️ — deux
+// caractères Unicode DIFFÉRENTS qui se ressemblent visuellement : U+2764+VS16
+// ici, contre U+2665+VS16 pour l'autre). BUG CORRIGÉ : ce fichier utilisait sa
+// propre liste SUITS locale avec '♥️' (U+2665), alors que playerSuits/
+// bankerSuits (venant du flux de jeu) sont toujours normalisés en '❤️'
+// (U+2764) par normSuit() dans strategies.js — donc `state.player['♥️']`
+// n'existait jamais et le cœur restait bloqué à 0, quel que soit le nombre
+// de cœurs réellement distribués. On réutilise donc normSuit() de
+// strategies.js (source canonique unique) dans bump() ci-dessous, au lieu de
+// comparer directement le caractère brut reçu.
+const { normSuit } = require('./strategies');
 
-const SUITS = ['♠️', '♥️', '♦️', '♣️'];
+// Ordre d'affichage du rapport (inchangé) — mais avec le bon caractère ❤️.
+const SUITS = ['♠️', '❤️', '♦️', '♣️'];
 const RESET_INTERVAL_MS = 60 * 60 * 1000; // 1 heure
 
 const state = {
   channelId: '',
-  player: { '♠️': 0, '♥️': 0, '♦️': 0, '♣️': 0 },
-  banker: { '♠️': 0, '♥️': 0, '♦️': 0, '♣️': 0 },
+  player: { '♠️': 0, '❤️': 0, '♦️': 0, '♣️': 0 },
+  banker: { '♠️': 0, '❤️': 0, '♦️': 0, '♣️': 0 },
   games: 0,             // nombre de jeux comptés depuis le dernier reset
   lastGameNumber: null, // évite de compter deux fois le même jeu
   sinceAt: Date.now(),
@@ -72,8 +84,11 @@ function bump(round) {
   if (!round || !round.finished) return;
   if (state.lastGameNumber === round.number) return; // déjà compté
   state.lastGameNumber = round.number;
-  for (const s of (round.playerSuits || [])) if (state.player[s] != null) state.player[s] += 1;
-  for (const s of (round.bankerSuits || [])) if (state.banker[s] != null) state.banker[s] += 1;
+  // normSuit() absorbe toute variante ('♥', '❤', avec/sans le sélecteur de
+  // variante ️) et renvoie toujours le costume canonique du projet — c'est
+  // exactement ce qui manquait ici avant.
+  for (const raw of (round.playerSuits || [])) { const s = normSuit(raw); if (s && state.player[s] != null) state.player[s] += 1; }
+  for (const raw of (round.bankerSuits || [])) { const s = normSuit(raw); if (s && state.banker[s] != null) state.banker[s] += 1; }
   state.games += 1;
 }
 
