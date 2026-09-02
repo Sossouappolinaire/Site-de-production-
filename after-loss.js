@@ -293,6 +293,26 @@ function resultLabel(kind) {
 // ---------------------------------------------------------------------------
 // Persistance
 // ---------------------------------------------------------------------------
+// CORRECTIF « les réglages disparaissent après une prédiction » : data.json
+// n'est pas persistant sur Render, et si la base n'était pas encore prête au
+// moment où l'utilisateur a enregistré ses réglages, ceux-ci n'étaient JAMAIS
+// écrits en base — au redémarrage suivant, restoreFromDb() rechargeait un
+// état ancien (sans la config), donnant l'impression que tout avait disparu.
+// On garde donc la dernière photo en mémoire et on la (re)pousse en base dès
+// qu'elle redevient joignable.
+let pendingDbSave = null;
+let dbFlushTimer = null;
+
+function flushDbSave() {
+  if (!pendingDbSave || !db.ready) return;
+  const snap = pendingDbSave;
+  pendingDbSave = null;
+  db.saveAfterLossState(snap).catch((error) => {
+    panel.lastError = error.message;
+    pendingDbSave = snap; // on retentera au prochain tour
+  });
+}
+
 function persist() {
   const saved = {
     config: config(),
@@ -302,10 +322,14 @@ function persist() {
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
+    savedAt: Date.now(),
   };
   try { store.patch({ afterLoss: saved }); } catch (_) {}
-  if (db.ready) db.saveAfterLossState(saved).catch((error) => { panel.lastError = error.message; });
+  pendingDbSave = saved;
+  flushDbSave();
+  if (!dbFlushTimer) dbFlushTimer = setInterval(flushDbSave, 15000);
 }
+
 
 function restore() {
   try {
@@ -319,9 +343,18 @@ async function restoreFromDb() {
   if (!db.ready) return config();
   const saved = await db.loadAfterLossState();
   if (!saved || typeof saved !== 'object') { persist(); return config(); }
+  // On ne remplace l'état courant que si la photo en base est PLUS RÉCENTE
+  // que celle du disque local : sinon un rechargement depuis la base
+  // écraserait des réglages tout juste modifiés (bug « la configuration
+  // disparaît »). Dans ce cas on repousse au contraire l'état local en base.
+  let localAt = 0;
+  try { localAt = Number(((store.read() || {}).afterLoss || {}).savedAt) || 0; } catch (_) {}
+  const remoteAt = Number(saved.savedAt) || 0;
+  if (localAt && remoteAt && localAt > remoteAt) { persist(); return config(); }
   applySaved(saved);
   return config();
 }
+
 
 function applySaved(saved) {
   if (saved.config) {
@@ -455,6 +488,10 @@ function addTracker(key, triggers, repeat, extra = {}) {
 function updateTracker(id, patch = {}) {
   const tracker = panel.trackers.find((t) => t.id === id);
   if (!tracker) return null;
+  // Un ré-enregistrement à l'IDENTIQUE (ex. on ne change que le canal) ne
+  // doit plus casser un décompte/une session en cours : on ne remet à zéro
+  // que si la valeur a réellement changé.
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   if (patch.triggers !== undefined) {
     const clean = sanitizeTriggers(patch.triggers);
     const willHaveRepeat = patch.repeat !== undefined ? sanitizeRepeat(patch.repeat).enabled : tracker.repeat.enabled;
@@ -463,31 +500,40 @@ function updateTracker(id, patch = {}) {
     if (!willHaveRepeat && !willHaveStreak && !willHaveDecade && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
       throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte », « série de même costume » ou « comptage dizaine ».");
     }
-    tracker.triggers = clean;
-    // un changement de réglages annule un décompte en cours, pour repartir
-    // proprement sur les nouvelles règles.
-    tracker.counting = false;
-    tracker.armedTrigger = null;
-    tracker.armedNeeded = 0;
-    tracker.armedSeen = 0;
-    tracker.armed = false;
-    tracker.armedAt = null;
+    if (!same(clean, tracker.triggers)) {
+      tracker.triggers = clean;
+      // un changement de réglages annule un décompte en cours, pour repartir
+      // proprement sur les nouvelles règles.
+      tracker.counting = false;
+      tracker.armedTrigger = null;
+      tracker.armedNeeded = 0;
+      tracker.armedSeen = 0;
+      tracker.armed = false;
+      tracker.armedAt = null;
+    }
   }
   if (patch.repeat !== undefined) {
     tracker.repeat = sanitizeRepeat(patch.repeat);
   }
   if (patch.streak !== undefined) {
-    tracker.streak = sanitizeStreak(patch.streak);
-    // on repart des séries À VENIR après un changement de réglage.
-    tracker.lastStreakEnd = currentMaxTarget(tracker.key);
+    const cleanStreak = sanitizeStreak(patch.streak);
+    if (!same(cleanStreak, tracker.streak)) {
+      tracker.streak = cleanStreak;
+      // on repart des séries À VENIR après un changement de réglage.
+      tracker.lastStreakEnd = currentMaxTarget(tracker.key);
+    }
   }
   if (patch.decade !== undefined) {
-    tracker.decade = sanitizeDecade(patch.decade);
-    // changement de réglage : on annule la session en cours et on repart des
-    // séries À VENIR.
-    tracker.decadeSession = null;
-    tracker.lastDecadeEnd = currentMaxTarget(tracker.key);
+    const cleanDecade = sanitizeDecade(patch.decade);
+    if (!same(cleanDecade, tracker.decade)) {
+      tracker.decade = cleanDecade;
+      // changement de réglage : on annule la session en cours et on repart des
+      // séries À VENIR.
+      tracker.decadeSession = null;
+      tracker.lastDecadeEnd = currentMaxTarget(tracker.key);
+    }
   }
+
   if (patch.channels !== undefined) {
     tracker.channels = parseChannels(patch.channels);
   }
