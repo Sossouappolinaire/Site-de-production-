@@ -1616,7 +1616,7 @@ Faites-en bon usage !
             ${afterLossStreakRow('trk-' + t.id, t.streak, snapshot.formatCount)}
             ${afterLossDecadeRow('trk-' + t.id, t.decade, snapshot.formatCount)}
             ${afterLossChannelFormatRow('trk-' + t.id, t)}
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small" onclick="editAfterLossTrackerModal('${esc(t.id)}')">Modifier la configuration</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Stratégie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
     }
@@ -1630,6 +1630,33 @@ Faites-en bon usage !
         ${afterLossDecadeRow('new', null, snapshot.formatCount)}
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    // « Modifier la configuration » : rouvre TOUS les réglages déjà
+    // enregistrés (déclencheurs, republication, série, comptage dizaine,
+    // canaux, format) pré-remplis avec l'état réellement stocké en base, et
+    // les réécrit en base à l'enregistrement.
+    async function editAfterLossTrackerModal(id) {
+      try { await refresh(); } catch (_) {}
+      const t = (snapshot.afterLoss?.trackers || []).find(x => String(x.id) === String(id));
+      if (!t) { toast('Stratégie introuvable — actualise la page.', 'error'); return; }
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Configuration enregistrée</span><h3 style="margin-top:8px">Modifier « ${esc(t.name)} »</h3><p class="small" style="margin:0">Les valeurs ci-dessous sont celles actuellement enregistrées en base de données. Modifie ce que tu veux puis enregistre : la base est mise à jour immédiatement.</p></div></div>
+        ${afterLossTriggerRows('edit', t.triggers)}
+        ${afterLossRepeatRow('edit', t.repeat)}
+        ${afterLossStreakRow('edit', t.streak, snapshot.formatCount)}
+        ${afterLossDecadeRow('edit', t.decade, snapshot.formatCount)}
+        ${afterLossChannelFormatRow('edit', t)}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveAfterLossTrackerEdit('${esc(t.id)}')">Enregistrer les modifications</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function saveAfterLossTrackerEdit(id) {
+      const triggers = readAfterLossTriggers('edit');
+      const repeat = readAfterLossRepeat('edit');
+      const streak = readAfterLossStreak('edit');
+      const decade = readAfterLossDecade('edit');
+      const { channels, siteChannelId, format } = readAfterLossChannelFormat('edit');
+      try {
+        await api('/api/after-loss/trackers/' + encodeURIComponent(id), 'PUT', { triggers, repeat, streak, decade, channels, siteChannelId, format });
+        closeModal(); await refresh(); afterLossPage(); toast('Configuration modifiée et enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
     }
     async function addAfterLossTracker() {
       const key = val('newTrackerKey');
