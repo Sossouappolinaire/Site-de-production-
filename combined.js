@@ -113,6 +113,10 @@ function currentMaxTarget(key) {
   return list.length ? list[list.length - 1].target : 0;
 }
 
+function normalizeMode(m) {
+  return m === 'inverse' || m === 'meme' ? m : 'relais';
+}
+
 function sanitizeRules(input) {
   const src = input && typeof input === 'object' ? input : {};
   const out = {};
@@ -178,11 +182,13 @@ function applySaved(saved) {
       key: t.key,
       name: t.name || (optionByKey(t.key) || {}).name || t.key,
       rules: sanitizeRules(t.rules),
-      mode: t.mode === 'inverse' ? 'inverse' : 'meme',
+      mode: normalizeMode(t.mode),
       offset: Math.max(1, Math.min(50, parseInt(t.offset, 10) || 5)),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       format: t.format ? fmt.clampFormat(t.format) : null,
       streakKind: t.streakKind || null,
+      armed: !!t.armed,
+      armedKind: t.armedKind || null,
       streakCount: Number.isFinite(Number(t.streakCount)) ? Number(t.streakCount) : 0,
       lastSeenTarget: Number.isFinite(Number(t.lastSeenTarget)) ? Number(t.lastSeenTarget) : 0,
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
@@ -220,12 +226,14 @@ function addTracker(key, rules, extra = {}) {
     key: opt.key,
     name: opt.name,
     rules: clean,
-    mode: extra.mode === 'inverse' ? 'inverse' : 'meme',
+    mode: normalizeMode(extra.mode),
     offset: Math.max(1, Math.min(50, parseInt(extra.offset, 10) || 5)),
     channels: parseChannels(extra.channels),
     format: extra.format ? fmt.clampFormat(extra.format) : null,
     streakKind: null,
     streakCount: 0,
+    armed: false,
+    armedKind: null,
     lastSeenTarget: currentMaxTarget(opt.key),
     sentCount: 0,
     lastSentAt: null,
@@ -247,8 +255,9 @@ function updateTracker(id, patch = {}) {
     tracker.rules = clean;
     tracker.streakKind = null;
     tracker.streakCount = 0;
+    tracker.armed = false;
   }
-  if (patch.mode !== undefined) tracker.mode = patch.mode === 'inverse' ? 'inverse' : 'meme';
+  if (patch.mode !== undefined) tracker.mode = normalizeMode(patch.mode);
   if (patch.offset !== undefined) tracker.offset = Math.max(1, Math.min(50, parseInt(patch.offset, 10) || 5));
   if (patch.channels !== undefined) tracker.channels = parseChannels(patch.channels);
   if (patch.format !== undefined) tracker.format = patch.format ? fmt.clampFormat(patch.format) : null;
@@ -263,7 +272,25 @@ function removeTracker(id) {
 }
 
 function resultKindLabelFor(tracker) {
-  return LEVEL_LABELS[tracker.streakKind] || tracker.streakKind || '?';
+  const k = tracker.armedKind || tracker.streakKind;
+  return LEVEL_LABELS[k] || k || '?';
+}
+
+// CORRECTIF (le mode par défaut avait été mal compris) : « on prédit le
+// 3ième prédiction de cette stratégie » / « sa prochaine prédiction sera
+// envoyée » = par défaut, une fois la série consécutive atteinte, on doit
+// RELAYER la VRAIE prochaine prédiction NATURELLE de la stratégie source
+// (copie exacte — costume, jeu cible, tout — dès qu'elle apparaît, même
+// pas encore résolue), pas en inventer une nouvelle. Le « même costume +w »
+// et son « inverse » sont des modes ALTERNATIFS, à choisir explicitement —
+// pas le comportement systématique.
+async function relayNext(tracker, pred) {
+  const sourceSuit = pred.suit || null;
+  if (!sourceSuit) return;
+  await send(tracker, {
+    target: pred.target, suit: sourceSuit, sourceTarget: pred.target, sourceSuit,
+    kind: resultKindLabelFor(tracker),
+  });
 }
 
 async function synthesize(tracker, pred) {
@@ -278,6 +305,18 @@ async function processTracker(tracker) {
   const list = trackerPredictions(tracker.key);
   for (const pred of list) {
     if (pred.target <= tracker.lastSeenTarget) continue;
+
+    // Mode « relais » ARMÉ : la toute prochaine prédiction de la stratégie
+    // source (résolue ou non) est relayée IMMÉDIATEMENT dès qu'elle
+    // apparaît — c'est ÇA, « sa prochaine prédiction sera envoyée ».
+    if (tracker.armed) {
+      tracker.lastSeenTarget = pred.target;
+      await relayNext(tracker, pred);
+      tracker.armed = false;
+      tracker.armedKind = null;
+      continue;
+    }
+
     if (pred.status === 'en attente') break;
     tracker.lastSeenTarget = pred.target;
     const kind = resultKind(pred);
@@ -286,7 +325,19 @@ async function processTracker(tracker) {
     else { tracker.streakKind = kind; tracker.streakCount = 1; }
     const rule = tracker.rules[kind];
     if (rule && rule.enabled && tracker.streakCount >= rule.need) {
-      await synthesize(tracker, pred);
+      // 3 modes possibles (voir addTracker/updateTracker) :
+      //   'relais'  (par défaut) → on ARME, et on relaie la VRAIE prochaine
+      //             prédiction naturelle de la stratégie source, dès
+      //             qu'elle apparaît (voir plus haut, tracker.armed).
+      //   'meme'    → prédiction synthétisée : même costume que la
+      //             dernière occurrence de la série, +w jeux plus loin.
+      //   'inverse' → pareil, mais avec le costume inverse.
+      if (tracker.mode === 'relais') {
+        tracker.armed = true;
+        tracker.armedKind = kind; // pour l'historique (voir resultKindLabelFor)
+      } else {
+        await synthesize(tracker, pred);
+      }
       tracker.streakKind = null;
       tracker.streakCount = 0;
     }
@@ -404,7 +455,7 @@ async function verifyPending() {
 }
 
 setOnShoeReset(() => {
-  for (const t of panel.trackers) { t.lastSeenTarget = 0; t.streakKind = null; t.streakCount = 0; }
+  for (const t of panel.trackers) { t.lastSeenTarget = 0; t.streakKind = null; t.streakCount = 0; t.armed = false; }
   for (const entry of panel.pendingMessages) {
     if (entry.status !== 'en attente') continue;
     entry.status = 'annulé';
@@ -451,7 +502,7 @@ function statusView() {
     options: options(),
     trackers: panel.trackers.map((t) => ({
       id: t.id, key: t.key, name: t.name, rules: t.rules, mode: t.mode, offset: t.offset,
-      channels: t.channels, format: t.format, streakKind: t.streakKind, streakCount: t.streakCount,
+      channels: t.channels, format: t.format, streakKind: t.streakKind, streakCount: t.streakCount, armed: t.armed,
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),
