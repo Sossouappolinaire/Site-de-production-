@@ -1710,15 +1710,17 @@ Faites-en bon usage !
       return out;
     }
     function combinedModeRow(prefix, tracker) {
-      const t = tracker || { mode: 'meme', offset: 5 };
+      const t = tracker || { mode: 'relais', offset: 5 };
+      const m = t.mode || 'relais';
       return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
-        <div class="field" style="max-width:260px;margin:0"><label style="font-size:11px">Costume à prédire, une fois déclenché</label>
-          <select id="${prefix}-mode">
-            <option value="meme" ${t.mode !== 'inverse' ? 'selected' : ''}>Le même costume que la dernière occurrence</option>
-            <option value="inverse" ${t.mode === 'inverse' ? 'selected' : ''}>Son inverse (❤️↔♣️, ♦️↔♠️)</option>
+        <div class="field" style="max-width:340px;margin:0"><label style="font-size:11px">Une fois déclenché (série consécutive atteinte)</label>
+          <select id="${prefix}-mode" onchange="document.getElementById('${prefix}-offset-wrap').style.display = this.value === 'relais' ? 'none' : ''">
+            <option value="relais" ${m === 'relais' ? 'selected' : ''}>Relayer la prochaine prédiction naturelle de la stratégie (défaut)</option>
+            <option value="meme" ${m === 'meme' ? 'selected' : ''}>Prédire le même costume que la dernière occurrence, +w jeux</option>
+            <option value="inverse" ${m === 'inverse' ? 'selected' : ''}>Prédire son inverse (❤️↔♣️, ♦️↔♠️), +w jeux</option>
           </select>
         </div>
-        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Décalage (+w jeux)</label><input id="${prefix}-offset" type="number" min="1" max="50" value="${esc(String(t.offset || 5))}"></div>
+        <div class="field" id="${prefix}-offset-wrap" style="max-width:130px;margin:0;${m === 'relais' ? 'display:none' : ''}"><label style="font-size:11px">Décalage (+w jeux)</label><input id="${prefix}-offset" type="number" min="1" max="50" value="${esc(String(t.offset || 5))}"></div>
       </div>`;
     }
     function readCombinedMode(prefix) {
@@ -1760,7 +1762,7 @@ Faites-en bon usage !
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
           ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.streakCount > 0 ? 'warn' : 'good'}">${t.streakCount > 0 ? `Série en cours : ${esc(COMBINED_LEVEL_LABELS[t.streakKind] || t.streakKind)} ×${esc(String(t.streakCount))}` : 'Surveillance'}</span></div>
-            <dl><dt>Envois combinés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Mode</dt><dd>${t.mode === 'inverse' ? 'Inverse' : 'Même costume'} (+${esc(String(t.offset))} jeux)</dd><dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
+            <dl><dt>Envois combinés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Mode</dt><dd>${t.mode === 'inverse' ? `Inverse (+${esc(String(t.offset))} jeux)` : t.mode === 'meme' ? `Même costume (+${esc(String(t.offset))} jeux)` : 'Relais de la prochaine prédiction naturelle'}${t.armed ? ' · <b>armé, en attente de la prochaine prédiction source</b>' : ''}</dd><dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
             ${combinedRuleRows('ct-' + t.id, t.rules)}
             ${combinedModeRow('ct-' + t.id, t)}
             ${combinedChannelFormatRow('ct-' + t.id, t)}
@@ -1773,7 +1775,7 @@ Faites-en bon usage !
       openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle source suivie</span><h3 style="margin-top:8px">Ajouter une stratégie ou une formation</h3><p class="small" style="margin:0">Coche au moins un niveau de rattrapage et le nombre de fois consécutif N, puis choisis le costume à prédire (même ou inverse) et le décalage +w.</p></div></div>
         <div class="field"><label>Source</label><select id="newCombinedKey">${opts}</select></div>
         ${combinedRuleRows('cnew', { perdue: { enabled: true, need: 1 } })}
-        ${combinedModeRow('cnew', { mode: 'meme', offset: 5 })}
+        ${combinedModeRow('cnew', { mode: 'relais', offset: 5 })}
         ${combinedChannelFormatRow('cnew', { channels: [], format: null })}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addCombinedTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
