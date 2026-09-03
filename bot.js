@@ -12,6 +12,7 @@ const aiQa = require('./ai-qa');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
+const combined = require('./combined');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
@@ -1892,9 +1893,12 @@ async function updateResult(pred) {
   }
   // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
   // dans CES MÊMES canaux — pour TOUTE stratégie, existante comme IA (voir
-  // aussi predit.js/update() pour le panneau « Prédit IA »). Réglable/
-  // désactivable depuis Système → Message de perte.
-  if (pred.status === 'perdu' && pred.messages.length && lossNotice.getSettings().enabled) {
+  // aussi predit.js/update() pour le panneau « Prédit IA »). CASE PAR
+  // STRATÉGIE (state.strategies[pred.strategy].lossNoticeEnabled — voir
+  // strategies.js/defaultsFor), désactivée par défaut — les deux réglages
+  // (général + celui-ci) doivent être activés à la fois.
+  const stratCfg = state.strategies[pred.strategy];
+  if (pred.status === 'perdu' && pred.messages.length && stratCfg && stratCfg.lossNoticeEnabled && lossNotice.getSettings().enabled) {
     const noticeText = lossNotice.buildText();
     for (const m of pred.messages) {
       try { await sender.sendMessage(m.chatId, noticeText); } catch (_) {}
@@ -2036,6 +2040,11 @@ async function tick() {
     // formation après une perte, puis publication de la prédiction confirmée
     // (et du « Bingo » si elle est gagnée) dans le canal configuré.
     await formationRelay.tick();
+
+    // panneau « Prédiction combinée pour costume joueur » : sources multiples
+    // (stratégies + formations), déclencheur consécutif par niveau de
+    // rattrapage, prédiction synthétisée même costume/inverse +w.
+    await combined.tick();
   } catch (e) {
     state.lastError = e.message;
   } finally {
@@ -2205,6 +2214,7 @@ async function applyDbConfigs() {
   });
   await predit.restoreFromDb();
   await afterLoss.restoreFromDb();
+  await combined.restoreFromDb();
   await shop.loadFromDb();
   await paiement.loadFromDb();
   await mirrorCounter.loadFromDb();
@@ -2248,6 +2258,8 @@ async function startLoop() {
   predit.setSender(senderFor);
   afterLoss.restore();
   afterLoss.setSender(senderFor);
+  combined.restore();
+  combined.setSender(senderFor);
   formationRelay.restore();
   formationRelay.setSender(senderFor);
   // Compteur « Taux Miroir » : édite le même message à chaque jeu terminé

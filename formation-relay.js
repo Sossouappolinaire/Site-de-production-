@@ -242,6 +242,47 @@ function formationOf(key) {
 }
 
 // ---------------------------------------------------------------------------
+// CORRECTIF (demande admin) : avant ce correctif, la formation n'était
+// JAMAIS réellement vérifiée — `processStrategy()` armait et annonçait
+// « sûr à 99% » sur la SEULE base de `form.length`, même quand
+// `form.reliable` était faux (échantillon insuffisant / en dessous du
+// seuil de fiabilité de formation.js). Résultat : des prédictions lancées
+// « à l'aveugle », sans analyse réelle.
+//
+// Ce correctif ajoute un VRAI double contrôle avant d'annoncer quoi que ce
+// soit avec assurance — pas un simple taux qu'on suit aveuglément (le
+// taux seul reste insuffisant), mais une VRAIE collaboration avec l'IA :
+//   1) `form.reliable` DOIT être vrai (formation.js a lui-même validé le
+//      constat statistique sur la série après incident — pas juste un taux
+//      brut, un jugement déjà porté par ce module).
+//   2) Le CONSEIL de la stratégie (strategy-advisor.js — l'IA) ne doit PAS
+//      dire « à mettre en pause » : on n'endosse jamais avec confiance une
+//      stratégie que l'IA elle-même déconseille en ce moment.
+// Sans ces deux conditions réunies, RIEN n'est annoncé comme « confirmé » :
+// le module continue de surveiller silencieusement, sans lancer de fausse
+// certitude dans le canal.
+// ---------------------------------------------------------------------------
+function adviceOf(key) {
+  try {
+    const advisor = require('./strategy-advisor');
+    const found = (advisor.runtime.advices || []).find((a) => a.key === key);
+    return found ? { verdict: found.verdict, tone: found.tone } : { verdict: null, tone: null };
+  } catch (_) {
+    return { verdict: null, tone: null };
+  }
+}
+
+function formationTrusted(key) {
+  const form = formationOf(key);
+  if (!form.reliable) return { ok: false, form, advice: null, reason: 'échantillon encore insuffisant pour cette stratégie' };
+  const advice = adviceOf(key);
+  if (advice.verdict === 'à mettre en pause') {
+    return { ok: false, form, advice, reason: "l'avis IA recommande actuellement une pause sur cette stratégie" };
+  }
+  return { ok: true, form, advice, reason: null };
+}
+
+// ---------------------------------------------------------------------------
 // Messages envoyés dans le canal
 // ---------------------------------------------------------------------------
 function confirmText(key, pred, form) {
@@ -250,17 +291,21 @@ function confirmText(key, pred, form) {
   const attente = form.length > 0
     ? `après une perte, attendre ${form.length} prédiction(s) avant de jouer`
     : 'après une perte, jouer la prédiction suivante';
+  // CORRECTIF (demande admin) : plus de « sûr à 99% » fabriqué de toute
+  // pièce — seulement le taux RÉELLEMENT mesuré par formation.js (déjà
+  // validé fiable à ce stade, voir formationTrusted() plus haut), avec le
+  // rappel explicite que c'est un résultat passé, pas une garantie.
   return [
     '📚 <b>FORMATION CONFIRMÉE</b>',
     '',
-    `Jouer cette prédiction, c'est confirmé ✅`,
+    `Jouer cette prédiction — la formation ET l'avis IA la valident actuellement ✅`,
     '',
     `🎯 Jeu prédit : <b>N°${pred.target}</b>`,
     `🃏 Costume prédit : <b>${suit}</b>`,
-    `📊 Sûr à <b>99%</b>`,
+    form.rate ? `📊 Taux mesuré à ce palier : <b>${form.rate}%</b> (résultat passé, pas une garantie)` : '',
     '',
-    `📘 Formation « ${name} » : ${attente}.${form.rate ? ` Taux observé : ${form.rate}%.` : ''}`,
-  ].join('\n');
+    `📘 Formation « ${name} » : ${attente}.`,
+  ].filter(Boolean).join('\n');
 }
 
 function bingoText(key, pending) {
@@ -365,11 +410,22 @@ async function processStrategy(key) {
     if (pred.status === 'perdu') {
       // formation envoyée automatiquement (option propre à la stratégie)
       if (entry.autoSend) { try { await send(key, entry, lessonText(key)); } catch (_) { /* ignore */ } }
-      // lecture de la formation de CETTE stratégie
-      const form = formationOf(key);
-      entry.needed = form.length;
+      // lecture de la formation de CETTE stratégie — voir formationTrusted()
+      // ci-dessus : n'arme QUE si la formation est fiable ET que l'IA ne
+      // déconseille pas actuellement cette stratégie. Sinon, on continue de
+      // surveiller sans rien annoncer avec une fausse assurance.
+      const trust = formationTrusted(key);
+      if (!trust.ok) {
+        entry.counting = false;
+        entry.armed = false;
+        entry.needed = 0;
+        entry.seen = 0;
+        persist();
+        continue;
+      }
+      entry.needed = trust.form.length;
       entry.seen = 0;
-      if (form.length <= 0) { entry.armed = true; entry.counting = false; }
+      if (trust.form.length <= 0) { entry.armed = true; entry.counting = false; }
       else { entry.counting = true; entry.armed = false; }
       persist();
     }

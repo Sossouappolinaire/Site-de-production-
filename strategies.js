@@ -1002,6 +1002,13 @@ function defaultsFor(key) {
     // Sans quoi (bouton désactivé, ou stratégie sans costume comme « Match nul »
     // ou « Pair/Impair »), rien ne change : comportement normal.
     aiAuto: false,
+    // message de perte + formation VIP (voir loss-notice.js) — CASE PAR
+    // STRATÉGIE, désactivée par défaut (demande admin) : rien n'est envoyé
+    // pour une stratégie tant que l'admin ne l'a pas explicitement activée
+    // ici, même si le réglage général (Système → Message de perte) est
+    // activé — les deux doivent être vrais à la fois (voir bot.js —
+    // updateResult).
+    lossNoticeEnabled: false,
     ...JSON.parse(JSON.stringify(s.defaults)),
   };
 }

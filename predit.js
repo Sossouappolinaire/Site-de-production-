@@ -50,6 +50,9 @@ const panel = {
   minGap: 3,           // écart minimum (en numéro de jeu) exigé entre deux
                         // numéros prédits par le panneau ; un nouveau numéro
                         // trop proche du dernier numéro déjà prédit est bloqué
+  // message de perte + formation VIP (voir loss-notice.js) — désactivé par
+  // défaut (demande admin), indépendant du panneau « Prédit » lui-même.
+  lossNoticeEnabled: false,
   // ── Filtre « pertes rapprochées » (même principe que la stratégie « ombre »,
   // jamais nommé ainsi dans les messages envoyés — voir shop.js/formation.js) ──
   // Quand actif, une prédiction du panneau n'est PUBLIÉE qu'après confirmation :
@@ -115,6 +118,7 @@ function configure(patch = {}) {
   if (patch.silentMode !== undefined) panel.silentMode = !!patch.silentMode;
   if (patch.silentLossTrigger !== undefined) panel.silentLossTrigger = Math.max(1, Math.min(5, parseInt(patch.silentLossTrigger, 10) || 2));
   if (patch.silentLossWindow !== undefined) panel.silentLossWindow = Math.max(1, Math.min(20, parseInt(patch.silentLossWindow, 10) || 3));
+  if (patch.lossNoticeEnabled !== undefined) panel.lossNoticeEnabled = !!patch.lossNoticeEnabled;
   persist();
   return config();
 }
@@ -133,6 +137,7 @@ function config() {
     silentMode: panel.silentMode,
     silentLossTrigger: panel.silentLossTrigger,
     silentLossWindow: panel.silentLossWindow,
+    lossNoticeEnabled: panel.lossNoticeEnabled,
   };
 }
 
@@ -181,6 +186,7 @@ async function restoreFromDb() {
     panel.silentMode = !!saved.config.silentMode;
     panel.silentLossTrigger = Math.max(1, Math.min(5, parseInt(saved.config.silentLossTrigger, 10) || 2));
     panel.silentLossWindow = Math.max(1, Math.min(20, parseInt(saved.config.silentLossWindow, 10) || 3));
+    panel.lossNoticeEnabled = !!saved.config.lossNoticeEnabled;
   }
   if (Array.isArray(saved.certified)) panel.certified = saved.certified;
   if (Array.isArray(saved.retired)) panel.retired = saved.retired;
@@ -738,8 +744,10 @@ async function update(pred) {
   }
   // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
   // dans CES MÊMES canaux — identique à bot.js/updateResult() pour les
-  // stratégies existantes, ici pour les prédictions « Prédit IA ».
-  if (pred.status === 'perdu' && lossNotice.getSettings().enabled) {
+  // stratégies existantes, ici pour les prédictions « Prédit IA ». CASE PAR
+  // STRATÉGIE (ici : panel.lossNoticeEnabled), désactivée par défaut — les
+  // deux réglages (général + celui-ci) doivent être activés à la fois.
+  if (pred.status === 'perdu' && panel.lossNoticeEnabled && lossNotice.getSettings().enabled) {
     const noticeText = lossNotice.buildText();
     for (const m of pred.messages) {
       try { await bot.sendMessage(m.chatId, noticeText); } catch (_) {}

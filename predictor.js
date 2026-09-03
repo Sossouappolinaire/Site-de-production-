@@ -192,6 +192,9 @@ function setStrategyConfig(key, patch = {}) {
   // interrupteur, effectif seulement pour les stratégies à costume (voir
   // aiSuitOverride() plus bas, appelée depuis evaluate()).
   if (patch.aiAuto !== undefined) next.aiAuto = !!patch.aiAuto;
+  // message de perte + formation VIP (voir loss-notice.js) — case par
+  // stratégie, désactivée par défaut (voir strategies.js/defaultsFor).
+  if (patch.lossNoticeEnabled !== undefined) next.lossNoticeEnabled = !!patch.lossNoticeEnabled;
   state.strategies[key] = next;
   // ⚠️ Chaque mode possède ses PROPRES réglages : on ne remet à zéro l'état
   // d'un mode que si l'une de SES valeurs a réellement changé. Un simple
