@@ -579,6 +579,7 @@
         ${card('#/ai-created', '🤖', 'Créé par moi avec IA', `${aiCreatedCount} stratégie(s) personnelle(s)`)}
         ${card('#/predit', '🔮', 'Prédit IA', `${(snapshot.predit?.activeCount || 0)} stratégie(s) certifiée(s)`)}
         ${card('#/after-loss', '↩️', 'Prédiction après perte', `${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)`)}
+        ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
@@ -1084,6 +1085,8 @@ Faites-en bon usage !
           ${s.key === 'dominant' ? `<div class="three-col"><div class="field"><label>Écart minimum entre 2 prédictions (jeux)</label><input id="cfgGap" type="number" min="1" max="20" value="${c.gap ?? 3}"></div></div><p class="small">Un déclencheur au jeu N est ignoré si le costume à prédire est apparu sur la main du joueur dans 2 jeux consécutifs parmi N-2, N-1 et N (N-2+N-1, ou N-1+N), ou si l'écart avec la dernière prédiction « dominant » est inférieur à cette valeur.</p>` : ''}
           <div class="field"><label>Format du message</label><p class="small">Les 89 formats complets sont accessibles depuis le bouton Formats.</p></div><label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <label class="check" style="margin-top:10px"><input id="cfgAiAuto" type="checkbox" ${c.aiAuto ? 'checked' : ''}> 🤖 Ajustement automatique par l'IA</label>
+          <label class="check" style="margin-top:10px"><input id="cfgLossNotice" type="checkbox" ${c.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
+          <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé — les deux doivent être cochés à la fois.</p>
           <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine'].includes(s.key)
             ? "Désactivé (par défaut) : la stratégie prédit normalement. Activé : avant chaque envoi, l'IA compare le taux de réussite récent du costume que la stratégie s'apprête à jouer avec celui des 3 autres costumes POUR CETTE STRATÉGIE. Si un autre costume affiche un net avantage (échantillon et écart suffisants), il est substitué automatiquement — le motif de la prédiction indique alors clairement la substitution."
             : "Cette stratégie ne prédit pas de costume : ce réglage n'a aucun effet ici (laissez-le désactivé)."}</p>
@@ -1152,7 +1155,7 @@ Faites-en bon usage !
     async function refreshStrategyLive(key) { await refresh(); strategyPage(key); }
     function val(id) { return document.getElementById(id)?.value ?? ''; }
     async function saveStrategy(key) {
-      const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
+      const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
       try { await api(`/api/strategies/${key}`, 'POST', patch); await refresh(); await strategyPage(key); toast('Réglages enregistrés.'); } catch (e) { toast(e.message, 'error'); }
@@ -1431,6 +1434,8 @@ Faites-en bon usage !
             <div class="field"><label>Nombre de prédictions par stratégie créée</label><input id="preditPerStrategy" type="number" min="1" max="50" value="${esc(String(p.perStrategy ?? 2))}"><p class="small">Exemple : 2 → une stratégie certifiée prédit 2 fois quand son déclencheur est trouvé, puis le panneau attend une nouvelle stratégie (priorité aux 100%).</p></div>
             <label class="check"><input id="preditCombo" type="checkbox" ${p.requireCombo ? 'checked' : ''}> N’envoyer que les signaux confirmés par deux stratégies certifiées</label>
             <label class="check" style="margin-top:10px"><input id="preditSilent" type="checkbox" ${p.silentMode ? 'checked' : ''}> N’envoyer qu’après confirmation par pertes rapprochées (filtre « pertes rapprochées »)</label>
+            <label class="check" style="margin-top:10px"><input id="preditLossNotice" type="checkbox" ${p.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
+            <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé.</p>
             <p class="small">Tant qu’aucune série de pertes rapprochées n’est observée, les prédictions restent suivies en interne mais ne partent pas sur le canal. Dès qu’assez de pertes rapprochées tombent, l’envoi s’active jusqu’à la prochaine victoire publiée.${p.silentGate ? ` <b>État actuel : ${p.silentGate.armed ? 'envoi actif' : `silencieux (${p.silentGate.lossesInWindow || 0}/${p.silentLossTrigger ?? 2} perte(s) comptée(s))`}</b>` : ''}</p>
             <div class="two-col" style="margin-top:10px">
               <div class="field"><label>Pertes rapprochées nécessaires</label><input id="preditSilentTrigger" type="number" min="1" max="5" value="${esc(String(p.silentLossTrigger ?? 2))}"></div>
@@ -1450,7 +1455,7 @@ Faites-en bon usage !
         ${retired.length ? `<section class="section"><div class="section-head"><div><span class="eyebrow">Retirées</span><h2 style="margin-top:7px">Stratégies sorties du panneau</h2></div></div><div class="panel">${retired.map(r => `<div class="notice warn"><b>${esc(r.name)}</b> — ${esc(r.reason || '')} <span class="muted">${formatDate(r.retiredAt)}</span></div>`).join('')}</div></section>` : ''}`;
     }
     async function savePredit() {
-      try { await api('/api/predit/config', 'POST', { enabled: $('#preditEnabled')?.checked, requireCombo: $('#preditCombo')?.checked, silentMode: $('#preditSilent')?.checked, silentLossTrigger: val('preditSilentTrigger'), silentLossWindow: val('preditSilentWindow'), minRate: val('preditMinRate'), minSample: val('preditSample'), maxR: val('preditMaxR'), format: val('preditFormat'), perStrategy: val('preditPerStrategy'), channels: ids(val('preditChannel')) }); await refresh(); preditPage(); toast('Panneau Prédit enregistré.'); }
+      try { await api('/api/predit/config', 'POST', { enabled: $('#preditEnabled')?.checked, requireCombo: $('#preditCombo')?.checked, silentMode: $('#preditSilent')?.checked, lossNoticeEnabled: $('#preditLossNotice')?.checked, silentLossTrigger: val('preditSilentTrigger'), silentLossWindow: val('preditSilentWindow'), minRate: val('preditMinRate'), minSample: val('preditSample'), maxR: val('preditMaxR'), format: val('preditFormat'), perStrategy: val('preditPerStrategy'), channels: ids(val('preditChannel')) }); await refresh(); preditPage(); toast('Panneau Prédit enregistré.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function savePreditChannel() {
@@ -1600,6 +1605,8 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveAfterLoss()">Enregistrer le canal du site</button></div></div>
           <div class="panel"><h3>Réglages du panneau</h3>
             <label class="check"><input id="afterLossEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer le relais automatique</label>
+            <label class="check" style="margin-top:10px"><input id="afterLossLossNotice" type="checkbox" ${p.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
+            <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé.</p>
             <div class="two-col" style="margin-top:16px">
               <div class="field"><label>Nombre de rattrapage</label><input id="afterLossMaxR" type="number" min="0" max="9" value="${esc(String(p.maxR ?? 1))}"></div>
               <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="afterLossFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
@@ -1616,7 +1623,7 @@ Faites-en bon usage !
             ${afterLossStreakRow('trk-' + t.id, t.streak, snapshot.formatCount)}
             ${afterLossDecadeRow('trk-' + t.id, t.decade, snapshot.formatCount)}
             ${afterLossChannelFormatRow('trk-' + t.id, t)}
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small" onclick="editAfterLossTrackerModal('${esc(t.id)}')">Modifier la configuration</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Stratégie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
     }
@@ -1630,33 +1637,6 @@ Faites-en bon usage !
         ${afterLossDecadeRow('new', null, snapshot.formatCount)}
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
-    }
-    // « Modifier la configuration » : rouvre TOUS les réglages déjà
-    // enregistrés (déclencheurs, republication, série, comptage dizaine,
-    // canaux, format) pré-remplis avec l'état réellement stocké en base, et
-    // les réécrit en base à l'enregistrement.
-    async function editAfterLossTrackerModal(id) {
-      try { await refresh(); } catch (_) {}
-      const t = (snapshot.afterLoss?.trackers || []).find(x => String(x.id) === String(id));
-      if (!t) { toast('Stratégie introuvable — actualise la page.', 'error'); return; }
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Configuration enregistrée</span><h3 style="margin-top:8px">Modifier « ${esc(t.name)} »</h3><p class="small" style="margin:0">Les valeurs ci-dessous sont celles actuellement enregistrées en base de données. Modifie ce que tu veux puis enregistre : la base est mise à jour immédiatement.</p></div></div>
-        ${afterLossTriggerRows('edit', t.triggers)}
-        ${afterLossRepeatRow('edit', t.repeat)}
-        ${afterLossStreakRow('edit', t.streak, snapshot.formatCount)}
-        ${afterLossDecadeRow('edit', t.decade, snapshot.formatCount)}
-        ${afterLossChannelFormatRow('edit', t)}
-        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveAfterLossTrackerEdit('${esc(t.id)}')">Enregistrer les modifications</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
-    }
-    async function saveAfterLossTrackerEdit(id) {
-      const triggers = readAfterLossTriggers('edit');
-      const repeat = readAfterLossRepeat('edit');
-      const streak = readAfterLossStreak('edit');
-      const decade = readAfterLossDecade('edit');
-      const { channels, siteChannelId, format } = readAfterLossChannelFormat('edit');
-      try {
-        await api('/api/after-loss/trackers/' + encodeURIComponent(id), 'PUT', { triggers, repeat, streak, decade, channels, siteChannelId, format });
-        closeModal(); await refresh(); afterLossPage(); toast('Configuration modifiée et enregistrée.');
-      } catch (e) { toast(e.message, 'error'); }
     }
     async function addAfterLossTracker() {
       const key = val('newTrackerKey');
@@ -1693,7 +1673,7 @@ Faites-en bon usage !
     }
     async function saveAfterLoss() {
       const rawSite = val('afterLossSiteChannel');
-      try { await api('/api/after-loss/config', 'POST', { enabled: $('#afterLossEnabled')?.checked, maxR: val('afterLossMaxR'), format: val('afterLossFormat'), channels: ids(val('afterLossChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); afterLossPage(); toast('Panneau « Prédiction après perte » enregistré.'); }
+      try { await api('/api/after-loss/config', 'POST', { enabled: $('#afterLossEnabled')?.checked, lossNoticeEnabled: $('#afterLossLossNotice')?.checked, maxR: val('afterLossMaxR'), format: val('afterLossFormat'), channels: ids(val('afterLossChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); afterLossPage(); toast('Panneau « Prédiction après perte » enregistré.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function saveAfterLossChannel() {
@@ -1703,6 +1683,139 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
     async function removeAfterLossChannel() { try { await api('/api/after-loss/channel', 'DELETE'); await refresh(); afterLossPage(); } catch (e) { toast(e.message, 'error'); } }
+
+    // -------------------------------------------------------------------
+    // « Prédiction combinée pour costume joueur » (voir combined.js) —
+    // même schéma d'écran que « Prédiction après perte », avec un « N »
+    // qui compte des occurrences CONSÉCUTIVES (pas un nombre à sauter), et
+    // un choix « même costume / inverse » + décalage +w au lieu d'un
+    // simple relais.
+    // -------------------------------------------------------------------
+    const COMBINED_LEVEL_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage 3', perdue: 'Perdue' };
+    function combinedRuleRows(prefix, rules) {
+      const r = rules || {};
+      return ['r1', 'r2', 'r3', 'perdue'].map((k) => {
+        const cur = r[k] || { enabled: false, need: 1 };
+        return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:8px">
+          <label class="check" style="flex:1"><input id="${prefix}-${k}-on" type="checkbox" ${cur.enabled ? 'checked' : ''}> ${esc(COMBINED_LEVEL_LABELS[k])}</label>
+          <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Fois consécutives (N)</label><input id="${prefix}-${k}-need" type="number" min="1" max="20" value="${esc(String(cur.need || 1))}"></div>
+        </div>`;
+      }).join('');
+    }
+    function readCombinedRules(prefix) {
+      const out = {};
+      for (const k of ['r1', 'r2', 'r3', 'perdue']) {
+        out[k] = { enabled: !!$(`#${prefix}-${k}-on`)?.checked, need: val(`${prefix}-${k}-need`) };
+      }
+      return out;
+    }
+    function combinedModeRow(prefix, tracker) {
+      const t = tracker || { mode: 'meme', offset: 5 };
+      return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="max-width:260px;margin:0"><label style="font-size:11px">Costume à prédire, une fois déclenché</label>
+          <select id="${prefix}-mode">
+            <option value="meme" ${t.mode !== 'inverse' ? 'selected' : ''}>Le même costume que la dernière occurrence</option>
+            <option value="inverse" ${t.mode === 'inverse' ? 'selected' : ''}>Son inverse (❤️↔♣️, ♦️↔♠️)</option>
+          </select>
+        </div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Décalage (+w jeux)</label><input id="${prefix}-offset" type="number" min="1" max="50" value="${esc(String(t.offset || 5))}"></div>
+      </div>`;
+    }
+    function readCombinedMode(prefix) {
+      return { mode: val(`${prefix}-mode`), offset: val(`${prefix}-offset`) };
+    }
+    function combinedChannelFormatRow(prefix, tracker) {
+      const t = tracker || { channels: [], format: null };
+      return `<div class="field-row" style="display:flex;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:220px;margin:0"><label style="font-size:11px">Canal(x) propre(s) (vide = canal du panneau)</label><input id="${prefix}-channels" value="${esc((t.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+        <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Format propre (vide = panneau)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${t.format ?? ''}"></div>
+      </div>`;
+    }
+    function readCombinedChannelFormat(prefix) {
+      return { channels: ids(val(`${prefix}-channels`)), format: val(`${prefix}-format`) || null };
+    }
+    function combinedPage() {
+      setNav('combined');
+      const p = snapshot.combined || {};
+      const trackers = p.trackers || [];
+      const history = p.history || [];
+      const optsHtml = (opt) => {
+        const groups = {};
+        for (const o of (opt || [])) { (groups[o.group] = groups[o.group] || []).push(o); }
+        return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
+      };
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Sources multiples</span><h2 style="margin-top:7px">Prédiction combinée pour costume joueur</h2><p class="small">Sélectionne une ou plusieurs stratégies (ou formations) existantes. Pour chacune, coche un ou plusieurs niveaux de rattrapage avec un nombre N — N = combien de fois ce niveau doit arriver D'AFFILÉE avant de déclencher (N=2 → 2 rattrapages 2 consécutifs déclenchent au 2ᵉ ; N=1 → dès le 1ᵉʳ). Une fois déclenché, une nouvelle prédiction est envoyée automatiquement : même costume ou son inverse, +w jeux plus loin. Toujours sur la main du JOUEUR.</p></div><div class="toolbar"><button class="button primary" onclick="addCombinedTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="combinedPage()">Actualiser</button></div></div>
+        <div class="two-col">
+          <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit les prédictions combinées, sauf source avec son propre canal.</p>
+            <div class="field"><label>ID ou @nom du canal</label><input id="combinedChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveCombinedChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="combinedTest()">Envoyer un test</button><button class="button small danger" onclick="removeCombinedChannel()">Retirer</button></div>
+            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
+          <div class="panel"><h3>Réglages du panneau</h3>
+            <label class="check"><input id="combinedEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer la prédiction combinée</label>
+            <div class="two-col" style="margin-top:16px">
+              <div class="field"><label>Nombre de rattrapage</label><input id="combinedMaxR" type="number" min="0" max="9" value="${esc(String(p.maxR ?? 1))}"></div>
+              <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="combinedFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
+            </div>
+            <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveCombined()">Enregistrer</button></div></div>
+        </div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.streakCount > 0 ? 'warn' : 'good'}">${t.streakCount > 0 ? `Série en cours : ${esc(COMBINED_LEVEL_LABELS[t.streakKind] || t.streakKind)} ×${esc(String(t.streakCount))}` : 'Surveillance'}</span></div>
+            <dl><dt>Envois combinés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Mode</dt><dd>${t.mode === 'inverse' ? 'Inverse' : 'Même costume'} (+${esc(String(t.offset))} jeux)</dd><dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
+            ${combinedRuleRows('ct-' + t.id, t.rules)}
+            ${combinedModeRow('ct-' + t.id, t)}
+            ${combinedChannelFormatRow('ct-' + t.id, t)}
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateCombinedTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeCombinedTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers envois combinés</h2></div></div>
+          ${history.length ? `<table><thead><tr><th>Source</th><th>Déclenché par</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${esc(h.triggeredBy || '—')}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun envoi combiné pour le moment.</div>'}</section>`;
+    }
+    function addCombinedTrackerModal() {
+      const opts = optsHtmlGlobal(snapshot.combined?.options || []);
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle source suivie</span><h3 style="margin-top:8px">Ajouter une stratégie ou une formation</h3><p class="small" style="margin:0">Coche au moins un niveau de rattrapage et le nombre de fois consécutif N, puis choisis le costume à prédire (même ou inverse) et le décalage +w.</p></div></div>
+        <div class="field"><label>Source</label><select id="newCombinedKey">${opts}</select></div>
+        ${combinedRuleRows('cnew', { perdue: { enabled: true, need: 1 } })}
+        ${combinedModeRow('cnew', { mode: 'meme', offset: 5 })}
+        ${combinedChannelFormatRow('cnew', { channels: [], format: null })}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addCombinedTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    function optsHtmlGlobal(opt) {
+      const groups = {};
+      for (const o of (opt || [])) { (groups[o.group] = groups[o.group] || []).push(o); }
+      return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
+    }
+    async function addCombinedTracker() {
+      const key = val('newCombinedKey');
+      const rules = readCombinedRules('cnew');
+      const { mode, offset } = readCombinedMode('cnew');
+      const { channels, format } = readCombinedChannelFormat('cnew');
+      try { await api('/api/combined/trackers', 'POST', { key, rules, mode, offset, channels, format }); closeModal(); await refresh(); combinedPage(); toast('Source ajoutée à la prédiction combinée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function updateCombinedTracker(id) {
+      const rules = readCombinedRules('ct-' + id);
+      const { mode, offset } = readCombinedMode('ct-' + id);
+      const { channels, format } = readCombinedChannelFormat('ct-' + id);
+      try { await api(`/api/combined/trackers/${encodeURIComponent(id)}`, 'PUT', { rules, mode, offset, channels, format }); await refresh(); combinedPage(); toast('Réglages mis à jour.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeCombinedTracker(id) {
+      try { await api(`/api/combined/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); combinedPage(); toast('Source retirée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveCombined() {
+      try { await api('/api/combined/config', 'POST', { enabled: $('#combinedEnabled')?.checked, maxR: val('combinedMaxR'), format: val('combinedFormat'), channels: ids(val('combinedChannel')) }); await refresh(); combinedPage(); toast('Panneau « Prédiction combinée » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveCombinedChannel() {
+      const list = ids(val('combinedChannel'));
+      if (!list.length) return toast('Entre un ID ou @nom de canal.', 'error');
+      try { const r = await api('/api/combined/channel', 'POST', { channelId: list[0] }); await refresh(); combinedPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeCombinedChannel() { try { await api('/api/combined/channel', 'DELETE'); await refresh(); combinedPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function combinedTest() {
+      try { const r = await api('/api/combined/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     async function afterLossTest() { try { const r = await api('/api/after-loss/test', 'POST', {}); toast('Test envoyé : ' + (r.sent || []).join(', ')); } catch (e) { toast(e.message, 'error'); } }
     async function diagnosticsPage() {
       setNav('settings'); $('#app').innerHTML = '<div class="loading">Vérification des canaux…</div>';
@@ -2239,6 +2352,7 @@ Faites-en bon usage !
         else if (h === '#/boutique') await boutiquePage();
         else if (h === '#/predit') preditPage();
         else if (h === '#/after-loss') afterLossPage();
+        else if (h === '#/combined') combinedPage();
         else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
         else if (h === '#/diagnostics') await diagnosticsPage();
