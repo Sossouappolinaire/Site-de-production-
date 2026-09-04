@@ -482,13 +482,28 @@
         <div class="live-number mono">#N${esc(live.number)}</div><div class="live-meta"><span class="tag">Joueur ${esc(live.playerValue ?? '—')}</span><span class="tag">Banquier ${esc(live.bankerValue ?? '—')}</span><span class="tag">${esc(live.winner || 'Distribution')}</span></div></div>`;
     }
     function strategyButtons() {
-      return (snapshot.strategies || []).map(s => {
+      const real = (snapshot.strategies || []).map(s => {
         const st = s.stats || {};
         return `<button class="strategy-button" onclick="location.hash='#/strategy/${encodeURIComponent(s.key)}'">
         <span class="eyebrow">${s.config?.enabled ? 'Active' : 'En pause'}</span><b>${esc(s.name)}</b><span>${esc((s.about || '').slice(0, 92))}...</span>
         <span class="strategy-stats"><span class="tag">${esc(st.total ?? 0)} préd.</span><span class="tag good">${esc(st.win ?? 0)} gagné(s)</span><span class="tag bad">${esc(st.loss ?? 0)} perdu(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`;
       }).join('');
+      // Sources suivies via « Prédiction combinée » (combined.js) — demande
+      // admin : elles doivent être VISIBLES ici, au même endroit que les
+      // stratégies existantes, une fois nommées et configurées. Elles restent
+      // un système distinct (voir #/combined pour la configuration complète :
+      // rattrapages, +w, inverse, canaux) — cliquer ici y renvoie directement.
+      const combined = (snapshot.combined?.trackers || []).map(t => {
+        return `<button class="strategy-button" onclick="location.hash='#/combined'">
+        <span class="eyebrow">🧩 Combinée</span><b>${esc(t.name)}</b><span>Source : ${esc((optionByKeyGlobal(t.key) || {}).name || t.key)}</span>
+        <span class="strategy-stats"><span class="tag">${esc(t.sentCount ?? 0)} envoyée(s)</span></span>
+        <em>Ouvrir la configuration →</em></button>`;
+      }).join('');
+      return real + combined;
+    }
+    function optionByKeyGlobal(key) {
+      return (snapshot.combined?.options || []).find(o => o.key === key) || null;
     }
     function closeModal() { document.getElementById('modalRoot')?.remove(); }
     function openModal(html) {
@@ -1124,7 +1139,7 @@ Faites-en bon usage !
         }
         parts.push(`<div class="panel" style="margin-top:12px"><div class="split"><b>Formation</b><span class="tag ${f && f.reliable ? (f.rate >= 75 ? 'good' : 'warn') : ''}">${f && f.reliable ? `Formation de ${esc(String(f.formationLength))} · ${esc(String(f.rate))}%` : 'échantillon insuffisant'}${f ? ` · ${esc(String(f.troubleEvents))} incident(s)` : ''}</span></div>
           ${f && (f.findings || []).length ? `<ul class="small">${f.findings.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : `<p class="small muted">Pas encore assez de pertes/rattrapages observés pour cette stratégie (minimum ${esc(String(form.minSupport || 5))} incidents).</p>`}</div>`);
-        if (adv.remote) parts.push(`<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(adv.remote.title || 'Avis Pollinations.ai')}</b><span class="tag">${formatDate(adv.remoteAt)}</span></div><p class="small">${esc(adv.remote.observation || '')}</p></div>`);
+        if (adv.remote) parts.push(`<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(adv.remote.title || 'Avis IA')}</b><span class="tag">${formatDate(adv.remoteAt)}</span></div><p class="small">${esc(adv.remote.observation || '')}</p></div>`);
         box.innerHTML = parts.join('');
       } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
@@ -1198,7 +1213,7 @@ Faites-en bon usage !
         <div class="toolbar" style="margin-top:8px"><button class="button ghost" onclick="checkAiQuota()">Vérifier maintenant (toutes les clés)</button></div>
         <p class="small" style="margin-top:6px">${aiState.quota && aiState.quota.checkedAt ? 'Dernière vérification réelle : ' + formatDate(aiState.quota.checkedAt) : ''}</p>
         <div class="field"><label>Remplacer la clé sans redéployer</label><input id="aiKey" type="password" autocomplete="off" placeholder="Clé Pollinations.ai"></div><button class="button ghost" onclick="saveAiKey()">Appliquer la clé</button>
-        <div class="field" style="margin-top:16px"><label>Analyse ciblée (optionnel)</label><textarea id="aiObjective" placeholder="Ex. Compare les absences de costumes de la main du joueur."></textarea></div><button class="button orange" onclick="runAnalysis()">Analyse Pollinations.ai</button></div>
+        <div class="field" style="margin-top:16px"><label>Analyse ciblée (optionnel)</label><textarea id="aiObjective" placeholder="Ex. Compare les absences de costumes de la main du joueur."></textarea></div><button class="button orange" onclick="runAnalysis()">Analyse IA</button></div>
       <div class="panel"><h3>Clés Gemini / Groq (prioritaires)</h3><div class="notice small">Essayées avant Pollinations : si l’une échoue ou expire, l’autre prend le relais automatiquement. Laisse un champ vide pour ne pas utiliser ce fournisseur.</div>
         <div class="notice ${quotaBadge(aiState.geminiConfigured, aiState.quota && aiState.quota.gemini).cls}" style="margin-top:10px">${quotaBadge(aiState.geminiConfigured, aiState.quota && aiState.quota.gemini).text}</div>
         <div class="field"><label>Clé OpenRouter (par défaut)</label><input id="openrouterKey" type="password" autocomplete="off" placeholder="Clé OpenRouter (openrouter.ai)"></div><button class="button ghost" onclick="saveOpenrouterKey()">Appliquer la clé OpenRouter</button>
@@ -1213,9 +1228,9 @@ Faites-en bon usage !
       <div id="aiCompare" class="section"><div class="empty">Lance la comparaison pour voir les écarts entre les journées.</div></div>
       <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Analyse cumulative</span><h2 style="margin-top:7px">Avis tous les 4 jeux (cumul 1 → 1440)</h2><p class="small">Jeux 1 à 4 : premier avis. Jeux 1 à 8 : l’avis reprend tout depuis le début. Puis 1 à 12, 1 à 16… jusqu’au jeu 1440. Tout est enregistré pour la date du jour ; si une stratégie est modifiée, les paliers qui ne sont plus justes sont effacés et recalculés.</p></div><div class="toolbar"><button class="button primary" onclick="runCumulative()">Mettre à jour</button><button class="button ghost" onclick="purgeCumulative()">Effacer l’incorrect</button></div></div>
       <div id="aiCumulative" class="section"><div class="loading">Chargement des paliers…</div></div>
-      <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Avis sur les stratégies</span><h2 style="margin-top:7px">L’IA juge les stratégies existantes (cumul complet)</h2><p class="small">L’IA reprend TOUT le cumul de la journée (jeux 1 → 1440) et les résultats réels de chaque stratégie pour dire laquelle garder, laquelle ajuster et laquelle mettre en silencieux.</p></div><div class="toolbar"><button class="button primary" onclick="runAdvice(false)">Mettre à jour</button><button class="button orange" onclick="runAdvice(true)">Avis Pollinations.ai</button></div></div>
+      <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Avis sur les stratégies</span><h2 style="margin-top:7px">L’IA juge les stratégies existantes (cumul complet)</h2><p class="small">L’IA reprend TOUT le cumul de la journée (jeux 1 → 1440) et les résultats réels de chaque stratégie pour dire laquelle garder, laquelle ajuster et laquelle mettre en silencieux.</p></div><div class="toolbar"><button class="button primary" onclick="runAdvice(false)">Mettre à jour</button><button class="button orange" onclick="runAdvice(true)">Avis IA</button></div></div>
       <div id="aiAdvice" class="section"><div class="loading">Chargement de l’avis…</div></div>
-      <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Formation</span><h2 style="margin-top:7px">L’IA apprend des enchaînements de prédictions</h2><p class="small">Pour chaque stratégie (y compris « Prédit »), l’IA regarde ce qui arrive à une prédiction quand celle qui la précède a perdu ou nécessité un rattrapage, et propose un taux de réussite pour ce cas précis.</p></div><div class="toolbar"><button class="button primary" onclick="runFormation(false)">Actualiser</button><button class="button orange" onclick="runFormation(true)">Avis Pollinations.ai</button></div></div>
+      <div class="section-head" style="margin-top:10px"><div><span class="eyebrow">Formation</span><h2 style="margin-top:7px">L’IA apprend des enchaînements de prédictions</h2><p class="small">Pour chaque stratégie (y compris « Prédit »), l’IA regarde ce qui arrive à une prédiction quand celle qui la précède a perdu ou nécessité un rattrapage, et propose un taux de réussite pour ce cas précis.</p></div><div class="toolbar"><button class="button primary" onclick="runFormation(false)">Actualiser</button><button class="button orange" onclick="runFormation(true)">Avis IA</button></div></div>
       <div id="aiFormation" class="section"><div class="loading">Chargement de la formation…</div></div>
       <div id="aiResult" class="section"></div>`;
       renderAiResults(); loadPatterns(); loadCompare(); loadCumulative(); loadAdvice(); loadFormation();
@@ -1235,7 +1250,7 @@ Faites-en bon usage !
       const list = (snapshot.ai?.results || []).filter(Boolean);
       const box = $('#aiResult'); if (!box) return;
       if (!list.length) { box.innerHTML = '<div class="empty">Aucun constat pour le moment : l’analyseur attend des jeux terminés.</div>'; return; }
-      box.innerHTML = list.map(r => `<div class="panel" style="margin-bottom:14px"><div class="split"><b>${esc(r.title || 'Analyse')}</b><span class="tag">${esc(r.source === 'pollinations' ? 'Pollinations.ai' : 'Moteur local')} · ${r.sample || 0} jeux · ${formatDate(r.generatedAt)}</span></div>
+      box.innerHTML = list.map(r => `<div class="panel" style="margin-bottom:14px"><div class="split"><b>${esc(r.title || 'Analyse')}</b><span class="tag">${esc(r.source && r.source.startsWith('IA') ? r.source : 'Moteur local')} · ${r.sample || 0} jeux · ${formatDate(r.generatedAt)}</span></div>
         <p class="small">${esc(r.observation || '')}</p>
         ${(r.findings || []).length ? `<ul class="small">${r.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
         ${(r.strategies || []).length ? `<div class="proposals">${r.strategies.map((p,i) => `<article class="proposal"><div class="split"><h3>${esc(p.name || ('Proposition ' + (i+1)))}</h3><span class="tag">${esc(p.compatibleExisting || 'à tester')}</span></div><dl><dt>Logique</dt><dd>${esc(p.logic)}</dd><dt>Déclencheur</dt><dd>${esc(p.trigger)}</dd><dt>Preuve</dt><dd>${esc(p.evidence)}</dd><dt>Risque</dt><dd>${esc(p.risks)}</dd></dl></article>`).join('')}</div>` : ''}
@@ -1280,7 +1295,7 @@ Faites-en bon usage !
       // seules les stratégies mesurées à 75% de réussite ou plus sont affichées
       const list = (snapshot.ai?.savedStrategies || []).filter(s => Number(s.rate) >= 75);
       $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Créées par l’analyseur</span><h2 style="margin-top:7px">Stratégies IA</h2><p class="small">Seules les stratégies dont l’analyse IA mesure <b>au moins 75% de réussite</b> apparaissent ici. Elles ne sont jamais activées seules : à tester d’abord en mode silencieux.</p></div></div>
-      ${list.length ? `<div class="proposals">${list.map(p => `<article class="proposal"><div class="split"><h3>${esc(p.name)}</h3><span class="tag good">${esc(String(p.rate))}% de réussite</span><span class="tag">${esc(p.origin === 'auto-pollinations' ? 'Pollinations.ai' : p.origin === 'auto-local' ? 'Analyse locale' : 'Manuelle')}</span></div><dl><dt>Logique</dt><dd>${esc(p.logic)}</dd>${p.trigger ? `<dt>Déclencheur</dt><dd>${esc(p.trigger)}</dd>` : ''}<dt>Preuve</dt><dd>${esc(p.evidence)}</dd><dt>Risque</dt><dd>${esc(p.risks)}</dd><dt>Créée le</dt><dd>${formatDate(p.createdAt)}</dd></dl><div class="toolbar" style="margin-top:14px">${p.compatibleExisting ? `<a class="button small ghost" href="#/strategy/${encodeURIComponent(p.compatibleExisting)}">Ouvrir la stratégie liée</a>` : ''}<button class="button small danger" onclick="deleteAiStrategy('${p.id}')">Supprimer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie à 75% de réussite ou plus pour l’instant. L’analyseur en ajoutera dès qu’une règle atteindra ce seuil.</div>'}`;
+      ${list.length ? `<div class="proposals">${list.map(p => `<article class="proposal"><div class="split"><h3>${esc(p.name)}</h3><span class="tag good">${esc(String(p.rate))}% de réussite</span><span class="tag">${esc(p.origin === 'auto-pollinations' ? 'IA distante' : p.origin === 'auto-local' ? 'Analyse locale' : 'Manuelle')}</span></div><dl><dt>Logique</dt><dd>${esc(p.logic)}</dd>${p.trigger ? `<dt>Déclencheur</dt><dd>${esc(p.trigger)}</dd>` : ''}<dt>Preuve</dt><dd>${esc(p.evidence)}</dd><dt>Risque</dt><dd>${esc(p.risks)}</dd><dt>Créée le</dt><dd>${formatDate(p.createdAt)}</dd></dl><div class="toolbar" style="margin-top:14px">${p.compatibleExisting ? `<a class="button small ghost" href="#/strategy/${encodeURIComponent(p.compatibleExisting)}">Ouvrir la stratégie liée</a>` : ''}<button class="button small danger" onclick="deleteAiStrategy('${p.id}')">Supprimer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie à 75% de réussite ou plus pour l’instant. L’analyseur en ajoutera dès qu’une règle atteindra ce seuil.</div>'}`;
     }
     async function loadCumulative() {
       const box = $('#aiCumulative'); if (!box) return;
@@ -1311,7 +1326,7 @@ Faites-en bon usage !
             <ul class="small">${(a.advice || []).map(t => `<li>${esc(t)}</li>`).join('')}</ul>
             ${(a.context || []).length ? `<div class="notice">${a.context.map(esc).join(' · ')}</div>` : ''}
             <div class="toolbar" style="margin-top:10px"><button class="button small ghost" onclick="unlockStrategy('${esc(a.key)}')">Débloquer l’envoi</button></div></div>`).join('')}
-          ${r.remote ? `<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(r.remote.title || 'Avis Pollinations.ai')}</b><span class="tag">${formatDate(r.remoteAt)}</span></div><p class="small">${esc(r.remote.observation || '')}</p>${(r.remote.findings || []).length ? `<ul class="small">${r.remote.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}</div>` : ''}`;
+          ${r.remote ? `<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(r.remote.title || 'Avis IA')}</b><span class="tag">${formatDate(r.remoteAt)}</span></div><p class="small">${esc(r.remote.observation || '')}</p>${(r.remote.findings || []).length ? `<ul class="small">${r.remote.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}</div>` : ''}`;
       } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
     async function runAdvice(remote) { const box = $('#aiAdvice'); if (box) box.innerHTML = '<div class="loading">Analyse en cours…</div>'; try { await api('/api/ai/strategy-advice/run', 'POST', { remote: !!remote }); await loadAdvice(); toast('Avis mis à jour.'); } catch(e) { toast(e.message, 'error'); } }
@@ -1349,7 +1364,7 @@ Faites-en bon usage !
           <div class="field" style="margin-top:8px"><label>Canal propre à cette stratégie (facultatif)</label><input id="formationRelayChan-${esc(s.key)}" placeholder="Laisser vide pour utiliser le canal ci-dessus" value="${esc((rl.channels || []).join(', '))}" onchange="saveFormationRelayStrategyChannel('${esc(s.key)}')"></div>
           <p class="small muted">État : ${etat} · ${esc(String(rl.sentCount || 0))} message(s) envoyé(s).</p>` : ''}</div>`;
         }).join('')
-          + (r.remote ? `<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(r.remote.title || 'Avis Pollinations.ai')}</b><span class="tag">${formatDate(r.remoteAt)}</span></div><p class="small">${esc(r.remote.observation || '')}</p>${r.remote.meilleureStrategie ? `<div class="notice">Formation la plus exploitable selon l’IA : <b>${esc(r.remote.meilleureStrategie)}</b></div>` : ''}${(r.remote.findings || []).length ? `<ul class="small">${r.remote.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}${r.remote.risks ? `<p class="small muted">${esc(r.remote.risks)}</p>` : ''}</div>` : '');
+          + (r.remote ? `<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(r.remote.title || 'Avis IA')}</b><span class="tag">${formatDate(r.remoteAt)}</span></div><p class="small">${esc(r.remote.observation || '')}</p>${r.remote.meilleureStrategie ? `<div class="notice">Formation la plus exploitable selon l’IA : <b>${esc(r.remote.meilleureStrategie)}</b></div>` : ''}${(r.remote.findings || []).length ? `<ul class="small">${r.remote.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}${r.remote.risks ? `<p class="small muted">${esc(r.remote.risks)}</p>` : ''}</div>` : '');
       } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
     async function toggleFormationRelay(key, enabled) {
@@ -1695,36 +1710,41 @@ Faites-en bon usage !
     function combinedRuleRows(prefix, rules) {
       const r = rules || {};
       return ['r1', 'r2', 'r3', 'perdue'].map((k) => {
-        const cur = r[k] || { enabled: false, need: 1 };
-        return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:8px">
-          <label class="check" style="flex:1"><input id="${prefix}-${k}-on" type="checkbox" ${cur.enabled ? 'checked' : ''}> ${esc(COMBINED_LEVEL_LABELS[k])}</label>
-          <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Fois consécutives (N)</label><input id="${prefix}-${k}-need" type="number" min="1" max="20" value="${esc(String(cur.need || 1))}"></div>
+        const cur = r[k] || { enabled: false, need: 1, mode: 'relais', offset: 5 };
+        const m = cur.mode || 'relais';
+        // CORRECTIF (demande admin) : les options mode/+w étaient masquées
+        // tant que la case n'était pas cochée (repliées derrière un
+        // onchange) — désormais TOUJOURS visibles dès l'affichage de la
+        // ligne, cochée ou non, pour qu'on les voie immédiatement.
+        return `<div class="rule-row" style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-top:8px">
+          <div class="field-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <label class="check" style="flex:1;min-width:140px"><input id="${prefix}-${k}-on" type="checkbox" ${cur.enabled ? 'checked' : ''}> ${esc(COMBINED_LEVEL_LABELS[k])}</label>
+            <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Fois consécutives (N)</label><input id="${prefix}-${k}-need" type="number" min="1" max="20" value="${esc(String(cur.need || 1))}"></div>
+          </div>
+          <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e2e8f0" class="field-row">
+            <div class="field" style="max-width:340px;margin:0"><label style="font-size:11px">Une fois ce niveau atteint</label>
+              <select id="${prefix}-${k}-mode" onchange="document.getElementById('${prefix}-${k}-offset-wrap').style.display = this.value === 'relais' ? 'none' : ''">
+                <option value="relais" ${m === 'relais' ? 'selected' : ''}>Relayer la prochaine prédiction naturelle (défaut)</option>
+                <option value="meme" ${m === 'meme' ? 'selected' : ''}>Même costume que la dernière occurrence, +w jeux</option>
+                <option value="inverse" ${m === 'inverse' ? 'selected' : ''}>Son inverse (❤️↔♣️, ♦️↔♠️), +w jeux</option>
+              </select>
+            </div>
+            <div class="field" id="${prefix}-${k}-offset-wrap" style="max-width:130px;margin:0;${m === 'relais' ? 'display:none' : ''}"><label style="font-size:11px">Décalage (+w jeux)</label><input id="${prefix}-${k}-offset" type="number" min="1" max="50" value="${esc(String(cur.offset || 5))}"></div>
+          </div>
         </div>`;
       }).join('');
     }
     function readCombinedRules(prefix) {
       const out = {};
       for (const k of ['r1', 'r2', 'r3', 'perdue']) {
-        out[k] = { enabled: !!$(`#${prefix}-${k}-on`)?.checked, need: val(`${prefix}-${k}-need`) };
+        out[k] = {
+          enabled: !!$(`#${prefix}-${k}-on`)?.checked,
+          need: val(`${prefix}-${k}-need`),
+          mode: val(`${prefix}-${k}-mode`),
+          offset: val(`${prefix}-${k}-offset`),
+        };
       }
       return out;
-    }
-    function combinedModeRow(prefix, tracker) {
-      const t = tracker || { mode: 'relais', offset: 5 };
-      const m = t.mode || 'relais';
-      return `<div class="field-row" style="display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
-        <div class="field" style="max-width:340px;margin:0"><label style="font-size:11px">Une fois déclenché (série consécutive atteinte)</label>
-          <select id="${prefix}-mode" onchange="document.getElementById('${prefix}-offset-wrap').style.display = this.value === 'relais' ? 'none' : ''">
-            <option value="relais" ${m === 'relais' ? 'selected' : ''}>Relayer la prochaine prédiction naturelle de la stratégie (défaut)</option>
-            <option value="meme" ${m === 'meme' ? 'selected' : ''}>Prédire le même costume que la dernière occurrence, +w jeux</option>
-            <option value="inverse" ${m === 'inverse' ? 'selected' : ''}>Prédire son inverse (❤️↔♣️, ♦️↔♠️), +w jeux</option>
-          </select>
-        </div>
-        <div class="field" id="${prefix}-offset-wrap" style="max-width:130px;margin:0;${m === 'relais' ? 'display:none' : ''}"><label style="font-size:11px">Décalage (+w jeux)</label><input id="${prefix}-offset" type="number" min="1" max="50" value="${esc(String(t.offset || 5))}"></div>
-      </div>`;
-    }
-    function readCombinedMode(prefix) {
-      return { mode: val(`${prefix}-mode`), offset: val(`${prefix}-offset`) };
     }
     function combinedChannelFormatRow(prefix, tracker) {
       const t = tracker || { channels: [], format: null };
@@ -1762,21 +1782,21 @@ Faites-en bon usage !
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
           ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.streakCount > 0 ? 'warn' : 'good'}">${t.streakCount > 0 ? `Série en cours : ${esc(COMBINED_LEVEL_LABELS[t.streakKind] || t.streakKind)} ×${esc(String(t.streakCount))}` : 'Surveillance'}</span></div>
-            <dl><dt>Envois combinés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Mode</dt><dd>${t.mode === 'inverse' ? `Inverse (+${esc(String(t.offset))} jeux)` : t.mode === 'meme' ? `Même costume (+${esc(String(t.offset))} jeux)` : 'Relais de la prochaine prédiction naturelle'}${t.armed ? ' · <b>armé, en attente de la prochaine prédiction source</b>' : ''}</dd><dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
+            <dl><dt>Envois combinés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(t.lastSentAt)}</dd>${t.armed ? `<dt>État</dt><dd><b>Armé — en attente de la prochaine prédiction source (${esc(COMBINED_LEVEL_LABELS[t.armedKind] || t.armedKind || '')})</b></dd>` : ''}<dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
             ${combinedRuleRows('ct-' + t.id, t.rules)}
-            ${combinedModeRow('ct-' + t.id, t)}
             ${combinedChannelFormatRow('ct-' + t.id, t)}
+            <div class="field" style="margin-top:12px"><label>Nom de cette stratégie combinée <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ct-${esc(t.id)}-name" value="${esc(t.name)}"></div>
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateCombinedTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeCombinedTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers envois combinés</h2></div></div>
-          ${history.length ? `<table><thead><tr><th>Source</th><th>Déclenché par</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${esc(h.triggeredBy || '—')}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun envoi combiné pour le moment.</div>'}</section>`;
+          ${history.length ? `<table><thead><tr><th>Source</th><th>Déclenché par</th><th>Mode</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${esc(h.triggeredBy || '—')}</td><td>${h.mode === 'inverse' ? 'Inverse' : h.mode === 'meme' ? 'Même costume' : 'Relais'}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun envoi combiné pour le moment.</div>'}</section>`;
     }
     function addCombinedTrackerModal() {
       const opts = optsHtmlGlobal(snapshot.combined?.options || []);
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle source suivie</span><h3 style="margin-top:8px">Ajouter une stratégie ou une formation</h3><p class="small" style="margin:0">Coche au moins un niveau de rattrapage et le nombre de fois consécutif N, puis choisis le costume à prédire (même ou inverse) et le décalage +w.</p></div></div>
-        <div class="field"><label>Source</label><select id="newCombinedKey">${opts}</select></div>
-        ${combinedRuleRows('cnew', { perdue: { enabled: true, need: 1 } })}
-        ${combinedModeRow('cnew', { mode: 'relais', offset: 5 })}
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle(s) source(s) suivie(s)</span><h3 style="margin-top:8px">Ajouter une ou plusieurs stratégies/formations</h3><p class="small" style="margin:0">Sélectionne une ou plusieurs sources (Ctrl/Cmd+clic pour en choisir plusieurs) — les MÊMES règles ci-dessous s'appliqueront à chacune, en une seule fois. Coche au moins un niveau de rattrapage et le nombre de fois consécutif N, puis choisis pour CHAQUE niveau ce qu'il faut faire une fois déclenché (relais, même costume +w, ou inverse +w).</p></div></div>
+        <div class="field"><label>Source(s) — sélection multiple possible</label><select id="newCombinedKey" multiple size="8">${opts}</select></div>
+        ${combinedRuleRows('cnew', { perdue: { enabled: true, need: 1, mode: 'relais', offset: 5 } })}
         ${combinedChannelFormatRow('cnew', { channels: [], format: null })}
+        <div class="field"><label>Nom de cette stratégie combinée <span class="small">(optionnel — vide = nom de la source ; affiché aussi dans la liste « Stratégies »)</span></label><input id="cnew-name" placeholder="Ex. Combo Dominant + Costume"></div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addCombinedTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     function optsHtmlGlobal(opt) {
@@ -1785,18 +1805,23 @@ Faites-en bon usage !
       return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
     }
     async function addCombinedTracker() {
-      const key = val('newCombinedKey');
+      const sel = $('#newCombinedKey');
+      const keys = sel ? Array.from(sel.selectedOptions).map(o => o.value) : [];
+      if (!keys.length) return toast('Sélectionne au moins une source.', 'error');
       const rules = readCombinedRules('cnew');
-      const { mode, offset } = readCombinedMode('cnew');
       const { channels, format } = readCombinedChannelFormat('cnew');
-      try { await api('/api/combined/trackers', 'POST', { key, rules, mode, offset, channels, format }); closeModal(); await refresh(); combinedPage(); toast('Source ajoutée à la prédiction combinée.'); }
-      catch (e) { toast(e.message, 'error'); }
+      const name = val('cnew-name');
+      try {
+        const r = await api('/api/combined/trackers', 'POST', { keys, rules, channels, format, name });
+        closeModal(); await refresh(); combinedPage();
+        toast(`${r.created?.length || keys.length} source(s) ajoutée(s) à la prédiction combinée.`);
+      } catch (e) { toast(e.message, 'error'); }
     }
     async function updateCombinedTracker(id) {
       const rules = readCombinedRules('ct-' + id);
-      const { mode, offset } = readCombinedMode('ct-' + id);
       const { channels, format } = readCombinedChannelFormat('ct-' + id);
-      try { await api(`/api/combined/trackers/${encodeURIComponent(id)}`, 'PUT', { rules, mode, offset, channels, format }); await refresh(); combinedPage(); toast('Réglages mis à jour.'); }
+      const name = val(`ct-${id}-name`);
+      try { await api(`/api/combined/trackers/${encodeURIComponent(id)}`, 'PUT', { rules, channels, format, name }); await refresh(); combinedPage(); toast('Réglages mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function removeCombinedTracker(id) {
