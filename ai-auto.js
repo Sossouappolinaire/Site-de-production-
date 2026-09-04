@@ -245,7 +245,13 @@ function runLocal() {
 }
 
 async function runRemote() {
-  if (!ai.keyLooksValid()) return null;
+  // CORRECTIF : ce garde ne testait QUE la clé Pollinations — si l'admin
+  // n'avait configuré QUE Gemini, Groq ou OpenRouter (sans Pollinations),
+  // l'analyse automatique ne se lançait JAMAIS, alors que chat()/
+  // chatAttempts() (voir ai-analyzer.js) sait très bien utiliser n'importe
+  // lequel de ces fournisseurs. On accepte maintenant n'importe quelle clé
+  // configurée, comme le fait déjà l'appel réel plus bas.
+  if (!ai.keyLooksValid() && !ai.geminiConfigured() && !ai.groqConfigured() && !ai.openrouterConfigured()) return null;
   const games = [...(state.history || [])].slice(0, 60);
   if (games.length < 6) return null;
   try {
@@ -322,7 +328,7 @@ function stop() {
 function status() {
   return {
     ...auto,
-    keyConfigured: ai.keyLooksValid(),
+    keyConfigured: ai.keyLooksValid() || ai.geminiConfigured() || ai.groqConfigured() || ai.openrouterConfigured(),
     model: config.POLLINATIONS.MODEL,
     localIntervalMs: config.AI_LOCAL_INTERVAL_MS,
     remoteIntervalMs: config.AI_REMOTE_INTERVAL_MS,

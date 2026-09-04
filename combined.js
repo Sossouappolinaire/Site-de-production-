@@ -30,6 +30,7 @@ const db = require('./db');
 const fmt = require('./formats');
 const { state, hasSuit, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
+const formationRelay = require('./formation-relay');
 
 const LEVEL_KEYS = ['r1', 'r2', 'r3', 'perdue'];
 const LEVEL_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage 3', perdue: 'Perdue' };
@@ -117,12 +118,22 @@ function normalizeMode(m) {
   return m === 'inverse' || m === 'meme' ? m : 'relais';
 }
 
+// CORRECTIF (demande admin) : le mode (relais / même costume+w / inverse+w)
+// et le décalage +w sont désormais réglables INDÉPENDAMMENT pour CHAQUE
+// niveau de rattrapage (r1/r2/r3/perdue), pas un seul réglage partagé pour
+// toute la source — un rattrapage 1 peut relayer normalement pendant qu'un
+// rattrapage 3 prédit l'inverse +6, par exemple.
 function sanitizeRules(input) {
   const src = input && typeof input === 'object' ? input : {};
   const out = {};
   for (const k of LEVEL_KEYS) {
     const raw = src[k] || {};
-    out[k] = { enabled: !!raw.enabled, need: Math.max(1, Math.min(20, parseInt(raw.need, 10) || 1)) };
+    out[k] = {
+      enabled: !!raw.enabled,
+      need: Math.max(1, Math.min(20, parseInt(raw.need, 10) || 1)),
+      mode: normalizeMode(raw.mode),
+      offset: Math.max(1, Math.min(50, parseInt(raw.offset, 10) || 5)),
+    };
   }
   return out;
 }
@@ -182,8 +193,6 @@ function applySaved(saved) {
       key: t.key,
       name: t.name || (optionByKey(t.key) || {}).name || t.key,
       rules: sanitizeRules(t.rules),
-      mode: normalizeMode(t.mode),
-      offset: Math.max(1, Math.min(50, parseInt(t.offset, 10) || 5)),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       format: t.format ? fmt.clampFormat(t.format) : null,
       streakKind: t.streakKind || null,
@@ -214,6 +223,8 @@ function applySaved(saved) {
   panel.lastScanAt = saved.lastScanAt || null;
 }
 
+// Crée UNE source suivie. Voir addTrackers() ci-dessous pour en ajouter
+// plusieurs à la fois (demande admin : sélection multi-stratégies).
 function addTracker(key, rules, extra = {}) {
   const opt = optionByKey(key);
   if (!opt) throw new Error('Source inconnue pour la prédiction combinée.');
@@ -224,10 +235,10 @@ function addTracker(key, rules, extra = {}) {
   const tracker = {
     id: `ct-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     key: opt.key,
-    name: opt.name,
+    // nom personnalisé (demande admin : « donner un nom une fois fini ») —
+    // à défaut, on retombe sur le nom de la source comme avant.
+    name: (extra.name && String(extra.name).trim()) || opt.name,
     rules: clean,
-    mode: normalizeMode(extra.mode),
-    offset: Math.max(1, Math.min(50, parseInt(extra.offset, 10) || 5)),
     channels: parseChannels(extra.channels),
     format: extra.format ? fmt.clampFormat(extra.format) : null,
     streakKind: null,
@@ -244,9 +255,29 @@ function addTracker(key, rules, extra = {}) {
   return tracker;
 }
 
+// Ajoute PLUSIEURS sources à la fois (demande admin), avec LES MÊMES règles
+// pour chacune — un appel, plusieurs trackers créés d'un coup. `keys` est un
+// tableau de clés de sources (voir options()).
+function addTrackers(keys, rules, extra = {}) {
+  const list = Array.isArray(keys) ? keys : [keys];
+  if (!list.length) throw new Error('Sélectionne au moins une stratégie ou une formation.');
+  const created = [];
+  const errors = [];
+  for (const key of list) {
+    try { created.push(addTracker(key, rules, extra)); }
+    catch (e) { errors.push(`${key} : ${e.message}`); }
+  }
+  if (!created.length) throw new Error(errors[0] || 'Aucune source ajoutée.');
+  return { created, errors };
+}
+
 function updateTracker(id, patch = {}) {
   const tracker = panel.trackers.find((t) => t.id === id);
   if (!tracker) return null;
+  if (patch.name !== undefined) {
+    const clean = String(patch.name || '').trim();
+    if (clean) tracker.name = clean; // vide = on garde le nom actuel (jamais de nom vide)
+  }
   if (patch.rules !== undefined) {
     const clean = sanitizeRules(patch.rules);
     if (!LEVEL_KEYS.some((k) => clean[k].enabled)) {
@@ -257,8 +288,6 @@ function updateTracker(id, patch = {}) {
     tracker.streakCount = 0;
     tracker.armed = false;
   }
-  if (patch.mode !== undefined) tracker.mode = normalizeMode(patch.mode);
-  if (patch.offset !== undefined) tracker.offset = Math.max(1, Math.min(50, parseInt(patch.offset, 10) || 5));
   if (patch.channels !== undefined) tracker.channels = parseChannels(patch.channels);
   if (patch.format !== undefined) tracker.format = patch.format ? fmt.clampFormat(patch.format) : null;
   persist();
@@ -289,19 +318,39 @@ async function relayNext(tracker, pred) {
   if (!sourceSuit) return;
   await send(tracker, {
     target: pred.target, suit: sourceSuit, sourceTarget: pred.target, sourceSuit,
-    kind: resultKindLabelFor(tracker),
+    kind: resultKindLabelFor(tracker), mode: 'relais',
   });
 }
 
-async function synthesize(tracker, pred) {
+async function synthesize(tracker, pred, rule) {
   const sourceSuit = pred.suit || null;
   if (!sourceSuit) return;
-  const suit = tracker.mode === 'inverse' ? (strategies.INVERSE[sourceSuit] || sourceSuit) : sourceSuit;
-  const target = pred.target + tracker.offset;
-  await send(tracker, { target, suit, sourceTarget: pred.target, sourceSuit, kind: resultKindLabelFor(tracker) });
+  const suit = rule.mode === 'inverse' ? (strategies.INVERSE[sourceSuit] || sourceSuit) : sourceSuit;
+  const target = pred.target + rule.offset;
+  await send(tracker, { target, suit, sourceTarget: pred.target, sourceSuit, kind: resultKindLabelFor(tracker), mode: rule.mode });
+}
+
+// CORRECTIF (demande admin) : les sources « formation: » n'étaient qu'un
+// ALIAS COSMÉTIQUE — elles suivaient exactement les mêmes prédictions que
+// la stratégie brute, sans jamais vérifier la fiabilité de la formation.
+// Résultat : « la formation » prédisait tout, sans analyser ni chercher le
+// meilleur moment. Désormais, une source « formation: » n'avance QUE quand
+// formationRelay.formationTrusted() dit que la formation est FIABLE pour
+// cette stratégie EN CE MOMENT (formation.js validée + avis IA pas « à
+// mettre en pause », voir formation-relay.js) — sinon le suivi est
+// simplement mis en PAUSE (rien n'avance, rien ne se déclenche) jusqu'à ce
+// que la formation redevienne fiable.
+function isFormationSource(key) {
+  return key.startsWith('formation:');
 }
 
 async function processTracker(tracker) {
+  if (isFormationSource(tracker.key)) {
+    const base = baseKeyOf(tracker.key);
+    const trustKey = base === 'ia' ? 'predit' : base; // formation.js utilise la clé 'predit' pour le panneau IA
+    const trust = formationRelay.formationTrusted(trustKey);
+    if (!trust.ok) return; // formation pas (ou plus) fiable : on ne traite rien ce tour-ci
+  }
   const list = trackerPredictions(tracker.key);
   for (const pred of list) {
     if (pred.target <= tracker.lastSeenTarget) continue;
@@ -325,18 +374,19 @@ async function processTracker(tracker) {
     else { tracker.streakKind = kind; tracker.streakCount = 1; }
     const rule = tracker.rules[kind];
     if (rule && rule.enabled && tracker.streakCount >= rule.need) {
-      // 3 modes possibles (voir addTracker/updateTracker) :
+      // 3 modes possibles PAR RÈGLE (r1/r2/r3/perdue ont chacune leur
+      // propre mode + décalage, voir sanitizeRules) :
       //   'relais'  (par défaut) → on ARME, et on relaie la VRAIE prochaine
       //             prédiction naturelle de la stratégie source, dès
       //             qu'elle apparaît (voir plus haut, tracker.armed).
       //   'meme'    → prédiction synthétisée : même costume que la
-      //             dernière occurrence de la série, +w jeux plus loin.
+      //             dernière occurrence de la série, + rule.offset jeux.
       //   'inverse' → pareil, mais avec le costume inverse.
-      if (tracker.mode === 'relais') {
+      if (rule.mode === 'relais') {
         tracker.armed = true;
         tracker.armedKind = kind; // pour l'historique (voir resultKindLabelFor)
       } else {
-        await synthesize(tracker, pred);
+        await synthesize(tracker, pred, rule);
       }
       tracker.streakKind = null;
       tracker.streakCount = 0;
@@ -380,7 +430,7 @@ async function send(tracker, syn) {
   tracker.lastSentAt = Date.now();
   panel.history.unshift({
     trackerId: tracker.id, trackerName: tracker.name, target: syn.target, suit: syn.suit,
-    sourceTarget: syn.sourceTarget, sourceSuit: syn.sourceSuit, mode: tracker.mode,
+    sourceTarget: syn.sourceTarget, sourceSuit: syn.sourceSuit, mode: syn.mode || 'relais',
     triggeredBy: syn.kind, sentAt: Date.now(),
   });
   panel.history = panel.history.slice(0, 100);
@@ -501,8 +551,8 @@ function statusView() {
     ...config(),
     options: options(),
     trackers: panel.trackers.map((t) => ({
-      id: t.id, key: t.key, name: t.name, rules: t.rules, mode: t.mode, offset: t.offset,
-      channels: t.channels, format: t.format, streakKind: t.streakKind, streakCount: t.streakCount, armed: t.armed,
+      id: t.id, key: t.key, name: t.name, rules: t.rules,
+      channels: t.channels, format: t.format, streakKind: t.streakKind, streakCount: t.streakCount, armed: t.armed, armedKind: t.armedKind,
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),
@@ -515,6 +565,6 @@ function statusView() {
 
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
-  options, addTracker, updateTracker, removeTracker,
+  options, addTracker, addTrackers, updateTracker, removeTracker,
   restore, restoreFromDb, parseChannels,
 };

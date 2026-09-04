@@ -1801,14 +1801,18 @@ app.post('/api/combined/scan', async (req, res) => {
 
 app.post('/api/combined/trackers', async (req, res) => {
   try {
-    const key = req.body && req.body.key;
-    const t = combined.addTracker(key, req.body && req.body.rules, {
+    // accepte soit `keys` (tableau, sélection multiple — demande admin),
+    // soit `key` (rétrocompatibilité, une seule source) — mêmes règles
+    // appliquées à chacune, en un seul appel (voir combined.addTrackers).
+    const keys = Array.isArray(req.body && req.body.keys)
+      ? req.body.keys
+      : (req.body && req.body.key ? [req.body.key] : []);
+    const r = combined.addTrackers(keys, req.body && req.body.rules, {
       channels: req.body && req.body.channels,
       format: req.body && req.body.format,
-      mode: req.body && req.body.mode,
-      offset: req.body && req.body.offset,
+      name: req.body && req.body.name,
     });
-    res.json({ ok: true, tracker: t, combined: combined.status() });
+    res.json({ ok: true, created: r.created, errors: r.errors, combined: combined.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -1887,7 +1891,7 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     console.log('Tableau de bord sur le port ' + config.PORT);
     startLoop().then(() => {
       if (aiAuto.auto.enabled) aiAuto.start(persist);
-      console.log('🤖 Analyseur IA temps réel démarré (clé environnement : ' + (ai.keyLooksValid() ? 'oui' : 'non configurée') + ')');
+      console.log('🤖 Analyseur IA temps réel démarré (clé configurée : ' + ((ai.keyLooksValid() || ai.geminiConfigured() || ai.groqConfigured() || ai.openrouterConfigured()) ? 'oui' : 'non configurée') + ')');
       // vérification réelle (appel réseau) du quota de chaque clé IA
       // configurée au démarrage, pour que le badge de la page Analyseur IA
       // n'affiche pas juste « clé présente » mais bien « clé valide et

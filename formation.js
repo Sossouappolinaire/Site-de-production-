@@ -104,21 +104,39 @@ function bestFormation(rates) {
   return rates.find((r) => r.n === 1 && r.support >= MIN_SUPPORT) || null;
 }
 
+// CORRECTIF (bug racine) : bestFormation() ci-dessus a un repli (dernière
+// ligne) qui renvoie le palier n=1 dès que l'échantillon est suffisant,
+// SANS revérifier le taux — un palier à 20% de réussite avec 8 observations
+// passait donc ce repli et ressortait comme "best" au même titre qu'un vrai
+// palier fiable. Tout code qui décidait de la fiabilité avec `!!best` était
+// donc silencieusement faux dans ce cas précis. isReliable() est le SEUL
+// endroit qui doit servir à répondre « peut-on faire confiance à ce best ? »
+// — n'utilisez plus jamais `!!best` seul pour ça.
+function isReliable(best) {
+  return !!best && best.support >= MIN_SUPPORT && best.rate >= THRESHOLD;
+}
+
 function findingText(name, events, rates) {
   const lines = [];
   if (!rates.length) return lines;
   const best = bestFormation(rates);
   if (best) {
+    // CORRECTIF : ne plus affirmer une formation comme si elle était acquise
+    // quand `best` vient du repli n=1 (échantillon suffisant mais taux sous
+    // le seuil de fiabilité) — voir isReliable() ci-dessus. On garde
+    // l'information (utile pour l'admin), mais avec une réserve explicite,
+    // au lieu de la présenter avec la même assurance qu'un vrai palier fiable.
+    const caveat = isReliable(best) ? '' : ' — échantillon encore faible ou taux sous le seuil de fiabilité, à confirmer';
     if (best.n === 1) {
       lines.push(
         `J'ai remarqué que pour « ${name} », quand une prédiction perd ou passe par un rattrapage, ` +
-        `la prédiction suivante est validée dans ${best.rate}% des cas (${best.hits}/${best.support} observations).`
+        `la prédiction suivante est validée dans ${best.rate}% des cas (${best.hits}/${best.support} observations)${caveat}.`
       );
     } else {
       lines.push(
         `J'ai remarqué que pour « ${name} », quand une prédiction perd ou passe par un rattrapage, ` +
         `les ${best.n} prédictions suivantes sont validées d'affilée dans ${best.rate}% des cas ` +
-        `(${best.hits}/${best.support} observations) — une formation probable de ${best.n}.`
+        `(${best.hits}/${best.support} observations) — une formation probable de ${best.n}${caveat}.`
       );
     }
   }
@@ -394,7 +412,7 @@ async function buildEntry(key, name, list, silentCfg) {
     formationLength: best ? best.n : null,
     rate: best ? best.rate : null,
     support: best ? best.support : 0,
-    reliable: !!best,
+    reliable: isReliable(best),
     findings,
     customerFindings,
     rates,

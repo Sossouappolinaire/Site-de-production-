@@ -594,4 +594,4 @@ function status() {
   };
 }
 
-module.exports = { panel, setSender, restore, configure, setStrategy, sendLesson, lessonText, lessonOf, lessonTitleOf, tick, status, options, parseChannels };
+module.exports = { panel, setSender, restore, configure, setStrategy, sendLesson, lessonText, lessonOf, lessonTitleOf, tick, status, options, parseChannels, formationTrusted };
