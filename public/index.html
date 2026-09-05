@@ -1350,7 +1350,8 @@ Faites-en bon usage !
         const head = relay ? `<div class="panel" style="margin-bottom:12px"><div class="split"><b>📢 Envoi de la formation dans le canal</b><span class="tag">${esc(String(relay.sentCount || 0))} envoi(s)</span></div>
           <p class="small">Coche une stratégie ci-dessous : après une perte, le bot lit la formation de cette stratégie (ex. « attendre 2 prédictions avant de jouer »), laisse passer ce nombre de prédictions, puis publie la prédiction confirmée (jeu + costume + taux réellement mesuré) dans le canal. Si elle est gagnée, il envoie « Bingo, Sossou Kouamé l'avait déjà dit ». Chaque stratégie a son propre message et un nom de code sans rapport avec sa logique. Si la case n'est PAS cochée, le bot envoie après chaque perte : « Écrivez à l'administrateur pour prendre la formation de comment jouer à cette stratégie ».</p>
           <div class="field"><label>Canal Telegram de la formation</label><input id="formationRelayChannel" placeholder="-1001234567890 ou @moncanal" value="${esc((relay.channels || []).join(', '))}"></div>
-          <div class="field" style="margin-top:8px"><label>Rattrapage des prédictions confirmées par Formation <span class="small">(n'abaisse jamais le rattrapage déjà prévu par la stratégie source — ne fait que l'augmenter si besoin)</span></label><input id="formationRelayMaxR" type="number" min="0" max="10" value="${esc(String(relay.maxR ?? 3))}"></div>
+          <div class="field" style="margin-top:8px"><label>Rattrapage des prédictions confirmées par Formation <span class="small">(imposé sur chaque prédiction envoyée dans le canal, quel que soit le rattrapage de sa stratégie source)</span></label><input id="formationRelayMaxR" type="number" min="0" max="10" value="${esc(String(relay.maxR ?? 3))}"></div>
+          <div class="field" style="margin-top:8px"><label>Format de prédiction (1 → ${esc(String((snapshot && snapshot.formatCount) || 89))}) <span class="small">(style du message publié dans le canal ; voir la page Formats)</span></label><input id="formationRelayFormat" type="number" min="1" max="${esc(String((snapshot && snapshot.formatCount) || 89))}" value="${esc(String(relay.format ?? 1))}"></div>
           <div class="toolbar"><button class="button primary" onclick="saveFormationRelayChannel()">Enregistrer</button></div>
           ${relay.lastError ? `<div class="notice warn">${esc(relay.lastError)}</div>` : ''}</div>` : '';
         box.innerHTML = head + list.map(s => {
@@ -1362,7 +1363,11 @@ Faites-en bon usage !
           return `<div class="panel" style="margin-bottom:12px"><div class="split"><b>${esc(s.name)}${rl && rl.codeName ? ` <span class="tag">nom de code : ${esc(rl.codeName)}</span>` : ''}${rl && rl.ai ? ' <span class="tag">créée par l’IA</span>' : ''}</b><span class="tag ${s.reliable ? (s.rate >= 75 ? 'good' : 'warn') : ''}">${s.reliable ? `Formation de ${esc(String(s.formationLength))} · ${esc(String(s.rate))}%` : 'échantillon insuffisant'} · ${esc(String(s.troubleEvents))} incident(s)</span></div>
           ${s.findings.length ? `<ul class="small">${s.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : `<p class="small muted">Pas encore assez de pertes/rattrapages observés pour cette stratégie (minimum ${esc(String(r.minSupport || 5))} incidents).</p>`}
           ${rl ? `<label class="small" style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" ${rl.enabled ? 'checked' : ''} onchange="toggleFormationRelay('${esc(s.key)}', this.checked)"> Envoyer la formation de cette stratégie dans le canal</label>
-          <div class="field" style="margin-top:8px"><label>Canal propre à cette stratégie (facultatif)</label><input id="formationRelayChan-${esc(s.key)}" placeholder="Laisser vide pour utiliser le canal ci-dessus" value="${esc((rl.channels || []).join(', '))}" onchange="saveFormationRelayStrategyChannel('${esc(s.key)}')"></div>
+          <div class="field" style="margin-top:8px"><label>ID du canal propre à cette stratégie (facultatif)</label><input id="formationRelayChan-${esc(s.key)}" placeholder="Laisser vide pour utiliser le canal ci-dessus" value="${esc((rl.channels || []).join(', '))}" onchange="saveFormationRelayStrategyChannel('${esc(s.key)}')"></div>
+          <div class="two-col" style="margin-top:8px"><div class="field"><label>Format de prédiction (0 = celui du panneau)</label><input id="formationRelayFmt-${esc(s.key)}" type="number" min="0" max="${esc(String((snapshot && snapshot.formatCount) || 89))}" value="${esc(String(rl.format || 0))}" onchange="saveFormationRelayStrategySettings('${esc(s.key)}')"></div>
+          <div class="field"><label>Rattrapage (vide = celui du panneau)</label><input id="formationRelayMaxR-${esc(s.key)}" type="number" min="0" max="10" placeholder="${esc(String(relay ? (relay.maxR ?? 3) : 3))}" value="${esc(String(rl.maxR === '' || rl.maxR == null ? '' : rl.maxR))}" onchange="saveFormationRelayStrategySettings('${esc(s.key)}')"></div></div>
+          <p class="small muted">Appliqué actuellement : format ${esc(String(rl.effectiveFormat || 1))} · rattrapage +${esc(String(rl.effectiveMaxR ?? 3))}.</p>
+          ${rl.trust && !rl.trust.ok ? `<div class="notice warn">Dernière perte (jeu N°${esc(String(rl.trust.target))}) : aucune prédiction confirmée — ${esc(rl.trust.reason || 'formation non validée')}.</div>` : ''}
           <p class="small muted">État : ${etat} · ${esc(String(rl.sentCount || 0))} message(s) envoyé(s).</p>` : ''}</div>`;
         }).join('')
           + (r.remote ? `<div class="panel" style="margin-top:12px"><div class="split"><b>${esc(r.remote.title || 'Avis IA')}</b><span class="tag">${formatDate(r.remoteAt)}</span></div><p class="small">${esc(r.remote.observation || '')}</p>${r.remote.meilleureStrategie ? `<div class="notice">Formation la plus exploitable selon l’IA : <b>${esc(r.remote.meilleureStrategie)}</b></div>` : ''}${(r.remote.findings || []).length ? `<ul class="small">${r.remote.findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}${r.remote.risks ? `<p class="small muted">${esc(r.remote.risks)}</p>` : ''}</div>` : '');
@@ -1370,6 +1375,12 @@ Faites-en bon usage !
     }
     async function toggleFormationRelay(key, enabled) {
       try { await api('/api/formation/relay/strategy', 'POST', { key, enabled }); toast(enabled ? 'Formation envoyée dans le canal pour cette stratégie.' : 'Envoi désactivé pour cette stratégie.'); await loadFormation(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveFormationRelayStrategySettings(key) {
+      const f = $('#formationRelayFmt-' + key);
+      const m = $('#formationRelayMaxR-' + key);
+      try { await api('/api/formation/relay/strategy', 'POST', { key, format: f ? f.value : undefined, maxR: m ? m.value : undefined }); toast('Réglages de cette formation enregistrés.'); await loadFormation(); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function saveFormationRelayStrategyChannel(key) {
@@ -1380,7 +1391,8 @@ Faites-en bon usage !
     async function saveFormationRelayChannel() {
       const el = $('#formationRelayChannel'); if (!el) return;
       const maxREl = $('#formationRelayMaxR');
-      try { await api('/api/formation/relay/config', 'POST', { channels: el.value, enabled: true, maxR: maxREl ? maxREl.value : undefined }); toast('Réglages de la formation enregistrés.'); await loadFormation(); }
+      const fmtEl = $('#formationRelayFormat');
+      try { await api('/api/formation/relay/config', 'POST', { channels: el.value, enabled: true, maxR: maxREl ? maxREl.value : undefined, format: fmtEl ? fmtEl.value : undefined }); toast('Réglages de la formation enregistrés.'); await loadFormation(); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function runFormation(remote) { const box = $('#aiFormation'); if (box) box.innerHTML = '<div class="loading">Analyse en cours…</div>'; try { await api('/api/formation/run', 'POST', { remote: !!remote }); await loadFormation(); toast('Formation mise à jour.'); } catch(e) { toast(e.message, 'error'); } }
