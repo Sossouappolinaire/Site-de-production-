@@ -1,94 +1,14 @@
 {
-  "afterLoss": {
-    "config": {
-      "enabled": true,
-      "channels": [],
-      "siteChannelId": null,
-      "format": 1,
-      "maxR": 1
-    },
-    "trackers": [
-      {
-        "id": "t-1787213442912-ov0ny",
-        "key": "costume",
-        "name": "Costume par numéro",
-        "triggers": {
-          "r1": {
-            "enabled": false,
-            "n": 0
-          },
-          "r2": {
-            "enabled": false,
-            "n": 0
-          },
-          "r3": {
-            "enabled": false,
-            "n": 0
-          },
-          "perdue": {
-            "enabled": true,
-            "n": 0
-          }
-        },
-        "repeat": {
-          "enabled": false,
-          "lead": 5
-        },
-        "channels": [],
-        "siteChannelId": null,
-        "format": null,
-        "lastRepeatSource": 0,
-        "counting": false,
-        "armedTrigger": null,
-        "armedNeeded": 0,
-        "armedSeen": 0,
-        "armed": false,
-        "armedAt": null,
-        "lastSeenTarget": 0,
-        "sentCount": 0,
-        "lastSentAt": null,
-        "createdAt": 1787213442912
-      }
+  "formationRelay": {
+    "enabled": true,
+    "channels": [
+      "-100123"
     ],
+    "maxR": 4,
+    "format": 5,
+    "strategies": {},
     "history": [],
-    "pendingMessages": [
-      {
-        "id": "p1",
-        "trackerId": "t-1787213442912-ov0ny",
-        "target": 100,
-        "suit": "❤️",
-        "kind": "suit",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "annulé",
-        "messages": [],
-        "createdAt": 1787213442912,
-        "resolvedAt": 1787213442918
-      },
-      {
-        "id": "p2",
-        "trackerId": "t-1787213442912-ov0ny",
-        "target": 110,
-        "suit": "❤️",
-        "kind": "suit",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "annulé",
-        "messages": [],
-        "createdAt": 1787213442912,
-        "resolvedAt": 1787213442918
-      }
-    ],
     "sentCount": 0,
-    "lastSentAt": null,
-    "lastScanAt": null
+    "lastSentAt": null
   }
 }

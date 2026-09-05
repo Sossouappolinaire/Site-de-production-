@@ -24,17 +24,21 @@ const store = require('./store');
 const { state } = require('./predictor');
 const predit = require('./predit');
 const formation = require('./formation');
+const advisor = require('./strategy-advisor');
+const fmt = require('./formats');
 
 const panel = {
   enabled: true,
   channels: [],          // canal(aux) Telegram par défaut du panneau Formation
   // Rattrapage propre aux prédictions CONFIRMÉES par Formation (demande
-  // admin) — une prédiction choisie par Formation comme fiable mérite plus
-  // de patience que le rattrapage par défaut de sa stratégie source (souvent
-  // 1 ou 2) avant d'être déclarée perdue. Appliqué au moment de l'armement
-  // (voir processStrategy ci-dessous) : ne réduit jamais le maxR déjà prévu
-  // par la stratégie source, seulement l'augmente si besoin.
+  // admin) — IMPOSÉ sur la prédiction confirmée, quel que soit le
+  // rattrapage par défaut de sa stratégie source. Appliqué au moment de
+  // l'armement (voir processStrategy ci-dessous).
   maxR: 3,
+  // Format de prédiction (1 → 89, voir formats.js) utilisé pour la
+  // prédiction confirmée publiée dans le canal. Chaque stratégie peut
+  // définir le sien (entry.format) ; 0 = utiliser celui du panneau.
+  format: 1,
   strategies: {},        // key -> { enabled, channels, counting, needed, seen, armed, pending, lastSeenTarget, sentCount, lastSentAt }
   history: [],           // 100 derniers envois
   sentCount: 0,
@@ -116,6 +120,10 @@ function entryFor(key) {
       sentCount: 0,
       lastSentAt: null,
       codeName: '',
+      format: 0,           // 0 = utiliser le format du panneau
+      maxR: null,          // null = utiliser le rattrapage du panneau
+      channelsNote: '',
+      lastTrust: null,     // dernier diagnostic « pourquoi ça n'a pas prédit »
       text: '',            // contenu de la formation écrit par l'admin (facultatif)
       title: '',           // titre de la formation (facultatif)
       autoSend: false,     // publier automatiquement la formation après chaque perte
@@ -131,6 +139,20 @@ function effectiveChannels(entry) {
   return (entry.channels && entry.channels.length) ? entry.channels : panel.channels;
 }
 
+// format de prédiction : celui de la stratégie s'il est défini, sinon celui
+// du panneau Formation.
+function effectiveFormat(entry) {
+  return fmt.clampFormat(entry && entry.format ? entry.format : panel.format);
+}
+
+// rattrapage imposé aux prédictions confirmées par Formation : celui de la
+// stratégie s'il est défini, sinon celui du panneau.
+function effectiveMaxR(entry) {
+  const own = entry && entry.maxR;
+  if (own !== null && own !== undefined && Number.isFinite(Number(own))) return Number(own);
+  return Number.isFinite(panel.maxR) ? panel.maxR : 3;
+}
+
 // ---------------------------------------------------------------------------
 // Persistance
 // ---------------------------------------------------------------------------
@@ -141,6 +163,7 @@ function persist() {
         enabled: panel.enabled,
         channels: panel.channels,
         maxR: panel.maxR,
+        format: panel.format,
         strategies: panel.strategies,
         history: panel.history.slice(0, 100),
         sentCount: panel.sentCount,
@@ -157,6 +180,7 @@ function restore() {
     panel.enabled = saved.enabled !== false;
     panel.channels = parseChannels(saved.channels);
     if (Number.isFinite(Number(saved.maxR))) panel.maxR = Number(saved.maxR);
+    if (Number.isFinite(Number(saved.format))) panel.format = fmt.clampFormat(saved.format);
     panel.strategies = {};
     if (saved.strategies && typeof saved.strategies === 'object') {
       for (const [key, s] of Object.entries(saved.strategies)) {
@@ -172,6 +196,8 @@ function restore() {
         e.sentCount = Number(s.sentCount) || 0;
         e.lastSentAt = s.lastSentAt || null;
         e.codeName = s.codeName || '';
+        e.format = Number(s.format) || 0;
+        e.maxR = (s.maxR === null || s.maxR === undefined || s.maxR === '') ? null : Number(s.maxR);
         e.text = typeof s.text === 'string' ? s.text : '';
         e.title = typeof s.title === 'string' ? s.title : '';
         e.autoSend = !!s.autoSend;
@@ -197,6 +223,7 @@ function configure(patch = {}) {
     const n = parseInt(patch.maxR, 10);
     if (Number.isFinite(n) && n >= 0 && n <= 10) panel.maxR = n;
   }
+  if (patch.format !== undefined) panel.format = fmt.clampFormat(patch.format);
   persist();
   return status();
 }
@@ -216,6 +243,14 @@ function setStrategy(key, patch = {}) {
     entry.lastSeenTarget = currentMaxTarget(key);
   }
   if (patch.channels !== undefined) entry.channels = parseChannels(patch.channels);
+  if (patch.format !== undefined) {
+    const f = parseInt(patch.format, 10);
+    entry.format = Number.isFinite(f) && f > 0 ? fmt.clampFormat(f) : 0;
+  }
+  if (patch.maxR !== undefined) {
+    const m = parseInt(patch.maxR, 10);
+    entry.maxR = Number.isFinite(m) && m >= 0 && m <= 10 ? m : null;
+  }
   if (patch.text !== undefined) entry.text = String(patch.text == null ? '' : patch.text);
   if (patch.title !== undefined) entry.title = String(patch.title == null ? '' : patch.title);
   if (patch.autoSend !== undefined) entry.autoSend = !!patch.autoSend;
@@ -285,6 +320,39 @@ function adviceOf(key) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// CORRECTIF RACINE (« la formation + les conseils ne sont pas pris en
+// compte ») : formation.js et strategy-advisor.js ne calculaient JAMAIS tout
+// seuls — leur `run()` n'était déclenché que lorsqu'un administrateur ouvrait
+// la page Analyseur IA. Dans la boucle du bot, `formation.status()` était donc
+// vide (`lastRunAt: null`, `strategies: []`) : `formationOf()` renvoyait
+// toujours { length: 0, reliable: false }, `formationTrusted()` refusait
+// systématiquement, et le bouton Formation n'armait donc JAMAIS de prédiction.
+// On rafraîchit maintenant les deux moteurs depuis le relais lui-même, avant
+// chaque scan, avec un cache court pour ne pas les recalculer à chaque tick.
+// ---------------------------------------------------------------------------
+const REFRESH_MS = 60 * 1000;
+let refreshing = false;
+
+async function refreshAnalysis() {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    const st = formation.status();
+    if (!st.lastRunAt || Date.now() - st.lastRunAt > REFRESH_MS) {
+      await formation.run({ remote: false });
+    }
+    const adv = advisor.runtime || {};
+    if (!adv.lastRunAt || Date.now() - adv.lastRunAt > REFRESH_MS) {
+      await advisor.run({ remote: false });
+    }
+  } catch (e) {
+    panel.lastError = `Analyse formation/conseils : ${e.message}`;
+  } finally {
+    refreshing = false;
+  }
+}
+
 function formationTrusted(key) {
   const form = formationOf(key);
   if (!form.reliable) return { ok: false, form, advice: null, reason: 'échantillon encore insuffisant pour cette stratégie' };
@@ -299,26 +367,42 @@ function formationTrusted(key) {
 // Messages envoyés dans le canal
 // ---------------------------------------------------------------------------
 function confirmText(key, pred, form) {
+  const entry = entryFor(key);
   const name = codeNameOf(key);
-  const suit = pred.suit || pred.card || '—';
+  const maxR = effectiveMaxR(entry);
   const attente = form.length > 0
     ? `après une perte, attendre ${form.length} prédiction(s) avant de jouer`
     : 'après une perte, jouer la prédiction suivante';
-  // CORRECTIF (demande admin) : plus de « sûr à 99% » fabriqué de toute
-  // pièce — seulement le taux RÉELLEMENT mesuré par formation.js (déjà
-  // validé fiable à ce stade, voir formationTrusted() plus haut), avec le
-  // rappel explicite que c'est un résultat passé, pas une garantie.
-  return [
-    '📚 <b>FORMATION CONFIRMÉE</b>',
+
+  // La prédiction elle-même est rendue avec le FORMAT choisi pour cette
+  // formation (réglage du panneau ou de la stratégie) — même bibliothèque
+  // de styles que les autres panneaux (formats.js / tg-formats.js).
+  const rendered = fmt.renderMessage(effectiveFormat(entry), {
+    gameNumber: pred.target,
+    suit: pred.suit || pred.card,
+    strategy: name,
+    maxR,
+    status: 'en attente',
+  });
+  const html = rendered.parse_mode === 'HTML';
+  const esc = (v) => (html
+    ? String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    : String(v));
+  const b = (v) => (html ? `<b>${esc(v)}</b>` : String(v));
+
+  const text = [
+    `📚 ${b('FORMATION CONFIRMÉE')}`,
     '',
-    `Jouer cette prédiction — la formation ET l'avis IA la valident actuellement ✅`,
+    rendered.text,
     '',
-    `🎯 Jeu prédit : <b>N°${pred.target}</b>`,
-    `🃏 Costume prédit : <b>${suit}</b>`,
-    form.rate ? `📊 Taux mesuré à ce palier : <b>${form.rate}%</b> (résultat passé, pas une garantie)` : '',
+    "Jouer cette prédiction — la formation ET l'avis IA la valident actuellement ✅",
+    form.rate ? `📊 Taux mesuré à ce palier : ${b(form.rate + '%')} (résultat passé, pas une garantie)` : '',
+    `🔁 Rattrapage appliqué : +${maxR}`,
     '',
-    `📘 Formation « ${name} » : ${attente}.`,
+    `📘 Formation « ${esc(name)} » : ${esc(attente)}.`,
   ].filter(Boolean).join('\n');
+
+  return { text, parse_mode: rendered.parse_mode || null };
 }
 
 function bingoText(key, pending) {
@@ -333,7 +417,10 @@ function bingoText(key, pending) {
   ].join('\n');
 }
 
-async function send(key, entry, text) {
+async function send(key, entry, message) {
+  const payload = (message && typeof message === 'object')
+    ? message
+    : { text: String(message || ''), parse_mode: 'HTML' };
   const channels = effectiveChannels(entry);
   if (!channels.length) {
     panel.lastError = `Aucun canal configuré pour la formation « ${codeNameOf(key)} »`;
@@ -344,7 +431,7 @@ async function send(key, entry, text) {
   let ok = false;
   for (const id of channels) {
     try {
-      await bot.sendMessage(id, text, { parse_mode: 'HTML' });
+      await bot.sendMessage(id, payload.text, payload.parse_mode ? { parse_mode: payload.parse_mode } : {});
       ok = true;
     } catch (e) { panel.lastError = `${id} : ${e.message}`; }
   }
@@ -392,12 +479,11 @@ async function processStrategy(key) {
     if (entry.armed) {
       // c'est la prédiction annoncée par la formation : on la publie.
       const form = formationOf(key);
-      // Rattrapage propre à Formation (panel.maxR, 3 par défaut) : on
-      // l'applique à LA PRÉDICTION SOURCE elle-même (pas juste au texte
-      // affiché) pour qu'elle bénéficie réellement de plus de tentatives
-      // avant d'être déclarée perdue — jamais moins que ce que la stratégie
-      // source prévoyait déjà.
-      if (Number.isFinite(panel.maxR) && panel.maxR > (pred.maxR || 0)) pred.maxR = panel.maxR;
+      // Rattrapage propre à Formation (panel.maxR, 3 par défaut) : IMPOSÉ
+      // (demande admin), pas seulement relevé si inférieur — toute
+      // prédiction confirmée par le bouton Formation utilise exactement ce
+      // rattrapage, quel que soit celui de la stratégie source.
+      pred.maxR = effectiveMaxR(entry);
       const sent = await send(key, entry, confirmText(key, pred, form));
       if (sent) {
         entry.pending = { target, suit: pred.suit || pred.card || '', formationLength: form.length };
@@ -434,6 +520,12 @@ async function processStrategy(key) {
       // déconseille pas actuellement cette stratégie. Sinon, on continue de
       // surveiller sans rien annoncer avec une fausse assurance.
       const trust = formationTrusted(key);
+      entry.lastTrust = {
+        at: Date.now(), target, ok: trust.ok, reason: trust.reason,
+        rate: trust.form ? trust.form.rate : null,
+        length: trust.form ? trust.form.length : null,
+        advice: trust.advice ? trust.advice.verdict : null,
+      };
       if (!trust.ok) {
         entry.counting = false;
         entry.armed = false;
@@ -562,6 +654,8 @@ async function sendLesson(key) {
 
 async function tick() {
   if (!panel.enabled) return status();
+  // formation + conseils IA à jour AVANT toute décision (voir refreshAnalysis)
+  await refreshAnalysis();
   try {
     for (const opt of options()) {
       const entry = entryFor(opt.key);
@@ -581,6 +675,7 @@ function status() {
     enabled: panel.enabled,
     channels: panel.channels,
     maxR: panel.maxR,
+    format: panel.format,
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -595,6 +690,11 @@ function status() {
         codeName: codeNameOf(o.key),
         enabled: !!e.enabled,
         channels: e.channels || [],
+        format: e.format || 0,
+        effectiveFormat: effectiveFormat(e),
+        maxR: (e.maxR === null || e.maxR === undefined) ? '' : e.maxR,
+        effectiveMaxR: effectiveMaxR(e),
+        trust: e.lastTrust || null,
         counting: !!e.counting,
         needed: e.needed || 0,
         seen: e.seen || 0,
@@ -614,4 +714,4 @@ function status() {
   };
 }
 
-module.exports = { panel, setSender, restore, configure, setStrategy, sendLesson, lessonText, lessonOf, lessonTitleOf, tick, status, options, parseChannels, formationTrusted };
+module.exports = { panel, setSender, restore, configure, setStrategy, refreshAnalysis, effectiveFormat, effectiveMaxR, sendLesson, lessonText, lessonOf, lessonTitleOf, tick, status, options, parseChannels, formationTrusted };

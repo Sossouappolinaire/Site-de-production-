@@ -517,6 +517,20 @@ async function run({ remote = false } = {}) {
     const preditList = (predit.panel.predictions || []).map((p) => ({ target: p.target, status: p.status, step: p.step, suit: p.suit }));
     out.push(await buildEntry('predit', 'Prédit (IA)', preditList, {}));
 
+    // CORRECTIF : les stratégies créées par l'IA (ai-auto.js) n'avaient
+    // AUCUNE entrée de formation — le bouton Formation ne pouvait donc
+    // jamais les considérer comme fiables et ne prédisait jamais pour
+    // elles. On calcule maintenant leur formation avec le même moteur.
+    try {
+      const aiAuto = require('./ai-auto');
+      for (const s of (aiAuto.listStrategies() || [])) {
+        const list = (state.predictions || [])
+          .filter((p) => p.strategy === s.id || p.strategy === `ai:${s.id}`)
+          .map((p) => ({ target: p.target, status: p.status, step: p.step, suit: p.suit }));
+        out.push(await buildEntry(`ai:${s.id}`, s.name, list, {}));
+      }
+    } catch (_) { /* module IA indisponible : on continue sans */ }
+
     out.sort((a, b) => (Number(b.reliable) - Number(a.reliable)) || (b.formationLength || 0) - (a.formationLength || 0) || (b.rate || 0) - (a.rate || 0));
 
     runtime.strategies = out;
