@@ -26,8 +26,10 @@ const ai = require('./ai-analyzer');
 // un taux pour un palier donné : sous ce seuil, le chiffre serait instable.
 const MIN_SUPPORT = 5;
 // taux minimum pour qu'un palier soit considéré comme une « formation »
-// fiable plutôt qu'une simple coïncidence.
-const THRESHOLD = 65;
+// fiable plutôt qu'une simple coïncidence — relevé à 80% (demande admin) :
+// en dessous, la stratégie reste analysée/affichée normalement, mais
+// formation-relay.js (canal de confirmation) refuse de s'en servir.
+const THRESHOLD = 80;
 // on regarde jusqu'à 5 prédictions d'affilée après l'incident.
 const MAX_N = 5;
 

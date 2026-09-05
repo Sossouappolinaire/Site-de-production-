@@ -1616,7 +1616,13 @@ app.post('/api/ai/auto/toggle', (req, res) => {
 app.post('/api/ai/key', async (req, res) => {
   ai.setApiKey(req.body && req.body.key);
   const configured = ai.keyLooksValid();
-  const quota = configured ? await ai.checkPollinationsQuota() : null;
+  // CORRECTIF : on appelait checkPollinationsQuota() directement, dont le
+  // résultat repartait dans la réponse (toast affiché une fois) mais SANS
+  // jamais mettre à jour le cache lu par /api/state (getLastQuotaCheck()) —
+  // le badge permanent de la page retombait donc sur « pas encore vérifiée »
+  // juste après l'enregistrement, donnant l'impression que rien ne s'était
+  // passé. refreshQuotaStatus() revérifie tout ET met le cache à jour.
+  const quota = configured ? (await ai.refreshQuotaStatus()).pollinations : null;
   res.json({ ok: true, configured, quota });
 });
 
@@ -1625,26 +1631,28 @@ app.post('/api/ai/key', async (req, res) => {
 // pour survivre à un redémarrage/redéploiement (voir applyDbConfigs dans bot.js).
 // Chaque route vérifie AUSSI le quota (appel réel minimal au fournisseur) dès
 // que la clé est appliquée, pour confirmer immédiatement à l'admin que le
-// quota existe bien sur cette clé et qu'elle sera utilisée.
+// quota existe bien sur cette clé et qu'elle sera utilisée — et met à jour
+// le cache (refreshQuotaStatus) pour que le badge permanent de la page ne
+// contredise pas le toast affiché juste après l'enregistrement.
 app.post('/api/ai/key/gemini', async (req, res) => {
   ai.setGeminiKey(req.body && req.body.key);
   if (db.ready) await db.setSetting('ai_gemini_key', ai.geminiKey());
   const configured = ai.geminiConfigured();
-  const quota = configured ? await ai.checkGeminiQuota() : null;
+  const quota = configured ? (await ai.refreshQuotaStatus()).gemini : null;
   res.json({ ok: true, configured, quota });
 });
 app.post('/api/ai/key/groq', async (req, res) => {
   ai.setGroqKey(req.body && req.body.key);
   if (db.ready) await db.setSetting('ai_groq_key', ai.groqKey());
   const configured = ai.groqConfigured();
-  const quota = configured ? await ai.checkGroqQuota() : null;
+  const quota = configured ? (await ai.refreshQuotaStatus()).groq : null;
   res.json({ ok: true, configured, quota });
 });
 app.post('/api/ai/key/openrouter', async (req, res) => {
   ai.setOpenrouterKey(req.body && req.body.key);
   if (db.ready) await db.setSetting('ai_openrouter_key', ai.openrouterKey());
   const configured = ai.openrouterConfigured();
-  const quota = configured ? await ai.checkOpenrouterQuota() : null;
+  const quota = configured ? (await ai.refreshQuotaStatus()).openrouter : null;
   res.json({ ok: true, configured, quota });
 });
 

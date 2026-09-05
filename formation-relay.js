@@ -28,6 +28,13 @@ const formation = require('./formation');
 const panel = {
   enabled: true,
   channels: [],          // canal(aux) Telegram par défaut du panneau Formation
+  // Rattrapage propre aux prédictions CONFIRMÉES par Formation (demande
+  // admin) — une prédiction choisie par Formation comme fiable mérite plus
+  // de patience que le rattrapage par défaut de sa stratégie source (souvent
+  // 1 ou 2) avant d'être déclarée perdue. Appliqué au moment de l'armement
+  // (voir processStrategy ci-dessous) : ne réduit jamais le maxR déjà prévu
+  // par la stratégie source, seulement l'augmente si besoin.
+  maxR: 3,
   strategies: {},        // key -> { enabled, channels, counting, needed, seen, armed, pending, lastSeenTarget, sentCount, lastSentAt }
   history: [],           // 100 derniers envois
   sentCount: 0,
@@ -133,6 +140,7 @@ function persist() {
       formationRelay: {
         enabled: panel.enabled,
         channels: panel.channels,
+        maxR: panel.maxR,
         strategies: panel.strategies,
         history: panel.history.slice(0, 100),
         sentCount: panel.sentCount,
@@ -148,6 +156,7 @@ function restore() {
     if (!saved) return status();
     panel.enabled = saved.enabled !== false;
     panel.channels = parseChannels(saved.channels);
+    if (Number.isFinite(Number(saved.maxR))) panel.maxR = Number(saved.maxR);
     panel.strategies = {};
     if (saved.strategies && typeof saved.strategies === 'object') {
       for (const [key, s] of Object.entries(saved.strategies)) {
@@ -184,6 +193,10 @@ function restore() {
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
+  if (patch.maxR !== undefined) {
+    const n = parseInt(patch.maxR, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 10) panel.maxR = n;
+  }
   persist();
   return status();
 }
@@ -379,6 +392,12 @@ async function processStrategy(key) {
     if (entry.armed) {
       // c'est la prédiction annoncée par la formation : on la publie.
       const form = formationOf(key);
+      // Rattrapage propre à Formation (panel.maxR, 3 par défaut) : on
+      // l'applique à LA PRÉDICTION SOURCE elle-même (pas juste au texte
+      // affiché) pour qu'elle bénéficie réellement de plus de tentatives
+      // avant d'être déclarée perdue — jamais moins que ce que la stratégie
+      // source prévoyait déjà.
+      if (Number.isFinite(panel.maxR) && panel.maxR > (pred.maxR || 0)) pred.maxR = panel.maxR;
       const sent = await send(key, entry, confirmText(key, pred, form));
       if (sent) {
         entry.pending = { target, suit: pred.suit || pred.card || '', formationLength: form.length };
@@ -561,6 +580,7 @@ function status() {
   return {
     enabled: panel.enabled,
     channels: panel.channels,
+    maxR: panel.maxR,
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
