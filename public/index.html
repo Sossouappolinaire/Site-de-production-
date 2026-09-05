@@ -1348,9 +1348,10 @@ Faites-en bon usage !
           : (r.strategies || []);
         if (!list.length) { box.innerHTML = '<div class="empty">Aucune donnée pour l’instant.</div>'; return; }
         const head = relay ? `<div class="panel" style="margin-bottom:12px"><div class="split"><b>📢 Envoi de la formation dans le canal</b><span class="tag">${esc(String(relay.sentCount || 0))} envoi(s)</span></div>
-          <p class="small">Coche une stratégie ci-dessous : après une perte, le bot lit la formation de cette stratégie (ex. « attendre 2 prédictions avant de jouer »), laisse passer ce nombre de prédictions, puis publie la prédiction confirmée (jeu + costume, sûr à 99%) dans le canal. Si elle est gagnée, il envoie « Bingo, Sossou Kouamé l’avait déjà dit ». Chaque stratégie a son propre message et un nom de code sans rapport avec sa logique. Si la case n’est PAS cochée, le bot envoie après chaque perte : « Écrivez à l’administrateur pour prendre la formation de comment jouer à cette stratégie ».</p>
+          <p class="small">Coche une stratégie ci-dessous : après une perte, le bot lit la formation de cette stratégie (ex. « attendre 2 prédictions avant de jouer »), laisse passer ce nombre de prédictions, puis publie la prédiction confirmée (jeu + costume + taux réellement mesuré) dans le canal. Si elle est gagnée, il envoie « Bingo, Sossou Kouamé l'avait déjà dit ». Chaque stratégie a son propre message et un nom de code sans rapport avec sa logique. Si la case n'est PAS cochée, le bot envoie après chaque perte : « Écrivez à l'administrateur pour prendre la formation de comment jouer à cette stratégie ».</p>
           <div class="field"><label>Canal Telegram de la formation</label><input id="formationRelayChannel" placeholder="-1001234567890 ou @moncanal" value="${esc((relay.channels || []).join(', '))}"></div>
-          <div class="toolbar"><button class="button primary" onclick="saveFormationRelayChannel()">Enregistrer le canal</button></div>
+          <div class="field" style="margin-top:8px"><label>Rattrapage des prédictions confirmées par Formation <span class="small">(n'abaisse jamais le rattrapage déjà prévu par la stratégie source — ne fait que l'augmenter si besoin)</span></label><input id="formationRelayMaxR" type="number" min="0" max="10" value="${esc(String(relay.maxR ?? 3))}"></div>
+          <div class="toolbar"><button class="button primary" onclick="saveFormationRelayChannel()">Enregistrer</button></div>
           ${relay.lastError ? `<div class="notice warn">${esc(relay.lastError)}</div>` : ''}</div>` : '';
         box.innerHTML = head + list.map(s => {
           const rl = relayByKey[s.key];
@@ -1378,7 +1379,8 @@ Faites-en bon usage !
     }
     async function saveFormationRelayChannel() {
       const el = $('#formationRelayChannel'); if (!el) return;
-      try { await api('/api/formation/relay/config', 'POST', { channels: el.value, enabled: true }); toast('Canal de la formation enregistré.'); await loadFormation(); }
+      const maxREl = $('#formationRelayMaxR');
+      try { await api('/api/formation/relay/config', 'POST', { channels: el.value, enabled: true, maxR: maxREl ? maxREl.value : undefined }); toast('Réglages de la formation enregistrés.'); await loadFormation(); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function runFormation(remote) { const box = $('#aiFormation'); if (box) box.innerHTML = '<div class="loading">Analyse en cours…</div>'; try { await api('/api/formation/run', 'POST', { remote: !!remote }); await loadFormation(); toast('Formation mise à jour.'); } catch(e) { toast(e.message, 'error'); } }
