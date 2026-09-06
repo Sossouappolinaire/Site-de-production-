@@ -369,6 +369,8 @@
         <a href="#/ai-strategies" data-nav="ai">Stratégies IA</a>
         <a href="#/ai-repair" data-nav="ai-repair">🛠 Réparation IA</a>
         <a href="#/ai-created" data-nav="ai-created">Créé par moi avec IA</a>
+        <a href="#/game21-strategies" data-nav="game21">Stratégies IA du 21</a>
+        <a href="#/game21-predict" data-nav="game21">Prédiction IA jeu 21</a>
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/formation" data-nav="formation">Formation</a>
@@ -600,6 +602,8 @@
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
         ${card('#/game21', '🃏', 'Game 21', 'Les jeux 21 de 1xbet en direct')}
         ${card('#/game21-ai', '🤖', 'Analyse IA du 21', 'Déclencheurs A, K, Q, J et cartes exactes')}
+        ${card('#/game21-strategies', '🧠', 'Stratégies IA du 21', 'Créer des stratégies à partir des déclencheurs')}
+        ${card('#/game21-predict', '🎯', 'Prédiction IA jeu 21', '21 classique et 21 séparés · carte exacte et carte de valeur')}
       </div>
 
       <div class="home-section-label">Système</div>
@@ -2400,6 +2404,18 @@ Faites-en bon usage !
     // Jeu « 21 » (TwentyOne) de 1xbet
     // -----------------------------------------------------------------------
     let game21Timer = null;
+    let g21Variant = 'classique';
+    function g21SetVariant(v) { g21Variant = v; if (location.hash === '#/game21-ai') game21AiPage(); else if (location.hash === '#/game21-strategies') game21StrategiesPage(); }
+    function g21VariantPicker() {
+      return `<div class="toolbar">
+        <button class="button small ${g21Variant === 'classique' ? 'primary' : 'ghost'}" onclick="g21SetVariant('classique')">21 classique</button>
+        <button class="button small ${g21Variant === 'simple' ? 'primary' : 'ghost'}" onclick="g21SetVariant('simple')">21</button>
+      </div>`;
+    }
+    function g21VariantSummary(d) {
+      const rows = (d.variants || []).map(v => `<tr><td><b>${esc(v.label)}</b></td><td>${esc((v.tables || []).join(', ') || '—')}</td><td>${esc(v.analysis?.rounds ?? 0)}</td><td>${esc(v.analysis?.valueRate ?? 0)}%</td><td>${esc(v.prediction?.trigger || '—')}</td></tr>`).join('');
+      return `<table><thead><tr><th>Variante</th><th>Tables lues</th><th>Tours</th><th>Cartes de valeur</th><th>Déclencheur en cours</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
     function stopGame21Refresh() { if (game21Timer) { clearInterval(game21Timer); game21Timer = null; } }
     function g21Cards(list) { return (list || []).length ? list.join(' ') : '—'; }
     function g21LiveRow(g) {
@@ -2446,7 +2462,7 @@ Faites-en bon usage !
       stopGame21Refresh();
       let d = data;
       if (!d) { $('#app').innerHTML = '<div class="empty">Chargement de l’analyse…</div>';
-        try { d = await api('/api/game21?limit=30'); } catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; } }
+        try { d = await api('/api/game21?limit=30&variant=' + encodeURIComponent(g21Variant)); } catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; } }
       const a = d.analysis || {};
       const p = d.prediction;
       const vt = (a.valueTriggers || []).map(t => `<tr><td class="mono">${esc(t.trigger)}</td><td>A, K, Q ou J</td><td>${esc(t.hit)}/${esc(t.total)}</td><td><b>${esc(t.rate)}%</b></td></tr>`).join('');
@@ -2454,9 +2470,13 @@ Faites-en bon usage !
       $('#app').innerHTML = `
         <div class="section-head" style="padding-top:38px"><div><span class="eyebrow">1xbet · TwentyOne</span>
           <h2 style="margin-top:7px">Analyse IA du jeu 21</h2>
-          <p class="small">L'IA cherche les déclencheurs : une carte vue dans un tour qui annonce, au tour suivant, une carte de valeur (A, K, Q, J) ou une carte de valeur exacte avec son costume ♦️ ♠️ ❤️ ♣️.</p></div>
+          <p class="small">Variante analysée : <b>${esc(a.variantLabel || '')}</b>. L'IA cherche les déclencheurs : une carte vue dans un tour qui annonce, au tour suivant, une carte de valeur (A, K, Q, J) ou une carte de valeur exacte avec son costume ♦️ ♠️ ❤️ ♣️.</p></div>
           <button class="button primary" id="g21AiBtn" onclick="game21Analyze()">Analyser avec l'IA</button></div>
+        ${g21VariantPicker()}
         ${d.error ? `<div class="notice error">${esc(d.error)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Vérification : 21 classique vs 21</h2>
+          <p class="small">Chaque variante est comptée séparément : l'analyse affichée ci-dessous ne porte que sur « ${esc(a.variantLabel || '')} ».</p></div></div>
+          <div class="panel">${g21VariantSummary(d)}</div></section>
         <div class="panel"><div class="split small"><span class="muted">Tours analysés</span><b>${esc(a.rounds ?? 0)}</b>
           <span class="muted">Tours avec carte de valeur</span><b>${esc(a.withValue ?? 0)} (${esc(a.valueRate ?? 0)}%)</b></div>
           ${p ? `<p class="small" style="margin-top:10px">Déclencheur en cours : <b>${esc(p.trigger)}</b> (tour #${esc(p.fromRound ?? '?')} · ${esc(p.tableName || '')})${p.valueRate != null ? ` → carte de valeur attendue à <b>${esc(p.valueRate)}%</b> sur ${esc(p.valueSample)} cas` : ''}${(p.exact || []).length ? ` · cartes exactes probables : ${p.exact.map(x => `${esc(x.card)} ${esc(x.rate)}%`).join(', ')}` : ''}</p>` : ''}
@@ -2469,12 +2489,161 @@ Faites-en bon usage !
           <div class="panel">${g21GridView(a)}</div></section>
         <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Avis de l'IA</h2></div></div>
           <div class="panel" id="g21AiText">${d.ai?.text ? `<pre style="white-space:pre-wrap;font-size:12px;line-height:1.6;margin:0">${esc(d.ai.text)}</pre><p class="small muted">Analyse du ${formatDate(d.ai.at)} · ${esc(d.ai.rounds)} tour(s)</p>` : '<div class="empty">Appuie sur « Analyser avec l’IA » pour obtenir les déclencheurs commentés.</div>'}</div></section>
-        <div class="toolbar"><button class="button ghost" onclick="location.hash='#/game21'">← Jeux 21 en live</button></div>`;
+        <div class="toolbar"><button class="button ghost" onclick="location.hash='#/game21'">← Jeux 21 en live</button>
+          <button class="button primary" onclick="location.hash='#/game21-strategies'">Créer stratégie IA jeu 21 →</button>
+          <button class="button primary" onclick="location.hash='#/game21-predict'">Prédiction IA jeu 21 →</button></div>`;
+    }
+
+    // ----- Stratégies IA du jeu 21 ----------------------------------------
+    async function game21StrategiesPage() {
+      setNav('game21');
+      stopGame21Refresh();
+      $('#app').innerHTML = '<div class="empty">Chargement des stratégies…</div>';
+      let d;
+      try { d = await api('/api/game21?limit=10&variant=' + encodeURIComponent(g21Variant)); }
+      catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; }
+      const st = (d.strategies && d.strategies.strategies) || [];
+      const a = d.analysis || {};
+      const cards = st.length ? st.map(s => `
+        <div class="panel" style="margin-bottom:10px">
+          <div class="split"><b>${esc(s.name)}</b><span class="tag ${s.enabled ? 'good' : 'warn'}">${s.enabled ? 'Activée' : 'Désactivée'}</span></div>
+          <p class="small" style="margin-top:8px">${esc(s.rule)}</p>
+          <div class="split small"><span class="muted">Variante</span><b>${esc(s.variantLabel)}</b>
+            <span class="muted">Fiabilité observée</span><b>${esc(s.rate)}% (${esc(s.hit)}/${esc(s.sample)})</b></div>
+          ${s.explanation ? `<pre style="white-space:pre-wrap;font-size:12px;line-height:1.6;margin:10px 0 0">${esc(s.explanation)}</pre>` : ''}
+          ${s.aiError ? `<p class="small muted">Avis IA indisponible : ${esc(s.aiError)}</p>` : ''}
+          <div class="notice ${s.active ? 'good' : ''}" style="margin-top:10px">${esc(s.message)}</div>
+          <div class="toolbar"><button class="button small ${s.enabled ? 'ghost' : 'primary'}" onclick="g21ToggleStrategy('${esc(s.id)}', ${s.enabled ? 'false' : 'true'})">${s.enabled ? 'Désactiver' : 'Activer'}</button>
+            <button class="button small ghost" onclick="g21DeleteStrategy('${esc(s.id)}')">Supprimer</button></div>
+        </div>`).join('') : '<div class="empty">Aucune stratégie créée pour le moment.</div>';
+      $('#app').innerHTML = `
+        <div class="section-head" style="padding-top:38px"><div><span class="eyebrow">1xbet · TwentyOne</span>
+          <h2 style="margin-top:7px">Stratégies IA du jeu 21</h2>
+          <p class="small">Comme pour le Baccara, l'IA crée une stratégie à partir des déclencheurs réellement observés. La règle est écrite en clair : « quand tu vois telle carte, attends telle carte au tour suivant ». Toute nouvelle stratégie est créée désactivée.</p></div></div>
+        ${g21VariantPicker()}
+        <div class="panel"><div class="split small"><span class="muted">Variante</span><b>${esc(a.variantLabel || '')}</b>
+          <span class="muted">Tours disponibles</span><b>${esc(a.rounds ?? 0)}</b>
+          <span class="muted">Déclencheur en cours</span><b>${esc(d.prediction?.trigger || '—')}</b></div>
+          <textarea id="g21StratDesc" rows="3" placeholder="Décris la stratégie voulue (ex. : cible les cartes exactes ♦️K après une carte de valeur)" style="width:100%;margin-top:10px"></textarea>
+          <div class="toolbar"><button class="button primary" id="g21StratBtn" onclick="g21CreateStrategy()">Créer stratégie IA jeu 21</button>
+            <button class="button ghost" onclick="location.hash='#/game21-ai'">← Analyse IA du 21</button></div></div>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Mes stratégies (${esc(st.length)})</h2></div></div>${cards}</section>`;
+    }
+    async function g21CreateStrategy() {
+      const btn = document.getElementById('g21StratBtn');
+      const desc = (document.getElementById('g21StratDesc') || {}).value || '';
+      if (btn) { btn.disabled = true; btn.textContent = 'Création en cours…'; }
+      try { await api('/api/game21/strategies', 'POST', { description: desc, variant: g21Variant }); toast('Stratégie créée (désactivée par sécurité).'); await game21StrategiesPage(); }
+      catch (e) { toast(e.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Créer stratégie IA jeu 21'; } }
+    }
+    async function g21ToggleStrategy(id, on) {
+      try { await api('/api/game21/strategies/' + id + '/toggle', 'POST', { enabled: on }); await game21StrategiesPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function g21DeleteStrategy(id) {
+      try { await api('/api/game21/strategies/' + id, 'DELETE'); await game21StrategiesPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ----- Prédiction IA jeu 21 -------------------------------------------
+    function g21pRows(block, titre) {
+      const list = (block && block.list) || [];
+      const b = (block && block.bilan) || { total: 0, win: 0, loss: 0, pending: 0, rate: 0 };
+      const rows = list.length ? list.map(p => `
+        <div class="split small" style="border-top:1px solid rgba(255,255,255,.06);padding:6px 0">
+          <span>#${esc(p.fromRoundNumber ?? '?')} → ${esc(p.card || 'A / K / Q / J')}</span>
+          <span class="muted">${esc(p.trigger)} · ${esc(p.rate)}%</span>
+          <span class="tag ${p.status === 'gagné' ? 'good' : p.status === 'perdu' ? 'bad' : 'warn'}">${esc(p.status)}</span>
+        </div>`).join('') : '<div class="empty">Aucune prédiction pour le moment.</div>';
+      return `<div class="panel" style="margin-bottom:10px"><div class="split"><b>${esc(titre)}</b>
+        <span class="small muted">${esc(b.win)} gagnées · ${esc(b.loss)} perdues · ${esc(b.pending)} en attente · ${esc(b.rate)}%</span></div>
+        ${rows}</div>`;
+    }
+    async function game21PredictPage() {
+      setNav('game21');
+      stopGame21Refresh();
+      $('#app').innerHTML = '<div class="empty">Chargement de la prédiction IA du 21…</div>';
+      let d;
+      try { d = await api('/api/game21/predict'); }
+      catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; }
+      const c = d.config || {};
+      $('#app').innerHTML = `
+        <div class="section-head" style="padding-top:38px"><div><span class="eyebrow">1xbet · TwentyOne</span>
+          <h2 style="margin-top:7px">Prédiction IA jeu 21</h2>
+          <p class="small">Utilise les déclencheurs IA du jeu 21 et les stratégies IA activées. Le « 21 classique » et le « 21 » sont prédits séparément, et uniquement sur deux cibles : la carte exacte et la carte de valeur (A, K, Q, J). Pourcentage accordé : ${esc(c.minRate)}%.</p></div></div>
+
+        <div class="panel">
+          <div class="split small"><span class="muted">Tours 21 classique</span><b>${esc(d.rounds21?.classique ?? 0)}</b>
+            <span class="muted">Tours 21</span><b>${esc(d.rounds21?.simple ?? 0)}</b>
+            <span class="muted">Envois</span><b>${esc(d.sentCount ?? 0)}</b></div>
+          ${d.lastError ? `<div class="notice error" style="margin-top:10px">${esc(d.lastError)}</div>` : ''}
+          <div class="toolbar">
+            <button class="button primary" id="g21pRun" onclick="g21pRun()">Prédiction IA jeu 21</button>
+            <button class="button ghost" onclick="g21pTest()">Envoi de test</button>
+            <button class="button ghost" onclick="g21pToggle(${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          </div>
+        </div>
+
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Réglages d'envoi</h2>
+          <p class="small">Les cartes exactes et les cartes de valeur ont chacune leur format et leur canal.</p></div></div>
+          <div class="panel" style="margin-bottom:10px"><b>🎴 Cartes exactes</b>
+            <div class="split small" style="margin-top:8px"><span class="muted">Canaux</span><b>${esc((c.exactChannels || []).join(', ') || '—')}</b>
+              <span class="muted">Format</span><b>n° ${esc(c.exactFormat)}</b></div>
+            <input id="g21pExactCh" placeholder="ID canal (ex : -1001234567890 ou @moncanal)" style="width:100%;margin-top:8px">
+            <input id="g21pExactFmt" type="number" min="1" max="89" value="${esc(c.exactFormat)}" style="width:100%;margin-top:8px">
+            <div class="toolbar"><button class="button small primary" onclick="g21pSaveChannel('exacte')">Enregistrer</button>
+              <button class="button small ghost" onclick="g21pClearChannel('exacte')">Retirer le canal</button></div></div>
+          <div class="panel"><b>🔤 Cartes de valeur (A, K, Q, J)</b>
+            <div class="split small" style="margin-top:8px"><span class="muted">Canaux</span><b>${esc((c.valueChannels || []).join(', ') || '—')}</b>
+              <span class="muted">Format</span><b>n° ${esc(c.valueFormat)}</b></div>
+            <input id="g21pValueCh" placeholder="ID canal (ex : -1001234567890 ou @moncanal)" style="width:100%;margin-top:8px">
+            <input id="g21pValueFmt" type="number" min="1" max="89" value="${esc(c.valueFormat)}" style="width:100%;margin-top:8px">
+            <div class="toolbar"><button class="button small primary" onclick="g21pSaveChannel('valeur')">Enregistrer</button>
+              <button class="button small ghost" onclick="g21pClearChannel('valeur')">Retirer le canal</button></div></div>
+        </section>
+
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">21 classique</h2></div></div>
+          ${g21pRows(d.classique?.exacte, 'Cartes exactes')}
+          ${g21pRows(d.classique?.valeur, 'Cartes de valeur')}</section>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">21</h2></div></div>
+          ${g21pRows(d.simple?.exacte, 'Cartes exactes')}
+          ${g21pRows(d.simple?.valeur, 'Cartes de valeur')}</section>
+        <div class="toolbar"><button class="button ghost" onclick="location.hash='#/game21-ai'">← Analyse IA du 21</button></div>`;
+    }
+    async function g21pRun() {
+      const btn = document.getElementById('g21pRun');
+      if (btn) { btn.disabled = true; btn.textContent = 'Prédiction en cours…'; }
+      try { await api('/api/game21/predict/run', 'POST', {}); toast('Prédiction IA jeu 21 terminée.'); await game21PredictPage(); }
+      catch (e) { toast(e.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Prédiction IA jeu 21'; } }
+    }
+    async function g21pToggle(on) {
+      try { await api('/api/game21/predict/config', 'POST', { enabled: on }); await game21PredictPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function g21pSaveChannel(kind) {
+      const chEl = document.getElementById(kind === 'exacte' ? 'g21pExactCh' : 'g21pValueCh');
+      const fmtEl = document.getElementById(kind === 'exacte' ? 'g21pExactFmt' : 'g21pValueFmt');
+      try {
+        const fmtVal = parseInt((fmtEl || {}).value, 10);
+        if (Number.isFinite(fmtVal)) await api('/api/game21/predict/config', 'POST', kind === 'exacte' ? { exactFormat: fmtVal } : { valueFormat: fmtVal });
+        const ch = ((chEl || {}).value || '').trim();
+        if (ch) await api('/api/game21/predict/channel', 'POST', { kind, channelId: ch });
+        toast('Réglages enregistrés.');
+        await game21PredictPage();
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function g21pClearChannel(kind) {
+      try { await api('/api/game21/predict/channel?kind=' + kind, 'DELETE'); await game21PredictPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function g21pTest() {
+      try { const r = await api('/api/game21/predict/test', 'POST', {}); toast(r.ok ? 'Test envoyé.' : 'Test impossible.', r.ok ? 'ok' : 'error'); }
+      catch (e) { toast(e.message, 'error'); }
     }
     async function game21Analyze() {
       const btn = document.getElementById('g21AiBtn');
       if (btn) { btn.disabled = true; btn.textContent = 'Analyse en cours…'; }
-      try { const d = await api('/api/game21/analyze', 'POST', {}); await game21AiPage(d); toast('Analyse IA terminée.'); }
+      try { const d = await api('/api/game21/analyze', 'POST', { variant: g21Variant }); await game21AiPage(d); toast('Analyse IA terminée.'); }
       catch (e) { toast(e.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = "Analyser avec l'IA"; } }
     }
     async function route() {
@@ -2502,6 +2671,8 @@ Faites-en bon usage !
         else if (h === '#/database') await databasePage();
         else if (h === '#/game21') await game21Page();
         else if (h === '#/game21-ai') await game21AiPage();
+        else if (h === '#/game21-strategies') await game21StrategiesPage();
+        else if (h === '#/game21-predict') await game21PredictPage();
         else if (h === '#/formats') await formatsPage();
         else if (h === '#/settings') settingsPage();
         else if (h === '#/users') await usersPage();
