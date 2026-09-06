@@ -781,13 +781,12 @@ function bilanOf(list) {
 }
 
 function bilanText(entry, list) {
+  // Même bilan minimal que les stratégies existantes (predictor.js).
   const b = bilanOf(list);
   return (
-    '📊 STATISTIQUE 📈\n\n' +
-    `🧠 Stratégie IA : ${entry.name}\n\n` +
-    `🟢 GAIN : ${b.win}\n` +
-    `🔴 PERTE : ${b.loss}\n\n` +
-    `✅ Taux de réussite : ${b.rate} %`
+    '📊 STATISTIQUE 📈\n\n\n' +
+    `🟢 GAIN : ${b.win}\n\n` +
+    `🔴 PERTE : ${b.loss}`
   );
 }
 
@@ -897,14 +896,10 @@ async function tick() {
 // ---------------------------------------------------------------------------
 function globalBilanText() {
   const b = bilanOf(panel.predictions);
-  const nb = new Set(panel.predictions.flatMap((p) => p.sources.map((s) => s.id))).size;
   return (
-    '📊 BILAN GLOBAL — PRÉDICTIONS IA 🤖\n\n' +
-    `🧠 Stratégies IA ayant prédit : ${nb}\n` +
-    `🎯 Prédictions : ${b.total}\n\n` +
-    `🟢 GAIN : ${b.win}\n` +
-    `🔴 PERTE : ${b.loss}\n\n` +
-    `✅ Taux de réussite : ${b.rate} %`
+    '📊 STATISTIQUE 📈\n\n\n' +
+    `🟢 GAIN : ${b.win}\n\n` +
+    `🔴 PERTE : ${b.loss}`
   );
 }
 

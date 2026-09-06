@@ -5,6 +5,7 @@ const api = require('./api');
 const store = require('./store');
 const db = require('./db');
 const predit = require('./predit');
+const game21Predict = require('./game21-predict');
 const auth = require('./auth');
 const aiAuto = require('./ai-auto');
 const ai = require('./ai-analyzer');
@@ -2032,6 +2033,10 @@ async function tick() {
     // panneau « Prédit » : prédictions certifiées à 100% (IA)
     await predit.tick();
 
+    // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
+    // cartes exactes et cartes de valeur sur leurs canaux respectifs.
+    await game21Predict.tick();
+
     // panneau « Prédiction après perte » : relais de la prochaine prédiction
     // d'une stratégie suivie (existante ou IA) après N pertes consécutives.
     await afterLoss.tick();
@@ -2256,6 +2261,8 @@ async function sendShoeReport(reason, seq) {
 async function startLoop() {
   predit.restore();
   predit.setSender(senderFor);
+  game21Predict.restore();
+  game21Predict.setSender(senderFor);
   afterLoss.restore();
   afterLoss.setSender(senderFor);
   combined.restore();

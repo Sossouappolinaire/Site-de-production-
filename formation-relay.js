@@ -364,6 +364,97 @@ function formationTrusted(key) {
 }
 
 // ---------------------------------------------------------------------------
+// CORRECTIF (demande admin) : « la formation envoyait TOUTES les prédictions »
+//
+// Avant, chaque stratégie cochée publiait sa propre prédiction confirmée dès
+// qu'elle était armée : si 5 stratégies (+ l'IA) prédisaient ❤️ aux jeux 12,
+// 14 et 18, TROIS confirmations partaient dans le canal — sans tenir compte
+// du conseil de la formation elle-même. Résultat : des pertes évitables.
+//
+// Nouvelle règle d'arbitrage, appliquée AVANT chaque envoi de prédiction
+// confirmée :
+//   1. On regarde si le costume prédit est DÉJÀ SORTI dans les 3 jeux
+//      précédents (joueur ou banquier).
+//   2. Si oui, on ne joue PAS la première prédiction : on attend la DERNIÈRE
+//      prédiction annoncée pour ce même costume (le jeu le plus éloigné parmi
+//      toutes les stratégies cochées + l'IA). Le jeu 12 est donc ignoré, seul
+//      le jeu 18 est publié.
+//   3. Si le costume n'est pas sorti récemment, la prédiction la plus proche
+//      est jouée normalement.
+//   4. Un seul costume à la fois : si une confirmation est déjà en attente de
+//      résultat pour ce costume, aucune deuxième n'est publiée (doublon).
+// ---------------------------------------------------------------------------
+const RECENT_WINDOW = 3;
+
+function suitOf(pred) {
+  return String((pred && (pred.suit || pred.card)) || '').trim();
+}
+
+// les 3 derniers jeux TERMINÉS, du plus récent au plus ancien
+function lastFinishedGames(limit = RECENT_WINDOW) {
+  const games = state && state.games ? [...state.games.values()] : [];
+  return games
+    .filter((g) => g && g.finished)
+    .sort((a, b) => (b.number || 0) - (a.number || 0))
+    .slice(0, limit);
+}
+
+// le costume est-il déjà sorti pendant les 3 jeux précédents ?
+function suitOutRecently(suit) {
+  if (!suit) return false;
+  for (const g of lastFinishedGames()) {
+    const all = [
+      ...strategiesLib.suitsOf(g.playerSuits),
+      ...strategiesLib.suitsOf(g.bankerSuits),
+    ];
+    if (all.includes(suit)) return true;
+  }
+  return false;
+}
+
+// dernière (= la plus éloignée) prédiction encore en attente annoncée pour ce
+// costume par n'importe quelle stratégie cochée (ou l'IA « Prédit »).
+function latestPeerTarget(suit, fromTarget) {
+  let max = Number(fromTarget) || 0;
+  for (const opt of options()) {
+    const e = panel.strategies[opt.key];
+    if (!e || !e.enabled) continue;
+    for (const p of predictionsFor(opt.key)) {
+      if (p.status !== 'en attente') continue;
+      if (suitOf(p) !== suit) continue;
+      const t = Number(p.target) || 0;
+      if (t > max) max = t;
+    }
+  }
+  return max;
+}
+
+// une confirmation est-elle déjà en attente de résultat pour ce costume ?
+function alreadyPendingSuit(suit, exceptKey) {
+  for (const [k, e] of Object.entries(panel.strategies)) {
+    if (k === exceptKey || !e || !e.pending) continue;
+    if (String(e.pending.suit || '').trim() === suit) return true;
+  }
+  return false;
+}
+
+function arbitrate(key, target, suit) {
+  if (!suit) return { ok: true };
+  if (alreadyPendingSuit(suit, key)) {
+    return { ok: false, reason: `une confirmation ${suit} est déjà en attente de résultat` };
+  }
+  if (!suitOutRecently(suit)) return { ok: true };
+  const later = latestPeerTarget(suit, target);
+  if (later > (Number(target) || 0)) {
+    return {
+      ok: false,
+      reason: `${suit} est déjà sorti dans les ${RECENT_WINDOW} jeux précédents : on ignore le jeu ${target} et on attend la dernière prédiction (jeu ${later})`,
+    };
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // Messages envoyés dans le canal
 // ---------------------------------------------------------------------------
 function confirmText(key, pred, form) {
@@ -477,8 +568,29 @@ async function processStrategy(key) {
     if (target <= entry.lastSeenTarget) continue;
 
     if (entry.armed) {
-      // c'est la prédiction annoncée par la formation : on la publie.
+      // c'est la prédiction annoncée par la formation : on l'ARBITRE d'abord
+      // (voir arbitrate() ci-dessus), puis on la publie seulement si c'est
+      // bien la MEILLEURE prédiction du moment pour ce costume.
       const form = formationOf(key);
+      const arb = arbitrate(key, target, suitOf(pred));
+      if (!arb.ok) {
+        entry.lastTrust = {
+          at: Date.now(), target, ok: false, reason: arb.reason,
+          rate: form.rate, length: form.length, advice: null,
+        };
+        panel.history.unshift({
+          key, name: nameOf(key), codeName: codeNameOf(key), target,
+          suit: suitOf(pred), kind: 'reporté', reason: arb.reason, at: Date.now(),
+        });
+        panel.history = panel.history.slice(0, 100);
+        // on reste armé : la prochaine prédiction de cette stratégie sera
+        // arbitrée à son tour, jusqu'à trouver la meilleure.
+        entry.armed = true;
+        entry.counting = false;
+        entry.lastSeenTarget = target;
+        persist();
+        continue;
+      }
       // Rattrapage propre à Formation (panel.maxR, 3 par défaut) : IMPOSÉ
       // (demande admin), pas seulement relevé si inférieur — toute
       // prédiction confirmée par le bouton Formation utilise exactement ce

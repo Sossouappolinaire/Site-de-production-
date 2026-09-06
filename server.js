@@ -30,6 +30,8 @@ const mirrorCounter = require('./mirror-counter');
 const sebpay = require('./sebpay');
 const lossNotice = require('./loss-notice');
 const game21 = require('./game21');
+const game21Strategies = require('./game21-strategies');
+const game21Predict = require('./game21-predict');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
@@ -359,8 +361,9 @@ app.get('/api/games', (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/game21', async (req, res) => {
   const limit = Math.min(200, parseInt(req.query.limit, 10) || 30);
+  const variant = req.query.variant && req.query.variant !== 'tous' ? String(req.query.variant) : null;
   if (req.query.refresh === '1' || !game21.state.updatedAt) await game21.refresh();
-  res.json(game21.snapshot({ limit }));
+  res.json({ ...game21.snapshot({ limit, variant }), strategies: game21Strategies.status() });
 });
 
 app.post('/api/game21/refresh', async (req, res) => {
@@ -370,12 +373,75 @@ app.post('/api/game21/refresh', async (req, res) => {
 
 app.post('/api/game21/analyze', async (req, res) => {
   try {
+    const variant = req.body && req.body.variant && req.body.variant !== 'tous' ? String(req.body.variant) : null;
     if (!game21.state.updatedAt) await game21.refresh();
-    const ai21 = await game21.aiOpinion({ limit: 40 });
-    res.json({ ...game21.snapshot({ limit: 30 }), ai: ai21 });
+    const ai21 = await game21.aiOpinion({ limit: 40, variant });
+    res.json({ ...game21.snapshot({ limit: 30, variant }), ai: ai21, strategies: game21Strategies.status() });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+
+// --- panneau « Prédiction IA jeu 21 » ---------------------------------------
+app.get('/api/game21/predict', (req, res) => res.json(game21Predict.status()));
+
+app.post('/api/game21/predict/config', (req, res) => {
+  game21Predict.configure(req.body || {});
+  res.json(game21Predict.status());
+});
+
+app.post('/api/game21/predict/channel', async (req, res) => {
+  const kind = (req.body && req.body.kind) === 'valeur' ? 'valeur' : 'exacte';
+  const ids = game21Predict.parseChannels(req.body && req.body.channelId);
+  if (!ids.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(ids[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  game21Predict.configure(kind === 'valeur' ? { valueChannels: ids } : { exactChannels: ids });
+  res.json({ ok: true, channel: check.chat, ...game21Predict.status() });
+});
+
+app.delete('/api/game21/predict/channel', (req, res) => {
+  const kind = req.query.kind === 'valeur' ? 'valeur' : 'exacte';
+  game21Predict.configure(kind === 'valeur' ? { valueChannels: [] } : { exactChannels: [] });
+  res.json(game21Predict.status());
+});
+
+app.post('/api/game21/predict/test', async (req, res) => {
+  const r = await game21Predict.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/game21/predict/run', async (req, res) => {
+  await game21.refresh();
+  const r = await game21Predict.tick();
+  res.json(r);
+});
+
+// --- stratégies IA du jeu 21 ------------------------------------------------
+app.get('/api/game21/strategies', (req, res) => res.json(game21Strategies.status()));
+
+app.post('/api/game21/strategies', async (req, res) => {
+  try {
+    const entry = await game21Strategies.create({
+      description: req.body && req.body.description,
+      variant: (req.body && req.body.variant) || 'classique',
+    });
+    res.json({ ok: true, strategy: entry, ...game21Strategies.status() });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/game21/strategies/:id/toggle', (req, res) => {
+  const s = game21Strategies.toggle(req.params.id, req.body && req.body.enabled);
+  if (!s) return res.status(404).json({ error: 'Stratégie introuvable.' });
+  res.json({ ok: true, strategy: s, ...game21Strategies.status() });
+});
+
+app.delete('/api/game21/strategies/:id', (req, res) => {
+  game21Strategies.remove(req.params.id);
+  res.json({ ok: true, ...game21Strategies.status() });
 });
 
 // jeux stockés en base par date (ex: /api/history?date=2/04/2026)

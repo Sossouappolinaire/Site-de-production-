@@ -22,6 +22,24 @@ const VALUE_RANKS = ['A', 'K', 'Q', 'J'];       // les « cartes de valeur »
 const SUITS = ['♦️', '♠️', '❤️', '♣️'];          // ordre demandé
 const HISTORY_MAX = 400;                        // tours gardés par table
 
+// ---------------------------------------------------------------------------
+// VARIANTES : la liste 1xbet du sport 146 mélange le « 21 classique »
+// (Classic TwentyOne / 21 Classic) et le « 21 » simple. On les sépare pour que
+// chaque analyse porte bien sur la variante annoncée.
+// ---------------------------------------------------------------------------
+const VARIANTS = {
+  classique: { key: 'classique', label: '21 classique' },
+  simple: { key: 'simple', label: '21' },
+};
+function classifyTable(name) {
+  const n = String(name || '').toLowerCase();
+  if (/classi/.test(n)) return 'classique';
+  return 'simple';
+}
+function variantLabel(key) {
+  return (VARIANTS[key] || VARIANTS.simple).label;
+}
+
 const HEADERS = {
   accept: 'application/json, text/plain, */*',
   'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8',
@@ -147,6 +165,8 @@ function parseChamp(data, table) {
       id: `${table.id}:${g.I}`,
       tableId: table.id,
       tableName: table.name,
+      variant: table.variant || classifyTable(table.name),
+      variantLabel: variantLabel(table.variant || classifyTable(table.name)),
       gameId: g.I,
       number: Number.isFinite(number) ? number : null,
       startsAt: g.S ? g.S * 1000 : null,
@@ -176,7 +196,11 @@ async function fetchTables() {
   ]);
   const list = (data && data.Value) || [];
   const tables = list
-    .map((c) => ({ id: Number(c.LI), name: c.L || c.LE || `Table ${c.LI}`, games: Number(c.GC || 0) }))
+    .map((c) => {
+      const name = c.L || c.LE || `Table ${c.LI}`;
+      const variant = classifyTable(name);
+      return { id: Number(c.LI), name, games: Number(c.GC || 0), variant, variantLabel: variantLabel(variant) };
+    })
     .filter((t) => Number.isFinite(t.id) && t.id > 0);
   if (!tables.length) throw new Error('API 1xbet « 21 » injoignable');
   return tables;
@@ -334,14 +358,37 @@ function buildTriggers(history, { minSample = 3 } = {}) {
   };
 }
 
-function analysis(opts) {
-  return buildTriggers(state.history, opts);
+function historyOf(variant) {
+  if (!variant || variant === 'tous') return state.history;
+  return state.history.filter((g) => (g.variant || 'simple') === variant);
+}
+
+function analysis(opts = {}) {
+  const a = buildTriggers(historyOf(opts.variant), opts);
+  a.variant = opts.variant || 'tous';
+  a.variantLabel = opts.variant ? variantLabel(opts.variant) : 'Toutes les variantes';
+  return a;
+}
+
+// Analyse séparée « 21 classique » vs « 21 » : c'est cette vue qui permet de
+// vérifier sur quelle variante porte réellement chaque déclencheur.
+function analysisByVariant(opts = {}) {
+  return Object.keys(VARIANTS).map((key) => {
+    const a = analysis({ ...opts, variant: key });
+    return {
+      variant: key,
+      label: VARIANTS[key].label,
+      tables: state.tables.filter((t) => t.variant === key).map((t) => t.name),
+      analysis: a,
+      prediction: localPrediction(a, key),
+    };
+  });
 }
 
 // Prédiction locale : à partir de la dernière carte connue, ce que les
 // déclencheurs annoncent pour le prochain tour.
-function localPrediction(a = analysis()) {
-  const last = state.history[0];
+function localPrediction(a = analysis(), variant = null) {
+  const last = historyOf(variant)[0];
   const trig = last ? triggerOf(last) : null;
   if (!trig) return null;
   const v = a.valueTriggers.find((x) => x.trigger === trig);
@@ -350,6 +397,8 @@ function localPrediction(a = analysis()) {
     trigger: trig,
     fromRound: last.number,
     tableName: last.tableName,
+    variant: last.variant || 'simple',
+    variantLabel: last.variantLabel || variantLabel(last.variant),
     valueRate: v ? v.rate : null,
     valueSample: v ? v.total : 0,
     exact,
@@ -360,15 +409,16 @@ function localPrediction(a = analysis()) {
 // Avis de l'IA
 // ---------------------------------------------------------------------------
 function compact(g) {
-  return `#${g.number ?? '?'} ${g.tableName} | joueur ${g.player.join(' ')} (${g.playerValue}) | croupier ${g.dealer.join(' ')} (${g.dealerValue}) | ${g.winner || '—'}`;
+  return `#${g.number ?? '?'} ${g.tableName} [${g.variantLabel || ''}] | joueur ${g.player.join(' ')} (${g.playerValue}) | croupier ${g.dealer.join(' ')} (${g.dealerValue}) | ${g.winner || '—'}`;
 }
 
-async function aiOpinion({ limit = 40 } = {}) {
-  const a = analysis();
+async function aiOpinion({ limit = 40, variant = null } = {}) {
+  const a = analysis({ variant });
   if (!a.rounds) throw new Error('Aucun tour « 21 » enregistré pour le moment.');
-  const local = localPrediction(a);
+  const local = localPrediction(a, variant);
   const system = [
-    'Tu es un analyste du jeu de cartes « 21 » (TwentyOne) de 1xbet.',
+    `Tu es un analyste du jeu de cartes « ${a.variantLabel} » (TwentyOne) de 1xbet.`,
+    'Ne parle que de cette variante : ne mélange jamais le « 21 classique » et le « 21 ».',
     'Tu cherches des DÉCLENCHEURS : une carte observée dans un tour qui annonce,',
     'au tour suivant, une carte de valeur (A, K, Q, J) ou une carte de valeur EXACTE',
     'avec son costume (♦️ ♠️ ❤️ ♣️).',
@@ -386,33 +436,35 @@ async function aiOpinion({ limit = 40 } = {}) {
     ...a.exactTriggers.slice(0, 15).map((t) => `  ${t.trigger} → ${t.card} : ${t.hit}/${t.total} = ${t.rate}%`),
     '',
     'Derniers tours :',
-    ...state.history.slice(0, limit).map(compact),
+    ...historyOf(variant).slice(0, limit).map(compact),
     '',
     local ? `Dernière carte visible (déclencheur en cours) : ${local.trigger}.` : '',
     'Donne les déclencheurs les plus fiables et ce qu\'il faut attendre au prochain tour.',
   ].join('\n');
 
   const text = await ai.chat({ system, user, temperature: 0.2, timeoutMs: 25000 });
-  state.lastAi = { at: Date.now(), text: String(text || '').trim(), rounds: a.rounds };
+  state.lastAi = { at: Date.now(), text: String(text || '').trim(), rounds: a.rounds, variant: a.variant, variantLabel: a.variantLabel };
   return state.lastAi;
 }
 
-function snapshot({ limit = 30 } = {}) {
-  const a = analysis();
+function snapshot({ limit = 30, variant = null } = {}) {
+  const a = analysis({ variant });
   return {
     tables: state.tables,
-    live: state.live,
-    games: state.history.slice(0, limit),
+    variants: analysisByVariant(),
+    live: variant ? state.live.filter((g) => (g.variant || 'simple') === variant) : state.live,
+    games: historyOf(variant).slice(0, limit),
     updatedAt: state.updatedAt,
     error: state.error,
     analysis: a,
-    prediction: localPrediction(a),
+    prediction: localPrediction(a, variant),
     ai: state.lastAi,
   };
 }
 
 module.exports = {
   SPORT_ID, SUIT_MAP, RANK_MAP, VALUE_RANKS, SUITS,
+  VARIANTS, classifyTable, variantLabel, historyOf, analysisByVariant, triggerOf,
   fetchTables, fetchTableGames, parseChamp, handValue, cardLabel,
   refresh, startLoop, snapshot, analysis, localPrediction, aiOpinion, state,
 };

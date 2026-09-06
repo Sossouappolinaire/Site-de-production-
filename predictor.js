@@ -1611,14 +1611,13 @@ function dizaineCounterView() {
 // Bilan envoyé sur Telegram quand le jeu reprend
 // ---------------------------------------------------------------------------
 function bilanText(key, list) {
+  // Bilan VOLONTAIREMENT MINIMAL (demande admin) : uniquement le titre, les
+  // gains et les pertes. Pas de nom de stratégie, pas de taux de réussite.
   const s = list ? statsFrom(list, key) : stats(key);
-  const def = key ? strategies.BY_KEY[key] : null;
   return (
-    '📊 STATISTIQUE 📈\n\n' +
-    (def ? `🧠 Stratégie : ${def.name}\n\n` : '') +
-    `🟢 GAIN : ${s.win}\n` +
-    `🔴 PERTE : ${s.loss}\n\n\n` +
-    `✅ Taux de réussite : ${s.rate} %`
+    '📊 STATISTIQUE 📈\n\n\n' +
+    `🟢 GAIN : ${s.win}\n\n` +
+    `🔴 PERTE : ${s.loss}`
   );
 }
 
