@@ -598,6 +598,8 @@
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
+        ${card('#/game21', '🃏', 'Game 21', 'Les jeux 21 de 1xbet en direct')}
+        ${card('#/game21-ai', '🤖', 'Analyse IA du 21', 'Déclencheurs A, K, Q, J et cartes exactes')}
       </div>
 
       <div class="home-section-label">Système</div>
@@ -2341,6 +2343,9 @@ Faites-en bon usage !
             <div class="field" style="margin-top:10px"><label>Titre de la formation</label><input id="fmT-${esc(s.key)}" value="${esc(s.title || '')}" placeholder="Formation « ${esc(s.codeName || '')} »"></div>
             <div class="field"><label>Contenu de la formation${s.custom ? '' : ' (généré automatiquement — modifiable)'}</label><textarea id="fmC-${esc(s.key)}" rows="7">${esc(s.lesson || '')}</textarea></div>
             <div class="field"><label>Canal d’envoi de CETTE formation</label><input id="fmCh-${esc(s.key)}" value="${esc((s.channels || []).join(', '))}" placeholder="Laisser vide pour le canal général ci-dessus"></div>
+            <div class="two-col"><div class="field"><label>Format de prédiction (0 = celui du panneau)</label><input id="fmF-${esc(s.key)}" type="number" min="0" max="${esc(String((typeof snapshot !== 'undefined' && snapshot && snapshot.formatCount) || 89))}" value="${esc(String(s.format || 0))}"></div>
+            <div class="field"><label>Rattrapage (vide = celui du panneau)</label><input id="fmR-${esc(s.key)}" type="number" min="0" max="10" placeholder="${esc(String(relay.maxR ?? 3))}" value="${esc(String(s.maxR === '' || s.maxR == null ? '' : s.maxR))}"></div></div>
+            <p class="small muted">Actuellement appliqué : format ${esc(String(s.effectiveFormat || 1))} · rattrapage ${esc(String(s.effectiveMaxR ?? 3))}</p>
             <label class="small" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmA-${esc(s.key)}" ${s.autoSend ? 'checked' : ''}> Envoyer automatiquement cette formation après chaque perte</label>
             <div class="toolbar" style="margin-top:10px"><button class="button primary" onclick="saveFormationLesson('${esc(s.key)}')">Enregistrer</button><button class="button orange" onclick="sendFormationLesson('${esc(s.key)}')">Envoyer dans le canal</button></div>
             <p class="small muted" style="margin-top:8px">${esc(String(s.manualSentCount || 0))} envoi(s) manuel(s)${s.lastManualAt ? ' · dernier : ' + esc(formatDate(s.lastManualAt)) : ''}</p>
@@ -2349,38 +2354,135 @@ Faites-en bon usage !
         $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Formation</span><h2 style="margin-top:7px">Toutes les formations, stratégie par stratégie</h2><p class="small">Chaque stratégie (y compris « Prédit » et celles créées par l’IA) possède sa formation et sa configuration d’envoi propre : titre, contenu et canal indépendants.</p></div><button class="button ghost" onclick="formationPage()">Actualiser</button></div>
         <div class="panel" style="margin-bottom:16px"><div class="split"><b>Canal général de repli</b><span class="tag">${esc(String(relay.sentCount || 0))} envoi(s)</span></div>
         <p class="small">Utilisé pour les stratégies dont le canal propre est vide.</p>
-        <div class="field"><label>Canal Telegram général</label><input id="fmGlobalChan" value="${esc((relay.channels || []).join(', '))}" placeholder="-1001234567890 ou @moncanal"></div>
-        <div class="toolbar"><button class="button primary" onclick="saveFormationGlobalChannel()">Enregistrer le canal général</button></div></div>
-        ${cards || '<div class="notice warn">Aucune stratégie disponible.</div>'}`;
-      } catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
-    }
-    async function saveFormationGlobalChannel() {
-      const el = $('#fmGlobalChan'); if (!el) return;
-      try { await api('/api/formation/relay/config', 'POST', { channels: el.value, enabled: true }); toast('Canal général enregistré.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function saveFormationLesson(key) {
-      try {
-        await api('/api/formation/relay/strategy', 'POST', {
-          key,
-          title: ($('#fmT-' + key) || {}).value || '',
-          text: ($('#fmC-' + key) || {}).value || '',
-          channels: ($('#fmCh-' + key) || {}).value || '',
-          autoSend: !!(($('#fmA-' + key) || {}).checked),
-        });
-        toast('Formation enregistrée.');
-      } catch (e) { toast(e.message, 'error'); }
-    }
+         <div class="field"><label>Canal Telegram général</label><input id="fmGlobalChan" value="${esc((relay.channels || []).join(', '))}" placeholder="-1001234567890 ou @moncanal"></div>
+         <div class="two-col"><div class="field"><label>Format de prédiction général (1 → ${esc(String((typeof snapshot !== 'undefined' && snapshot && snapshot.formatCount) || 89))})</label><input id="fmGlobalFormat" type="number" min="1" max="${esc(String((typeof snapshot !== 'undefined' && snapshot && snapshot.formatCount) || 89))}" value="${esc(String(relay.format ?? 1))}"></div>
+         <div class="field"><label>Rattrapage général des prédictions</label><input id="fmGlobalMaxR" type="number" min="0" max="10" value="${esc(String(relay.maxR ?? 3))}"></div></div>
+         <div class="toolbar"><button class="button primary" onclick="saveFormationGlobalChannel()">Enregistrer les réglages généraux</button></div></div>
+         ${cards || '<div class="notice warn">Aucune stratégie disponible.</div>'}`;
+       } catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+     }
+     async function saveFormationGlobalChannel() {
+       const el = $('#fmGlobalChan'); if (!el) return;
+       const f = $('#fmGlobalFormat');
+       const m = $('#fmGlobalMaxR');
+       try {
+         await api('/api/formation/relay/config', 'POST', {
+           channels: el.value,
+           enabled: true,
+           ...(f ? { format: f.value } : {}),
+           ...(m ? { maxR: m.value } : {}),
+         });
+         toast('Réglages généraux enregistrés.');
+         await formationPage();
+       } catch (e) { toast(e.message, 'error'); }
+     }
+     async function saveFormationLesson(key) {
+       try {
+         await api('/api/formation/relay/strategy', 'POST', {
+           key,
+           title: ($('#fmT-' + key) || {}).value || '',
+           text: ($('#fmC-' + key) || {}).value || '',
+           channels: ($('#fmCh-' + key) || {}).value || '',
+           format: ($('#fmF-' + key) || {}).value ?? 0,
+           maxR: ($('#fmR-' + key) || {}).value ?? '',
+           autoSend: !!(($('#fmA-' + key) || {}).checked),
+         });
+         toast('Formation enregistrée.');
+       } catch (e) { toast(e.message, 'error'); }
+     }
     async function sendFormationLesson(key) {
       try { await saveFormationLesson(key); await api('/api/formation/relay/send', 'POST', { key }); toast('Formation envoyée dans le canal.'); await formationPage(); }
       catch (e) { toast(e.message, 'error'); }
     }
 
+
+    // -----------------------------------------------------------------------
+    // Jeu « 21 » (TwentyOne) de 1xbet
+    // -----------------------------------------------------------------------
+    let game21Timer = null;
+    function stopGame21Refresh() { if (game21Timer) { clearInterval(game21Timer); game21Timer = null; } }
+    function g21Cards(list) { return (list || []).length ? list.join(' ') : '—'; }
+    function g21LiveRow(g) {
+      return `<tr><td class="mono">#${esc(g.number ?? '?')}</td><td>${esc(g.tableName || '')}</td>
+        <td>${esc(g21Cards(g.player))}</td><td>${esc(g21Cards(g.dealer))}</td>
+        <td>${esc(g.playerValue ?? '—')} / ${esc(g.dealerValue ?? '—')}</td>
+        <td>${esc(g.winner || '—')}</td>
+        <td><span class="tag ${g.finished ? 'good' : 'warn'}">${esc(g.phaseLabel || '')}</span></td></tr>`;
+    }
+    function g21Table(rows, empty) {
+      if (!rows.length) return `<div class="empty">${esc(empty)}</div>`;
+      return `<table><thead><tr><th>Tour</th><th>Table</th><th>Joueur</th><th>Croupier</th><th>Points</th><th>Vainqueur</th><th>État</th></tr></thead><tbody>${rows.map(g21LiveRow).join('')}</tbody></table>`;
+    }
+    async function game21Page(silent) {
+      setNav('game21');
+      if (!silent) $('#app').innerHTML = '<div class="empty">Chargement des jeux 21…</div>';
+      let d;
+      try { d = await api('/api/game21?limit=30'); }
+      catch (e) { stopGame21Refresh(); $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; }
+      const tables = (d.tables || []).map(t => `<span class="tag">${esc(t.name)}</span>`).join(' ');
+      $('#app').innerHTML = `
+        <div class="section-head" style="padding-top:38px"><div><span class="eyebrow">1xbet · TwentyOne</span>
+          <h2 style="margin-top:7px">Game 21 — jeux en live</h2>
+          <p class="small">Les tours du jeu 21 de 1xbet en direct : toutes les cartes du joueur et du croupier, leur costume et le total de chaque main. Actualisé tout seul toutes les 6 secondes.</p></div>
+          <button class="button small ghost" onclick="game21Page(true)">Actualiser</button></div>
+        ${d.error ? `<div class="notice error">${esc(d.error)}</div>` : ''}
+        <div class="panel">${tables || '<span class="muted">Aucune table détectée</span>'}
+          <div class="split small" style="margin-top:10px"><span class="muted">Tours enregistrés</span><b>${esc(d.analysis?.rounds ?? 0)}</b>
+          <span class="muted">Avec une carte de valeur</span><b>${esc(d.analysis?.valueRate ?? 0)}%</b></div></div>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">En cours et à venir</h2></div></div>
+          <div class="panel">${g21Table(d.live || [], 'Aucun tour en cours pour le moment.')}</div></section>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Derniers tours terminés</h2></div></div>
+          <div class="panel">${g21Table(d.games || [], 'Aucun tour terminé reçu pour le moment.')}</div></section>
+        <div class="toolbar"><button class="button ghost" onclick="location.hash='#/game21-ai'">Analyse IA du 21 →</button></div>`;
+      stopGame21Refresh();
+      game21Timer = setInterval(() => { if (location.hash === '#/game21') game21Page(true); else stopGame21Refresh(); }, 6000);
+    }
+    function g21GridView(a) {
+      const rows = (a.grid || []).map(r => `<tr><td>${esc(r.suit)}</td>${r.ranks.map(x => `<td>${esc(x.rank)} · <b>${esc(x.count)}</b></td>`).join('')}</tr>`).join('');
+      return `<table><thead><tr><th>Costume</th><th>A</th><th>K</th><th>Q</th><th>J</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    async function game21AiPage(data) {
+      setNav('game21');
+      stopGame21Refresh();
+      let d = data;
+      if (!d) { $('#app').innerHTML = '<div class="empty">Chargement de l’analyse…</div>';
+        try { d = await api('/api/game21?limit=30'); } catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; } }
+      const a = d.analysis || {};
+      const p = d.prediction;
+      const vt = (a.valueTriggers || []).map(t => `<tr><td class="mono">${esc(t.trigger)}</td><td>A, K, Q ou J</td><td>${esc(t.hit)}/${esc(t.total)}</td><td><b>${esc(t.rate)}%</b></td></tr>`).join('');
+      const et = (a.exactTriggers || []).map(t => `<tr><td class="mono">${esc(t.trigger)}</td><td>${esc(t.card)}</td><td>${esc(t.hit)}/${esc(t.total)}</td><td><b>${esc(t.rate)}%</b></td></tr>`).join('');
+      $('#app').innerHTML = `
+        <div class="section-head" style="padding-top:38px"><div><span class="eyebrow">1xbet · TwentyOne</span>
+          <h2 style="margin-top:7px">Analyse IA du jeu 21</h2>
+          <p class="small">L'IA cherche les déclencheurs : une carte vue dans un tour qui annonce, au tour suivant, une carte de valeur (A, K, Q, J) ou une carte de valeur exacte avec son costume ♦️ ♠️ ❤️ ♣️.</p></div>
+          <button class="button primary" id="g21AiBtn" onclick="game21Analyze()">Analyser avec l'IA</button></div>
+        ${d.error ? `<div class="notice error">${esc(d.error)}</div>` : ''}
+        <div class="panel"><div class="split small"><span class="muted">Tours analysés</span><b>${esc(a.rounds ?? 0)}</b>
+          <span class="muted">Tours avec carte de valeur</span><b>${esc(a.withValue ?? 0)} (${esc(a.valueRate ?? 0)}%)</b></div>
+          ${p ? `<p class="small" style="margin-top:10px">Déclencheur en cours : <b>${esc(p.trigger)}</b> (tour #${esc(p.fromRound ?? '?')} · ${esc(p.tableName || '')})${p.valueRate != null ? ` → carte de valeur attendue à <b>${esc(p.valueRate)}%</b> sur ${esc(p.valueSample)} cas` : ''}${(p.exact || []).length ? ` · cartes exactes probables : ${p.exact.map(x => `${esc(x.card)} ${esc(x.rate)}%`).join(', ')}` : ''}</p>` : ''}
+        </div>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Déclencheurs → carte de valeur (A, K, Q, J)</h2></div></div>
+          <div class="panel">${vt ? `<table><thead><tr><th>Déclencheur</th><th>Cible</th><th>Réussites</th><th>Taux</th></tr></thead><tbody>${vt}</tbody></table>` : '<div class="empty">Pas encore assez de tours enregistrés.</div>'}</div></section>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Déclencheurs → carte de valeur exacte</h2></div></div>
+          <div class="panel">${et ? `<table><thead><tr><th>Déclencheur</th><th>Carte exacte</th><th>Réussites</th><th>Taux</th></tr></thead><tbody>${et}</tbody></table>` : '<div class="empty">Pas encore assez de tours enregistrés.</div>'}</div></section>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Cartes de valeur sorties par costume</h2></div></div>
+          <div class="panel">${g21GridView(a)}</div></section>
+        <section class="section"><div class="section-head"><div><h2 style="margin-top:7px">Avis de l'IA</h2></div></div>
+          <div class="panel" id="g21AiText">${d.ai?.text ? `<pre style="white-space:pre-wrap;font-size:12px;line-height:1.6;margin:0">${esc(d.ai.text)}</pre><p class="small muted">Analyse du ${formatDate(d.ai.at)} · ${esc(d.ai.rounds)} tour(s)</p>` : '<div class="empty">Appuie sur « Analyser avec l’IA » pour obtenir les déclencheurs commentés.</div>'}</div></section>
+        <div class="toolbar"><button class="button ghost" onclick="location.hash='#/game21'">← Jeux 21 en live</button></div>`;
+    }
+    async function game21Analyze() {
+      const btn = document.getElementById('g21AiBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Analyse en cours…'; }
+      try { const d = await api('/api/game21/analyze', 'POST', {}); await game21AiPage(d); toast('Analyse IA terminée.'); }
+      catch (e) { toast(e.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = "Analyser avec l'IA"; } }
+    }
     async function route() {
       try {
         await refresh();
         const h = location.hash || '#/';
         if (!h.startsWith('#/canal/')) stopCanalRefresh();
+        if (h !== '#/game21') stopGame21Refresh();
         if (h.startsWith('#/strategy/')) await strategyPage(decodeURIComponent(h.split('/')[2]));
         else if (h.startsWith('#/canal/')) await canalPage(decodeURIComponent(h.split('/')[2]));
         else if (h === '#/canaux') await canauxPage();
@@ -2398,6 +2500,8 @@ Faites-en bon usage !
         else if (h === '#/announcements') await announcementsPage();
         else if (h === '#/diagnostics') await diagnosticsPage();
         else if (h === '#/database') await databasePage();
+        else if (h === '#/game21') await game21Page();
+        else if (h === '#/game21-ai') await game21AiPage();
         else if (h === '#/formats') await formatsPage();
         else if (h === '#/settings') settingsPage();
         else if (h === '#/users') await usersPage();
