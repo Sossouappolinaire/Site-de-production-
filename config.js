@@ -64,7 +64,7 @@ const OPENROUTER = {
   // sans préavis) : si ce modèle disparaît, remplacez-le (liste à jour sur
   // https://openrouter.ai/models?fmt=free) via OPENROUTER_MODEL, sans toucher
   // au code.
-  MODEL: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
+  MODEL: process.env.OPENROUTER_MODEL || 'minimax/minimax-m3:free',
 };
 
 // ---------------------------------------------------------------------------

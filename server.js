@@ -29,6 +29,7 @@ const paiement = require('./paiement');
 const mirrorCounter = require('./mirror-counter');
 const sebpay = require('./sebpay');
 const lossNotice = require('./loss-notice');
+const game21 = require('./game21');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
@@ -350,6 +351,31 @@ app.get('/api/state', async (req, res) => {
 app.get('/api/games', (req, res) => {
   const limit = Math.min(100, parseInt(req.query.limit, 10) || 30);
   res.json({ live: state.live, games: recentGames(limit) });
+});
+
+// ---------------------------------------------------------------------------
+// Jeu « 21 » (TwentyOne) de 1xbet — jeux en live + analyse des déclencheurs
+// des cartes de valeur (A, K, Q, J) et des cartes de valeur exacte.
+// ---------------------------------------------------------------------------
+app.get('/api/game21', async (req, res) => {
+  const limit = Math.min(200, parseInt(req.query.limit, 10) || 30);
+  if (req.query.refresh === '1' || !game21.state.updatedAt) await game21.refresh();
+  res.json(game21.snapshot({ limit }));
+});
+
+app.post('/api/game21/refresh', async (req, res) => {
+  await game21.refresh();
+  res.json(game21.snapshot({ limit: 30 }));
+});
+
+app.post('/api/game21/analyze', async (req, res) => {
+  try {
+    if (!game21.state.updatedAt) await game21.refresh();
+    const ai21 = await game21.aiOpinion({ limit: 40 });
+    res.json({ ...game21.snapshot({ limit: 30 }), ai: ai21 });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // jeux stockés en base par date (ex: /api/history?date=2/04/2026)
@@ -1897,6 +1923,7 @@ app.get('/api/diagnostics/channels', async (req, res) => {
 
   app.listen(config.PORT, '0.0.0.0', () => {
     console.log('Tableau de bord sur le port ' + config.PORT);
+    game21.startLoop(6000);
     startLoop().then(() => {
       if (aiAuto.auto.enabled) aiAuto.start(persist);
       console.log('🤖 Analyseur IA temps réel démarré (clé configurée : ' + ((ai.keyLooksValid() || ai.geminiConfigured() || ai.groqConfigured() || ai.openrouterConfigured()) ? 'oui' : 'non configurée') + ')');
