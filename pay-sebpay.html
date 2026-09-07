@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paiement SebPay — Baccara Vend</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0f1115; color: #e8e8ec; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 420px; background: #171a21; border: 1px solid #262b36;
+    border-radius: 14px; padding: 28px 24px; box-shadow: 0 10px 40px rgba(0,0,0,.35); text-align: center;
+  }
+  h1 { font-size: 20px; margin: 14px 0 4px; }
+  p.sub { color: #9098a8; font-size: 13px; margin: 0 0 22px; line-height: 1.5; }
+  .icon { font-size: 40px; }
+  .icon.spin { animation: spin 1s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .amount { font-size: 26px; font-weight: 700; color: #8ef0a8; margin: 4px 0 20px; }
+  .field { text-align: left; margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; color: #9098a8; margin-bottom: 6px; }
+  .field input, .field select {
+    width: 100%; padding: 11px 14px; border-radius: 9px; border: 1px solid #2c3140;
+    background: #10131a; color: #e8e8ec; font-size: 14px;
+  }
+  button {
+    padding: 12px 16px; border: none; border-radius: 9px;
+    background: #f26522; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    width: 100%; margin-top: 6px;
+  }
+  button:hover { background: #d9551a; }
+  button:disabled { opacity: .6; cursor: default; }
+  .msg { margin-top: 14px; font-size: 13px; padding: 10px 12px; border-radius: 8px; text-align: left; }
+  .msg.err { background: #3a1a1f; color: #ff9aa6; }
+  .msg.ok { background: #17301f; color: #8ef0a8; }
+  .hidden { display: none !important; }
+  .ussd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 18px; color: #f26522; text-align: center; margin: 10px 0; }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div id="loading">
+      <div class="icon spin">⏳</div>
+      <h1>Chargement…</h1>
+      <p class="sub">Merci de patienter un instant.</p>
+    </div>
+
+    <div id="form" class="hidden">
+      <div class="icon">📱</div>
+      <h1 id="itemName">Paiement Mobile Money</h1>
+      <div class="amount" id="amountText"></div>
+      <div class="field"><label>Opérateur</label><select id="operator"></select></div>
+      <div class="field"><label>Numéro de téléphone (sans le +)</label><input id="phone" type="tel" inputmode="numeric" placeholder="Ex. 2290100000000"></div>
+      <button id="payBtn" onclick="submitPayment()">💳 Payer maintenant</button>
+      <div id="formMsg" class="msg err hidden"></div>
+    </div>
+
+    <div id="otpStep" class="hidden">
+      <div class="icon">🔐</div>
+      <h1>Confirmation requise</h1>
+      <p class="sub">Compose ce code USSD sur ton téléphone pour recevoir un code de validation, puis entre-le ci-dessous.</p>
+      <div class="ussd" id="ussdCode"></div>
+      <div class="field"><label>Code de validation reçu</label><input id="otpCode" inputmode="numeric" placeholder="Ex. 123456"></div>
+      <button id="otpBtn" onclick="submitOtp()">✅ Valider</button>
+      <div id="otpMsg" class="msg err hidden"></div>
+    </div>
+
+    <div id="waiting" class="hidden">
+      <div class="icon spin">⏳</div>
+      <h1>Demande envoyée</h1>
+      <p class="sub" id="waitingSub">Valide la demande de paiement sur ton téléphone. Redirection automatique dès confirmation…</p>
+    </div>
+
+    <div id="notfound" class="hidden">
+      <div class="icon">🔎</div>
+      <h1>Paiement introuvable ou expiré</h1>
+      <p class="sub">Retourne sur Telegram et relance un paiement depuis le bot.</p>
+    </div>
+  </div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const ref = params.get('ref');
+  const $ = (id) => document.getElementById(id);
+  let operatorsList = [];
+
+  function show(id) {
+    ['loading', 'form', 'otpStep', 'waiting', 'notfound'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function init() {
+    if (!ref) { show('notfound'); return; }
+    try {
+      const [infoRes, opsRes] = await Promise.all([
+        fetch(`/api/sebpay/info/${encodeURIComponent(ref)}`),
+        fetch('/api/sebpay/operators'),
+      ]);
+      const info = await infoRes.json();
+      if (!infoRes.ok || !info.ok) { show('notfound'); return; }
+      $('itemName').textContent = info.itemName ? `Paiement — ${info.itemName}` : 'Paiement Mobile Money';
+      $('amountText').textContent = `${info.amount} ${info.currency}`;
+      const ops = await opsRes.json();
+      operatorsList = (ops.ok && Array.isArray(ops.operators)) ? ops.operators : (ops.ok && ops.operators && ops.operators.operators) || [];
+      $('operator').innerHTML = operatorsList.length
+        ? operatorsList.map((o) => `<option value="${escapeHtml(o.slug || o.code)}">${escapeHtml(o.name || o.slug || o.code)}</option>`).join('')
+        : `<option value="mtn">MTN</option><option value="moov">Moov</option>`;
+      show('form');
+    } catch (e) {
+      show('notfound');
+    }
+  }
+
+  async function submitPayment() {
+    const phone = $('phone').value.trim();
+    const operator = $('operator').value;
+    if (!phone) { showFormError('Entre ton numéro de téléphone.'); return; }
+    $('payBtn').disabled = true;
+    try {
+      const res = await fetch(`/api/sebpay/collect/${encodeURIComponent(ref)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, operator }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) { showFormError(data.error || 'Échec du lancement du paiement.'); $('payBtn').disabled = false; return; }
+      if (data.needsOtp) {
+        $('ussdCode').textContent = data.ussdCode || '';
+        show('otpStep');
+        return;
+      }
+      afterCollectSuccess(data);
+    } catch (e) {
+      showFormError('Erreur réseau, réessaie.');
+      $('payBtn').disabled = false;
+    }
+  }
+
+  async function submitOtp() {
+    const phone = $('phone').value.trim();
+    const operator = $('operator').value;
+    const otpCode = $('otpCode').value.trim();
+    if (!otpCode) { showOtpError('Entre le code reçu.'); return; }
+    $('otpBtn').disabled = true;
+    try {
+      const res = await fetch(`/api/sebpay/collect/${encodeURIComponent(ref)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, operator, otpCode }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) { showOtpError(data.error || 'Code invalide.'); $('otpBtn').disabled = false; return; }
+      afterCollectSuccess(data);
+    } catch (e) {
+      showOtpError('Erreur réseau, réessaie.');
+      $('otpBtn').disabled = false;
+    }
+  }
+
+  function afterCollectSuccess(data) {
+    // Wave (ou tout opérateur avec redirection) : SebPay renvoie un lien à
+    // ouvrir pour finaliser — sinon on part directement en attente sur
+    // succes.html, qui affichera « Voir mon code » dès la confirmation du
+    // webhook (voir server.js — /api/sebpay/webhook, paiement.js —
+    // confirmSebpayPayment). AUCUNE confirmation n'a lieu sur CETTE page.
+    if (data.providerLink) { location.href = data.providerLink; return; }
+    show('waiting');
+    setTimeout(() => { location.href = `succes.html?ref=${encodeURIComponent(ref)}`; }, 1500);
+  }
+
+  function showFormError(text) { $('formMsg').textContent = text; $('formMsg').classList.remove('hidden'); }
+  function showOtpError(text) { $('otpMsg').textContent = text; $('otpMsg').classList.remove('hidden'); }
+
+  init();
+</script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paiement — Baccara Vend</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0f1115; color: #e8e8ec; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 420px; background: #171a21; border: 1px solid #262b36;
+    border-radius: 14px; padding: 28px 24px; box-shadow: 0 10px 40px rgba(0,0,0,.35); text-align: center;
+  }
+  h1 { font-size: 20px; margin: 14px 0 4px; }
+  p.sub { color: #9098a8; font-size: 13px; margin: 0 0 22px; line-height: 1.5; }
+  .icon { font-size: 40px; }
+  .icon.spin { animation: spin 1s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .identity {
+    background: #10131a; border: 1px solid #2c3140; border-radius: 9px;
+    padding: 12px 14px; margin: 0 0 20px; text-align: left; font-size: 13px; color: #c7cbd6; line-height: 1.7;
+  }
+  .identity b { color: #e8e8ec; }
+  .code-box {
+    display: flex; align-items: center; gap: 8px; background: #10131a; border: 1px solid #2c3140;
+    border-radius: 9px; padding: 12px 14px; margin: 16px 0;
+  }
+  .code-box span { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px; letter-spacing: .04em; color: #8ef0a8; text-align: left; word-break: break-all; }
+  button {
+    padding: 11px 16px; border: none; border-radius: 9px;
+    background: #5b7cff; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    width: 100%;
+  }
+  button:hover { background: #4a6bee; }
+  button:disabled { opacity: .6; cursor: default; }
+  .msg { margin-top: 14px; font-size: 13px; padding: 10px 12px; border-radius: 8px; }
+  .msg.err { background: #3a1a1f; color: #ff9aa6; }
+  .msg.ok { background: #17301f; color: #8ef0a8; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div id="ask" class="hidden">
+      <div class="icon">🎟️</div>
+      <h1>Voici ton paiement</h1>
+      <div class="identity" id="identityBox"></div>
+      <p class="sub">Appuie sur « Voir mon code » pour afficher le code à copier dans Telegram.</p>
+      <button id="askBtn" onclick="viewCode()">🎟️ Voir mon code</button>
+      <div id="askMsg" class="msg err hidden"></div>
+    </div>
+
+    <div id="pending">
+      <div class="icon spin">⏳</div>
+      <h1>Chargement…</h1>
+      <p class="sub">Merci de patienter un instant.</p>
+    </div>
+
+    <div id="paid" class="hidden">
+      <div class="icon" id="paidIcon">🎟️</div>
+      <h1 id="paidTitle">Voici ton code</h1>
+      <div class="identity hidden" id="identityBoxPaid"></div>
+      <p class="sub" id="paidSub">Copie-le, puis renvoie-le dans Telegram. Il restera valide 30 secondes après la copie.</p>
+      <div class="code-box" id="codeBox"><span id="codeValue"></span><button onclick="copyCode()">📋 Copier</button></div>
+      <div id="copyMsg" class="msg ok hidden">Code copié ! Il reste valide 30 secondes.</div>
+    </div>
+
+    <div id="thanks" class="hidden">
+      <div class="icon">🙏</div>
+      <h1 id="thanksTitle">Merci pour ton soutien !</h1>
+      <p class="sub" id="thanksSub"></p>
+    </div>
+
+    <div id="failed" class="hidden">
+      <div class="icon">❌</div>
+      <h1>Paiement non confirmé</h1>
+      <p class="sub">Le paiement n'a pas abouti ou a été annulé. Retourne sur Telegram pour réessayer.</p>
+    </div>
+
+    <div id="closed" class="hidden">
+      <div class="icon">✅</div>
+      <h1>C'est noté !</h1>
+      <p class="sub">Ton code a été copié. Tu peux fermer cette page.</p>
+    </div>
+
+    <div id="expired" class="hidden">
+      <div class="icon">⌛</div>
+      <h1>Code expiré</h1>
+      <p class="sub">Les 30 secondes après la copie sont écoulées. Ce code n'est plus utilisable. Retourne sur Telegram pour lancer un nouveau paiement.</p>
+    </div>
+
+    <div id="notfound" class="hidden">
+      <div class="icon">🔎</div>
+      <h1>Aucun paiement en cours</h1>
+      <p class="sub">Retourne sur Telegram, clique sur « Payer » dans le bot, puis reviens sur cette page une fois le paiement effectué.</p>
+      <p class="sub">Ou entre ton ID Telegram ci-dessous pour retrouver ton paiement (laisse vide pour utiliser l'ID par défaut) :</p>
+      <input id="uidInput" type="text" inputmode="numeric" placeholder="Ton ID Telegram"
+        style="width:100%; padding:11px 14px; border-radius:9px; border:1px solid #2c3140; background:#10131a; color:#e8e8ec; font-size:14px; margin-bottom:10px; box-sizing:border-box;">
+      <button id="findBtn" onclick="findByUserId()">🎟️ Voir mon code</button>
+      <div id="findMsg" class="msg err hidden"></div>
+    </div>
+  </div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  let ref = params.get('ref');
+  const uid = params.get('uid');
+  const fn = params.get('fn');
+  const ln = params.get('ln');
+  const $ = (id) => document.getElementById(id);
+
+  function show(id) {
+    ['ask', 'pending', 'paid', 'thanks', 'failed', 'closed', 'expired', 'notfound'].forEach((x) => $(x).classList.toggle('hidden', x !== id));
+  }
+
+  function identityHtml() {
+    const rows = [];
+    if (ln) rows.push(`<div>👤 <b>Nom</b> : ${escapeHtml(ln)}</div>`);
+    if (fn) rows.push(`<div>👤 <b>Prénom</b> : ${escapeHtml(fn)}</div>`);
+    if (uid) rows.push(`<div>🆔 <b>ID Telegram</b> : ${escapeHtml(uid)}</div>`);
+    return rows.join('');
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  let expiryTimer = null;
+  function armExpiry(expiresAt) {
+    if (!expiresAt) return;
+    if (expiryTimer) clearTimeout(expiryTimer);
+    const delay = Math.max(0, Number(expiresAt) - Date.now());
+    expiryTimer = setTimeout(() => {
+      $('codeValue').textContent = '';
+      $('codeBox').classList.add('hidden');
+      show('expired');
+    }, delay);
+  }
+
+  // Une fois le code copié, la page n'a plus besoin de rester ouverte. Le
+  // serveur garde toutefois le code valide pendant 30 secondes afin de
+  // laisser le temps au client de revenir dans Telegram.
+  function copyCode() {
+    const text = $('codeValue').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      if (expiryTimer) clearTimeout(expiryTimer);
+      fetch(`/api/paiement/copie/${encodeURIComponent(ref)}`, { method: 'POST' }).catch(() => {});
+      $('copyMsg').classList.remove('hidden');
+      setTimeout(() => {
+        show('closed');
+        window.close();
+      }, 1200);
+    });
+  }
+
+  function showPaid(code, aiName, expiresAt) {
+    $('paidIcon').textContent = '✅';
+    $('paidTitle').textContent = aiName ? `Voici ton code — ${aiName}` : 'Voici ton code';
+    const idHtml = identityHtml();
+    $('identityBoxPaid').innerHTML = idHtml;
+    $('identityBoxPaid').classList.toggle('hidden', !idHtml);
+    $('paidSub').textContent = "Copie-le, puis renvoie-le dans Telegram pour débloquer ta stratégie. Il restera valide 30 secondes après la copie.";
+    $('codeValue').textContent = code;
+    $('codeBox').classList.remove('hidden');
+    armExpiry(expiresAt);
+    show('paid');
+  }
+
+  function showThanks(data) {
+    const name = (fn || ln) ? [fn, ln].filter(Boolean).join(' ') : (data.buyerName || '');
+    $('thanksTitle').textContent = name ? `Merci, ${name} !` : 'Merci pour ton soutien !';
+    $('thanksSub').textContent = `Sossou Kouamé te remercie infiniment — tu as versé ${data.amountUsd}$ (${data.amount} F CFA) pour ton soutien. ❤️ Ce message t'a aussi été envoyé sur Telegram.`;
+    show('thanks');
+  }
+
+  function showAskError(text) {
+    $('askMsg').textContent = text;
+    $('askMsg').classList.remove('hidden');
+  }
+
+  // Cas normal avec le lien de succès FIXE Money Fusion (pas de ?ref= dans
+  // l'URL de retour) : on retrouve automatiquement, côté serveur, le client
+  // qui vient de payer (verrou global d'achat — une seule personne à la fois,
+  // voir paiement.currentActiveRecord), SANS rien lui faire saisir, puis on
+  // reconstruit et on ouvre le lien complet succes.html?ref=...&uid=...&fn=
+  // ...&ln=... (même format qu'avant) pour la suite normale de l'affichage.
+  async function autoDetect() {
+    show('pending');
+    try {
+      const res = await fetch('/api/paiement/actif');
+      const data = await res.json();
+      if (!res.ok || !data.ok) { show('notfound'); return; }
+      const target = new URLSearchParams({ ref: data.ref });
+      if (data.uid) target.set('uid', data.uid);
+      if (data.buyerName) {
+        const parts = String(data.buyerName).trim().split(/\s+/);
+        if (parts[0]) target.set('fn', parts[0]);
+        if (parts.length > 1) target.set('ln', parts.slice(1).join(' '));
+      }
+      location.replace(`${location.pathname}?${target.toString()}`);
+    } catch (e) {
+      show('notfound');
+    }
+  }
+
+  // Le bouton de paiement est dans Telegram et ouvre directement Money
+  // Fusion. Cette page ne sert qu'à afficher puis copier le code.
+  async function viewCode() {
+    $('askMsg').classList.add('hidden');
+    $('askBtn').disabled = true;
+    show('pending');
+    await fetchStatus();
+  }
+
+  async function fetchStatus() {
+    if (!ref) { show('notfound'); return; }
+    try {
+      const res = await fetch(`/api/paiement/statut/${encodeURIComponent(ref)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Paiement introuvable.');
+      if (data.status === 'failed') { show('failed'); return; }
+      if (data.status === 'expired') {
+        $('codeValue').textContent = '';
+        $('codeBox').classList.add('hidden');
+        show('expired');
+        return;
+      }
+      if (data.kind === 'support') { showThanks(data); return; }
+      if (data.code) { showPaid(data.code, data.aiName, data.expiresAt); return; }
+      show('ask');
+      $('askBtn').disabled = false;
+      showAskError("Code pas encore disponible — réessaie dans un instant.");
+    } catch (e) {
+      show('ask');
+      $('askBtn').disabled = false;
+      showAskError('Erreur réseau, réessaie.');
+    }
+  }
+
+  // Solution de secours : recherche manuelle par ID Telegram, utilisée quand
+  // la détection automatique (autoDetect, ci-dessus) échoue — ex. si le
+  // serveur a redémarré entre le clic sur « Payer » et le retour ici (Render
+  // gratuit : disque non persistant). Reprend exactement la même API que le
+  // reste de la page (voir server.js — POST /api/paiement/confirmer).
+  // Si le champ est laissé vide : ID par défaut "100000", et un nom
+  // "Client N" généré localement (compteur conservé dans ce navigateur).
+  function nextDefaultClientName() {
+    const n = (parseInt(localStorage.getItem('defaultClientCounter') || '0', 10) || 0) + 1;
+    localStorage.setItem('defaultClientCounter', String(n));
+    return `Client ${n}`;
+  }
+
+  async function findByUserId() {
+    $('findMsg').classList.add('hidden');
+    let val = $('uidInput').value.trim();
+    let defaultName = null;
+    if (!val) {
+      val = '100000';
+      defaultName = nextDefaultClientName();
+    }
+    $('findBtn').disabled = true;
+    try {
+      const res = await fetch('/api/paiement/confirmer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: val }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        $('findMsg').textContent = data.error || "Aucun paiement en cours trouvé pour cet ID Telegram.";
+        $('findMsg').classList.remove('hidden');
+        $('findBtn').disabled = false;
+        return;
+      }
+      const target = new URLSearchParams({ ref: data.ref });
+      target.set('uid', val);
+      if (data.buyerName) {
+        const parts = String(data.buyerName).trim().split(/\s+/);
+        if (parts[0]) target.set('fn', parts[0]);
+        if (parts.length > 1) target.set('ln', parts.slice(1).join(' '));
+      } else if (defaultName) {
+        target.set('fn', defaultName);
+      }
+      location.replace(`${location.pathname}?${target.toString()}`);
+    } catch (e) {
+      $('findMsg').textContent = 'Erreur réseau, réessaie.';
+      $('findMsg').classList.remove('hidden');
+      $('findBtn').disabled = false;
+    }
+  }
+
+  if (!ref) {
+    autoDetect();
+  } else {
+    $('identityBox').innerHTML = identityHtml();
+    show('ask');
+  }
+</script>
+</body>
+</html>

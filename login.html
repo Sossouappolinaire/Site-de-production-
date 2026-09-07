@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connexion — Baccara Bot</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0f1115; color: #e8e8ec; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 380px; background: #171a21; border: 1px solid #262b36;
+    border-radius: 14px; padding: 28px 24px; box-shadow: 0 10px 40px rgba(0,0,0,.35);
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: #9098a8; font-size: 13px; margin: 0 0 22px; }
+  label { display: block; font-size: 13px; color: #b6bcc9; margin: 14px 0 6px; }
+  input {
+    width: 100%; padding: 11px 12px; border-radius: 9px; border: 1px solid #2c3140;
+    background: #10131a; color: #e8e8ec; font-size: 14px; outline: none;
+  }
+  input:focus { border-color: #5b7cff; }
+  button {
+    width: 100%; margin-top: 20px; padding: 12px; border: none; border-radius: 9px;
+    background: #5b7cff; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { background: #4a6bee; }
+  button:disabled { opacity: .6; cursor: wait; }
+  button.ghost { background: transparent; color: #9098a8; margin-top: 10px; text-decoration: underline; font-weight: 400; }
+  .msg { margin-top: 14px; font-size: 13px; padding: 10px 12px; border-radius: 8px; display: none; }
+  .msg.err { display: block; background: #3a1a1f; color: #ff9aa6; }
+  .msg.ok { display: block; background: #17301f; color: #8ef0a8; }
+  .switch { text-align: center; margin-top: 16px; font-size: 13px; color: #9098a8; }
+  .switch a { color: #5b7cff; cursor: pointer; text-decoration: none; }
+  .hidden { display: none !important; }
+
+  /* petite roue de chargement dans les boutons, pendant l'envoi */
+  .spin-ico {
+    display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px;
+    border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%;
+    animation: spinIco 700ms linear infinite;
+  }
+  @keyframes spinIco { to { transform: rotate(360deg); } }
+
+  /* ── Fenêtre modale : saisie du code de confirmation ──────────────── */
+  #verifyModalBackdrop {
+    position: fixed; inset: 0; z-index: 1000; background: rgba(5,7,13,.72);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    opacity: 0; pointer-events: none; transition: opacity 220ms ease;
+  }
+  #verifyModalBackdrop.open { opacity: 1; pointer-events: auto; }
+  #verifyModal {
+    width: 100%; max-width: 360px; background: #171a21; border: 1px solid #2c3140;
+    border-radius: 16px; padding: 26px 22px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    transform: translateY(14px) scale(.97); transition: transform 220ms ease;
+  }
+  #verifyModalBackdrop.open #verifyModal { transform: translateY(0) scale(1); }
+
+  /* ── Fenêtre modale : « patientez, l'administrateur va traiter » ────── */
+  #pendingModalBackdrop, #blockedModalBackdrop {
+    position: fixed; inset: 0; z-index: 1000; background: rgba(5,7,13,.72);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    opacity: 0; pointer-events: none; transition: opacity 220ms ease;
+  }
+  #pendingModalBackdrop.open, #blockedModalBackdrop.open { opacity: 1; pointer-events: auto; }
+  #pendingModal, #blockedModal {
+    width: 100%; max-width: 360px; background: #171a21; border: 1px solid #2c3140;
+    border-radius: 16px; padding: 30px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    text-align: center; transform: translateY(14px) scale(.97); transition: transform 220ms ease;
+  }
+  #pendingModalBackdrop.open #pendingModal, #blockedModalBackdrop.open #blockedModal { transform: translateY(0) scale(1); }
+  .wait-ico {
+    width: 40px; height: 40px; margin: 0 auto 16px; border: 3px solid rgba(91,124,255,.3);
+    border-top-color: #5b7cff; border-radius: 50%; animation: spinIco 900ms linear infinite;
+  }
+  .lock-ico { font-size: 38px; margin-bottom: 10px; }
+  #pendingModal p, #blockedModal p { color: #9098a8; font-size: 13px; margin: 0 0 4px; }
+  .telegram-link {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; margin-top: 18px; padding: 12px; border-radius: 9px;
+    background: #229ed9; color: #fff; font-size: 14px; font-weight: 600;
+    text-decoration: none; box-sizing: border-box;
+  }
+  .telegram-link:hover { background: #1c8bc0; }
+
+  /* ── Écran de démarrage : livre qui s'ouvre (15 s) ── */
+  #splash {
+    position: fixed; inset: 0; z-index: 999;
+    background: #05070d;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; overflow: hidden;
+  }
+  #splash.leaving { animation: splashOut 700ms ease forwards; }
+  .book-intro { position: relative; width: 100%; height: 100%; overflow: hidden;
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    background: radial-gradient(ellipse at center, #1a1030 0%, #0a0714 45%, #05070d 100%); }
+
+  /* phase 1 (0 → 3.5 s) — une étincelle d'IA traverse l'écran et « appelle » le livre */
+  .ai-orb { position: absolute; top: 26%; font-size: 46px; opacity: 0;
+    filter: drop-shadow(0 0 20px rgba(130,190,255,.85)) drop-shadow(0 0 40px rgba(130,90,255,.5));
+    animation: aiCall 3500ms ease both; }
+  .ai-orb .spark { display: inline-block; animation: sparkPulse 900ms ease-in-out infinite; }
+  @keyframes sparkPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+  @keyframes aiCall {
+    0%   { opacity: 0; transform: translate(240px, -30px) scale(.4) rotate(-10deg); }
+    22%  { opacity: 1; transform: translate(90px, -10px) scale(.95) rotate(4deg); }
+    50%  { opacity: 1; transform: translate(0, 0) scale(1.08) rotate(-4deg); }
+    72%  { opacity: 1; transform: translate(0, 0) scale(1) rotate(2deg); }
+    100% { opacity: 0; transform: translate(0, 6px) scale(.7) rotate(0deg); }
+  }
+
+  /* phase 2 (3.2 → 5 s) — le livre fermé apparaît puis s'ouvre */
+  .book-wrap { position: relative; margin-top: 34px; opacity: 0; animation: bookIn 700ms ease 2900ms forwards; }
+  @keyframes bookIn { to { opacity: 1; } }
+  .book { position: relative; width: 300px; height: 200px; perspective: 1800px; }
+  .book-base {
+    position: absolute; inset: 0; border-radius: 6px; background: #241610;
+    box-shadow: 0 30px 70px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.03);
+  }
+  .page {
+    position: absolute; top: 6px; bottom: 6px; width: calc(50% - 8px);
+    background: linear-gradient(180deg,#f7f0e2,#ecdfc7);
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    padding: 16px; box-sizing: border-box;
+  }
+  .page-left { left: 6px; border-radius: 3px 0 0 3px; }
+  .page-right { right: 6px; border-radius: 0 3px 3px 0; }
+  .page-content { opacity: 0; animation: pageTextIn 900ms ease 5100ms forwards; }
+  .page-content .dev-name { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; font-weight: 700; color: #241610; letter-spacing: .01em; }
+  .page-content .dev-role { margin-top: 6px; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: #7a6a52; }
+  @keyframes pageTextIn { to { opacity: 1; } }
+  .cover {
+    position: absolute; top: 0; left: 0; width: 50%; height: 100%;
+    background: linear-gradient(135deg,#7a4a24,#3a2010 70%);
+    border-radius: 6px 0 0 6px; transform-origin: left center; backface-visibility: hidden;
+    box-shadow: 3px 0 14px rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center; z-index: 5;
+    animation: coverOpen 1300ms cubic-bezier(.4,0,.2,1) 3500ms forwards;
+  }
+  .cover-emblem { font-size: 30px; opacity: .85; filter: drop-shadow(0 0 8px rgba(0,0,0,.5)); }
+  @keyframes coverOpen { to { transform: rotateY(-172deg); box-shadow: -3px 0 14px rgba(0,0,0,.3); } }
+  .book-glow {
+    position: absolute; inset: -30px; border-radius: 16px; opacity: 0;
+    background: radial-gradient(ellipse at center, rgba(130,150,255,.35), transparent 70%);
+    animation: glowPulse 1600ms ease 3600ms forwards;
+  }
+  @keyframes glowPulse { 0% { opacity: 0; } 40% { opacity: 1; } 100% { opacity: .45; } }
+
+  .skip-hint { position: absolute; bottom: 26px; left: 0; right: 0; text-align: center; color: #cfd4e2; font-size: 12px;
+    letter-spacing: .04em; opacity: 0; animation: skipHintIn 8000ms ease-in-out both; z-index: 5; }
+  @keyframes skipHintIn { 0%, 55% { opacity: 0; } 100% { opacity: .7; } }
+  @keyframes splashOut {
+    to { opacity: 0; visibility: hidden; pointer-events: none; }
+  }
+  body.no-scroll { overflow: hidden; }
+</style>
+</head>
+<body class="no-scroll">
+  <div id="splash" onclick="closeSplash()">
+    <div class="book-intro">
+      <div class="ai-orb"><span class="spark">✨</span></div>
+      <div class="book-wrap">
+        <div class="book-glow"></div>
+        <div class="book">
+          <div class="book-base"></div>
+          <div class="page page-left"></div>
+          <div class="page page-right">
+            <div class="page-content">
+              <div class="dev-name">Sossou Kouamé Appolinaire</div>
+              <div class="dev-role">Développeur</div>
+            </div>
+          </div>
+          <div class="cover"><div class="cover-emblem">📖</div></div>
+        </div>
+      </div>
+      <div class="skip-hint">Touchez pour continuer</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="loginView">
+      <h1>🔒 Connexion</h1>
+      <p class="sub">Accès au tableau de bord — identifiants requis.</p>
+      <label>Identifiant</label>
+      <input id="loginId" autocomplete="username" placeholder="sossoukouam">
+      <label>Mot de passe</label>
+      <input id="loginPwd" type="password" autocomplete="current-password" placeholder="••••••••">
+      <button id="loginBtn" onclick="doLogin()">Se connecter</button>
+      <div id="loginMsg" class="msg"></div>
+      <div class="switch">Pas de compte ? <a onclick="showView('signup')">Créer un compte</a></div>
+    </div>
+
+    <div id="signupView" class="hidden">
+      <h1>✉️ Créer un compte</h1>
+      <p class="sub">Adresse Gmail requise. Aucun code n'est envoyé : après l'inscription, l'administrateur valide votre compte et vous accorde un temps d'accès.</p>
+      <label>Email Gmail</label>
+      <input id="suEmail" type="email" autocomplete="email" placeholder="vous@gmail.com">
+      <label>Mot de passe</label>
+      <input id="suPwd" type="password" autocomplete="new-password" placeholder="6 caractères minimum">
+      <label>Confirmation du mot de passe</label>
+      <input id="suPwd2" type="password" autocomplete="new-password" placeholder="Répéter le mot de passe">
+      <button id="signupBtn" onclick="doSignup()">Créer le compte</button>
+      <div id="signupMsg" class="msg"></div>
+      <div class="switch">Déjà un compte ? <a onclick="showView('login')">Se connecter</a></div>
+    </div>
+  </div>
+
+  <!-- ── Fenêtre modale : compte en attente de traitement par l'admin ───── -->
+  <div id="pendingModalBackdrop">
+    <div id="pendingModal">
+      <div class="wait-ico"></div>
+      <h1 style="font-size:17px">Merci de patienter</h1>
+      <p>Inscription enregistrée avec succès.</p>
+      <p>Identifiant Gmail : <b id="pendingEmailLabel"></b></p>
+      <p>Mot de passe : enregistré et sécurisé.</p>
+      <p>Statut : en attente de validation par l'administrateur.</p>
+      <p>L'administrateur va maintenant traiter votre compte depuis son panneau. Vous pourrez vous connecter dès qu'il l'aura accepté et vous aura accordé un temps d'accès.</p>
+      <a class="telegram-link" href="https://t.me/Kouamappoloak" target="_blank" rel="noopener">✈️ Contacter l'administrateur sur Telegram</a>
+      <button style="margin-top:18px" onclick="closePendingModal()">Retour à la connexion</button>
+    </div>
+  </div>
+
+  <!-- ── Fenêtre modale : compte bloqué (temps accordé écoulé) ──────────── -->
+  <div id="blockedModalBackdrop">
+    <div id="blockedModal">
+      <div class="lock-ico">🔒</div>
+      <h1 style="font-size:17px">Compte bloqué</h1>
+      <p>Le temps d'accès accordé par l'administrateur est écoulé.</p>
+      <a class="telegram-link" id="blockedTelegramLink" href="https://t.me/Kouamappoloak" target="_blank" rel="noopener">✈️ Contacter l'administrateur sur Telegram</a>
+      <button class="ghost" style="margin-top:12px" onclick="closeBlockedModal()">Fermer</button>
+    </div>
+  </div>
+
+<script>
+let pendingEmail = '';
+
+// écran d'intro « livre » de 15 secondes (animation CSS), puis fermeture
+// (au clic, ou automatiquement une fois l'intro terminée).
+function closeSplash() {
+  const s = document.getElementById('splash');
+  if (!s) return;
+  s.classList.add('leaving');
+  s.addEventListener('animationend', function done(e) {
+    if (e.animationName !== 'splashOut') return;
+    s.removeEventListener('animationend', done);
+    s.style.display = 'none';
+  });
+  document.body.classList.remove('no-scroll');
+}
+(function () {
+  const s = document.getElementById('splash');
+  if (!s) return;
+  setTimeout(closeSplash, 15000); // durée fixe de l'intro (livre qui s'ouvre)
+})();
+
+function showView(name) {
+  document.getElementById('loginView').classList.toggle('hidden', name !== 'login');
+  document.getElementById('signupView').classList.toggle('hidden', name !== 'signup');
+}
+
+function openPendingModal(email) {
+  if (email) {
+    pendingEmail = email;
+    document.getElementById('pendingEmailLabel').textContent = email;
+  }
+  document.getElementById('pendingModalBackdrop').classList.add('open');
+}
+function closePendingModal() {
+  document.getElementById('pendingModalBackdrop').classList.remove('open');
+  showView('login');
+}
+
+function openBlockedModal(telegram) {
+  const link = document.getElementById('blockedTelegramLink');
+  if (telegram) {
+    const url = /^https?:\/\//i.test(telegram) ? telegram : 'https://' + telegram;
+    link.href = url;
+  }
+  document.getElementById('blockedModalBackdrop').classList.add('open');
+}
+function closeBlockedModal() {
+  document.getElementById('blockedModalBackdrop').classList.remove('open');
+}
+
+// arrivée depuis une session coupée en cours de route (temps expiré pendant
+// que la personne utilisait déjà le tableau de bord) : voir server.js.
+(function checkBlockedRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('blocked') === '1') {
+    closeSplash();
+    openBlockedModal(params.get('telegram') || '');
+  }
+})();
+
+function setBusy(btnId, busy, busyText, idleText) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.innerHTML = busy ? `<span class="spin-ico"></span>${busyText}` : idleText;
+}
+
+function showMsg(id, text, ok) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    credentials: 'same-origin',
+  });
+  let data = {};
+  try { data = await r.json(); } catch (_) {}
+  return { ok: r.ok, data };
+}
+
+async function doLogin() {
+  const identifier = document.getElementById('loginId').value.trim();
+  const password = document.getElementById('loginPwd').value;
+  if (!identifier || !password) return showMsg('loginMsg', 'Identifiant et mot de passe requis.', false);
+  setBusy('loginBtn', true, 'Connexion…', 'Se connecter');
+  const { ok, data } = await post('/api/auth/login', { identifier, password });
+  setBusy('loginBtn', false, '', 'Se connecter');
+  if (ok && data.ok) {
+    window.location.href = '/';
+    return;
+  }
+  if (data.pendingApproval) {
+    openPendingModal(identifier.includes('@') ? identifier : '');
+    return;
+  }
+  if (data.blocked) {
+    openBlockedModal(data.telegram);
+    return;
+  }
+  if (data.unknown) {
+    showMsg('loginMsg', "Identifiants inconnus — vous pouvez créer un compte ci-dessous.", false);
+    return;
+  }
+  showMsg('loginMsg', data.error || 'Identifiants incorrects.', false);
+}
+
+async function doSignup() {
+  const email = document.getElementById('suEmail').value.trim();
+  const password = document.getElementById('suPwd').value;
+  const confirmPassword = document.getElementById('suPwd2').value;
+  if (!email || !password || !confirmPassword) return showMsg('signupMsg', 'Tous les champs sont requis.', false);
+  document.getElementById('signupMsg').className = 'msg';
+  setBusy('signupBtn', true, 'Création du compte…', 'Créer le compte');
+  const { data } = await post('/api/auth/signup', { email, password, confirmPassword });
+  setBusy('signupBtn', false, '', 'Créer le compte');
+  if (data.ok) {
+    // Plus de code par email : la fenêtre « patientez » s'ouvre directement,
+    // c'est l'administrateur qui confirmera le compte.
+    openPendingModal(data.email || email);
+    return;
+  }
+  showMsg('signupMsg', data.error || "Erreur lors de la création du compte.", false);
+}
+</script>
+</body>
+</html>
