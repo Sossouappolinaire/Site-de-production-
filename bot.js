@@ -14,6 +14,7 @@ const fmt = require('./formats');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
+const suitStreak = require('./suit-streak');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
@@ -28,7 +29,7 @@ const {
   initStrategies, setStrategyConfig, resetStrategy, strategyChannels, parityRuntime,
   bilanText, canSend, noteGateSent, gateView, autoView, noteSent, shadowRuntime, sweepAutoUnlock, unlockGate,
   fulfillAnnouncement, announcementsFor, queueFloor,
-  setOnAnnouncementSave, setOnAnnouncementDelete, restoreAnnouncements,
+  setOnAnnouncementSave, setOnAnnouncementDelete, restoreAnnouncements, restorePredictions,
 } = require('./predictor');
 
 let bot = null;
@@ -2050,6 +2051,12 @@ async function tick() {
     // (stratégies + formations), déclencheur consécutif par niveau de
     // rattrapage, prédiction synthétisée même costume/inverse +w.
     await combined.tick();
+
+    // panneau « Série de costume » : sélection d'UNE source (stratégie, IA
+    // ou formation), série de N prédictions consécutives de MÊME costume —
+    // déclenchement immédiat si aucune perte dans la série, sinon attente du
+    // retour de ce costume avant de déclencher (voir suit-streak.js).
+    await suitStreak.tick();
   } catch (e) {
     state.lastError = e.message;
   } finally {
@@ -2220,6 +2227,13 @@ async function applyDbConfigs() {
   await predit.restoreFromDb();
   await afterLoss.restoreFromDb();
   await combined.restoreFromDb();
+  await suitStreak.restoreFromDb();
+  // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
+  // depuis la base les prédictions encore « en attente » + les dernières
+  // résolues, pour que gagné/perdu/total ne repartent pas à zéro à chaque
+  // redémarrage du process.
+  const restoredCount = await restorePredictions();
+  if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
   await shop.loadFromDb();
   await paiement.loadFromDb();
   await mirrorCounter.loadFromDb();
@@ -2267,6 +2281,8 @@ async function startLoop() {
   afterLoss.setSender(senderFor);
   combined.restore();
   combined.setSender(senderFor);
+  suitStreak.restore();
+  suitStreak.setSender(senderFor);
   formationRelay.restore();
   formationRelay.setSender(senderFor);
   // Compteur « Taux Miroir » : édite le même message à chaque jeu terminé

@@ -121,10 +121,34 @@ function config() {
 // ---------------------------------------------------------------------------
 // Stratégies disponibles pour le choix (barre de déroulement)
 // ---------------------------------------------------------------------------
+// PONT ENTRE PANNEAUX (demande admin) : chaque configuration déjà enregistrée
+// ici (« Prédit après une perte ») ET chaque combo déjà enregistré dans
+// « Combinaisons » (combined.js) devient lui-même une SOURCE sélectionnable,
+// exactement comme une stratégie existante — clé `after:<id>` pour un
+// tracker de ce panneau, `combo:<id>` pour un combo de l'autre. On ne
+// duplique rien : chaque panneau vérifie déjà ses propres relais un par un
+// (panel.pendingMessages + verifyPending(), voir plus bas) — on expose
+// simplement cette liste déjà résolue à qui la demande (voir
+// trackerPredictions() ci-dessous et pendingFor() exporté en bas de fichier).
+// Require() PARESSEUX de combined.js : les deux panneaux sont des modules
+// « frères » (ni l'un ni l'autre ne requiert normalement l'autre), un
+// require() en tête de fichier créerait ici un cycle bidirectionnel
+// (after-loss.js → combined.js → after-loss.js). Appelé seulement à
+// l'intérieur de options()/trackerPredictions(), bien après le démarrage
+// complet de l'appli, ce risque n'existe plus.
+function combinedOptions() {
+  try {
+    const combined = require('./combined');
+    return (combined.panel.trackers || []).map((t) => ({ key: `combo:${t.id}`, name: `Combinaison — ${t.name}`, group: 'Combinaisons' }));
+  } catch (_) { return []; }
+}
+
 function options() {
   return [
     ...strategies.LIST.map((s) => ({ key: s.key, name: s.name })),
     { key: 'ia', name: 'Stratégie IA (Prédit)' },
+    ...panel.trackers.map((t) => ({ key: `after:${t.id}`, name: `Après perte — ${t.name}`, group: 'Après perte' })),
+    ...combinedOptions(),
   ];
 }
 
@@ -394,8 +418,28 @@ function applySaved(saved) {
 // ---------------------------------------------------------------------------
 // Gestion des stratégies suivies (trackers)
 // ---------------------------------------------------------------------------
+// Vue « prédiction » des relais DÉJÀ ENVOYÉS et suivis par CE panneau, pour
+// une stratégie suivie donnée (trackerId) — même forme que les prédictions
+// normales (target/suit/status/step/maxR), pour être consommée à l'identique
+// par ce fichier lui-même (self-chaining, clé `after:<id>`) ET par
+// combined.js (clé `after:<id>` là-bas aussi, voir combined.js/pendingFor).
+// Exportée en bas de fichier.
+function pendingFor(trackerId) {
+  return panel.pendingMessages
+    .filter((e) => e.trackerId === trackerId)
+    .map((e) => ({ target: e.target, suit: e.suit, kind: e.kind || 'suit', status: e.status, step: e.step, maxR: e.maxR }))
+    .sort((a, b) => a.target - b.target);
+}
+
 function trackerPredictions(key) {
   if (key === 'ia') return [...predit.panel.predictions].sort((a, b) => a.target - b.target);
+  if (key.startsWith('after:')) return pendingFor(key.slice('after:'.length));
+  if (key.startsWith('combo:')) {
+    try {
+      const combined = require('./combined'); // require paresseux, voir combinedOptions() plus haut
+      return combined.pendingFor(key.slice('combo:'.length));
+    } catch (_) { return []; }
+  }
   return state.predictions.filter((p) => p.strategy === key).sort((a, b) => a.target - b.target);
 }
 
@@ -1337,5 +1381,5 @@ module.exports = {
   panel, status, config, configure, restore, restoreFromDb, setSender, tick, test,
   parseChannels, options, addTracker, updateTracker, removeTracker,
   backtestTracker, optimizeTracker, triggersAboveThreshold, allTriggersAboveThreshold,
-  TRIGGER_KEYS, TRIGGER_LABELS,
+  TRIGGER_KEYS, TRIGGER_LABELS, pendingFor,
 };

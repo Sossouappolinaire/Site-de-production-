@@ -11,6 +11,7 @@
 const config = require('./config');
 const fmt = require('./formats');
 const strategies = require('./strategies');
+const db = require('./db');
 
 const BADGES = ['0⃣', '1⃣', '2⃣', '3⃣', '4⃣', '5⃣', '6⃣', '7⃣', '8⃣', '9⃣'];
 const SUITS = strategies.SUITS;
@@ -1716,6 +1717,66 @@ function statsFrom(list, key) {
 }
 function stats(key) { return statsFrom(state.predictions, key); }
 
+// CORRECTIF « bilans remis à zéro après redémarrage » : state.predictions
+// (utilisé par stats()/bilanText()) est un tableau en RAM, vide au
+// démarrage — alors que la base garde tout durablement (voir
+// db.restorePredictions()). On recharge donc ici, une fois, juste après la
+// connexion à la base (voir l'appel dans bot.js, au même endroit que les
+// autres restoreFromDb() des panneaux) — pour que les bilans par stratégie
+// survivent à une veille/redéploiement au lieu de repartir de zéro.
+async function restorePredictions() {
+  if (!db.ready) return 0;
+  let rows;
+  try { rows = await db.restorePredictions(300); }
+  catch (e) { state.lastError = `restauration prédictions: ${e.message}`; return 0; }
+  if (!rows || !rows.length) return 0;
+  // ne restaure qu'au tout premier démarrage : si des prédictions ont déjà
+  // été générées dans CETTE session (cas peu probable vu l'ordre d'appel,
+  // mais par sécurité), on ne les écrase pas.
+  if (state.predictions.length) return 0;
+  state.predictions = rows.map((row) => {
+    const status = row.status === 'gagne' ? 'gagné' : row.status === 'perdu' ? 'perdu' : row.status === 'attente' ? 'en attente' : (row.status || 'en attente');
+    const hand = row.hand === 'banquier' ? 'banquier' : 'joueur';
+    return {
+      id: `db-${row.id}`,
+      strategy: row.strategy || 'costume',
+      strategyName: (strategies.BY_KEY[row.strategy] || {}).name || row.strategy,
+      // NOTE : la base ne stocke pas `kind` — on le déduit de la main visée.
+      // Suffisant pour l'affichage des bilans ; une prédiction encore
+      // « attente » restaurée après un redémarrage sera revérifiée avec
+      // cette déduction (majoritairement correcte, les stratégies « carte »
+      // étant minoritaires).
+      kind: hand === 'banquier' ? 'suit-banquier' : 'suit',
+      target: Number(row.target),
+      suit: row.suit && row.suit !== '-' ? row.suit : null,
+      card: null,
+      cardsLabel: null,
+      wantPlayer: null,
+      wantBanker: null,
+      label: row.label || row.suit || '',
+      reason: row.reason || '',
+      meta: null,
+      hand,
+      trigger: null,
+      from: null,
+      step: row.rattrapage || 0,
+      maxR: row.max_r != null ? row.max_r : 0,
+      counter: row.b_counter != null ? row.b_counter : null,
+      b: row.b_value || 0,
+      format: null,
+      template: null,
+      sentAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+      status,
+      badge: null,
+      result: null,
+      hitNumber: row.hit_number != null ? Number(row.hit_number) : null,
+      messages: [],
+      shoe: -1, // restaurée depuis la base : numéro de sabot d'origine inconnu
+    };
+  });
+  return state.predictions.length;
+}
+
 
 // état courant de la stratégie « Prédiction dans l'ombre » (costumes surveillés)
 function shadowRuntime() {
@@ -1949,6 +2010,7 @@ module.exports = {
   recentGames,
   stats,
   statsFrom,
+  restorePredictions,
   BADGES,
   parityOf,
   parityRuntime,

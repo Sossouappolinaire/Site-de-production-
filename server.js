@@ -22,6 +22,7 @@ const formationRelay = require('./formation-relay');
 const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
+const suitStreak = require('./suit-streak');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const shop = require('./shop');
@@ -332,6 +333,7 @@ app.get('/api/state', async (req, res) => {
     predit: predit.status(),
     afterLoss: afterLoss.status(),
     combined: combined.status(),
+    suitStreak: suitStreak.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
       target: p.target, suit: p.suit, hand: p.hand, step: p.step, maxR: p.maxR,
@@ -1927,6 +1929,75 @@ app.put('/api/combined/trackers/:id', (req, res) => {
 app.delete('/api/combined/trackers/:id', (req, res) => {
   combined.removeTracker(req.params.id);
   res.json(combined.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Série de costume » (voir suit-streak.js) — nouveau bouton (demande
+// admin) : sélection d'UNE source (stratégie, IA, ou formation), série de N
+// prédictions CONSÉCUTIVES de MÊME costume (peu importe gagné/perdu) avant
+// de déclencher — aucune perte dans la série → déclenchement immédiat
+// (jeu suivant ou +Z, réglable) ; une perte dans la série → attend le
+// RETOUR de ce même costume avant de déclencher (une seule fois).
+// ---------------------------------------------------------------------------
+app.get('/api/suit-streak', (req, res) => res.json(suitStreak.status()));
+
+app.post('/api/suit-streak/config', (req, res) => {
+  suitStreak.configure(req.body || {});
+  res.json(suitStreak.status());
+});
+
+app.post('/api/suit-streak/channel', async (req, res) => {
+  const idsList = suitStreak.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  suitStreak.configure({ channels: idsList });
+  const notice = await suitStreak.test();
+  res.json({ ok: true, channel: check.chat, notice, suitStreak: suitStreak.status() });
+});
+
+app.delete('/api/suit-streak/channel', (req, res) => {
+  suitStreak.configure({ channels: [] });
+  res.json(suitStreak.status());
+});
+
+app.post('/api/suit-streak/test', async (req, res) => {
+  const r = await suitStreak.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/suit-streak/scan', async (req, res) => {
+  await suitStreak.tick();
+  res.json(suitStreak.status());
+});
+
+app.post('/api/suit-streak/trackers', async (req, res) => {
+  try {
+    const t = suitStreak.addTracker(req.body && req.body.key, {
+      n: req.body && req.body.n,
+      mode: req.body && req.body.mode,
+      offset: req.body && req.body.offset,
+      channels: req.body && req.body.channels,
+      siteChannelId: req.body && req.body.siteChannelId,
+      format: req.body && req.body.format,
+      maxR: req.body && req.body.maxR,
+      name: req.body && req.body.name,
+    });
+    res.json({ ok: true, tracker: t, suitStreak: suitStreak.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/suit-streak/trackers/:id', (req, res) => {
+  try {
+    const t = suitStreak.updateTracker(req.params.id, req.body || {});
+    if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    res.json({ ok: true, tracker: t, suitStreak: suitStreak.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/suit-streak/trackers/:id', (req, res) => {
+  suitStreak.removeTracker(req.params.id);
+  res.json(suitStreak.status());
 });
 
 // Optimisation IA : teste chaque déclencheur (rattrapage 1/2/3, perdue) x

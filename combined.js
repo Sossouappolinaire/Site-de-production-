@@ -83,6 +83,21 @@ function config() {
   return { enabled: panel.enabled, channels: panel.channels, format: panel.format, maxR: panel.maxR };
 }
 
+// PONT ENTRE PANNEAUX (demande admin) : symétrique à after-loss.js — chaque
+// combo déjà enregistré ICI (self-chaining, clé `combo:<id>`) ET chaque
+// tracker déjà enregistré dans « Prédit après une perte » (after-loss.js,
+// clé `after:<id>`) devient lui-même une source sélectionnable, comme une
+// stratégie existante. Require() PARESSEUX de after-loss.js pour la même
+// raison que dans after-loss.js (cycle bidirectionnel évité, voir le
+// commentaire équivalent là-bas) : les deux fichiers ne se requièrent
+// normalement pas, un require() en tête de fichier créerait un cycle.
+function afterLossOptions() {
+  try {
+    const afterLoss = require('./after-loss');
+    return (afterLoss.panel.trackers || []).map((t) => ({ key: `after:${t.id}`, name: `Après perte — ${t.name}`, group: 'Après perte' }));
+  } catch (_) { return []; }
+}
+
 function options() {
   const base = [
     ...strategies.LIST.map((s) => ({ key: s.key, name: s.name, group: 'Stratégies' })),
@@ -92,7 +107,8 @@ function options() {
     ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: `Formation — ${s.name}`, group: 'Formations' })),
     { key: 'formation:ia', name: 'Formation — Prédit IA', group: 'Formations' },
   ];
-  return [...base, ...formations];
+  const combos = panel.trackers.map((t) => ({ key: `combo:${t.id}`, name: `Combinaison — ${t.name}`, group: 'Combinaisons' }));
+  return [...base, ...formations, ...combos, ...afterLossOptions()];
 }
 
 function optionByKey(key) {
@@ -103,7 +119,27 @@ function baseKeyOf(key) {
   return key.startsWith('formation:') ? key.slice('formation:'.length) : key;
 }
 
+// Vue « prédiction » des relais DÉJÀ ENVOYÉS et suivis par CE panneau, pour
+// un combo donné (trackerId) — même forme que les prédictions normales
+// (target/suit/status/step/maxR). Consommée à l'identique par ce fichier
+// (self-chaining, clé `combo:<id>`) ET par after-loss.js (clé `combo:<id>`
+// là-bas aussi, voir after-loss.js/trackerPredictions). Exportée en bas de
+// fichier.
+function pendingFor(trackerId) {
+  return panel.pendingMessages
+    .filter((e) => e.trackerId === trackerId)
+    .map((e) => ({ target: e.target, suit: e.suit, kind: e.kind || 'suit', status: e.status, step: e.step, maxR: e.maxR }))
+    .sort((a, b) => a.target - b.target);
+}
+
 function trackerPredictions(key) {
+  if (key.startsWith('after:')) {
+    try {
+      const afterLoss = require('./after-loss'); // require paresseux, voir afterLossOptions() plus haut
+      return afterLoss.pendingFor(key.slice('after:'.length));
+    } catch (_) { return []; }
+  }
+  if (key.startsWith('combo:')) return pendingFor(key.slice('combo:'.length));
   const base = baseKeyOf(key);
   if (base === 'ia') return [...predit.panel.predictions].sort((a, b) => a.target - b.target);
   return state.predictions.filter((p) => p.strategy === base).sort((a, b) => a.target - b.target);
@@ -566,5 +602,5 @@ function statusView() {
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
   options, addTracker, addTrackers, updateTracker, removeTracker,
-  restore, restoreFromDb, parseChannels,
+  restore, restoreFromDb, parseChannels, pendingFor,
 };

@@ -430,6 +430,24 @@ async function clearPredictions(key) {
     : q(`DELETE FROM predictions`);
 }
 
+// CORRECTIF « bilans remis à zéro après redémarrage » : state.predictions
+// (côté predictor.js) ne vit qu'en RAM et repart vide à chaque redémarrage
+// du process (veille/redéploiement Render), alors que cette table, elle,
+// garde tout durablement. On recharge donc au démarrage : TOUTES les
+// prédictions encore « attente » (à re-suivre), + les `limit` dernières
+// prédictions résolues (gagne/perdu/annulé), toutes stratégies confondues —
+// même logique de plafond que state.predictions en fonctionnement normal.
+async function restorePredictions(limit = 300) {
+  const r = await q(
+    `(SELECT * FROM predictions WHERE status = 'attente')
+     UNION ALL
+     (SELECT * FROM predictions WHERE status <> 'attente' ORDER BY id DESC LIMIT $1)
+     ORDER BY id DESC`,
+    [limit]
+  );
+  return r ? r.rows : [];
+}
+
 // ---- stratégies IA (créées automatiquement ou manuellement, >= 75%) --------
 async function saveAiStrategy(item) {
   return q(
@@ -744,6 +762,7 @@ module.exports = {
   connect, status, saveGame, gamesByDate, dailySummary, exec, rows,
   savePrediction, closePrediction, predictionsByNumber, setSetting, getSetting, normalizeDate,
   saveStrategy, loadStrategies, deleteStrategy, strategyStats, strategyPredictions, clearPredictions,
+  restorePredictions,
   saveGate, loadGates,
   saveAnnouncement, deleteAnnouncement, loadAnnouncements,
   saveAiStrategy, loadAiStrategies, deleteAiStrategy, pruneAiStrategies,
