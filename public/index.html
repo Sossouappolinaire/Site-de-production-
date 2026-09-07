@@ -373,6 +373,7 @@
         <a href="#/game21-predict" data-nav="game21">Prédiction IA jeu 21</a>
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
+        <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
         <a href="#/formation" data-nav="formation">Formation</a>
         <a href="#/diagnostics" data-nav="settings">Envois</a>
         <a href="#/database" data-nav="database">Base de données</a>
@@ -597,6 +598,7 @@
         ${card('#/predit', '🔮', 'Prédit IA', `${(snapshot.predit?.activeCount || 0)} stratégie(s) certifiée(s)`)}
         ${card('#/after-loss', '↩️', 'Prédiction après perte', `${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)`)}
         ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
@@ -1864,6 +1866,138 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
     async function afterLossTest() { try { const r = await api('/api/after-loss/test', 'POST', {}); toast('Test envoyé : ' + (r.sent || []).join(', ')); } catch (e) { toast(e.message, 'error'); } }
+
+    // -------------------------------------------------------------------
+    // « Répétition de costume » (voir suit-streak.js) — sélection d'UNE
+    // source (stratégie existante, IA « Prédit », ou Formation), série de N
+    // prédictions CONSÉCUTIVES de MÊME costume (peu importe gagné/perdu)
+    // avant de déclencher : sans perte parmi elles → prédiction immédiate
+    // (jeu suivant ou +Z décalage) ; avec au moins une perte → le panneau
+    // attend que ce même costume revienne avant de déclencher, une seule
+    // fois. Même schéma d'écran que « Prédiction combinée ».
+    // -------------------------------------------------------------------
+    function suitStreakSiteChannelOptions(currentId) {
+      const list = snapshot.suitStreak?.siteChannels || [];
+      const cur = currentId === null || currentId === undefined ? '' : String(currentId);
+      const opts = list.map(c => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+      return `<option value="">— aucun —</option>${opts}`;
+    }
+    function suitStreakSettingsRow(prefix, t) {
+      const n = t?.n ?? 2;
+      const mode = t?.mode || 'next';
+      const offset = t?.offset ?? 1;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="max-width:220px;margin:0"><label style="font-size:11px">Prédictions consécutives même costume (N)</label><input id="${prefix}-n" type="number" min="2" max="20" value="${esc(String(n))}"></div>
+        <div class="field" style="max-width:280px;margin:0"><label style="font-size:11px">Une fois la série atteinte, prédire sur</label>
+          <select id="${prefix}-mode" onchange="document.getElementById('${prefix}-offset-wrap').style.display = this.value === 'offset' ? '' : 'none'">
+            <option value="next" ${mode !== 'offset' ? 'selected' : ''}>Le jeu suivant (target+1)</option>
+            <option value="offset" ${mode === 'offset' ? 'selected' : ''}>Décalage +Z jeux</option>
+          </select>
+        </div>
+        <div class="field" id="${prefix}-offset-wrap" style="max-width:110px;margin:0;${mode === 'offset' ? '' : 'display:none'}"><label style="font-size:11px">Décalage +Z</label><input id="${prefix}-offset" type="number" min="1" max="20" value="${esc(String(offset))}"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Dès que N prédictions consécutives de même costume sont observées (peu importe gagné/perdu) : aucune perte parmi elles → prédiction immédiate du même costume. Au moins une perte parmi elles → le panneau attend que la source reprédise ce même costume une prochaine fois (les autres costumes entre-temps n'interrompent pas l'attente), et c'est ce moment-là qui déclenche, une seule fois.</p>`;
+    }
+    function readSuitStreakSettings(prefix) {
+      return { n: val(`${prefix}-n`), mode: val(`${prefix}-mode`), offset: val(`${prefix}-offset`) };
+    }
+    function suitStreakChannelFormatRow(prefix, tracker) {
+      const t = tracker || {};
+      const channels = (t.channels || []).join(', ');
+      const format = (t.format === null || t.format === undefined) ? '' : t.format;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram propre (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+        <div class="field" style="flex:1;min-width:160px;margin:0"><label style="font-size:11px">Canal du site propre (optionnel)</label><select id="${prefix}-siteChannel">${suitStreakSiteChannelOptions(t.siteChannelId)}</select></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format propre (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = format du panneau"></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Rattrapage propre (optionnel)</label><input id="${prefix}-maxR" type="number" min="0" max="9" value="${(t.maxR === null || t.maxR === undefined) ? '' : esc(String(t.maxR))}" placeholder="vide = panneau"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Laisse ces champs vides/« aucun » pour utiliser les réglages du panneau (en haut de la page).</p>`;
+    }
+    function readSuitStreakChannelFormat(prefix) {
+      const rawFormat = val(`${prefix}-format`);
+      const rawMaxR = val(`${prefix}-maxR`);
+      const siteChannelId = val(`${prefix}-siteChannel`);
+      return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat, maxR: rawMaxR === '' ? null : rawMaxR };
+    }
+    function suitStreakPage() {
+      setNav('suit-streak');
+      const p = snapshot.suitStreak || {};
+      const trackers = p.trackers || [];
+      const history = p.history || [];
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Série par costume</span><h2 style="margin-top:7px">Répétition de costume</h2><p class="small">Choisis une source (stratégie existante, IA « Prédit », ou Formation). Définis N = combien de prédictions consécutives du MÊME costume observer, peu importe si elles ont été gagnées ou perdues — une prédiction d'un autre costume casse la série en cours. Sans perte parmi les N → prédiction immédiate du même costume. Avec au moins une perte → le panneau attend que ce costume revienne avant de déclencher, une seule fois.</p></div><div class="toolbar"><button class="button primary" onclick="addSuitStreakTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="suitStreakPage()">Actualiser</button></div></div>
+        <div class="two-col">
+          <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit les répétitions de costume, sauf source avec son propre canal.</p>
+            <div class="field"><label>ID ou @nom du canal</label><input id="suitStreakChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveSuitStreakChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="suitStreakTest()">Envoyer un test</button><button class="button small danger" onclick="removeSuitStreakChannel()">Retirer</button></div>
+            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}
+            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine, page « Canaux »)</label><select id="suitStreakSiteChannel">${suitStreakSiteChannelOptions(p.siteChannelId)}</select></div>
+            <p class="small muted" style="margin:6px 0 0">Indépendant du canal Telegram ci-dessus : les deux reçoivent en parallèle si les deux sont configurés.</p>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveSuitStreak()">Enregistrer le canal du site</button></div></div>
+          <div class="panel"><h3>Réglages du panneau</h3>
+            <label class="check"><input id="suitStreakEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer la répétition de costume</label>
+            <div class="two-col" style="margin-top:16px">
+              <div class="field"><label>Nombre de rattrapage</label><input id="suitStreakMaxR" type="number" min="0" max="9" value="${esc(String(p.maxR ?? 1))}"></div>
+              <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="suitStreakFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
+            </div>
+            <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveSuitStreak()">Enregistrer</button></div></div>
+        </div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.waitingSuit ? 'warn' : (t.streakCount > 0 ? 'warn' : 'good')}">${t.waitingSuit ? `En attente du retour de ${esc(t.waitingSuit)}` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}${t.streakHasLoss ? ' (perte présente)' : ''}` : 'Surveillance')}</span></div>
+            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
+            ${suitStreakSettingsRow('ss-' + t.id, t)}
+            ${suitStreakChannelFormatRow('ss-' + t.id, t)}
+            <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ss-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateSuitStreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeSuitStreakTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
+          ${history.length ? `<table><thead><tr><th>Source</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
+    }
+    function addSuitStreakTrackerModal() {
+      const opts = optsHtmlGlobal(snapshot.suitStreak?.options || []);
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle source suivie</span><h3 style="margin-top:8px">Ajouter une source</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot, la stratégie IA « Prédit », ou une Formation, puis définis N et le mode de déclenchement.</p></div></div>
+        <div class="field"><label>Source</label><select id="newSuitStreakKey">${opts}</select></div>
+        ${suitStreakSettingsRow('ssnew', null)}
+        ${suitStreakChannelFormatRow('ssnew', { channels: [], format: null, siteChannelId: null })}
+        <div class="field"><label>Nom de cette source <span class="small">(optionnel — vide = nom de la source)</span></label><input id="ssnew-name" placeholder="Ex. Répétition costume Dominant"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addSuitStreakTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function addSuitStreakTracker() {
+      const key = val('newSuitStreakKey');
+      const { n, mode, offset } = readSuitStreakSettings('ssnew');
+      const { channels, siteChannelId, format, maxR } = readSuitStreakChannelFormat('ssnew');
+      const name = val('ssnew-name');
+      try {
+        await api('/api/suit-streak/trackers', 'POST', { key, n, mode, offset, channels, siteChannelId, format, maxR, name });
+        closeModal(); await refresh(); suitStreakPage();
+        toast('Source ajoutée à la répétition de costume.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function updateSuitStreakTracker(id) {
+      const { n, mode, offset } = readSuitStreakSettings('ss-' + id);
+      const { channels, siteChannelId, format, maxR } = readSuitStreakChannelFormat('ss-' + id);
+      const name = val(`ss-${id}-name`);
+      try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'PUT', { n, mode, offset, channels, siteChannelId, format, maxR, name }); await refresh(); suitStreakPage(); toast('Réglages mis à jour.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeSuitStreakTracker(id) {
+      try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); suitStreakPage(); toast('Source retirée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveSuitStreak() {
+      const rawSite = val('suitStreakSiteChannel');
+      try { await api('/api/suit-streak/config', 'POST', { enabled: $('#suitStreakEnabled')?.checked, maxR: val('suitStreakMaxR'), format: val('suitStreakFormat'), channels: ids(val('suitStreakChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); suitStreakPage(); toast('Panneau « Répétition de costume » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveSuitStreakChannel() {
+      const list = ids(val('suitStreakChannel'));
+      if (!list.length) return toast('Renseigne un ID de canal.', 'error');
+      try { const r = await api('/api/suit-streak/channel', 'POST', { channelId: list[0] }); await refresh(); suitStreakPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeSuitStreakChannel() { try { await api('/api/suit-streak/channel', 'DELETE'); await refresh(); suitStreakPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function suitStreakTest() {
+      try { const r = await api('/api/suit-streak/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     async function diagnosticsPage() {
       setNav('settings'); $('#app').innerHTML = '<div class="loading">Vérification des canaux…</div>';
       try {
@@ -2665,6 +2799,7 @@ Faites-en bon usage !
         else if (h === '#/predit') preditPage();
         else if (h === '#/after-loss') afterLossPage();
         else if (h === '#/combined') combinedPage();
+        else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
         else if (h === '#/diagnostics') await diagnosticsPage();
