@@ -6,7 +6,16 @@
 //   • LiveFeed/GetChampsZip?sport=146  → la liste des tables en direct
 //   • LiveFeed/GetChampZip?champ=<LI>  → les tours de la table
 // Les cartes arrivent dans SC.S sous les clés P1 (joueur) et P2 (croupier)
-// au format {"CS":2,"CV":12} : CS = costume, CV = valeur.
+// au format {"CS":2,"CV":12,"V":3} : CS = costume, CV = rang, V = points.
+//
+// API VÉRIFIÉE le 07/09/2026 sur https://1xbet.cd/service-api :
+//   • GetChampsZip?sport=146&lng=en&country=96 → 200 (les variantes 21 Classics,
+//     TwentyOne Game, 21 Dota). Attention : ajouter virtualSports/groupChamps à
+//     CET appel renvoie 406, d'où les replis de requêtes plus bas.
+//   • GetChampZip?champ=<LI>&lng=en&country=96&groupChamps=true → 200.
+//   • Barème réel relevé sur les tours en direct (FS.S1/S2 = somme des V) :
+//     6..10 = valeur nominale, J = 2, Q = 3, K = 4, A = 11. Ce n'est PAS le
+//     barème du blackjack (où J/Q/K valent 10) — c'est le « 21 » russe.
 'use strict';
 
 const config = require('./config');
@@ -18,6 +27,17 @@ const RANK_MAP = {
   1: 'A', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8',
   9: '9', 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A',
 };
+// Barème officiel du « 21 » 1xbet (vérifié : la somme des V d'une main est
+// exactement égale au score FS.S1/FS.S2 renvoyé par l'API).
+const CARD_POINTS = {
+  2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10,
+  11: 2,  // J
+  12: 3,  // Q
+  13: 4,  // K
+  14: 11, // A
+  1: 11,  // A (si l'API renvoie 1 au lieu de 14)
+};
+
 const VALUE_RANKS = ['A', 'K', 'Q', 'J'];       // les « cartes de valeur »
 const SUITS = ['♦️', '♠️', '❤️', '♣️'];          // ordre demandé
 const HISTORY_MAX = 400;                        // tours gardés par table
@@ -30,10 +50,12 @@ const HISTORY_MAX = 400;                        // tours gardés par table
 const VARIANTS = {
   classique: { key: 'classique', label: '21 classique' },
   simple: { key: 'simple', label: '21' },
+  dota: { key: 'dota', label: '21 Dota' },
 };
 function classifyTable(name) {
   const n = String(name || '').toLowerCase();
   if (/classi/.test(n)) return 'classique';
+  if (/dota/.test(n)) return 'dota';
   return 'simple';
 }
 function variantLabel(key) {
@@ -106,17 +128,22 @@ function suitLabel(c) {
 function cardLabel(c) {
   return `${rankLabel(c)}${suitLabel(c)}`;
 }
-// valeur « 21 » : A = 11 (ramené à 1 si dépassement), 10/J/Q/K = 10
+// Points d'une carte : on fait CONFIANCE au champ V de l'API quand il est
+// présent (c'est lui qui compose le score officiel FS.S1/FS.S2), sinon on
+// applique le barème CARD_POINTS.
+function cardPoints(c) {
+  const v = c && (c.V != null ? c.V : c.value);
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n;
+  const r = rankOf(c);
+  return CARD_POINTS[r] != null ? CARD_POINTS[r] : (Number.isFinite(r) ? r : 0);
+}
+
+// Valeur d'une main au « 21 » de 1xbet : simple somme des points. Il n'y a PAS
+// de repli de l'As à 1 comme au blackjack — au-delà de 21 la main est brûlée.
 function handValue(list) {
   let total = 0;
-  let aces = 0;
-  for (const c of list || []) {
-    const r = rankOf(c);
-    if (r === 1 || r === 14) { total += 11; aces += 1; }
-    else if (r >= 10) total += 10;
-    else total += r || 0;
-  }
-  while (total > 21 && aces > 0) { total -= 10; aces -= 1; }
+  for (const c of list || []) total += cardPoints(c);
   return total;
 }
 
@@ -148,7 +175,10 @@ function parseChamp(data, table) {
     const st = Number(scEntry(scS, 'STATE'));
     const number = parseInt(g.DI, 10);
     const fs = sc.FS || {};
-    const finished = !!g.F || sc.CPS === 'Game finished' || st === 4;
+    // L'API renvoie CPS traduit selon lng (« Game finished » / « Jeu terminé »)
+    // → on teste les deux langues au lieu du seul libellé anglais.
+    const label = `${sc.CPS || ''} ${sc.I || ''}`;
+    const finished = !!g.F || st === 4 || /finish|fini|termin/i.test(label);
     const playerValue = player.length ? handValue(player) : (Number.isFinite(Number(fs.S1)) ? Number(fs.S1) : null);
     const dealerValue = dealer.length ? handValue(dealer) : (Number.isFinite(Number(fs.S2)) ? Number(fs.S2) : null);
     let winner = null;
@@ -193,6 +223,9 @@ function parseChamp(data, table) {
 async function fetchTables() {
   const data = await getAny([
     `/LiveFeed/GetChampsZip?sport=${SPORT_ID}&lng=en&country=96`,
+    `/LiveFeed/GetChampsZip?sport=${SPORT_ID}&lng=fr&country=96`,
+    `/LiveFeed/GetChampsZip?sport=${SPORT_ID}&lng=fr`,
+    `/LiveFeed/GetChampsZip?sport=${SPORT_ID}`,
   ]);
   const list = (data && data.Value) || [];
   const tables = list
@@ -201,7 +234,10 @@ async function fetchTables() {
       const variant = classifyTable(name);
       return { id: Number(c.LI), name, games: Number(c.GC || 0), variant, variantLabel: variantLabel(variant) };
     })
-    .filter((t) => Number.isFinite(t.id) && t.id > 0);
+    // Le sport 146 contient aussi « 21 Dota » : un affrontement e-sport SANS
+    // cartes (l'API n'y renvoie que des scores de manches, jamais de P1/P2),
+    // ce qui polluerait les statistiques de déclencheurs → on l'écarte.
+    .filter((t) => Number.isFinite(t.id) && t.id > 0 && t.variant !== 'dota');
   if (!tables.length) throw new Error('API 1xbet « 21 » injoignable');
   return tables;
 }
@@ -209,6 +245,8 @@ async function fetchTables() {
 async function fetchTableGames(table) {
   const data = await getAny([
     `/LiveFeed/GetChampZip?champ=${table.id}&lng=en&country=96&groupChamps=true`,
+    `/LiveFeed/GetChampZip?champ=${table.id}&lng=fr&country=96&mode=4&getEmpty=true`,
+    `/LiveFeed/GetChampZip?champ=${table.id}&lng=fr`,
   ]);
   return data ? parseChamp(data, table) : [];
 }
@@ -465,6 +503,6 @@ function snapshot({ limit = 30, variant = null } = {}) {
 module.exports = {
   SPORT_ID, SUIT_MAP, RANK_MAP, VALUE_RANKS, SUITS,
   VARIANTS, classifyTable, variantLabel, historyOf, analysisByVariant, triggerOf,
-  fetchTables, fetchTableGames, parseChamp, handValue, cardLabel,
+  fetchTables, fetchTableGames, parseChamp, handValue, cardPoints, CARD_POINTS, cardLabel,
   refresh, startLoop, snapshot, analysis, localPrediction, aiOpinion, state,
 };
