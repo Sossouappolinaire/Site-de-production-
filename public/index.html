@@ -2003,7 +2003,7 @@ Faites-en bon usage !
       const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : s === 'programmé' ? '🕓 programmé' : '🚫 annulé';
       const pend = (p.pending || []).slice().reverse();
       const hist = p.history || [];
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot compte par lot de 30 jeux (1→30, 31→60, 61→90…) les catégories 3/2, 3/3 et 2/2. Un lot ne commence jamais à 43, 45, 50 ou 52 : au démarrage, le prochain début de lot valide est calculé automatiquement. Si 2/2 est la catégorie la plus faible du lot, trois prédictions 2/2 sont programmées (début+34, +44, +54 → 35/45/55, puis 65/75/85, etc.). Chaque prédiction n'est envoyée que lorsque le jeu en live arrive à 3 ou 2 jeux de la cible, puis vérifiée avec le rattrapage configuré.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot compte par lot de <b>${p.blockSize || 30}</b> jeux (1→${p.blockSize || 30}, puis le lot suivant…) les catégories cochées parmi 3/2, 3/3 et 2/2. La catégorie la plus faible du lot est prédite ; si une seule catégorie est cochée, c'est toujours elle. Trois prédictions sont programmées à début+${(p.offsets || [34,44,54]).join(', +')}. Chaque prédiction n'est envoyée que lorsque le jeu en live arrive à 3 ou 2 jeux de la cible, puis vérifiée avec le rattrapage configuré. Chaque catégorie peut avoir son propre canal.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
         <div class="grid two">
           <div class="card">
             <h3>Canal et réglages</h3>
@@ -2011,19 +2011,28 @@ Faites-en bon usage !
             <div class="toolbar"><button class="button small primary" onclick="saveCardsCountChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="cardsCountTest()">Envoyer un test</button><button class="button small danger" onclick="removeCardsCountChannel()">Retirer</button></div>
             <div class="field" style="margin-top:16px"><label>Canal du site (vitrine)</label><select id="ccSiteChannel">${cardsCountSiteOptions(p.siteChannelId)}</select></div>
             <div class="field"><label>Rattrapage maximum</label><input id="ccMaxR" type="number" min="0" max="9" value="${p.maxR ?? 1}"></div>
+            <div class="field"><label>Nombre de jeux par lot</label><select id="ccBlockSize">${[10,20,30,40,50,60,70,80,90,100].map((n) => `<option value="${n}" ${Number(p.blockSize || 30) === n ? 'selected' : ''}>${n} jeux</option>`).join('')}</select></div>
             <div class="field"><label>Déclenchement de l'envoi</label><select id="ccTrigger">
               <option value="both" ${p.trigger === 'both' ? 'selected' : ''}>Au jeu −3 ou −2 (ex. 32 ou 33 pour le jeu 35)</option>
               <option value="minus3" ${p.trigger === 'minus3' ? 'selected' : ''}>Uniquement au jeu −3 (ex. 32 / 42)</option>
               <option value="minus2" ${p.trigger === 'minus2' ? 'selected' : ''}>Uniquement au jeu −2 (ex. 33 / 43)</option>
             </select></div>
             <label class="check"><input id="ccEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer le comptage 2/2</label>
+            <h3 style="margin-top:18px">Catégories prédites et canaux</h3>
+            <p class="small">Coche les catégories à prédire. Le canal indiqué pour une catégorie reçoit ses prédictions ; laisse vide pour utiliser le canal général ci-dessus.</p>
+            ${['3/2', '3/3', '2/2'].map((c, i) => `
+              <div class="field" style="margin-top:10px">
+                <label class="check"><input id="ccCat${i}" type="checkbox" ${(p.categoriesOn || {})[c] !== false ? 'checked' : ''}> Prédire la catégorie ${c}</label>
+                <input id="ccCatChan${i}" style="margin-top:6px" value="${esc(((p.categoryChannels || {})[c] || []).join(', '))}" placeholder="ID du canal pour ${c} (ex. -1001234567890)">
+                <select id="ccCatSite${i}" style="margin-top:6px">${cardsCountSiteOptions((p.categorySiteChannels || {})[c])}</select>
+              </div>`).join('')}
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveCardsCount()">Enregistrer</button><button class="button small ghost" onclick="resetCardsCount()">Réinitialiser le comptage</button></div>
             ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
           </div>
           <div class="card">
             <h3>Lot en cours</h3>
             <p class="small">Jeu en live : <b>№${esc(String(p.live || '—'))}</b></p>
-            ${b ? `<p class="small">Lot <b>${b.start} → ${b.end}</b> • ${b.countedCount || 0}/30 jeux comptés</p>
+            ${b ? `<p class="small">Lot <b>${b.start} → ${b.end}</b> • ${b.countedCount || 0}/${p.blockSize || 30} jeux comptés</p>
             <table class="table"><thead><tr><th>Catégorie</th><th>Compte</th></tr></thead><tbody>
               ${['3/2', '3/3', '2/2'].map((c) => `<tr><td>${c}</td><td>${counts[c] || 0}</td></tr>`).join('')}
             </tbody></table>` : '<p class="small">Comptage non démarré.</p>'}
@@ -2033,20 +2042,29 @@ Faites-en bon usage !
         <div class="card" style="margin-top:16px">
           <h3>Prédictions</h3>
           ${pend.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Lot</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>
-            ${pend.map((e) => `<tr><td>№${e.target}</td><td>${e.blockStart} → ${e.blockStart + 29}</td><td>${statusBadge(e.status)}</td><td>${e.step}/${e.maxR}</td></tr>`).join('')}
+            ${pend.map((e) => `<tr><td>№${e.target}</td><td>${e.blockStart} → ${e.blockStart + ((p.blockSize || 30) - 1)}</td><td>${statusBadge(e.status)}</td><td>${e.step}/${e.maxR}</td></tr>`).join('')}
           </tbody></table>` : '<p class="small">Aucune prédiction pour le moment.</p>'}
         </div>
         <div class="card" style="margin-top:16px">
           <h3>Historique des lots</h3>
           ${hist.length ? `<table class="table"><thead><tr><th>Lot</th><th>3/2</th><th>3/3</th><th>2/2</th><th>Décision</th></tr></thead><tbody>
-            ${hist.map((x) => `<tr><td>${x.start} → ${x.end}</td><td>${x.counts['3/2'] || 0}</td><td>${x.counts['3/3'] || 0}</td><td>${x.counts['2/2'] || 0}</td><td>${x.predicted ? `2/2 le plus faible → jeux ${x.targets.join(', ')}` : 'aucune prédiction'}</td></tr>`).join('')}
+            ${hist.map((x) => `<tr><td>${x.start} → ${x.end}</td><td>${x.counts['3/2'] || 0}</td><td>${x.counts['3/3'] || 0}</td><td>${x.counts['2/2'] || 0}</td><td>${x.predicted ? `${esc(String(x.signal || '2/2'))} le plus faible → jeux ${x.targets.join(', ')}` : 'aucune prédiction'}</td></tr>`).join('')}
           </tbody></table>` : '<p class="small">Aucun lot terminé pour le moment.</p>'}
         </div>`;
     }
 
     async function saveCardsCount() {
       const rawSite = val('ccSiteChannel');
-      try { await api('/api/cards-count/config', 'POST', { enabled: $('#ccEnabled')?.checked, maxR: val('ccMaxR'), trigger: val('ccTrigger'), channels: ids(val('ccChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); cardsCountPage(); toast('Panneau « Comptage 2/2 » enregistré.'); }
+      const cats = ['3/2', '3/3', '2/2'];
+      const categoriesOn = {}; const categoryChannels = {}; const categorySiteChannels = {};
+      cats.forEach((c, i) => {
+        categoriesOn[c] = !!$(`#ccCat${i}`)?.checked;
+        categoryChannels[c] = ids(val(`ccCatChan${i}`));
+        const site = val(`ccCatSite${i}`);
+        categorySiteChannels[c] = site === '' ? null : site;
+      });
+      if (!cats.some((c) => categoriesOn[c])) return toast('Coche au moins une catégorie à prédire.', 'error');
+      try { await api('/api/cards-count/config', 'POST', { enabled: $('#ccEnabled')?.checked, maxR: val('ccMaxR'), blockSize: val('ccBlockSize'), trigger: val('ccTrigger'), channels: ids(val('ccChannel')), siteChannelId: rawSite === '' ? null : rawSite, categoriesOn, categoryChannels, categorySiteChannels }); await refresh(); cardsCountPage(); toast('Panneau « Comptage 2/2 » enregistré.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function saveCardsCountChannel() {
