@@ -374,6 +374,7 @@
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
+        <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/formation" data-nav="formation">Formation</a>
         <a href="#/diagnostics" data-nav="settings">Envois</a>
         <a href="#/database" data-nav="database">Base de données</a>
@@ -599,6 +600,7 @@
         ${card('#/after-loss', '↩️', 'Prédiction après perte', `${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)`)}
         ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
@@ -1982,6 +1984,91 @@ Faites-en bon usage !
       try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); suitStreakPage(); toast('Source retirée.'); }
       catch (e) { toast(e.message, 'error'); }
     }
+    // -----------------------------------------------------------------------
+    // « Comptage 2/2 » (voir cards-count.js) : comptage 3/2, 3/3, 2/3, 2/2 par
+    // lot de 30 jeux, prédictions début+34/+44/+54 quand 2/2 est la plus faible.
+    // -----------------------------------------------------------------------
+    function cardsCountSiteOptions(currentId) {
+      const list = snapshot.cardsCount?.siteChannels || [];
+      const cur = currentId == null ? '' : String(currentId);
+      return ['<option value="">Aucun</option>']
+        .concat(list.map((c) => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`)).join('');
+    }
+
+    function cardsCountPage() {
+      setNav('cards-count');
+      const p = snapshot.cardsCount || {};
+      const b = p.block || null;
+      const counts = (b && b.counts) || {};
+      const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : s === 'programmé' ? '🕓 programmé' : '🚫 annulé';
+      const pend = (p.pending || []).slice().reverse();
+      const hist = p.history || [];
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot compte par lot de 30 jeux (1→30, 31→60, 61→90…) les catégories 3/2, 3/3, 2/3 et 2/2. Un lot ne commence jamais à 43, 45, 50 ou 52 : au démarrage, le prochain début de lot valide est calculé automatiquement. Si 2/2 est la catégorie la plus faible du lot, trois prédictions 2/2 sont programmées (début+34, +44, +54 → 35/45/55, puis 65/75/85, etc.). Chaque prédiction n'est envoyée que lorsque le jeu en live arrive à 3 ou 2 jeux de la cible, puis vérifiée avec le rattrapage configuré.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
+        <div class="grid two">
+          <div class="card">
+            <h3>Canal et réglages</h3>
+            <div class="field"><label>ID ou @nom du canal</label><input id="ccChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveCardsCountChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="cardsCountTest()">Envoyer un test</button><button class="button small danger" onclick="removeCardsCountChannel()">Retirer</button></div>
+            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine)</label><select id="ccSiteChannel">${cardsCountSiteOptions(p.siteChannelId)}</select></div>
+            <div class="field"><label>Rattrapage maximum</label><input id="ccMaxR" type="number" min="0" max="9" value="${p.maxR ?? 1}"></div>
+            <div class="field"><label>Déclenchement de l'envoi</label><select id="ccTrigger">
+              <option value="both" ${p.trigger === 'both' ? 'selected' : ''}>Au jeu −3 ou −2 (ex. 32 ou 33 pour le jeu 35)</option>
+              <option value="minus3" ${p.trigger === 'minus3' ? 'selected' : ''}>Uniquement au jeu −3 (ex. 32 / 42)</option>
+              <option value="minus2" ${p.trigger === 'minus2' ? 'selected' : ''}>Uniquement au jeu −2 (ex. 33 / 43)</option>
+            </select></div>
+            <label class="check"><input id="ccEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer le comptage 2/2</label>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveCardsCount()">Enregistrer</button><button class="button small ghost" onclick="resetCardsCount()">Réinitialiser le comptage</button></div>
+            ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+          </div>
+          <div class="card">
+            <h3>Lot en cours</h3>
+            <p class="small">Jeu en live : <b>№${esc(String(p.live || '—'))}</b></p>
+            ${b ? `<p class="small">Lot <b>${b.start} → ${b.end}</b> • ${b.countedCount || 0}/30 jeux comptés</p>
+            <table class="table"><thead><tr><th>Catégorie</th><th>Compte</th></tr></thead><tbody>
+              ${['3/2', '3/3', '2/3', '2/2'].map((c) => `<tr><td>${c}</td><td>${counts[c] || 0}</td></tr>`).join('')}
+            </tbody></table>` : '<p class="small">Comptage non démarré.</p>'}
+            <p class="small" style="margin-top:10px">Prédictions envoyées : <b>${p.sentCount || 0}</b> • gagnées ${p.won || 0} • perdues ${p.lost || 0}</p>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Prédictions</h3>
+          ${pend.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Lot</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>
+            ${pend.map((e) => `<tr><td>№${e.target}</td><td>${e.blockStart} → ${e.blockStart + 29}</td><td>${statusBadge(e.status)}</td><td>${e.step}/${e.maxR}</td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Aucune prédiction pour le moment.</p>'}
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Historique des lots</h3>
+          ${hist.length ? `<table class="table"><thead><tr><th>Lot</th><th>3/2</th><th>3/3</th><th>2/3</th><th>2/2</th><th>Décision</th></tr></thead><tbody>
+            ${hist.map((x) => `<tr><td>${x.start} → ${x.end}</td><td>${x.counts['3/2'] || 0}</td><td>${x.counts['3/3'] || 0}</td><td>${x.counts['2/3'] || 0}</td><td>${x.counts['2/2'] || 0}</td><td>${x.predicted ? `2/2 le plus faible → jeux ${x.targets.join(', ')}` : 'aucune prédiction'}</td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Aucun lot terminé pour le moment.</p>'}
+        </div>`;
+    }
+
+    async function saveCardsCount() {
+      const rawSite = val('ccSiteChannel');
+      try { await api('/api/cards-count/config', 'POST', { enabled: $('#ccEnabled')?.checked, maxR: val('ccMaxR'), trigger: val('ccTrigger'), channels: ids(val('ccChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); cardsCountPage(); toast('Panneau « Comptage 2/2 » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveCardsCountChannel() {
+      const list = ids(val('ccChannel'));
+      if (!list.length) return toast('Renseigne un ID de canal.', 'error');
+      try { const r = await api('/api/cards-count/channel', 'POST', { channelId: list[0] }); await refresh(); cardsCountPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeCardsCountChannel() { try { await api('/api/cards-count/channel', 'DELETE'); await refresh(); cardsCountPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function cardsCountTest() {
+      try { const r = await api('/api/cards-count/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function cardsCountScan() {
+      try { await api('/api/cards-count/scan', 'POST', {}); await refresh(); cardsCountPage(); toast('Analyse effectuée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetCardsCount() {
+      try { await api('/api/cards-count/reset', 'POST', {}); await refresh(); cardsCountPage(); toast('Comptage réinitialisé.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
     async function saveSuitStreak() {
       const rawSite = val('suitStreakSiteChannel');
       try { await api('/api/suit-streak/config', 'POST', { enabled: $('#suitStreakEnabled')?.checked, maxR: val('suitStreakMaxR'), format: val('suitStreakFormat'), channels: ids(val('suitStreakChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); suitStreakPage(); toast('Panneau « Répétition de costume » enregistré.'); }
@@ -2800,6 +2887,7 @@ Faites-en bon usage !
         else if (h === '#/after-loss') afterLossPage();
         else if (h === '#/combined') combinedPage();
         else if (h === '#/suit-streak') suitStreakPage();
+        else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
         else if (h === '#/diagnostics') await diagnosticsPage();
