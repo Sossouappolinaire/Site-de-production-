@@ -12,8 +12,11 @@
 //    On ne commence donc JAMAIS un comptage à 43, 45, 50 ou 52 : au
 //    démarrage du bot, on calcule le prochain début de lot valide à partir
 //    du jeu en cours (voir pickStart()).
-//  • À la fin d'un lot, si le nombre de 2/2 est STRICTEMENT INFÉRIEUR aux
-//    trois autres catégories, on programme 3 prédictions « 2/2 » :
+//  • À la fin d'un lot, on regarde LES TROIS comptages (3/2, 3/3, 2/2) et on
+//    retient la catégorie LA PLUS FAIBLE : c'est elle qui est prédite (si
+//    c'est 3/2 le plus faible → on prédit 3/2, si c'est 2/2 → 2/2, etc.).
+//    En cas d'égalité pour la plus basse, aucun signal n'est programmé.
+//    3 prédictions sont alors programmées :
 //        lot 1→30   : jeux 35, 45, 55
 //        lot 31→60  : jeux 65, 75, 85
 //        lot 61→90  : jeux 95, 105, 115   (règle générale : début+34/+44/+54)
@@ -33,14 +36,22 @@ const db = require('./db');
 const { state, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 
 const CATEGORIES = ['3/2', '3/3', '2/2'];
-const BLOCK = 30;
-const OFFSETS = [34, 44, 54]; // début du lot + offset = jeux prédits
+const DEFAULT_BLOCK = 30;
+// Le lot est configurable (10, 20, 30, 40…). Les 3 prédictions tombent
+// toujours 4 jeux après la fin du lot, puis tous les 10 jeux :
+//   lot 30 -> début+34/+44/+54 (35/45/55) ; lot 10 -> début+14/+24/+34.
+function offsetsFor(size) { return [size + 4, size + 14, size + 24]; }
+function blockSize() { return panel.blockSize || DEFAULT_BLOCK; }
 
 const panel = {
   enabled: true,
   channels: [],
   siteChannelId: null,
   maxR: 1,
+  blockSize: DEFAULT_BLOCK,
+  categoriesOn: { '3/2': true, '3/3': true, '2/2': true },
+  categoryChannels: { '3/2': [], '3/3': [], '2/2': [] },
+  categorySiteChannels: { '3/2': null, '3/3': null, '2/2': null },
   trigger: 'both',        // 'both' | 'minus3' | 'minus2'
   block: null,            // { start, end, counts, counted: [numéros comptés] }
   pending: [],            // prédictions programmées / envoyées
@@ -81,6 +92,40 @@ function sanitizeSiteChannelId(value) {
   return Number.isFinite(n) ? n : String(value);
 }
 
+function sanitizeBlockSize(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return DEFAULT_BLOCK;
+  return Math.max(5, Math.min(200, n));
+}
+
+function sanitizeCategoriesOn(value) {
+  const out = { '3/2': false, '3/3': false, '2/2': false };
+  if (Array.isArray(value)) {
+    for (const c of value) if (CATEGORIES.includes(String(c))) out[String(c)] = true;
+  } else if (value && typeof value === 'object') {
+    for (const c of CATEGORIES) out[c] = !!value[c];
+  }
+  // Au moins une catégorie doit rester cochée.
+  if (!CATEGORIES.some((c) => out[c])) for (const c of CATEGORIES) out[c] = true;
+  return out;
+}
+
+function sanitizeCategoryChannels(value) {
+  const out = { '3/2': [], '3/3': [], '2/2': [] };
+  if (value && typeof value === 'object') {
+    for (const c of CATEGORIES) out[c] = parseChannels(value[c]);
+  }
+  return out;
+}
+
+function sanitizeCategorySites(value) {
+  const out = { '3/2': null, '3/3': null, '2/2': null };
+  if (value && typeof value === 'object') {
+    for (const c of CATEGORIES) out[c] = sanitizeSiteChannelId(value[c]);
+  }
+  return out;
+}
+
 function sanitizeTrigger(value) {
   return value === 'minus3' || value === 'minus2' ? value : 'both';
 }
@@ -91,6 +136,18 @@ function configure(patch = {}) {
   if (patch.siteChannelId !== undefined) panel.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
   if (patch.maxR !== undefined) panel.maxR = Math.max(0, Math.min(9, parseInt(patch.maxR, 10) || 0));
   if (patch.trigger !== undefined) panel.trigger = sanitizeTrigger(patch.trigger);
+  if (patch.categoriesOn !== undefined) panel.categoriesOn = sanitizeCategoriesOn(patch.categoriesOn);
+  if (patch.categoryChannels !== undefined) panel.categoryChannels = sanitizeCategoryChannels(patch.categoryChannels);
+  if (patch.categorySiteChannels !== undefined) panel.categorySiteChannels = sanitizeCategorySites(patch.categorySiteChannels);
+  if (patch.blockSize !== undefined) {
+    const size = sanitizeBlockSize(patch.blockSize);
+    if (size !== panel.blockSize) {
+      panel.blockSize = size;
+      // Nouvelle taille de lot : on réaligne le comptage en cours.
+      panel.block = null;
+      ensureBlock();
+    }
+  }
   persist();
   return config();
 }
@@ -102,6 +159,14 @@ function config() {
     siteChannelId: panel.siteChannelId,
     maxR: panel.maxR,
     trigger: panel.trigger,
+    blockSize: blockSize(),
+    categoriesOn: { ...panel.categoriesOn },
+    categoryChannels: {
+      '3/2': [...panel.categoryChannels['3/2']],
+      '3/3': [...panel.categoryChannels['3/3']],
+      '2/2': [...panel.categoryChannels['2/2']],
+    },
+    categorySiteChannels: { ...panel.categorySiteChannels },
   };
 }
 
@@ -125,6 +190,10 @@ function applySaved(saved) {
     panel.siteChannelId = sanitizeSiteChannelId(saved.config.siteChannelId);
     panel.maxR = Math.max(0, Math.min(9, parseInt(saved.config.maxR, 10) || 0));
     panel.trigger = sanitizeTrigger(saved.config.trigger);
+    panel.blockSize = sanitizeBlockSize(saved.config.blockSize ?? DEFAULT_BLOCK);
+    panel.categoriesOn = sanitizeCategoriesOn(saved.config.categoriesOn);
+    panel.categoryChannels = sanitizeCategoryChannels(saved.config.categoryChannels);
+    panel.categorySiteChannels = sanitizeCategorySites(saved.config.categorySiteChannels);
   }
   if (saved.block && Number.isFinite(Number(saved.block.start))) {
     panel.block = normalizeBlock(saved.block);
@@ -142,7 +211,7 @@ function normalizeBlock(b) {
   for (const c of CATEGORIES) counts[c] = Number((b.counts || {})[c]) || 0;
   return {
     start,
-    end: start + BLOCK - 1,
+    end: start + blockSize() - 1,
     counts,
     counted: Array.isArray(b.counted) ? b.counted.filter((n) => Number.isFinite(Number(n))).map(Number) : [],
   };
@@ -192,9 +261,10 @@ function maxFinishedGameNumber() {
 // Prochain début de lot valide : toujours ≡ 1 (mod 30) — 1, 31, 61, 91…
 // Jamais 43/45/50/52 : ces numéros ne sont pas des débuts de lot.
 function pickStart(currentNumber) {
+  const size = blockSize();
   const n = Math.max(1, Number(currentNumber) || 1);
-  if (n <= BLOCK) return 1;
-  return 1 + BLOCK * Math.ceil((n - 1) / BLOCK);
+  if (n <= size) return 1;
+  return 1 + size * Math.ceil((n - 1) / size);
 }
 
 function ensureBlock() {
@@ -223,22 +293,40 @@ function blockFinished(block) {
   return maxFinishedGameNumber() >= block.end;
 }
 
-function twoTwoIsLowest(counts) {
-  const two = counts['2/2'] || 0;
-  return CATEGORIES.filter((c) => c !== '2/2').every((c) => two < (counts[c] || 0));
+// Catégorie la PLUS FAIBLE du lot (demande admin) : on ne prédit plus
+// seulement « 2/2 ». On regarde les trois comptages (3/2, 3/3, 2/2) et on
+// retient celle qui est STRICTEMENT inférieure aux deux autres. En cas
+// d'égalité pour la plus basse, aucune prédiction n'est programmée.
+function lowestCategory(counts) {
+  // On ne considère que les catégories cochées dans le panneau. Si une seule
+  // est cochée, c'est toujours elle qui est prédite.
+  const allowed = CATEGORIES.filter((c) => panel.categoriesOn[c]);
+  if (!allowed.length) return null;
+  if (allowed.length === 1) return allowed[0];
+  let best = null;
+  for (const c of allowed) {
+    const v = counts[c] || 0;
+    if (best === null || v < (counts[best] || 0)) best = c;
+  }
+  if (best === null) return null;
+  const low = counts[best] || 0;
+  const tie = allowed.some((c) => c !== best && (counts[c] || 0) <= low);
+  return tie ? null : best;
 }
 
 function closeBlock() {
   const block = panel.block;
   if (!block) return;
-  const decided = twoTwoIsLowest(block.counts);
+  const signal = lowestCategory(block.counts);
+  const decided = !!signal;
   if (decided) {
-    for (const off of OFFSETS) {
+    for (const off of offsetsFor(blockSize())) {
       const target = block.start + off;
       if (panel.pending.some((p) => p.target === target)) continue;
       panel.pending.push({
         id: `cc-${target}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         target,
+        signal,
         blockStart: block.start,
         status: 'programmé',   // programmé -> en attente -> gagné/perdu/annulé
         step: 0,
@@ -254,7 +342,7 @@ function closeBlock() {
   }
   panel.history.unshift({
     start: block.start, end: block.end, counts: { ...block.counts },
-    predicted: decided, targets: decided ? OFFSETS.map((o) => block.start + o) : [],
+    predicted: decided, signal: signal || null, targets: decided ? offsetsFor(blockSize()).map((o) => block.start + o) : [],
     closedAt: Date.now(),
   });
   panel.history = panel.history.slice(0, 60);
@@ -283,26 +371,39 @@ function messageText(entry, status) {
   const result = status === 'gagné' ? '✅' : status === 'perdu' ? '❌' : '⏳';
   const lines = [
     `🎯 Jeu №${entry.target}`,
-    '🔹 Signal : 2/2',
+    `🔹 Signal : ${entry.signal || '2/2'}`,
     `✅ Résultat : ${result}`,
   ];
   if (entry.step > 0 && status !== 'perdu') lines.splice(2, 0, `🔁 Rattrapage ${entry.step}/${entry.maxR}`);
   return lines.join('\n');
 }
 
+function channelsFor(signal) {
+  const list = (panel.categoryChannels[signal] || []);
+  return list.length ? list : panel.channels;
+}
+
+function siteChannelFor(signal) {
+  const id = panel.categorySiteChannels[signal];
+  return id === null || id === undefined || id === '' ? panel.siteChannelId : id;
+}
+
 async function sendEntry(entry) {
-  if (!panel.channels.length && !panel.siteChannelId) {
+  const cat = entry.signal || '2/2';
+  const targetChannels = channelsFor(cat);
+  const targetSite = siteChannelFor(cat);
+  if (!targetChannels.length && !targetSite) {
     panel.lastError = 'Aucun canal configuré pour le comptage 2/2';
     return false;
   }
   const text = messageText(entry, 'en attente');
   const errors = [];
   let ok = false;
-  if (panel.channels.length) {
+  if (targetChannels.length) {
     const bot = typeof sender === 'function' ? sender() : null;
     if (!bot) errors.push('Aucun token Telegram configuré');
     else {
-      for (const id of panel.channels) {
+      for (const id of targetChannels) {
         try {
           const m = await bot.sendMessage(id, text);
           entry.messages.push({ chatId: id, messageId: m.message_id });
@@ -311,9 +412,9 @@ async function sendEntry(entry) {
       }
     }
   }
-  if (panel.siteChannelId) {
-    const posted = addSiteChannelMessage(panel.siteChannelId, { sender: 'Comptage 2/2', text });
-    if (posted) ok = true; else errors.push(`Canal du site introuvable (id ${panel.siteChannelId})`);
+  if (targetSite) {
+    const posted = addSiteChannelMessage(targetSite, { sender: `Comptage ${cat}`, text });
+    if (posted) ok = true; else errors.push(`Canal du site introuvable (id ${targetSite})`);
   }
   if (!ok) {
     panel.lastError = errors[0] || 'Envoi impossible';
@@ -368,7 +469,7 @@ function verifyPending() {
         }
         break;
       }
-      if (categoryOf(g) === '2/2') {
+      if (categoryOf(g) === (entry.signal || '2/2')) {
         entry.status = 'gagné'; entry.resolvedAt = Date.now(); editEntry(entry, 'gagné'); break;
       }
       if (entry.step >= entry.maxR) {
@@ -413,13 +514,18 @@ async function tick() {
 async function test() {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return { ok: false, error: 'Aucun token Telegram configuré' };
-  if (!panel.channels.length) return { ok: false, error: 'Aucun canal configuré' };
-  const preview = messageText({ target: 35, step: 0, maxR: panel.maxR }, 'en attente');
   const sent = [];
   const errors = [];
-  for (const id of panel.channels) {
+  const targets = [];
+  for (const cat of CATEGORIES) {
+    if (!panel.categoriesOn[cat]) continue;
+    for (const id of channelsFor(cat)) if (!targets.some((t) => t.id === id)) targets.push({ id, cat });
+  }
+  if (!targets.length) return { ok: false, error: 'Aucun canal configuré' };
+  for (const { id, cat } of targets) {
+    const preview = messageText({ target: blockSize() + 5, step: 0, maxR: panel.maxR, signal: cat }, 'en attente');
     try {
-      await bot.sendMessage(id, `🧮 COMPTAGE 2/2 — message de test\n\n${preview}`);
+      await bot.sendMessage(id, `🧮 COMPTAGE ${cat} — message de test\n\n${preview}`);
       sent.push(String(id));
     } catch (e) { errors.push(`${id} : ${e.message}`); }
   }
@@ -433,11 +539,12 @@ function statusView() {
   return {
     ...config(),
     categories: CATEGORIES,
+    offsets: offsetsFor(blockSize()),
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     live: liveNumber(),
     block,
     pending: panel.pending.slice(-30).map((e) => ({
-      id: e.id, target: e.target, blockStart: e.blockStart, status: e.status,
+      id: e.id, target: e.target, signal: e.signal || '2/2', blockStart: e.blockStart, status: e.status,
       step: e.step, maxR: e.maxR, sentAt: e.sentAt, resolvedAt: e.resolvedAt,
     })),
     history: panel.history.slice(0, 20),
@@ -460,6 +567,6 @@ function resetCounting() {
 
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
-  restore, restoreFromDb, parseChannels, resetCounting, categoryOf, pickStart,
-  CATEGORIES, BLOCK, OFFSETS,
+  restore, restoreFromDb, parseChannels, resetCounting, categoryOf, pickStart, lowestCategory,
+  CATEGORIES, DEFAULT_BLOCK, offsetsFor, blockSize,
 };

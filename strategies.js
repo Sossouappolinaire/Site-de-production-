@@ -837,6 +837,8 @@ const costumeFaible = {
 // la Formation a établi pour la stratégie source (formationInfo.length —
 // combien de prédictions il faut rejouer d'affilée après une perte/
 // rattrapage pour cette stratégie), voir hit.maxR ci-dessous et predictor.js.
+const FORMATION_MAXR = 3; // rattrapage uniforme imposé aux relais Formation
+
 const collecte = {
   key: 'collecte',
   name: 'Collecte IA — meilleures stratégies',
@@ -911,7 +913,10 @@ const collecte = {
     // uniquement si, cas limite, aucune longueur de formation n'est connue
     // pour cette source (ne devrait pas arriver : bestKeys exige déjà un
     // conseil de formation établi pour entrer dans les candidats).
-    const maxR = srcFormation && srcFormation.length > 0 ? srcFormation.length : cfg.maxR;
+    // RATTRAPAGE UNIFORME (demande admin) : toute prédiction issue de la
+    // Formation part avec EXACTEMENT 3 rattrapages — plus de 1, 2 ou 5 selon
+    // la longueur de formation de la source.
+    const maxR = FORMATION_MAXR;
 
     // écart minimum de 3 jeux entre deux prédictions Collecte : si le jeu
     // cible retenu tombe à moins de 3 jeux de la dernière prédiction déjà
