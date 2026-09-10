@@ -1935,7 +1935,7 @@ app.delete('/api/combined/trackers/:id', (req, res) => {
 
 // ---------------------------------------------------------------------------
 // « Comptage 2/2 » (voir cards-count.js) — nouveau bouton : comptage des
-// catégories 3/2, 3/3, 2/3 et 2/2 par lot de 30 jeux, prédiction des jeux
+// catégories 3/2, 3/3 et 2/2 par lot de 30 jeux, prédiction des jeux
 // début+34/+44/+54 quand 2/2 est la catégorie la plus faible, envoi déclenché
 // à −3/−2 du jeu cible, vérification avec le rattrapage configuré.
 // ---------------------------------------------------------------------------

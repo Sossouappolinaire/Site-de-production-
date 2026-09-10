@@ -2059,7 +2059,7 @@ async function tick() {
     // retour de ce costume avant de déclencher (voir suit-streak.js).
     await suitStreak.tick();
 
-    // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/3, 2/2 par
+    // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
     // lot de 30 jeux (1→30, 31→60, 61→90…) et prédictions 2/2 sur début+34/44/54
     // déclenchées quand le jeu en live arrive à −3/−2 de la cible (voir cards-count.js).
     await cardsCount.tick();

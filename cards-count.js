@@ -6,7 +6,7 @@
 //    terminé, en 4 catégories :
 //        3/2 : 3 cartes joueur + 2 cartes banquier
 //        3/3 : 3 cartes joueur + 3 cartes banquier
-//        2/3 : 2 cartes joueur + 3 cartes banquier
+
 //        2/2 : 2 cartes joueur + 2 cartes banquier
 //  • Les lots sont TOUJOURS alignés sur 1 : 1→30, 31→60, 61→90, 91→120…
 //    On ne commence donc JAMAIS un comptage à 43, 45, 50 ou 52 : au
@@ -32,7 +32,7 @@ const store = require('./store');
 const db = require('./db');
 const { state, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 
-const CATEGORIES = ['3/2', '3/3', '2/3', '2/2'];
+const CATEGORIES = ['3/2', '3/3', '2/2'];
 const BLOCK = 30;
 const OFFSETS = [34, 44, 54]; // début du lot + offset = jeux prédits
 
