@@ -2003,7 +2003,7 @@ Faites-en bon usage !
       const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : s === 'programmé' ? '🕓 programmé' : '🚫 annulé';
       const pend = (p.pending || []).slice().reverse();
       const hist = p.history || [];
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot compte par lot de <b>${p.blockSize || 30}</b> jeux (1→${p.blockSize || 30}, puis le lot suivant…) les catégories cochées parmi 3/2, 3/3 et 2/2. La catégorie la plus faible du lot est prédite ; si une seule catégorie est cochée, c'est toujours elle. Trois prédictions sont programmées à début+${(p.offsets || [34,44,54]).join(', +')}. Chaque prédiction n'est envoyée que lorsque le jeu en live arrive à 3 ou 2 jeux de la cible, puis vérifiée avec le rattrapage configuré. Chaque catégorie peut avoir son propre canal.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot compte par lot de <b>${p.blockSize || 30}</b> jeux (1→${p.blockSize || 30}, puis le lot suivant…) les catégories cochées parmi 3/2, 3/3 et 2/2. La catégorie la plus faible du lot est prédite ; si une seule catégorie est cochée, c'est toujours elle. Une seule prédiction est programmée par lot, à début+${(p.offsets || [34]).join(', +')} ; ensuite on attend le comptage du lot suivant. Chaque prédiction n'est envoyée que lorsque le jeu en live arrive à 3 ou 2 jeux de la cible, puis vérifiée avec le rattrapage configuré. Chaque catégorie peut avoir son propre canal.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
         <div class="grid two">
           <div class="card">
             <h3>Canal et réglages</h3>
@@ -2048,7 +2048,7 @@ Faites-en bon usage !
         <div class="card" style="margin-top:16px">
           <h3>Historique des lots</h3>
           ${hist.length ? `<table class="table"><thead><tr><th>Lot</th><th>3/2</th><th>3/3</th><th>2/2</th><th>Décision</th></tr></thead><tbody>
-            ${hist.map((x) => `<tr><td>${x.start} → ${x.end}</td><td>${x.counts['3/2'] || 0}</td><td>${x.counts['3/3'] || 0}</td><td>${x.counts['2/2'] || 0}</td><td>${x.predicted ? `${esc(String(x.signal || '2/2'))} le plus faible → jeux ${x.targets.join(', ')}` : 'aucune prédiction'}</td></tr>`).join('')}
+            ${hist.map((x) => `<tr><td>${x.start} → ${x.end}</td><td>${x.counts['3/2'] || 0}</td><td>${x.counts['3/3'] || 0}</td><td>${x.counts['2/2'] || 0}</td><td>${x.predicted ? `${esc(String(x.signal || '2/2'))} le plus faible → jeu ${x.targets.join(', ')}` : 'aucune prédiction'}</td></tr>`).join('')}
           </tbody></table>` : '<p class="small">Aucun lot terminé pour le moment.</p>'}
         </div>`;
     }
