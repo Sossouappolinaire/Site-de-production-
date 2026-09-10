@@ -37,10 +37,11 @@ const { state, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = requi
 
 const CATEGORIES = ['3/2', '3/3', '2/2'];
 const DEFAULT_BLOCK = 30;
-// Le lot est configurable (10, 20, 30, 40…). Les 3 prédictions tombent
-// toujours 4 jeux après la fin du lot, puis tous les 10 jeux :
-//   lot 30 -> début+34/+44/+54 (35/45/55) ; lot 10 -> début+14/+24/+34.
-function offsetsFor(size) { return [size + 4, size + 14, size + 24]; }
+// Le lot est configurable (10, 20, 30, 40…). UNE SEULE prédiction est
+// programmée par lot : elle tombe 4 jeux après la fin du lot
+//   lot 30 -> début+34 (jeu 35) ; lot 10 -> début+14 (jeu 15).
+// Après cette prédiction on attend simplement le comptage du lot suivant.
+function offsetsFor(size) { return [size + 4]; }
 function blockSize() { return panel.blockSize || DEFAULT_BLOCK; }
 
 const panel = {
@@ -367,14 +368,26 @@ function triggerReady(target) {
   return live === target - 3 || live === target - 2;
 }
 
+// Chiffres en emoji pour la vérification : ✅0️⃣ = gagné sur le jeu cible,
+// ✅1️⃣ = gagné au 1er rattrapage, ✅2️⃣ au 2e, etc. ❌ = perdu.
+const DIGITS = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+function digitEmoji(n) {
+  const i = Math.max(0, parseInt(n, 10) || 0);
+  return i < DIGITS.length ? DIGITS[i] : `(${i})`;
+}
+
 function messageText(entry, status) {
-  const result = status === 'gagné' ? '✅' : status === 'perdu' ? '❌' : '⏳';
+  const step = Math.max(0, parseInt(entry.step, 10) || 0);
+  const result = status === 'gagné'
+    ? `✅${digitEmoji(step)}`
+    : status === 'perdu'
+      ? `❌${digitEmoji(step)}`
+      : '⏳';
   const lines = [
     `🎯 Jeu №${entry.target}`,
     `🔹 Signal : ${entry.signal || '2/2'}`,
-    `✅ Résultat : ${result}`,
+    `🔎 Résultat : ${result}`,
   ];
-  if (entry.step > 0 && status !== 'perdu') lines.splice(2, 0, `🔁 Rattrapage ${entry.step}/${entry.maxR}`);
   return lines.join('\n');
 }
 
