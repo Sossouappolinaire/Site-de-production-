@@ -1985,7 +1985,7 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
     // -----------------------------------------------------------------------
-    // « Comptage 2/2 » (voir cards-count.js) : comptage 3/2, 3/3, 2/3, 2/2 par
+    // « Comptage 2/2 » (voir cards-count.js) : comptage 3/2, 3/3, 2/2 par
     // lot de 30 jeux, prédictions début+34/+44/+54 quand 2/2 est la plus faible.
     // -----------------------------------------------------------------------
     function cardsCountSiteOptions(currentId) {
@@ -2003,7 +2003,7 @@ Faites-en bon usage !
       const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : s === 'programmé' ? '🕓 programmé' : '🚫 annulé';
       const pend = (p.pending || []).slice().reverse();
       const hist = p.history || [];
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot compte par lot de 30 jeux (1→30, 31→60, 61→90…) les catégories 3/2, 3/3, 2/3 et 2/2. Un lot ne commence jamais à 43, 45, 50 ou 52 : au démarrage, le prochain début de lot valide est calculé automatiquement. Si 2/2 est la catégorie la plus faible du lot, trois prédictions 2/2 sont programmées (début+34, +44, +54 → 35/45/55, puis 65/75/85, etc.). Chaque prédiction n'est envoyée que lorsque le jeu en live arrive à 3 ou 2 jeux de la cible, puis vérifiée avec le rattrapage configuré.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot compte par lot de 30 jeux (1→30, 31→60, 61→90…) les catégories 3/2, 3/3 et 2/2. Un lot ne commence jamais à 43, 45, 50 ou 52 : au démarrage, le prochain début de lot valide est calculé automatiquement. Si 2/2 est la catégorie la plus faible du lot, trois prédictions 2/2 sont programmées (début+34, +44, +54 → 35/45/55, puis 65/75/85, etc.). Chaque prédiction n'est envoyée que lorsque le jeu en live arrive à 3 ou 2 jeux de la cible, puis vérifiée avec le rattrapage configuré.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
         <div class="grid two">
           <div class="card">
             <h3>Canal et réglages</h3>
@@ -2025,7 +2025,7 @@ Faites-en bon usage !
             <p class="small">Jeu en live : <b>№${esc(String(p.live || '—'))}</b></p>
             ${b ? `<p class="small">Lot <b>${b.start} → ${b.end}</b> • ${b.countedCount || 0}/30 jeux comptés</p>
             <table class="table"><thead><tr><th>Catégorie</th><th>Compte</th></tr></thead><tbody>
-              ${['3/2', '3/3', '2/3', '2/2'].map((c) => `<tr><td>${c}</td><td>${counts[c] || 0}</td></tr>`).join('')}
+              ${['3/2', '3/3', '2/2'].map((c) => `<tr><td>${c}</td><td>${counts[c] || 0}</td></tr>`).join('')}
             </tbody></table>` : '<p class="small">Comptage non démarré.</p>'}
             <p class="small" style="margin-top:10px">Prédictions envoyées : <b>${p.sentCount || 0}</b> • gagnées ${p.won || 0} • perdues ${p.lost || 0}</p>
           </div>
@@ -2038,8 +2038,8 @@ Faites-en bon usage !
         </div>
         <div class="card" style="margin-top:16px">
           <h3>Historique des lots</h3>
-          ${hist.length ? `<table class="table"><thead><tr><th>Lot</th><th>3/2</th><th>3/3</th><th>2/3</th><th>2/2</th><th>Décision</th></tr></thead><tbody>
-            ${hist.map((x) => `<tr><td>${x.start} → ${x.end}</td><td>${x.counts['3/2'] || 0}</td><td>${x.counts['3/3'] || 0}</td><td>${x.counts['2/3'] || 0}</td><td>${x.counts['2/2'] || 0}</td><td>${x.predicted ? `2/2 le plus faible → jeux ${x.targets.join(', ')}` : 'aucune prédiction'}</td></tr>`).join('')}
+          ${hist.length ? `<table class="table"><thead><tr><th>Lot</th><th>3/2</th><th>3/3</th><th>2/2</th><th>Décision</th></tr></thead><tbody>
+            ${hist.map((x) => `<tr><td>${x.start} → ${x.end}</td><td>${x.counts['3/2'] || 0}</td><td>${x.counts['3/3'] || 0}</td><td>${x.counts['2/2'] || 0}</td><td>${x.predicted ? `2/2 le plus faible → jeux ${x.targets.join(', ')}` : 'aucune prédiction'}</td></tr>`).join('')}
           </tbody></table>` : '<p class="small">Aucun lot terminé pour le moment.</p>'}
         </div>`;
     }
