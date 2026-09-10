@@ -23,6 +23,7 @@ const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const cardsCount = require('./cards-count');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const shop = require('./shop');
@@ -334,6 +335,7 @@ app.get('/api/state', async (req, res) => {
     afterLoss: afterLoss.status(),
     combined: combined.status(),
     suitStreak: suitStreak.status(),
+    cardsCount: cardsCount.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
       target: p.target, suit: p.suit, hand: p.hand, step: p.step, maxR: p.maxR,
@@ -1929,6 +1931,48 @@ app.put('/api/combined/trackers/:id', (req, res) => {
 app.delete('/api/combined/trackers/:id', (req, res) => {
   combined.removeTracker(req.params.id);
   res.json(combined.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Comptage 2/2 » (voir cards-count.js) — nouveau bouton : comptage des
+// catégories 3/2, 3/3, 2/3 et 2/2 par lot de 30 jeux, prédiction des jeux
+// début+34/+44/+54 quand 2/2 est la catégorie la plus faible, envoi déclenché
+// à −3/−2 du jeu cible, vérification avec le rattrapage configuré.
+// ---------------------------------------------------------------------------
+app.get('/api/cards-count', (req, res) => res.json(cardsCount.status()));
+
+app.post('/api/cards-count/config', (req, res) => {
+  cardsCount.configure(req.body || {});
+  res.json(cardsCount.status());
+});
+
+app.post('/api/cards-count/channel', async (req, res) => {
+  const idsList = cardsCount.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ ok: false, error: 'Identifiant de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ ok: false, error: check.error });
+  cardsCount.configure({ channels: idsList });
+  const notice = await cardsCount.test();
+  res.json({ ok: true, channel: check.chat, notice, cardsCount: cardsCount.status() });
+});
+
+app.delete('/api/cards-count/channel', (req, res) => {
+  cardsCount.configure({ channels: [] });
+  res.json(cardsCount.status());
+});
+
+app.post('/api/cards-count/test', async (req, res) => {
+  const r = await cardsCount.test();
+  res.status(r.ok ? 200 : 400).json({ ...r, cardsCount: cardsCount.status() });
+});
+
+app.post('/api/cards-count/scan', async (req, res) => {
+  await cardsCount.tick();
+  res.json(cardsCount.status());
+});
+
+app.post('/api/cards-count/reset', (req, res) => {
+  res.json(cardsCount.resetCounting());
 });
 
 // ---------------------------------------------------------------------------
