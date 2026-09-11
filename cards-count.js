@@ -12,11 +12,13 @@
 //    On ne commence donc JAMAIS un comptage à 43, 45, 50 ou 52 : au
 //    démarrage du bot, on calcule le prochain début de lot valide à partir
 //    du jeu en cours (voir pickStart()).
-//  • À la fin d'un lot, on regarde LES TROIS comptages (3/2, 3/3, 2/2) et on
-//    retient la catégorie LA PLUS FAIBLE : c'est elle qui est prédite (si
-//    c'est 3/2 le plus faible → on prédit 3/2, si c'est 2/2 → 2/2, etc.).
-//    En cas d'égalité pour la plus basse, aucun signal n'est programmé.
-//    3 prédictions sont alors programmées :
+//  • À la fin d'un lot, on regarde TOUJOURS LES TROIS comptages (3/2, 3/3,
+//    2/2). La catégorie la plus faible n'est prédite que si sa case est
+//    cochée. Exemple : si seul 2/2 est coché et que 3/2 est le plus faible,
+//    aucune prédiction n'est programmée. En cas d'égalité pour la plus basse,
+//    aucun signal n'est programmé.
+//  • Le nombre de prédictions est configurable. Avec 1 : jeu 35 ; avec 2 :
+//    jeux 35 et 45 ; avec 3 : jeux 35, 45 et 55 pour le lot 1→30.
 //        lot 1→30   : jeux 35, 45, 55
 //        lot 31→60  : jeux 65, 75, 85
 //        lot 61→90  : jeux 95, 105, 115   (règle générale : début+34/+44/+54)
@@ -37,11 +39,12 @@ const { state, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = requi
 
 const CATEGORIES = ['3/2', '3/3', '2/2'];
 const DEFAULT_BLOCK = 30;
-// Le lot est configurable (10, 20, 30, 40…). UNE SEULE prédiction est
-// programmée par lot : elle tombe 4 jeux après la fin du lot
-//   lot 30 -> début+34 (jeu 35) ; lot 10 -> début+14 (jeu 15).
-// Après cette prédiction on attend simplement le comptage du lot suivant.
-function offsetsFor(size) { return [size + 4]; }
+// La première cible tombe 4 jeux après la fin du lot, puis les répétitions
+// suivantes sont espacées de 10 jeux : +34, +44, +54 pour un lot de 30.
+function offsetsFor(size, count = panel.predictionCount) {
+  const total = sanitizePredictionCount(count);
+  return Array.from({ length: total }, (_, i) => size + 4 + (i * 10));
+}
 function blockSize() { return panel.blockSize || DEFAULT_BLOCK; }
 
 const panel = {
@@ -49,6 +52,7 @@ const panel = {
   channels: [],
   siteChannelId: null,
   maxR: 1,
+  predictionCount: 1,
   blockSize: DEFAULT_BLOCK,
   categoriesOn: { '3/2': true, '3/3': true, '2/2': true },
   categoryChannels: { '3/2': [], '3/3': [], '2/2': [] },
@@ -99,6 +103,12 @@ function sanitizeBlockSize(value) {
   return Math.max(5, Math.min(200, n));
 }
 
+function sanitizePredictionCount(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(10, n));
+}
+
 function sanitizeCategoriesOn(value) {
   const out = { '3/2': false, '3/3': false, '2/2': false };
   if (Array.isArray(value)) {
@@ -136,6 +146,7 @@ function configure(patch = {}) {
   if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
   if (patch.siteChannelId !== undefined) panel.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
   if (patch.maxR !== undefined) panel.maxR = Math.max(0, Math.min(9, parseInt(patch.maxR, 10) || 0));
+  if (patch.predictionCount !== undefined) panel.predictionCount = sanitizePredictionCount(patch.predictionCount);
   if (patch.trigger !== undefined) panel.trigger = sanitizeTrigger(patch.trigger);
   if (patch.categoriesOn !== undefined) panel.categoriesOn = sanitizeCategoriesOn(patch.categoriesOn);
   if (patch.categoryChannels !== undefined) panel.categoryChannels = sanitizeCategoryChannels(patch.categoryChannels);
@@ -159,6 +170,7 @@ function config() {
     channels: panel.channels,
     siteChannelId: panel.siteChannelId,
     maxR: panel.maxR,
+    predictionCount: panel.predictionCount,
     trigger: panel.trigger,
     blockSize: blockSize(),
     categoriesOn: { ...panel.categoriesOn },
@@ -190,6 +202,7 @@ function applySaved(saved) {
     panel.channels = parseChannels(saved.config.channels);
     panel.siteChannelId = sanitizeSiteChannelId(saved.config.siteChannelId);
     panel.maxR = Math.max(0, Math.min(9, parseInt(saved.config.maxR, 10) || 0));
+    panel.predictionCount = sanitizePredictionCount(saved.config.predictionCount);
     panel.trigger = sanitizeTrigger(saved.config.trigger);
     panel.blockSize = sanitizeBlockSize(saved.config.blockSize ?? DEFAULT_BLOCK);
     panel.categoriesOn = sanitizeCategoriesOn(saved.config.categoriesOn);
@@ -294,24 +307,18 @@ function blockFinished(block) {
   return maxFinishedGameNumber() >= block.end;
 }
 
-// Catégorie la PLUS FAIBLE du lot (demande admin) : on ne prédit plus
-// seulement « 2/2 ». On regarde les trois comptages (3/2, 3/3, 2/2) et on
-// retient celle qui est STRICTEMENT inférieure aux deux autres. En cas
-// d'égalité pour la plus basse, aucune prédiction n'est programmée.
+// Catégorie la PLUS FAIBLE du lot : l'analyse porte toujours sur les trois
+// catégories. Les cases cochées ne changent pas l'analyse ; elles autorisent
+// seulement (ou refusent) la prédiction de la catégorie trouvée.
 function lowestCategory(counts) {
-  // On ne considère que les catégories cochées dans le panneau. Si une seule
-  // est cochée, c'est toujours elle qui est prédite.
-  const allowed = CATEGORIES.filter((c) => panel.categoriesOn[c]);
-  if (!allowed.length) return null;
-  if (allowed.length === 1) return allowed[0];
   let best = null;
-  for (const c of allowed) {
+  for (const c of CATEGORIES) {
     const v = counts[c] || 0;
     if (best === null || v < (counts[best] || 0)) best = c;
   }
   if (best === null) return null;
   const low = counts[best] || 0;
-  const tie = allowed.some((c) => c !== best && (counts[c] || 0) <= low);
+  const tie = CATEGORIES.some((c) => c !== best && (counts[c] || 0) <= low);
   return tie ? null : best;
 }
 
@@ -319,7 +326,7 @@ function closeBlock() {
   const block = panel.block;
   if (!block) return;
   const signal = lowestCategory(block.counts);
-  const decided = !!signal;
+  const decided = !!signal && panel.categoriesOn[signal] === true;
   if (decided) {
     for (const off of offsetsFor(blockSize())) {
       const target = block.start + off;
@@ -343,7 +350,8 @@ function closeBlock() {
   }
   panel.history.unshift({
     start: block.start, end: block.end, counts: { ...block.counts },
-    predicted: decided, signal: signal || null, targets: decided ? offsetsFor(blockSize()).map((o) => block.start + o) : [],
+    predicted: decided, signal: signal || null, selected: signal ? panel.categoriesOn[signal] === true : false,
+    targets: decided ? offsetsFor(blockSize()).map((o) => block.start + o) : [],
     closedAt: Date.now(),
   });
   panel.history = panel.history.slice(0, 60);

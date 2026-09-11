@@ -82,6 +82,16 @@ Les statistiques et les analyses IA décrivent uniquement un historique observé
 Elles ne garantissent pas le résultat d'un jeu et ne doivent pas être présentées
 comme une certitude.
 
+## Version 6.1 — Comptage 2/2
+
+- L'analyse du lot compare toujours **3/2, 3/3 et 2/2**. Une case cochée
+  autorise uniquement la prédiction de cette catégorie : si une autre catégorie
+  est la plus faible, aucune prédiction n'est envoyée.
+- Le nombre de prédictions par lot est configurable de 1 à 10. Pour le lot
+  1→30 : `1` programme le jeu 35, `2` programme 35 et 45, `3` programme 35,
+  45 et 55. Les lots suivants suivent la même règle avec un intervalle de 10.
+- Chaque cible conserve sa propre vérification et affiche `✅0️⃣`, `✅1️⃣`, etc.
+
 ## Analyseur IA
 
 Les adresses publiques de l'API sont définies dans `config.js` :
