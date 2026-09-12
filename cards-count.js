@@ -69,6 +69,8 @@ const panel = {
 
 let sender = null;
 function setSender(fn) { sender = fn; }
+// Bulles publiées sur le site (non persistées) : { entryId -> objet message }
+const siteEntries = new Map();
 let busy = false;
 
 // ---------------------------------------------------------------------------
@@ -310,16 +312,23 @@ function blockFinished(block) {
 // Catégorie la PLUS FAIBLE du lot : l'analyse porte toujours sur les trois
 // catégories. Les cases cochées ne changent pas l'analyse ; elles autorisent
 // seulement (ou refusent) la prédiction de la catégorie trouvée.
-function lowestCategory(counts) {
-  let best = null;
+function lowestCategory(counts, categoriesOn = panel.categoriesOn) {
+  let low = null;
   for (const c of CATEGORIES) {
     const v = counts[c] || 0;
-    if (best === null || v < (counts[best] || 0)) best = c;
+    if (low === null || v < low) low = v;
   }
-  if (best === null) return null;
-  const low = counts[best] || 0;
-  const tie = CATEGORIES.some((c) => c !== best && (counts[c] || 0) <= low);
-  return tie ? null : best;
+  if (low === null) return null;
+  // Toutes les catégories à égalité sur le compteur le plus faible.
+  const tied = CATEGORIES.filter((c) => (counts[c] || 0) === low);
+  if (tied.length === 1) return tied[0];
+  // ÉGALITÉ : on choisit la catégorie COCHÉE parmi celles à égalité.
+  // Ex. : 2/2 et 3/2 sont les deux plus faibles et à égalité, seul 2/2 est
+  // coché -> on prédit 2/2 (au lieu de ne rien prédire).
+  const checked = tied.filter((c) => (categoriesOn || {})[c] === true);
+  if (checked.length === 1) return checked[0];
+  if (checked.length > 1) return checked[0]; // priorité à l'ordre 3/2, 3/3, 2/2
+  return null; // aucune des catégories à égalité n'est cochée
 }
 
 function closeBlock() {
@@ -371,9 +380,11 @@ function liveNumber() {
 function triggerReady(target) {
   const live = liveNumber();
   if (live >= target) return false; // trop tard : la cible est déjà en cours/passée
-  if (panel.trigger === 'minus3') return live === target - 3;
-  if (panel.trigger === 'minus2') return live === target - 2;
-  return live === target - 3 || live === target - 2;
+  // Fenêtre (et non égalité stricte) : si le direct saute un numéro, l'envoi
+  // ne doit pas être perdu.
+  if (panel.trigger === 'minus3') return live <= target - 3;
+  if (panel.trigger === 'minus2') return live <= target - 2 && live >= target - 3;
+  return live <= target - 2;
 }
 
 // Chiffres en emoji pour la vérification : ✅0️⃣ = gagné sur le jeu cible,
@@ -435,7 +446,8 @@ async function sendEntry(entry) {
   }
   if (targetSite) {
     const posted = addSiteChannelMessage(targetSite, { sender: `Comptage ${cat}`, text });
-    if (posted) ok = true; else errors.push(`Canal du site introuvable (id ${targetSite})`);
+    if (posted) { ok = true; siteEntries.set(entry.id, posted); }
+    else errors.push(`Canal du site introuvable (id ${targetSite})`);
   }
   if (!ok) {
     panel.lastError = errors[0] || 'Envoi impossible';
@@ -444,6 +456,8 @@ async function sendEntry(entry) {
   entry.status = 'en attente';
   entry.sentAt = Date.now();
   entry.maxR = panel.maxR;
+  entry.usedChannels = targetChannels.length ? [...targetChannels] : [];
+  entry.usedSite = targetSite || null;
   panel.sentCount += 1;
   panel.lastSentAt = Date.now();
   panel.lastError = errors.length ? errors[0] : null;
@@ -451,9 +465,15 @@ async function sendEntry(entry) {
 }
 
 function editEntry(entry, status) {
+  const text = messageText(entry, status);
+  // Mise à jour de la bulle du site (le résultat doit aussi s'afficher là-bas).
+  const siteMsg = siteEntries.get(entry.id);
+  if (siteMsg) {
+    siteMsg.text = text;
+    if (status !== 'en attente') siteEntries.delete(entry.id);
+  }
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return;
-  const text = messageText(entry, status);
   for (const m of entry.messages) {
     bot.editMessageText(text, { chat_id: m.chatId, message_id: m.messageId }).catch(() => {});
   }
@@ -567,6 +587,7 @@ function statusView() {
     pending: panel.pending.slice(-30).map((e) => ({
       id: e.id, target: e.target, signal: e.signal || '2/2', blockStart: e.blockStart, status: e.status,
       step: e.step, maxR: e.maxR, sentAt: e.sentAt, resolvedAt: e.resolvedAt,
+      usedChannels: e.usedChannels || [], usedSite: e.usedSite || null,
     })),
     history: panel.history.slice(0, 20),
     won: resolved.filter((e) => e.status === 'gagné').length,

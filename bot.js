@@ -16,6 +16,7 @@ const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const cardsCount = require('./cards-count');
+const vip = require('./vip');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
@@ -2063,6 +2064,12 @@ async function tick() {
     // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur début+34
     // déclenchées quand le jeu en live arrive à −3/−2 de la cible (voir cards-count.js).
     await cardsCount.tick();
+
+    // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
+    // relais des 2 prochaines prédictions d'une stratégie cochée après 3
+    // pertes consécutives, ou après 3 prédictions consécutives du même
+    // costume, dans le canal VIP configuré (voir vip.js).
+    await vip.tick();
   } catch (e) {
     state.lastError = e.message;
   } finally {
@@ -2235,6 +2242,7 @@ async function applyDbConfigs() {
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
   await cardsCount.restoreFromDb();
+  await vip.restoreFromDb();
   // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
   // depuis la base les prédictions encore « en attente » + les dernières
   // résolues, pour que gagné/perdu/total ne repartent pas à zéro à chaque
@@ -2292,6 +2300,8 @@ async function startLoop() {
   suitStreak.setSender(senderFor);
   cardsCount.restore();
   cardsCount.setSender(senderFor);
+  vip.restore();
+  vip.setSender(senderFor);
   formationRelay.restore();
   formationRelay.setSender(senderFor);
   // Compteur « Taux Miroir » : édite le même message à chaque jeu terminé

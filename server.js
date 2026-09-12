@@ -24,6 +24,7 @@ const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const cardsCount = require('./cards-count');
+const vip = require('./vip');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const shop = require('./shop');
@@ -336,6 +337,7 @@ app.get('/api/state', async (req, res) => {
     combined: combined.status(),
     suitStreak: suitStreak.status(),
     cardsCount: cardsCount.status(),
+    vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
       target: p.target, suit: p.suit, hand: p.hand, step: p.step, maxR: p.maxR,
@@ -1973,6 +1975,44 @@ app.post('/api/cards-count/scan', async (req, res) => {
 
 app.post('/api/cards-count/reset', (req, res) => {
   res.json(cardsCount.resetCounting());
+});
+
+// ---------------------------------------------------------------------------
+// « VIP » (voir vip.js) — liste à cocher de toutes les stratégies + IA :
+// après 3 pertes consécutives OU 3 prédictions consécutives du même costume
+// sur une stratégie cochée, relais de ses 2 prochaines prédictions dans le
+// canal VIP configuré, puis arrêt jusqu'à la prochaine série.
+// ---------------------------------------------------------------------------
+app.get('/api/vip', (req, res) => res.json(vip.status()));
+
+app.post('/api/vip/config', (req, res) => {
+  vip.configure(req.body || {});
+  res.json(vip.status());
+});
+
+app.post('/api/vip/channel', async (req, res) => {
+  const idsList = vip.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ ok: false, error: 'Identifiant de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ ok: false, error: check.error });
+  vip.configure({ channels: idsList });
+  const notice = await vip.test();
+  res.json({ ok: true, channel: check.chat, notice, vip: vip.status() });
+});
+
+app.delete('/api/vip/channel', (req, res) => {
+  vip.configure({ channels: [] });
+  res.json(vip.status());
+});
+
+app.post('/api/vip/test', async (req, res) => {
+  const r = await vip.test();
+  res.status(r.ok ? 200 : 400).json({ ...r, vip: vip.status() });
+});
+
+app.post('/api/vip/scan', async (req, res) => {
+  await vip.tick();
+  res.json(vip.status());
 });
 
 // ---------------------------------------------------------------------------

@@ -277,6 +277,23 @@ function varCounterAt(index, varN) {
   return varN - (index % varN);
 }
 
+// CORRECTIF (demande admin, « pourquoi elle n'envoie pas les prédictions
+// d'avance ») : cette stratégie attendait `game.finished` — c'est-à-dire la
+// fin COMPLÈTE du tour (les deux mains, joueur ET banquier) — avant de
+// pouvoir lire le point du joueur. Or au baccara, le banquier joue APRÈS le
+// joueur et sa 3e carte éventuelle ne change jamais le point du joueur : dès
+// que la main du JOUEUR est complète, son point est définitivement connu,
+// souvent plusieurs secondes avant la fin réelle du tour. Règle du baccara :
+// avec 2 cartes, la main du joueur est déjà complète (aucune 3e carte ne
+// viendra) si son total vaut 6, 7, 8 ou 9 ; en dessous (0 à 5), une 3e carte
+// est toujours tirée. Avec 3 cartes, la main est de toute façon complète.
+function playerHandComplete(game) {
+  const cards = Number(game.playerCards) || 0;
+  if (cards >= 3) return true;
+  if (cards === 2) return game.playerValue != null && game.playerValue >= 6;
+  return false;
+}
+
 const parite = {
   key: 'parite',
   name: 'Pair / Impair (VAR)',
@@ -286,9 +303,11 @@ const parite = {
     "Sur chaque déclencheur il lit le POINT DU JOUEUR : point pair → prédiction " +
     "IMPAIR, point impair → prédiction PAIR. Le jeu cible est déclencheur + " +
     "décalage, et la vérification porte sur la parité du point du joueur du jeu " +
-    "cible, puis sur les rattrapages configurés. Au redémarrage la séquence est " +
-    "reconstruite mathématiquement : le bot attend simplement le prochain " +
-    "déclencheur, sans rejouer le passé.",
+    "cible, puis sur les rattrapages configurés. La prédiction est calculée dès " +
+    "que la main du JOUEUR est complète sur le jeu déclencheur (sans attendre " +
+    "la main du banquier ni la fin totale du tour), ce qui l'envoie en avance. " +
+    "Au redémarrage la séquence est reconstruite mathématiquement : le bot " +
+    "attend simplement le prochain déclencheur, sans rejouer le passé.",
   defaults: {
     enabled: true,
     format: 80,
@@ -302,16 +321,36 @@ const parite = {
     channels: [],
   },
   usesB: false,
-  source: 'finished',
+  // CORRECTIF : passé de 'finished' à 'live' — le point du joueur (donc la
+  // parité) est connu dès que SA main est complète, pas besoin d'attendre la
+  // fin totale du tour (voir playerHandComplete ci-dessus et le commentaire
+  // au-dessus de la définition). `game` ici est le tour EN COURS (state.live).
+  source: 'live',
   detect(game, cfg, ctx) {
-    if (!game || !game.finished) return null;
+    if (!game) return null;
     const { start, varN, dec } = normParity(cfg);
-    if (game.number < start) return null;                 // pas encore démarré
-    // Règle : la prédiction part IMMÉDIATEMENT sur le jeu déclencheur lui-même.
-    // Si le jeu terminé n'appartient pas à la séquence, on n'invente rien.
-    if (triggerIndexOf(game.number, start, varN) < 0) return null;
-    const trig = game.number;
-    const src = game;
+    // CORRECTIF « pair/impair n'envoie pas en avance » : le jeu EN DIRECT ne
+    // livre pas toujours le point du joueur avant la fin du tour. Dans ce cas
+    // le déclencheur était perdu et plus aucune prédiction ne partait.
+    // On prend donc, dans l'ordre : le jeu en direct s'il est déjà lisible,
+    // sinon le DERNIER déclencheur déjà terminé dont la cible n'est pas encore
+    // jouée — la prédiction part ainsi toujours avant le jeu cible.
+    const games = (ctx && ctx.games) ? ctx.games : new Map();
+    const live = Number(game.number) || 0;
+    let src = null;
+    for (let n = live; n >= Math.max(start, live - (dec + 6)); n--) {
+      if (triggerIndexOf(n, start, varN) < 0) continue;
+      if (n + dec <= live - 1) break;          // cible déjà jouée : trop tard
+      const g = n === live ? game : games.get(n);
+      if (!g) continue;
+      if (n === live) { if (!playerHandComplete(g)) continue; }
+      else if (!g.finished) continue;
+      if (g.playerValue == null) continue;
+      src = g;
+      break;
+    }
+    if (!src) return null;
+    const trig = Number(src.number);
     const pv = src.playerValue;
     if (pv == null) return null;
     const pair = pv % 2 === 0;
@@ -325,7 +364,8 @@ const parite = {
       trigger: trig,
       reason:
         `déclencheur #N${trig} • point joueur ${pv} (${pair ? 'pair' : 'impair'}) → ` +
-        `prédiction ${suit.toUpperCase()} sur #N${trig + dec} (décalage ${dec})`,
+        `prédiction ${suit.toUpperCase()} sur #N${trig + dec} (décalage ${dec}) — ` +
+        `envoyée avant le jeu cible`,
       meta: {
         trigger: trig,
         index: idx,
