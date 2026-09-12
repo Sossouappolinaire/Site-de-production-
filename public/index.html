@@ -375,6 +375,7 @@
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
+        <a href="#/vip" data-nav="vip">VIP</a>
         <a href="#/formation" data-nav="formation">Formation</a>
         <a href="#/diagnostics" data-nav="settings">Envois</a>
         <a href="#/database" data-nav="database">Base de données</a>
@@ -601,6 +602,7 @@
         ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
+        ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).filter((t) => t.selected).length} stratégie(s) suivie(s) • ${(snapshot.vip?.sentCount) || 0} relais`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
@@ -2003,7 +2005,7 @@ Faites-en bon usage !
       const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : s === 'programmé' ? '🕓 programmé' : '🚫 annulé';
       const pend = (p.pending || []).slice().reverse();
       const hist = p.history || [];
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot analyse toujours les catégories 3/2, 3/3 et 2/2 sur chaque lot de <b>${p.blockSize || 30}</b> jeux. Il ne prédit la catégorie la plus faible que si sa case est cochée. Avec <b>${p.predictionCount || 1}</b> prédiction(s), les cibles sont espacées de 10 jeux : ${(p.offsets || [34]).map((n) => `début+${n}`).join(', ')}. Chaque envoi attend que le jeu en direct arrive à 3 ou 2 jeux de sa cible, puis il est vérifié avec le rattrapage configuré.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Distribution des cartes</span><h2 style="margin-top:7px">Comptage 2/2</h2><p class="small">Le bot analyse toujours les catégories 3/2, 3/3 et 2/2 sur chaque lot de <b>${p.blockSize || 30}</b> jeux. Il ne prédit la catégorie la plus faible que si sa case est cochée. En cas d'égalité entre les catégories les plus faibles (ex. 2/2 et 3/2), c'est la catégorie cochée qui est prédite. Avec <b>${p.predictionCount || 1}</b> prédiction(s), les cibles sont espacées de 10 jeux : ${(p.offsets || [34]).map((n) => `début+${n}`).join(', ')}. Chaque envoi attend que le jeu en direct arrive à 3 ou 2 jeux de sa cible, puis il est vérifié avec le rattrapage configuré.</p></div><div class="toolbar"><button class="button ghost" onclick="cardsCountScan()">Analyser maintenant</button><button class="button ghost" onclick="cardsCountPage()">Actualiser</button></div></div>
         <div class="grid two">
           <div class="card">
             <h3>Canal et réglages</h3>
@@ -2042,8 +2044,8 @@ Faites-en bon usage !
         </div>
         <div class="card" style="margin-top:16px">
           <h3>Prédictions</h3>
-          ${pend.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Lot</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>
-            ${pend.map((e) => `<tr><td>№${e.target}</td><td>${e.blockStart} → ${e.blockStart + ((p.blockSize || 30) - 1)}</td><td>${statusBadge(e.status)}</td><td>${e.step}/${e.maxR}</td></tr>`).join('')}
+          ${pend.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Catégorie</th><th>Lot</th><th>État</th><th>Rattrapage</th><th>Canal utilisé</th></tr></thead><tbody>
+            ${pend.map((e) => `<tr><td>№${e.target}</td><td><b>${esc(e.signal || '2/2')}</b></td><td>${e.blockStart} → ${e.blockStart + ((p.blockSize || 30) - 1)}</td><td>${statusBadge(e.status)}</td><td>${e.step}/${e.maxR}</td><td class="small">${(e.usedChannels && e.usedChannels.length) ? esc(e.usedChannels.join(', ')) : (e.usedSite != null ? `site #${esc(String(e.usedSite))}` : (e.status === 'programmé' ? '—' : 'aucun'))}</td></tr>`).join('')}
           </tbody></table>` : '<p class="small">Aucune prédiction pour le moment.</p>'}
         </div>
         <div class="card" style="margin-top:16px">
@@ -2085,6 +2087,96 @@ Faites-en bon usage !
     }
     async function resetCardsCount() {
       try { await api('/api/cards-count/reset', 'POST', {}); await refresh(); cardsCountPage(); toast('Comptage réinitialisé.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // « VIP » (voir vip.js) : liste à cocher de toutes les stratégies + IA ;
+    // après une série de pertes ou une série de même costume sur une
+    // stratégie cochée, relais de ses prochaines prédictions dans le canal
+    // VIP configuré, puis arrêt jusqu'à la prochaine série.
+    function vipPage() {
+      setNav('vip');
+      const p = snapshot.vip || {};
+      const trackers = p.trackers || [];
+      const pend = (p.pending || []).slice().reverse();
+      const hist = p.history || [];
+      const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : '🚫 annulé';
+      const reasonLabel = (r) => r === 'perte' ? 'série de pertes' : r === 'costume' ? 'série de même costume' : (r || '—');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Relais prioritaire</span><h2 style="margin-top:7px">VIP</h2><p class="small">Coche les stratégies à surveiller (stratégies existantes + IA). Dès qu'une stratégie cochée enchaîne <b>${p.lossNeed ?? 3}</b> pertes consécutives, ou <b>${p.suitNeed ?? 3}</b> prédictions consécutives du même costume, ses <b>${p.lossRelay ?? 2}</b> (ou <b>${p.suitRelay ?? 2}</b>) prochaines prédictions sont relayées dans le canal VIP, puis le suivi s'arrête jusqu'à la prochaine série.</p></div><div class="toolbar"><button class="button ghost" onclick="vipScan()">Analyser maintenant</button><button class="button ghost" onclick="vipPage()">Actualiser</button></div></div>
+        <div class="grid two">
+          <div class="card">
+            <h3>Canal VIP et réglages</h3>
+            <div class="field"><label>ID ou @nom du canal VIP</label><input id="vipChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveVipChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="vipTest()">Envoyer un test</button><button class="button small danger" onclick="removeVipChannel()">Retirer</button></div>
+            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine)</label><select id="vipSiteChannel">${cardsCountSiteOptions(p.siteChannelId)}</select></div>
+            <div class="field"><label>Rattrapage maximum</label><input id="vipMaxR" type="number" min="0" max="9" value="${p.maxR ?? 1}"></div>
+            <label class="check"><input id="vipEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer le panneau VIP</label>
+            <h3 style="margin-top:18px">Déclencheur « série de pertes »</h3>
+            <div class="field"><label>Pertes consécutives avant relais</label><input id="vipLossNeed" type="number" min="1" max="20" value="${p.lossNeed ?? 3}"></div>
+            <div class="field"><label>Nombre de prédictions relayées</label><input id="vipLossRelay" type="number" min="1" max="10" value="${p.lossRelay ?? 2}"></div>
+            <h3 style="margin-top:18px">Déclencheur « série de même costume »</h3>
+            <div class="field"><label>Prédictions consécutives du même costume avant relais</label><input id="vipSuitNeed" type="number" min="1" max="20" value="${p.suitNeed ?? 3}"></div>
+            <div class="field"><label>Nombre de prédictions relayées</label><input id="vipSuitRelay" type="number" min="1" max="10" value="${p.suitRelay ?? 2}"></div>
+            <h3 style="margin-top:18px">Stratégies suivies</h3>
+            <p class="small">Coche les stratégies (et/ou l'IA « Prédit ») à surveiller.</p>
+            ${trackers.map((t) => `<label class="check" style="display:block;margin-top:6px"><input id="vipSel_${esc(t.key)}" type="checkbox" ${t.selected ? 'checked' : ''}> ${esc(t.name)} ${t.remaining ? `<span class="small muted">— rafale en cours (${t.remaining} restante(s), ${reasonLabel(t.armedKind)})</span>` : `<span class="small muted">— pertes ${t.lossStreak}/${p.lossNeed ?? 3} · costume ${t.suitStreak}/${p.suitNeed ?? 3}</span>`}</label>`).join('')}
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveVipConfig()">Enregistrer</button></div>
+            ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+          </div>
+          <div class="card">
+            <h3>Suivi en direct</h3>
+            <table class="table"><thead><tr><th>Stratégie</th><th>Pertes</th><th>Costume</th><th>Rafale</th></tr></thead><tbody>
+              ${trackers.filter((t) => t.selected).map((t) => `<tr><td>${esc(t.name)}</td><td>${t.lossStreak}/${p.lossNeed ?? 3}</td><td>${t.suitStreak}/${p.suitNeed ?? 3}</td><td>${t.remaining ? `${t.remaining} restante(s) (${reasonLabel(t.armedKind)})` : '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="small">Aucune stratégie cochée.</td></tr>'}
+            </tbody></table>
+            <p class="small" style="margin-top:10px">Prédictions relayées : <b>${p.sentCount || 0}</b></p>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Prédictions relayées</h3>
+          ${pend.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Stratégie</th><th>Déclencheur</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>
+            ${pend.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.name)}</td><td>${reasonLabel(e.reason)}</td><td>${statusBadge(e.status)}</td><td>${e.step}/${e.maxR}</td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Aucun relais pour le moment.</p>'}
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Historique des relais</h3>
+          ${hist.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Stratégie</th><th>Déclencheur</th><th>Envoyé le</th></tr></thead><tbody>
+            ${hist.map((x) => `<tr><td>№${x.target}</td><td>${esc(x.name)}</td><td>${reasonLabel(x.reason)}</td><td>${x.sentAt ? new Date(x.sentAt).toLocaleString('fr-FR') : '—'}</td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Aucun relais envoyé pour le moment.</p>'}
+        </div>`;
+    }
+
+    async function saveVipConfig() {
+      const rawSite = val('vipSiteChannel');
+      const p = snapshot.vip || {};
+      const trackers = p.trackers || [];
+      const selected = {};
+      trackers.forEach((t) => { selected[t.key] = !!$(`#vipSel_${t.key}`)?.checked; });
+      try {
+        await api('/api/vip/config', 'POST', {
+          enabled: $('#vipEnabled')?.checked,
+          maxR: val('vipMaxR'),
+          siteChannelId: rawSite === '' ? null : rawSite,
+          lossNeed: val('vipLossNeed'), lossRelay: val('vipLossRelay'),
+          suitNeed: val('vipSuitNeed'), suitRelay: val('vipSuitRelay'),
+          selected,
+        });
+        await refresh(); vipPage(); toast('Panneau VIP enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+
+    async function saveVipChannel() {
+      const list = ids(val('vipChannel'));
+      if (!list.length) return toast('Indique un identifiant de canal.', 'error');
+      try { const r = await api('/api/vip/channel', 'POST', { channelId: list[0] }); await refresh(); vipPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau VIP.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeVipChannel() { try { await api('/api/vip/channel', 'DELETE'); await refresh(); vipPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function vipTest() {
+      try { const r = await api('/api/vip/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function vipScan() {
+      try { await api('/api/vip/scan', 'POST', {}); await refresh(); vipPage(); toast('Analyse effectuée.'); }
       catch (e) { toast(e.message, 'error'); }
     }
 
@@ -2907,6 +2999,7 @@ Faites-en bon usage !
         else if (h === '#/combined') combinedPage();
         else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/cards-count') cardsCountPage();
+        else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
         else if (h === '#/diagnostics') await diagnosticsPage();
