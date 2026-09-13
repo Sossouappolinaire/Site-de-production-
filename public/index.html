@@ -602,7 +602,7 @@
         ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
-        ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).filter((t) => t.selected).length} stratégie(s) suivie(s) • ${(snapshot.vip?.sentCount) || 0} relais`)}
+        ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
@@ -2098,11 +2098,13 @@ Faites-en bon usage !
       setNav('vip');
       const p = snapshot.vip || {};
       const trackers = p.trackers || [];
+      const allSelected = trackers.length > 0 && trackers.every((t) => t.selected);
+      const activeCount = trackers.filter((t) => t.remaining).length;
       const pend = (p.pending || []).slice().reverse();
       const hist = p.history || [];
       const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : '🚫 annulé';
       const reasonLabel = (r) => r === 'perte' ? 'série de pertes' : r === 'costume' ? 'série de même costume' : (r || '—');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Relais prioritaire</span><h2 style="margin-top:7px">VIP</h2><p class="small">Coche les stratégies à surveiller (stratégies existantes + IA). Dès qu'une stratégie cochée enchaîne <b>${p.lossNeed ?? 3}</b> pertes consécutives, ou <b>${p.suitNeed ?? 3}</b> prédictions consécutives du même costume, ses <b>${p.lossRelay ?? 2}</b> (ou <b>${p.suitRelay ?? 2}</b>) prochaines prédictions sont relayées dans le canal VIP, puis le suivi s'arrête jusqu'à la prochaine série.</p></div><div class="toolbar"><button class="button ghost" onclick="vipScan()">Analyser maintenant</button><button class="button ghost" onclick="vipPage()">Actualiser</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Relais prioritaire</span><h2 style="margin-top:7px">VIP</h2><p class="small">Coche « Formation » : toutes les stratégies de costumes et l'IA sont surveillées ensemble (aucun détail par stratégie n'est affiché). Dès qu'une stratégie incluse enchaîne <b>${p.lossNeed ?? 3}</b> pertes consécutives, ou <b>${p.suitNeed ?? 3}</b> prédictions consécutives du même costume, ses <b>${p.lossRelay ?? 2}</b> (ou <b>${p.suitRelay ?? 2}</b>) prochaines prédictions sont relayées dans le canal VIP, puis le suivi s'arrête jusqu'à la prochaine série.</p></div><div class="toolbar"><button class="button ghost" onclick="vipScan()">Analyser maintenant</button><button class="button ghost" onclick="vipPage()">Actualiser</button></div></div>
         <div class="grid two">
           <div class="card">
             <h3>Canal VIP et réglages</h3>
@@ -2118,9 +2120,9 @@ Faites-en bon usage !
             <h3 style="margin-top:18px">Déclencheur « série de même costume »</h3>
             <div class="field"><label>Prédictions consécutives du même costume avant relais</label><input id="vipSuitNeed" type="number" min="1" max="20" value="${p.suitNeed ?? 3}"></div>
             <div class="field"><label>Nombre de prédictions relayées</label><input id="vipSuitRelay" type="number" min="1" max="10" value="${p.suitRelay ?? 2}"></div>
-            <h3 style="margin-top:18px">Stratégies suivies</h3>
-            <p class="small">Coche les stratégies (et/ou l'IA « Prédit ») à surveiller.</p>
-            ${trackers.map((t) => `<label class="check" style="display:block;margin-top:6px"><input id="vipSel_${esc(t.key)}" type="checkbox" ${t.selected ? 'checked' : ''}> ${esc(t.name)} ${t.remaining ? `<span class="small muted">— rafale en cours (${t.remaining} restante(s), ${reasonLabel(t.armedKind)})</span>` : `<span class="small muted">— pertes ${t.lossStreak}/${p.lossNeed ?? 3} · costume ${t.suitStreak}/${p.suitNeed ?? 3}</span>`}</label>`).join('')}
+            <h3 style="margin-top:18px">Formation</h3>
+            <p class="small">Une seule option qui regroupe <b>toutes les formations des stratégies de costumes</b> + la <b>formation des prédictions IA (Prédit)</b>. Coche « Formation » pour surveiller l'ensemble — les détails par stratégie ne sont plus affichés.</p>
+            <label class="check" style="display:block;margin-top:6px"><input id="vipSel_formation" type="checkbox" ${allSelected ? 'checked' : ''}> 📘 Formation (toutes les stratégies de costumes + IA) ${activeCount ? `<span class="small muted">— ${activeCount} rafale(s) en cours</span>` : ''}</label>
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveVipConfig()">Enregistrer</button></div>
             ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
           </div>
@@ -2151,7 +2153,8 @@ Faites-en bon usage !
       const p = snapshot.vip || {};
       const trackers = p.trackers || [];
       const selected = {};
-      trackers.forEach((t) => { selected[t.key] = !!$(`#vipSel_${t.key}`)?.checked; });
+      const formationChecked = !!$('#vipSel_formation')?.checked;
+      trackers.forEach((t) => { selected[t.key] = formationChecked; });
       try {
         await api('/api/vip/config', 'POST', {
           enabled: $('#vipEnabled')?.checked,
