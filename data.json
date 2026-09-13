@@ -1,7 +1,9 @@
 {
   "formationRelay": {
     "enabled": true,
-    "channels": [],
+    "channels": [
+      "-100123"
+    ],
     "maxR": 4,
     "format": 5,
     "strategies": {
@@ -72,7 +74,7 @@
         "autoSend": false,
         "manualSentCount": 0,
         "lastManualAt": null,
-        "lastNoticeTarget": 0
+        "lastNoticeTarget": 1337
       },
       "parite": {
         "enabled": false,
@@ -233,7 +235,7 @@
         "autoSend": false,
         "manualSentCount": 0,
         "lastManualAt": null,
-        "lastNoticeTarget": 0
+        "lastNoticeTarget": 1338
       },
       "collecte": {
         "enabled": false,
@@ -550,7 +552,7 @@
         "streakCount": 0,
         "streakHasLoss": false,
         "waitingSuit": null,
-        "lastSeenTarget": 0,
+        "lastSeenTarget": 55,
         "sentCount": 1,
         "lastSentAt": 1788813991827,
         "createdAt": 1788813991824
@@ -566,7 +568,29 @@
         "sentAt": 1788813991827
       }
     ],
-    "pendingMessages": [],
+    "pendingMessages": [
+      {
+        "id": "p-1788813991827-xtz0f",
+        "trackerId": "ss-1788813991824-3vvhz",
+        "target": 56,
+        "suit": "♠️",
+        "strategyName": "Stratégie IA (Prédit)",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 7,
+        "skipped": 7,
+        "status": "annulé",
+        "messages": [
+          {
+            "chatId": "@test",
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1788813991827,
+        "resolvedAt": 1788819279594
+      }
+    ],
     "sentCount": 1,
     "lastSentAt": 1788813991827,
     "lastScanAt": 1788819689639
@@ -767,7 +791,7 @@
     "ombre": {
       "token": null,
       "bilan": true,
-      "silent": false,
+      "silent": true,
       "lossWindow": 6,
       "lossTrigger": 2,
       "lossInterval": 5,

@@ -98,24 +98,15 @@ function afterLossOptions() {
   } catch (_) { return []; }
 }
 
-// CORRECTIF (demande admin) : la liste à cocher doit rester simple — chaque
-// source « Formation » affiche juste « Formation — <nom de la stratégie> »,
-// SANS détail de canal. C'est bien la formation de cette stratégie (donc
-// toutes les prédictions qu'elle envoie, quel que soit son canal) qui est
-// suivie une fois sélectionnée — le canal n'a pas à apparaître ici.
-function formationOptions() {
-  return [
-    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: `Formation — ${s.name}`, group: 'Formations' })),
-    { key: 'formation:ia', name: 'Formation — Prédit IA', group: 'Formations' },
-  ];
-}
-
 function options() {
   const base = [
     ...strategies.LIST.map((s) => ({ key: s.key, name: s.name, group: 'Stratégies' })),
     { key: 'ia', name: 'Stratégie IA (Prédit)', group: 'Stratégies' },
   ];
-  const formations = formationOptions();
+  const formations = [
+    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: `Formation — ${s.name}`, group: 'Formations' })),
+    { key: 'formation:ia', name: 'Formation — Prédit IA', group: 'Formations' },
+  ];
   const combos = panel.trackers.map((t) => ({ key: `combo:${t.id}`, name: `Combinaison — ${t.name}`, group: 'Combinaisons' }));
   return [...base, ...formations, ...combos, ...afterLossOptions()];
 }

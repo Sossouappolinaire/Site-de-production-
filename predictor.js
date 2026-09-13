@@ -1088,18 +1088,10 @@ function registerGames(games) {
 
 function detectLive() {
   const all = [...state.games.values()].sort((a, b) => a.number - b.number);
-  // CORRECTIF « la parité ne prédit plus » : on prenait le PREMIER jeu non
-  // terminé de la table. Un ancien tour resté « non terminé » dans le flux
-  // (relevé incomplet, tour jamais clôturé) figeait donc le jeu « en direct »
-  // sur un vieux numéro — et la seule stratégie qui lit le direct (Pair /
-  // Impair) ne voyait plus jamais arriver ses déclencheurs. On ne considère
-  // désormais comme « en direct » qu'un tour situé APRÈS le dernier tour
-  // terminé, et on garde le plus récent d'entre eux.
-  const maxDone = maxFinishedNumber();
-  const current = all.filter((g) => !g.finished && Number(g.number) >= maxDone);
-  const dealing = current.filter((g) => g.dealing);
-  if (dealing.length) return dealing[dealing.length - 1];
-  if (current.length) return current[current.length - 1];
+  const dealing = all.filter((g) => !g.finished && g.dealing);
+  if (dealing.length) return dealing[0];
+  const pending = all.filter((g) => !g.finished);
+  if (pending.length) return pending[0];
   return state.lastFinished;
 }
 
@@ -1199,12 +1191,6 @@ function onFinished(round) {
 // les sources — voir aussi collecte.detect() dans strategies.js qui départage
 // désormais par la formation (longueur de la série conseillée / échantillon)
 // et non par un pourcentage.
-// Taux minimum EXIGÉ (règle de taux de la Formation, identique à
-// formation-relay.js/MIN_RATE) : une source dont le taux mesuré est sous ce
-// seuil n'est plus relayée, même si un conseil de formation existe.
-const FORMATION_MIN_RATE = 91;
-const FORMATION_MIN_SUPPORT = 5;
-
 function bestStrategyKeys() {
   const keys = new Set();
   const rates = {};
@@ -1212,11 +1198,7 @@ function bestStrategyKeys() {
   try {
     const formation = require('./formation');
     for (const f of formation.runtime.strategies || []) {
-      const rate = Number(f.rate);
-      const support = Number(f.support) || 0;
-      // règle de taux : conseil de formation ÉTABLI *et* taux mesuré >= 91%
-      // sur un échantillon suffisant.
-      if (f.reliable && Number.isFinite(rate) && rate >= FORMATION_MIN_RATE && support >= FORMATION_MIN_SUPPORT) {
+      if (f.reliable) { // un conseil de formation existe et s'applique à cette stratégie — peu importe son taux
         keys.add(f.key);
         rates[f.key] = f.rate; // informatif uniquement
         formationInfo[f.key] = { length: f.formationLength || 0, support: f.support || 0 };
