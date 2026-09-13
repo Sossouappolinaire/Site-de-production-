@@ -1088,10 +1088,18 @@ function registerGames(games) {
 
 function detectLive() {
   const all = [...state.games.values()].sort((a, b) => a.number - b.number);
-  const dealing = all.filter((g) => !g.finished && g.dealing);
-  if (dealing.length) return dealing[0];
-  const pending = all.filter((g) => !g.finished);
-  if (pending.length) return pending[0];
+  // CORRECTIF « la parité ne prédit plus » : on prenait le PREMIER jeu non
+  // terminé de la table. Un ancien tour resté « non terminé » dans le flux
+  // (relevé incomplet, tour jamais clôturé) figeait donc le jeu « en direct »
+  // sur un vieux numéro — et la seule stratégie qui lit le direct (Pair /
+  // Impair) ne voyait plus jamais arriver ses déclencheurs. On ne considère
+  // désormais comme « en direct » qu'un tour situé APRÈS le dernier tour
+  // terminé, et on garde le plus récent d'entre eux.
+  const maxDone = maxFinishedNumber();
+  const current = all.filter((g) => !g.finished && Number(g.number) >= maxDone);
+  const dealing = current.filter((g) => g.dealing);
+  if (dealing.length) return dealing[dealing.length - 1];
+  if (current.length) return current[current.length - 1];
   return state.lastFinished;
 }
 

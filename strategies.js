@@ -337,15 +337,33 @@ const parite = {
     // jouée — la prédiction part ainsi toujours avant le jeu cible.
     const games = (ctx && ctx.games) ? ctx.games : new Map();
     const live = Number(game.number) || 0;
+    // CORRECTIF « la parité ne prédit plus » (3 bugs cumulés) :
+    //  1) la fenêtre de recherche était calculée sur le jeu EN DIRECT et
+    //     s'arrêtait dès que `trigger + décalage` passait sous `live`. Comme
+    //     deux relevés peuvent être espacés de plusieurs jeux, le déclencheur
+    //     était déclaré « trop tard » alors que le jeu cible n'était PAS encore
+    //     joué → aucune prédiction. On compare désormais à la borne réelle :
+    //     le dernier jeu TERMINÉ (maxDone). Tant que la cible n'est pas
+    //     terminée, la prédiction reste valable.
+    //  2) la fenêtre (décalage + 6) était plus courte que l'écart entre deux
+    //     déclencheurs (9 à 10 jeux) : élargie à décalage + 12.
+    //  3) sur un jeu déjà TERMINÉ, playerHandComplete() exigeait un nombre de
+    //     cartes lisible ; quand le flux ne le renvoyait pas, le déclencheur
+    //     était ignoré bien que le point du joueur soit connu. Un jeu terminé
+    //     avec un point joueur lisible est désormais toujours accepté.
+    let maxDone = 0;
+    for (const g of games.values()) {
+      if (g && g.finished && Number(g.number) > maxDone) maxDone = Number(g.number);
+    }
+    if (game.finished && live > maxDone) maxDone = live;
     let src = null;
-    for (let n = live; n >= Math.max(start, live - (dec + 6)); n--) {
+    for (let n = live; n >= Math.max(start, live - (dec + 12)); n--) {
       if (triggerIndexOf(n, start, varN) < 0) continue;
-      if (n + dec <= live - 1) break;          // cible déjà jouée : trop tard
+      if (n + dec <= maxDone) break;           // jeu cible déjà terminé : trop tard
       const g = n === live ? game : games.get(n);
       if (!g) continue;
-      if (n === live) { if (!playerHandComplete(g)) continue; }
-      else if (!g.finished) continue;
       if (g.playerValue == null) continue;
+      if (!g.finished && !playerHandComplete(g)) continue;
       src = g;
       break;
     }
