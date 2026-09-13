@@ -145,12 +145,17 @@ function effectiveFormat(entry) {
   return fmt.clampFormat(entry && entry.format ? entry.format : panel.format);
 }
 
-// rattrapage imposé aux prédictions confirmées par Formation : celui de la
-// stratégie s'il est défini, sinon celui du panneau.
-function effectiveMaxR(entry) {
-  const own = entry && entry.maxR;
-  if (own !== null && own !== undefined && Number.isFinite(Number(own))) return Number(own);
-  return Number.isFinite(panel.maxR) ? panel.maxR : 3;
+// RATTRAPAGE UNIFORME (demande admin) : TOUTE prédiction envoyée par la
+// Formation utilise exactement 3 rattrapages, quelle que soit la stratégie
+// source et quel que soit le réglage du panneau ou de la stratégie.
+const FORMATION_MAXR = 3;
+
+// Taux de réussite minimum exigé pour qu'une stratégie soit prédite par la
+// Formation. En dessous, la Formation attend (aucune prédiction envoyée).
+const MIN_RATE = 91;
+
+function effectiveMaxR(_entry) {
+  return FORMATION_MAXR;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +184,7 @@ function restore() {
     if (!saved) return status();
     panel.enabled = saved.enabled !== false;
     panel.channels = parseChannels(saved.channels);
-    if (Number.isFinite(Number(saved.maxR))) panel.maxR = Number(saved.maxR);
+    panel.maxR = FORMATION_MAXR; // rattrapage uniforme imposé
     if (Number.isFinite(Number(saved.format))) panel.format = fmt.clampFormat(saved.format);
     panel.strategies = {};
     if (saved.strategies && typeof saved.strategies === 'object') {
@@ -220,8 +225,8 @@ function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
   if (patch.maxR !== undefined) {
-    const n = parseInt(patch.maxR, 10);
-    if (Number.isFinite(n) && n >= 0 && n <= 10) panel.maxR = n;
+    // rattrapage uniforme : la Formation reste toujours à 3
+    panel.maxR = FORMATION_MAXR;
   }
   if (patch.format !== undefined) panel.format = fmt.clampFormat(patch.format);
   persist();
@@ -353,14 +358,89 @@ async function refreshAnalysis() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// COLLECTE PUIS SÉLECTION (demande admin) :
+//   1. Au démarrage des jeux, la Formation ne prédit RIEN. Elle observe et
+//      collecte les 10 PREMIÈRES prédictions résolues de CHAQUE stratégie
+//      (stratégies existantes + « Prédit » (IA) + stratégies ai:*).
+//   2. Une fois ces 10 prédictions collectées, elle mesure le taux de
+//      réussite réel de la stratégie.
+//   3. Si ce taux est >= 91%, elle envoie les prédictions SUIVANTES de cette
+//      stratégie. Elle prédit TOUTES les stratégies dont le taux est >= 91%
+//      (pas seulement la meilleure).
+//   4. Le taux est recalculé en continu : dès qu'il redescend sous 91%, la
+//      Formation arrête d'envoyer les prédictions de cette stratégie et
+//      attend qu'il repasse à 91% ou plus.
+// ---------------------------------------------------------------------------
+const SAMPLE_MIN = 10;
+
+function isWin(status) {
+  const s = String(status || '').toLowerCase();
+  return s === 'gagné' || s === 'gagne';
+}
+
+function isResolved(status) {
+  const s = String(status || '').toLowerCase();
+  return !!s && s !== 'en attente';
+}
+
+// taux de réussite MESURÉ sur les prédictions résolues de la stratégie
+// (les 10 premières servent de collecte, puis la mesure continue de vivre).
+function measuredRate(key) {
+  const resolved = predictionsFor(key).filter((p) => isResolved(p.status));
+  const n = resolved.length;
+  if (!n) return { n: 0, wins: 0, rate: null };
+  const wins = resolved.filter((p) => isWin(p.status)).length;
+  return { n, wins, rate: Math.round((wins / n) * 100) };
+}
+
+function ratedStrategies() {
+  const out = [];
+  for (const opt of options()) {
+    const sample = measuredRate(opt.key);
+    if (sample.n < SAMPLE_MIN || !Number.isFinite(Number(sample.rate))) continue;
+    if (Number(sample.rate) < MIN_RATE) continue;
+    const advice = adviceOf(opt.key);
+    if (advice.verdict === 'à mettre en pause') continue;
+    out.push({ key: opt.key, rate: Number(sample.rate), sample, form: formationOf(opt.key) });
+  }
+  return out.sort((a, b) => b.rate - a.rate);
+}
+
+function bestStrategy() {
+  const list = ratedStrategies();
+  return list.length ? list[0] : null;
+}
+
 function formationTrusted(key) {
   const form = formationOf(key);
-  if (!form.reliable) return { ok: false, form, advice: null, reason: 'échantillon encore insuffisant pour cette stratégie' };
   const advice = adviceOf(key);
-  if (advice.verdict === 'à mettre en pause') {
-    return { ok: false, form, advice, reason: "l'avis IA recommande actuellement une pause sur cette stratégie" };
+  const sample = measuredRate(key);
+
+  // 1) phase de collecte : on attend les 10 premières prédictions
+  if (sample.n < SAMPLE_MIN) {
+    return {
+      ok: false, form, advice, sample,
+      reason: `collecte en cours : ${sample.n}/${SAMPLE_MIN} premières prédictions observées avant toute décision`,
+    };
   }
-  return { ok: true, form, advice, reason: null };
+
+  // 2) taux mesuré : il doit être >= 91%, sinon la Formation s'arrête et attend
+  const rate = Number(sample.rate);
+  if (!Number.isFinite(rate) || rate < MIN_RATE) {
+    return {
+      ok: false, form, advice, sample,
+      reason: `taux de réussite mesuré ${Number.isFinite(rate) ? `${rate}%` : 'non mesuré'} sur ${sample.n} prédictions — sous le minimum de ${MIN_RATE}%, la Formation attend`,
+    };
+  }
+
+  // 3) avis IA : jamais de prédiction sur une stratégie que l'IA met en pause
+  if (advice.verdict === 'à mettre en pause') {
+    return { ok: false, form, advice, sample, reason: "l'avis IA recommande actuellement une pause sur cette stratégie" };
+  }
+
+  // toutes les stratégies >= 91% sont prédites (plus de filtre « meilleure »)
+  return { ok: true, form, advice, sample, reason: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +642,34 @@ async function processStrategy(key) {
     }
   }
 
+  // 1bis) COLLECTE TERMINÉE : dès que les 10 premières prédictions sont
+  // observées et que le taux mesuré est >= 91%, la Formation envoie les
+  // prédictions SUIVANTES de cette stratégie (sans attendre une perte).
+  // Si le taux redescend sous 91%, elle se désarme et attend de nouveau.
+  if (!entry.armed && !entry.counting) {
+    const gate = formationTrusted(key);
+    entry.lastTrust = {
+      at: Date.now(), target: currentMaxTarget(key), ok: gate.ok, reason: gate.reason,
+      rate: gate.sample ? gate.sample.rate : null,
+      sampleSize: gate.sample ? gate.sample.n : 0,
+      length: gate.form ? gate.form.length : null,
+      advice: gate.advice ? gate.advice.verdict : null,
+    };
+    if (gate.ok) entry.armed = true;
+  } else if (entry.armed) {
+    const gate = formationTrusted(key);
+    if (!gate.ok) {
+      entry.armed = false;
+      entry.lastTrust = {
+        at: Date.now(), target: currentMaxTarget(key), ok: false, reason: gate.reason,
+        rate: gate.sample ? gate.sample.rate : null,
+        sampleSize: gate.sample ? gate.sample.n : 0,
+        length: gate.form ? gate.form.length : null,
+        advice: gate.advice ? gate.advice.verdict : null,
+      };
+    }
+  }
+
   // 2) suivi des nouvelles prédictions
   for (const pred of list) {
     const target = Number(pred.target) || 0;
@@ -572,7 +680,12 @@ async function processStrategy(key) {
       // (voir arbitrate() ci-dessus), puis on la publie seulement si c'est
       // bien la MEILLEURE prédiction du moment pour ce costume.
       const form = formationOf(key);
-      const arb = arbitrate(key, target, suitOf(pred));
+      // Re-contrôle juste avant publication : toujours la MEILLEURE stratégie
+      // et toujours un taux >= 91%, sinon on attend (on reste armé).
+      const trustNow = formationTrusted(key);
+      const arb = trustNow.ok
+        ? arbitrate(key, target, suitOf(pred))
+        : { ok: false, reason: trustNow.reason };
       if (!arb.ok) {
         entry.lastTrust = {
           at: Date.now(), target, ok: false, reason: arb.reason,
