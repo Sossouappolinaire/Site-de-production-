@@ -2109,6 +2109,7 @@ Faites-en bon usage !
             <div class="field"><label>ID ou @nom du canal VIP</label><input id="vipChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="toolbar"><button class="button small primary" onclick="saveVipChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="vipTest()">Envoyer un test</button><button class="button small danger" onclick="removeVipChannel()">Retirer</button></div>
             <div class="field" style="margin-top:16px"><label>Canal du site (vitrine)</label><select id="vipSiteChannel">${cardsCountSiteOptions(p.siteChannelId)}</select></div>
+            <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="vipFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
             <div class="field"><label>Rattrapage maximum</label><input id="vipMaxR" type="number" min="0" max="9" value="${p.maxR ?? 1}"></div>
             <label class="check"><input id="vipEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer le panneau VIP</label>
             <h3 style="margin-top:18px">Déclencheur « série de pertes »</h3>
@@ -2155,6 +2156,7 @@ Faites-en bon usage !
         await api('/api/vip/config', 'POST', {
           enabled: $('#vipEnabled')?.checked,
           maxR: val('vipMaxR'),
+          format: val('vipFormat'),
           siteChannelId: rawSite === '' ? null : rawSite,
           lossNeed: val('vipLossNeed'), lossRelay: val('vipLossRelay'),
           suitNeed: val('vipSuitNeed'), suitRelay: val('vipSuitRelay'),
@@ -2797,8 +2799,12 @@ Faites-en bon usage !
         try { d = await api('/api/game21?limit=30&variant=' + encodeURIComponent(g21Variant)); } catch (e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; } }
       const a = d.analysis || {};
       const p = d.prediction;
-      const vt = (a.valueTriggers || []).map(t => `<tr><td class="mono">${esc(t.trigger)}</td><td>A, K, Q ou J</td><td>${esc(t.hit)}/${esc(t.total)}</td><td><b>${esc(t.rate)}%</b></td></tr>`).join('');
-      const et = (a.exactTriggers || []).map(t => `<tr><td class="mono">${esc(t.trigger)}</td><td>${esc(t.card)}</td><td>${esc(t.hit)}/${esc(t.total)}</td><td><b>${esc(t.rate)}%</b></td></tr>`).join('');
+      // Affichage : on ne montre que les meilleures lignes dans les tableaux
+      // (12 / 24), mais le calcul (game21.js) garde désormais TOUTE la
+      // liste — voir localPrediction() qui doit pouvoir retrouver le
+      // déclencheur en cours même s'il n'est pas dans le haut du classement.
+      const vt = (a.valueTriggers || []).slice(0, 12).map(t => `<tr><td class="mono">${esc(t.trigger)}</td><td>A, K, Q ou J</td><td>${esc(t.hit)}/${esc(t.total)}</td><td><b>${esc(t.rate)}%</b></td></tr>`).join('');
+      const et = (a.exactTriggers || []).slice(0, 24).map(t => `<tr><td class="mono">${esc(t.trigger)}</td><td>${esc(t.card)}</td><td>${esc(t.hit)}/${esc(t.total)}</td><td><b>${esc(t.rate)}%</b></td></tr>`).join('');
       $('#app').innerHTML = `
         <div class="section-head" style="padding-top:38px"><div><span class="eyebrow">1xbet · TwentyOne</span>
           <h2 style="margin-top:7px">Analyse IA du jeu 21</h2>
