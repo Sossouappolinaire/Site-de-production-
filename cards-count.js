@@ -377,14 +377,22 @@ function liveNumber() {
   return maxFinishedGameNumber();
 }
 
+// CORRECTIF « plusieurs prédictions envoyées d'un coup » : la borne basse
+// manquait sur 'minus3' (et donc sur 'both', qui s'appuyait dessus). Sans
+// borne basse, « live <= target - 3 » restait VRAIE dès la création de
+// l'entrée (live est alors très inférieur à target), donc TOUTES les
+// entrées programmées d'un même lot (35, 45, 55…) étaient envoyées au même
+// tick au lieu d'attendre chacune que le direct s'approche de SA cible.
+// Chaque mode est maintenant une fenêtre bornée des deux côtés (comme
+// 'minus2' l'était déjà) : 'both' = union des deux fenêtres.
 function triggerReady(target) {
   const live = liveNumber();
   if (live >= target) return false; // trop tard : la cible est déjà en cours/passée
   // Fenêtre (et non égalité stricte) : si le direct saute un numéro, l'envoi
   // ne doit pas être perdu.
-  if (panel.trigger === 'minus3') return live <= target - 3;
+  if (panel.trigger === 'minus3') return live <= target - 3 && live >= target - 4;
   if (panel.trigger === 'minus2') return live <= target - 2 && live >= target - 3;
-  return live <= target - 2;
+  return live <= target - 2 && live >= target - 4;
 }
 
 // Chiffres en emoji pour la vérification : ✅0️⃣ = gagné sur le jeu cible,

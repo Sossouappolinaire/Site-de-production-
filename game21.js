@@ -357,11 +357,21 @@ function buildTriggers(history, { minSample = 3 } = {}) {
     exact.set(trig, m);
   }
 
+  // CORRECTIF « déclencheur introuvable » (demande admin) : on ne tronque
+  // PLUS ici. Avant, seuls les 12 (resp. 24) déclencheurs au taux le plus
+  // élevé étaient conservés, et TOUT le reste du code (localPrediction(),
+  // game21-predict.js/candidatesFor(), game21-strategies.js) cherchait dans
+  // cette liste déjà coupée. Un déclencheur bien réel (assez d'occurrences,
+  // taux valable) mais classé au-delà de la coupe devenait introuvable
+  // partout : c'est ce qui faisait afficher une carte « 7♦️ » sans aucune
+  // stat dans « Analyse IA du 21 », et pouvait aussi faire manquer de vraies
+  // prédictions dans « Prédiction IA jeu 21 ». La liste complète est
+  // maintenant renvoyée ; c'est à l'AFFICHAGE (tableau) de ne montrer que
+  // les premières lignes si besoin, jamais au calcul.
   const valueTriggers = [...value.entries()]
     .filter(([, v]) => v.total >= minSample)
     .map(([trigger, v]) => ({ trigger, total: v.total, hit: v.hit, rate: rate(v.hit, v.total) }))
-    .sort((a, b) => b.rate - a.rate || b.total - a.total)
-    .slice(0, 12);
+    .sort((a, b) => b.rate - a.rate || b.total - a.total);
 
   const exactTriggers = [];
   for (const [trigger, m] of exact.entries()) {
@@ -391,7 +401,7 @@ function buildTriggers(history, { minSample = 3 } = {}) {
     withValue,
     valueRate: rate(withValue, rounds),
     valueTriggers,
-    exactTriggers: exactTriggers.slice(0, 24),
+    exactTriggers,
     grid,
   };
 }
