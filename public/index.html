@@ -1648,8 +1648,31 @@ Faites-en bon usage !
     }
     function afterLossCounters(t) {
       const list = t.counters || [];
-      if (!list.length) return '';
-      return `<div class="notice" style="margin:10px 0"><b>Compteurs en cours</b><div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${list.map(c => `<span class="tag ${c.done ? 'good' : 'warn'}" title="${esc(c.hint || '')}">${esc(c.label)} : <b>${esc(c.value)}</b></span>`).join('')}</div></div>`;
+      const st = t.suitStats || null;
+      // Compteurs des 4 costumes : série consécutive en cours / total prédit.
+      const suitRow = (st && st.suits && st.suits.length)
+        ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${st.suits.map(s => `<span class="tag ${s.done ? 'good' : (s.run ? 'warn' : '')}" title="${esc(String(s.total))} prédiction(s) de ce costume au total">${esc(s.suit)} <b>${esc(String(s.run))}${s.need ? '/' + esc(String(s.need)) : ''}</b> <span class="small muted">(total ${esc(String(s.total))})</span></span>`).join('')}</div>`
+        : '';
+      const head = (st && st.current && st.current.suit)
+        ? `<p class="small muted" style="margin:8px 0 0">Série en cours : ${esc(st.current.suit)} ×${esc(String(st.current.run))} — ${esc(String(st.total || 0))} prédiction(s) reçue(s) de cette stratégie.</p>`
+        : `<p class="small muted" style="margin:8px 0 0">${st && st.total ? esc(String(st.total)) + ' prédiction(s) reçue(s) de cette stratégie.' : 'Aucune prédiction reçue de cette stratégie pour le moment.'}</p>`;
+      if (!list.length && !suitRow) return '';
+      return `<div class="notice" style="margin:10px 0"><b>Compteurs en cours</b>
+        ${list.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${list.map(c => `<span class="tag ${c.done ? 'good' : 'warn'}" title="${esc(c.hint || '')}">${esc(c.label)} : <b>${esc(c.value)}</b></span>`).join('')}</div>` : ''}
+        ${suitRow}${head}</div>`;
+    }
+    // Configuration exacte de la stratégie sélectionnée : nom, stratégie
+    // source, règles actives, exemple concret et dernières prédictions
+    // (numéro + costume) telles que la stratégie les a envoyées.
+    function afterLossSummary(t) {
+      const s = t.summary || null;
+      if (!s) return '';
+      const preds = (s.suitStats && s.suitStats.lastPredictions) || [];
+      return `<div class="notice" style="margin:10px 0"><b>Configuration exacte — ${esc(s.name || '')}</b>
+        <p class="small" style="margin:6px 0 0">Stratégie suivie : <b>${esc(s.sourceName || '')}</b></p>
+        ${s.rules && s.rules.length ? `<ul class="small" style="margin:6px 0 0;padding-left:18px">${s.rules.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : '<p class="small muted" style="margin:6px 0 0">Aucune règle active pour le moment.</p>'}
+        ${s.example ? `<p class="small" style="margin:6px 0 0">${esc(s.example)}</p>` : ''}
+        ${preds.length ? `<p class="small muted" style="margin:8px 0 4px">Numéros et costumes prédits par la stratégie :</p><div style="display:flex;flex-wrap:wrap;gap:6px">${preds.map(p => `<span class="tag mono" title="${esc(p.status || '')}">#N${esc(String(p.target))}${esc(p.suit || '')}</span>`).join('')}</div>` : ''}</div>`;
     }
     function afterLossPage() {
       setNav('after-loss');
@@ -1687,6 +1710,7 @@ Faites-en bon usage !
             ${afterLossStreakRow('trk-' + t.id, t.streak, snapshot.formatCount)}
             ${afterLossDecadeRow('trk-' + t.id, t.decade, snapshot.formatCount)}
             ${afterLossChannelFormatRow('trk-' + t.id, t)}
+            ${afterLossSummary(t)}
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Stratégie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
