@@ -444,7 +444,15 @@
         window.location.href = '/login.html' + qs;
         throw new Error(data.error || 'Session expirée.');
       }
-      if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
+      if (!res.ok) {
+        const err = new Error(data.error || `Erreur ${res.status}`);
+        // CORRECTIF « doublons de configuration » : on transporte le corps
+        // JSON complet de l'erreur (ex. code + conflicts) pour que l'appelant
+        // puisse afficher une fenêtre détaillée sans refaire l'appel.
+        err.data = data;
+        err.status = res.status;
+        throw err;
+      }
       return data;
     }
     function toast(message, type = '') {
@@ -1679,15 +1687,39 @@ Faites-en bon usage !
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
-    async function addAfterLossTracker() {
+    async function addAfterLossTracker(force) {
       const key = val('newTrackerKey');
       const triggers = readAfterLossTriggers('new');
       const repeat = readAfterLossRepeat('new');
       const streak = readAfterLossStreak('new');
       const decade = readAfterLossDecade('new');
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
-      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, streak, decade, channels, siteChannelId, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
-      catch (e) { toast(e.message, 'error'); }
+      const payload = { key, triggers, repeat, streak, decade, channels, siteChannelId, format, force: !!force };
+      try { await api('/api/after-loss/trackers', 'POST', payload); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      catch (e) {
+        // CORRECTIF « doublons de configuration » : au lieu d'un simple toast
+        // d'erreur, on affiche une fenêtre listant la (les) configuration(s)
+        // déjà identique(s), avec la possibilité de confirmer quand même.
+        if (e.status === 409 && e.data && e.data.code === 'DUPLICATE_CONFIG') {
+          showAfterLossConflictModal(e.data.conflicts || [], payload);
+          return;
+        }
+        toast(e.message, 'error');
+      }
+    }
+    function showAfterLossConflictModal(conflicts, payload) {
+      const rows = conflicts.map(c => `<tr>
+        <td>${esc(c.name)}</td>
+        <td class="mono">${esc((c.channels || []).join(', ') || '—')}</td>
+        <td>${esc(c.siteChannelId != null ? String(c.siteChannelId) : '—')}</td>
+        <td>${esc(String(c.format))}</td>
+      </tr>`).join('');
+      openModal(`<div class="modal-head"><div><span class="eyebrow">⚠️ Configuration déjà utilisée</span><h3 style="margin-top:8px">Cette stratégie suivie existe déjà avec les mêmes réglages</h3><p class="small" style="margin:0">Même stratégie suivie, même(s) canal(aux)/canal du site ET même format de prédiction qu'une configuration déjà enregistrée ci-dessous. Ajouter quand même créera un doublon (deux relais identiques pour le même résultat).</p></div></div>
+        <table style="margin-top:10px"><thead><tr><th>Stratégie suivie existante</th><th>Canal(aux)</th><th>Canal du site</th><th>Format</th></tr></thead><tbody>${rows}</tbody></table>
+        <div class="modal-actions" style="margin-top:14px">
+          <button class="button small danger" onclick="addAfterLossTracker(true)">Ajouter quand même</button>
+          <button class="button small ghost" onclick="addAfterLossTrackerModal()">Modifier les réglages</button>
+        </div>`);
     }
     async function updateAfterLossTriggers(id) {
       const triggers = readAfterLossTriggers('trk-' + id);
