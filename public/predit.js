@@ -16,14 +16,25 @@
 //    (ex. 2). Ensuite elle est mise en pause et le panneau attend une NOUVELLE
 //    stratégie certifiée pour continuer à prédire.
 //  • Dès qu'une stratégie certifiée perd, elle est retirée automatiquement.
+//  • FILTRE « PERTES RAPPROCHÉES » (optionnel, désactivé par défaut) : une
+//    fois activé, une prédiction n'est publiée sur le canal qu'APRÈS avoir
+//    observé une série de pertes rapprochées (même principe que le filtre de
+//    la stratégie « ombre », jamais nommé ainsi dans les messages envoyés à
+//    l'acheteur — voir shop.js). Tant que le filtre n'est pas armé, les
+//    prédictions restent suivies en interne (elles alimentent le compteur de
+//    pertes) mais ne partent jamais sur Telegram. Une victoire publiée
+//    referme le filtre. Voir panel.silentMode / silentLossTrigger /
+//    silentLossWindow / silentGate ci-dessous.
 'use strict';
 
+const appConfig = require('./config');
 const miner = require('./pattern-miner');
 const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
 const { state } = require('./predictor');
+const lossNotice = require('./loss-notice');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
 
@@ -31,7 +42,7 @@ const panel = {
   enabled: true,
   channels: [],        // canaux Telegram du panneau
   minSample: 6,        // observations minimum pour certifier une règle
-  minRate: 85,          // taux de réussite minimum accepté (réglable 50-100 ; 100 = parfait, prioritaire)
+  minRate: 98,          // taux de réussite minimum accepté (réglable 50-100 ; 100 = parfait, prioritaire)
   maxR: 1,             // rattrapages autorisés sur une prédiction du panneau
   format: 1,           // format de prédiction utilisé pour les messages
   perStrategy: 2,      // nombre de prédictions autorisées par stratégie créée
@@ -39,6 +50,22 @@ const panel = {
   minGap: 3,           // écart minimum (en numéro de jeu) exigé entre deux
                         // numéros prédits par le panneau ; un nouveau numéro
                         // trop proche du dernier numéro déjà prédit est bloqué
+  // message de perte + formation VIP (voir loss-notice.js) — désactivé par
+  // défaut (demande admin), indépendant du panneau « Prédit » lui-même.
+  lossNoticeEnabled: false,
+  // ── Filtre « pertes rapprochées » (même principe que la stratégie « ombre »,
+  // jamais nommé ainsi dans les messages envoyés — voir shop.js/formation.js) ──
+  // Quand actif, une prédiction du panneau n'est PUBLIÉE qu'après confirmation :
+  // tant qu'aucune série de pertes rapprochées n'a été observée, les
+  // prédictions restent TRACKÉES en interne (elles alimentent le compteur)
+  // mais ne partent jamais sur Telegram. Dès que `silentLossTrigger` pertes
+  // tombent dans une fenêtre de `silentLossWindow` prédictions résolues,
+  // l'envoi s'active — et le reste actif jusqu'à la prochaine victoire
+  // publiée, qui referme le filtre (retour au silence).
+  silentMode: false,
+  silentLossTrigger: 2,  // nb de pertes rapprochées nécessaires pour activer l'envoi (1-5)
+  silentLossWindow: 3,   // écart max (en prédictions résolues) entre ces pertes (1-20)
+  silentGate: { armed: false, lossesInWindow: 0, sinceLastLoss: 0 }, // état runtime du filtre ci-dessus
   certified: [],       // règles IA actuellement au-dessus du seuil
   retired: [],         // règles retirées (perdues ou quota atteint)
   predictions: [],     // prédictions du panneau (les 200 dernières)
@@ -77,13 +104,21 @@ function configure(patch = {}) {
   if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
   if (patch.minRate !== undefined) {
     const v = parseInt(patch.minRate, 10);
-    panel.minRate = Math.max(50, Math.min(100, Number.isFinite(v) ? v : 85));
+    // CORRECTIF (demande admin) : seuil PLANCHER remonté à 98% (au lieu de
+    // 50%) — trop de règles peu fiables généraient trop de pertes sur les
+    // prédictions IA. Un déclencheur en dessous de 98% n'est plus jamais
+    // certifié ni utilisé, quoi que l'admin saisisse ici.
+    panel.minRate = Math.max(98, Math.min(100, Number.isFinite(v) ? v : 98));
   }
   if (patch.minSample !== undefined) panel.minSample = Math.max(3, Math.min(60, parseInt(patch.minSample, 10) || 6));
   if (patch.maxR !== undefined) panel.maxR = Math.max(0, Math.min(5, parseInt(patch.maxR, 10) || 0));
   if (patch.format !== undefined) panel.format = fmt.clampFormat(patch.format);
   if (patch.perStrategy !== undefined) panel.perStrategy = Math.max(1, Math.min(50, parseInt(patch.perStrategy, 10) || 1));
   if (patch.minGap !== undefined) panel.minGap = Math.max(0, Math.min(30, parseInt(patch.minGap, 10) || 0));
+  if (patch.silentMode !== undefined) panel.silentMode = !!patch.silentMode;
+  if (patch.silentLossTrigger !== undefined) panel.silentLossTrigger = Math.max(1, Math.min(5, parseInt(patch.silentLossTrigger, 10) || 2));
+  if (patch.silentLossWindow !== undefined) panel.silentLossWindow = Math.max(1, Math.min(20, parseInt(patch.silentLossWindow, 10) || 3));
+  if (patch.lossNoticeEnabled !== undefined) panel.lossNoticeEnabled = !!patch.lossNoticeEnabled;
   persist();
   return config();
 }
@@ -99,6 +134,10 @@ function config() {
     perStrategy: panel.perStrategy,
     requireCombo: panel.requireCombo,
     minGap: panel.minGap,
+    silentMode: panel.silentMode,
+    silentLossTrigger: panel.silentLossTrigger,
+    silentLossWindow: panel.silentLossWindow,
+    lossNoticeEnabled: panel.lossNoticeEnabled,
   };
 }
 
@@ -111,6 +150,7 @@ function persist() {
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
+    silentGate: panel.silentGate,
   };
   try { store.patch({ predit: config() }); } catch (_) {}
   if (db.ready) db.savePreditState(saved).catch((error) => { panel.lastError = error.message; });
@@ -121,6 +161,7 @@ function restore() {
     const saved = (store.read() || {}).predit;
     if (saved) configure({ ...saved });
   } catch (_) {}
+  purgeChainRules();
   return config();
 }
 
@@ -136,19 +177,58 @@ async function restoreFromDb() {
     panel.enabled = saved.config.enabled !== false;
     panel.requireCombo = !!saved.config.requireCombo;
     panel.channels = parseChannels(saved.config.channels);
-    panel.minRate = Math.max(50, Math.min(100, parseInt(saved.config.minRate, 10) || 85));
+    panel.minRate = Math.max(98, Math.min(100, parseInt(saved.config.minRate, 10) || 98));
     panel.minSample = Math.max(3, Math.min(60, parseInt(saved.config.minSample, 10) || 6));
     panel.maxR = Math.max(0, Math.min(5, parseInt(saved.config.maxR, 10) || 0));
     panel.format = fmt.clampFormat(saved.config.format);
-    panel.perStrategy = Math.max(1, Math.min(50, parseInt(saved.config.perStrategy, 10) || 1));
+    panel.perStrategy = Math.max(1, Math.min(50, parseInt(saved.config.perStrategy, 10) || 2));
+    panel.minGap = Math.max(0, Math.min(30, parseInt(saved.config.minGap, 10) || 0));
+    panel.silentMode = !!saved.config.silentMode;
+    panel.silentLossTrigger = Math.max(1, Math.min(5, parseInt(saved.config.silentLossTrigger, 10) || 2));
+    panel.silentLossWindow = Math.max(1, Math.min(20, parseInt(saved.config.silentLossWindow, 10) || 3));
+    panel.lossNoticeEnabled = !!saved.config.lossNoticeEnabled;
   }
   if (Array.isArray(saved.certified)) panel.certified = saved.certified;
   if (Array.isArray(saved.retired)) panel.retired = saved.retired;
-  if (Array.isArray(saved.predictions)) panel.predictions = saved.predictions.slice(0, 200);
+  if (Array.isArray(saved.predictions)) {
+    // CORRECTIF (même règle qu'ailleurs) : au redémarrage, on ne rejette pas
+    // les entrées encore « en attente » au-delà de 200 — seules les entrées
+    // déjà résolues sont plafonnées.
+    const keep = [];
+    let resolvedCount = 0;
+    for (const p of saved.predictions) {
+      if (p.status === 'en attente' || resolvedCount < 200) {
+        keep.push(p);
+        if (p.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    panel.predictions = keep;
+  }
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
+  if (saved.silentGate && typeof saved.silentGate === 'object') {
+    panel.silentGate = {
+      armed: !!saved.silentGate.armed,
+      lossesInWindow: Number(saved.silentGate.lossesInWindow) || 0,
+      sinceLastLoss: Number(saved.silentGate.sinceLastLoss) || 0,
+    };
+  }
+  purgeChainRules();
   return config();
+}
+
+// CORRECTIF (demande) : les règles de type « chaine » (enchaînement de
+// costumes) ne sont plus proposées par l'analyseur (voir pattern-miner.js),
+// et triggered() ne sait plus les évaluer — une règle « chaine » certifiée
+// avant ce changement resterait donc inerte pour toujours (ni retirée, ni
+// jamais re-déclenchée). On la retire proprement au chargement.
+function purgeChainRules() {
+  const stale = panel.certified.filter((c) => c.id && c.id.startsWith('ia:chaine:'));
+  for (const entry of stale) {
+    retire(entry, "Type de déclencheur « enchaînement de costumes » désactivé.");
+    dropPredictionsFor(entry.id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -175,12 +255,36 @@ function cardTokens(game, hand) {
   return out;
 }
 
+// jeton (rang+costume) exactement à la position donnée (0 = 1ère carte, etc.)
+// dans la main indiquée, ou null si aucune carte à cette position.
+function cardTokenAt(game, hand, pos) {
+  const cards = hand === 'banquier' ? (game.bankerCards || []) : (game.playerCards || []);
+  const text = String(cards[pos] || '');
+  if (!text) return null;
+  const suit = SUITS.find((s) => text.includes(s.charAt(0)));
+  if (!suit) return null;
+  const rank = text.replace(suit, '').replace(/\uFE0F/g, '').trim() || '?';
+  return `${rank}${suit}`;
+}
+
 // la règle est-elle déclenchée par ce jeu ?
 function triggered(rule, game) {
   if (!rule || !game) return false;
-  if (rule.kind === 'carte') return cardTokens(game, rule.hand).has(rule.token);
+  if (rule.kind === 'carte') {
+    // règle avec position exacte du déclencheur (ex. « 4❤️ en 2e position du
+    // banquier ») : on exige la carte À CETTE position précise, pas ailleurs
+    // dans la main — sinon on retombe sur l'ancien comportement (présence
+    // n'importe où) pour les règles héritées sans position enregistrée.
+    if (rule.pos != null) return cardTokenAt(game, rule.hand, rule.pos) === rule.token;
+    return cardTokens(game, rule.hand).has(rule.token);
+  }
   if (rule.kind === 'point') return game.playerValue != null && Number(game.playerValue) === Number(rule.value);
-  if (rule.kind === 'chaine') return suitsOf(game).includes(rule.token);
+  if (rule.kind === 'egalite') return game.winner === 'Égalité' && game.playerValue != null && Number(game.playerValue) === Number(rule.value);
+  if (rule.kind === 'forme') {
+    return game.playerValue != null && Number(game.playerValue) === Number(rule.value)
+      && (game.playerCards || []).length === Number(rule.pCount)
+      && (game.bankerCards || []).length === Number(rule.bCount);
+  }
   return false;
 }
 
@@ -191,16 +295,55 @@ function triggered(rule, game) {
 // base de données, puisque panel.predictions est réenregistré en entier par
 // persist()/db.savePreditState()).
 function dropPredictionsFor(id) {
-  panel.predictions = panel.predictions.filter((p) => !p.sources.some((s) => s.id === id));
+  panel.predictions = panel.predictions.filter((p) => !(p.sources || []).some((s) => s.id === id));
+}
+
+// ---------------------------------------------------------------------------
+// Durée de vie des déclencheurs certifiés (demande admin) — deux règles :
+//   1) TTL général : un déclencheur certifié expire de toute façon au bout
+//      d'1h, même s'il n'a jamais perdu — un motif trop ancien n'est plus
+//      forcément d'actualité (voir purgeExpiredCertified, appelée à CHAQUE
+//      certifyDiscoveries()).
+//   2) Purge après perte : dès qu'UNE prédiction du panneau perd, on
+//      considère tout le stock de déclencheurs comme potentiellement
+//      périmé — on retire IMMÉDIATEMENT tous ceux certifiés il y a plus de
+//      10 minutes, pas seulement celui qui a perdu (voir purgeAfterLoss,
+//      appelée depuis verify() ci-dessous). Seuls les tout derniers motifs
+//      (< 10 min) survivent : le panneau doit alors en trouver de nouveaux.
+// ---------------------------------------------------------------------------
+const CERTIFIED_MAX_AGE_MS = 60 * 60 * 1000;   // 1h : durée de vie maximale, quoi qu'il arrive
+const LOSS_PURGE_FRESH_MS = 10 * 60 * 1000;    // 10 min : seuls les déclencheurs plus récents survivent à une perte
+
+function purgeExpiredCertified() {
+  const now = Date.now();
+  for (const entry of [...panel.certified]) {
+    const certifiedAt = entry.certifiedAt ? new Date(entry.certifiedAt).getTime() : now;
+    const age = now - certifiedAt;
+    if (age > CERTIFIED_MAX_AGE_MS) {
+      retire(entry, `Expiré : certifiée il y a plus d'1h (${Math.round(age / 60000)} min).`);
+    }
+  }
+}
+
+function purgeAfterLoss() {
+  const now = Date.now();
+  for (const entry of [...panel.certified]) {
+    const certifiedAt = entry.certifiedAt ? new Date(entry.certifiedAt).getTime() : now;
+    const age = now - certifiedAt;
+    if (age > LOSS_PURGE_FRESH_MS) {
+      retire(entry, `Retirée après une perte ailleurs dans le panneau : certifiée il y a ${Math.round(age / 60000)} min (> 10 min de fraîcheur exigée).`);
+    }
+  }
 }
 
 function certifyDiscoveries() {
+  purgeExpiredCertified();
   const found = miner.mine(state.history || [], { lead: 2 });
   const discoveries = found.discoveries || [];
   const byId = new Map();
   for (const d of discoveries) {
     if (!d.rule) continue;
-    byId.set(`ia:${d.rule.kind}:${d.rule.hand}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`, d);
+    byId.set(`ia:${d.rule.kind}:${d.rule.hand}:${d.rule.pos ?? 'any'}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`, d);
   }
   // CORRECTIF : avant, seules les règles ENCORE au-dessus du seuil (85% par
   // défaut) étaient réévaluées ci-dessous (elles étaient filtrées AVANT).
@@ -223,7 +366,7 @@ function certifyDiscoveries() {
     (d) => d.rule && Number(d.rate) >= panel.minRate && Number(d.support || 0) >= panel.minSample,
   );
   for (const d of list) {
-    const id = `ia:${d.rule.kind}:${d.rule.hand}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`;
+    const id = `ia:${d.rule.kind}:${d.rule.hand}:${d.rule.pos ?? 'any'}:${d.rule.token}:${d.rule.k}:${d.rule.suit}`;
     if (panel.retired.some((r) => r.id === id)) continue;
     if (panel.certified.some((c) => c.id === id)) continue; // déjà mise à jour ci-dessus
     panel.certified.push({
@@ -352,6 +495,10 @@ function makePredictions(games) {
       if (!triggered(entry.rule, g)) continue;
       const target = g.n + entry.rule.k;
       if (target <= last) continue; // le jeu cible est déjà joué
+      // CORRECTIF (demande) : un jeu va de 1 à appConfig.MAX_GAME_NUMBER (1440)
+      // avant le retour à 1 (nouveau sabot) — une cible calculée au-delà ne
+      // sera jamais jouée avant le rebouclage, on l'ignore.
+      if (target > appConfig.MAX_GAME_NUMBER) continue;
       if (panel.predictions.some((p) => p.source === entry.id && p.target === target)) continue;
       if (minGap > 0 && lastTarget != null && Math.abs(target - lastTarget) < minGap) {
         // numéro trop proche du dernier prédit : cette occurrence est
@@ -384,7 +531,21 @@ function makePredictions(games) {
       break;
     }
   }
-  panel.predictions = panel.predictions.slice(0, 200);
+  // CORRECTIF (identique à predictor.js) : ne jamais tronquer une prédiction
+  // encore « en attente » — sinon son message Telegram reste bloqué sans
+  // vérification pour toujours. Seul le nombre de prédictions déjà RÉSOLUES
+  // est plafonné à 200 (les plus récentes conservées en priorité).
+  if (panel.predictions.length > 200) {
+    const keep = [];
+    let resolvedCount = 0;
+    for (const p of panel.predictions) {
+      if (p.status === 'en attente' || resolvedCount < 200) {
+        keep.push(p);
+        if (p.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    panel.predictions = keep;
+  }
   return created;
 }
 
@@ -414,48 +575,108 @@ function gameByNumber(games, n) {
   return games.find((g) => g.n === n) || null;
 }
 
+// Met à jour le filtre « pertes rapprochées » (silentGate) à partir du
+// résultat d'UNE prédiction résolue — appelé pour TOUTES les prédictions
+// clôturées, qu'elles aient été publiées ou non : le filtre doit voir le
+// vrai historique complet pour détecter une série de pertes, pas seulement
+// ce qui a été montré publiquement. Une prédiction 'annulé' (données
+// illisibles) est ignorée, comme dans formation.js — ce n'est pas un vrai
+// résultat de jeu.
+function updateSilentGate(pred) {
+  if (pred.status !== 'gagné' && pred.status !== 'perdu') return;
+  const g = panel.silentGate;
+  const isLoss = pred.status === 'perdu';
+  if (g.armed) {
+    // une victoire referme le filtre (retour au silence) ; une perte
+    // pendant que l'envoi est déjà actif ne change rien, il reste actif.
+    if (!isLoss) { g.armed = false; g.lossesInWindow = 0; g.sinceLastLoss = 0; }
+    return;
+  }
+  const need = Math.max(1, Math.min(5, parseInt(panel.silentLossTrigger, 10) || 2));
+  const window = Math.max(1, Math.min(20, parseInt(panel.silentLossWindow, 10) || 3));
+  if (isLoss) {
+    g.lossesInWindow += 1;
+    g.sinceLastLoss = 0;
+    if (g.lossesInWindow >= need) g.armed = true;
+  } else if (g.lossesInWindow > 0) {
+    g.sinceLastLoss += 1;
+    if (g.sinceLastLoss > window) { g.lossesInWindow = 0; g.sinceLastLoss = 0; } // fenêtre dépassée → repart à zéro
+  }
+}
+
 function verify(games) {
   const last = lastFinishedNumber(games);
   const closed = [];
   for (const pred of panel.predictions) {
     if (pred.status !== 'en attente') continue;
-    let checked = pred.target + pred.step;
-    while (checked <= last) {
-      const g = gameByNumber(games, checked);
-      // CORRECTIF : un tour absent, non terminé ou sans cartes lues (flux qui
-      // « saute ») est ignoré — il ne consomme PAS d'étape de rattrapage et ne
-      // peut donc plus provoquer une fausse perte.
-      if (!g || g.finished === false || g.complete === false || !suitsOf(g).length) {
-        checked += 1;
+    if (pred.skipped == null) pred.skipped = 0;
+    // CORRECTIF « prédictions IA mal vérifiées » : le curseur de lecture est
+    // désormais MÉMORISÉ sur la prédiction. Avant, chaque passage repartait
+    // de `target + step`, si bien qu'un jeu déjà contrôlé au tour précédent
+    // (lorsqu'un tour du milieu avait été sauté faute de données) était
+    // recompté une seconde fois : un rattrapage était consommé pour rien et
+    // la prédiction était déclarée perdue trop tôt (ou gagnée sur le mauvais
+    // jeu). On avance maintenant un curseur unique, jamais réévalué.
+    if (pred.cursor == null || pred.cursor < pred.target) pred.cursor = pred.target + (pred.step || 0);
+    while (pred.cursor <= last) {
+      const g = gameByNumber(games, pred.cursor);
+      // Tour déjà présent mais PAS ENCORE TERMINÉ : on ne le saute pas, on
+      // attend simplement le prochain passage. Le sauter reviendrait à
+      // vérifier la prédiction sur le mauvais numéro de jeu.
+      if (g && (g.finished === false || g.complete === false)) break;
+      // Tour absent du flux ou sans cartes lisibles : ignoré, il ne consomme
+      // PAS d'étape de rattrapage et ne peut donc pas provoquer une fausse
+      // perte. Au-delà de 6 tours illisibles consécutifs, la prédiction est
+      // annulée (même règle que predictor.js) au lieu de rester bloquée.
+      if (!g || !suitsOf(g).length) {
+        pred.cursor += 1;
+        pred.skipped += 1;
+        if (pred.skipped > 6) {
+          pred.status = 'annulé';
+          pred.closedAt = new Date().toISOString();
+          pred.reasonClosed = 'Tours non lus dans le flux (données illisibles) — annulée automatiquement.';
+          closed.push(pred);
+          break;
+        }
         continue;
       }
+      pred.skipped = 0;
       if (suitsOf(g).includes(pred.suit)) {
         pred.status = 'gagné';
+        pred.hitOn = pred.cursor;
         pred.closedAt = new Date().toISOString();
         closed.push(pred);
         break;
       }
       if (pred.step >= pred.maxR) {
         pred.status = 'perdu';
+        pred.lastCheckedGame = pred.cursor;
         pred.closedAt = new Date().toISOString();
         closed.push(pred);
         break;
       }
-      pred.step += 1;
-      checked += 1;
+      pred.step += 1;   // un rattrapage réellement consommé sur un tour lisible
+      pred.cursor += 1;
     }
   }
   // une règle certifiée qui perd sort immédiatement du panneau
+  let anyLoss = false;
   for (const pred of closed) {
     for (const src of pred.sources) {
       const entry = panel.certified.find((c) => c.id === src.id);
       if (!entry) continue;
       if (pred.status === 'gagné') {
         entry.win += 1;
+      } else if (pred.status === 'annulé') {
+        // Annulée pour données illisibles (voir plus haut) : ce n'est PAS un
+        // échec réel de la stratégie — on ne la pénalise pas et on ne la
+        // retire pas, contrairement à une vraie perte ci-dessous.
+        continue;
       } else {
         entry.loss += 1;
         entry.rate = 0;
         retire(entry, `Prédiction perdue sur le jeu #N${pred.target} : la règle passe sous le seuil de ${panel.minRate}%.`);
+        anyLoss = true;
         continue;
       }
       // quota atteint : la stratégie sort du service, on attend une nouvelle
@@ -466,6 +687,11 @@ function verify(games) {
       }
     }
   }
+  // dès qu'UNE perte a été enregistrée dans ce lot : on purge tout le reste
+  // du stock de déclencheurs (voir purgeAfterLoss ci-dessus), pas seulement
+  // celui qui a perdu — ne survivent que les déclencheurs certifiés depuis
+  // moins de 10 minutes.
+  if (anyLoss) purgeAfterLoss();
   return closed;
 }
 
@@ -516,6 +742,17 @@ async function update(pred) {
       });
     } catch (_) {}
   }
+  // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
+  // dans CES MÊMES canaux — identique à bot.js/updateResult() pour les
+  // stratégies existantes, ici pour les prédictions « Prédit IA ». CASE PAR
+  // STRATÉGIE (ici : panel.lossNoticeEnabled), désactivée par défaut — les
+  // deux réglages (général + celui-ci) doivent être activés à la fois.
+  if (pred.status === 'perdu' && panel.lossNoticeEnabled && lossNotice.getSettings().enabled) {
+    const noticeText = lossNotice.buildText();
+    for (const m of pred.messages) {
+      try { await bot.sendMessage(m.chatId, noticeText); } catch (_) {}
+    }
+  }
 }
 
 // Les stratégies existantes du bot ne sont plus reprises dans « Prédit ».
@@ -533,20 +770,23 @@ function predRow(p) {
 }
 
 function bilanOf(list) {
-  const done = list.filter((p) => p.status !== 'en attente');
+  // Les prédictions « annulé » (données illisibles, pas un vrai échec de la
+  // stratégie — voir verify() ci-dessus) sont exclues des statistiques,
+  // comme pour les stratégies existantes (predictor.js).
+  const done = list.filter((p) => p.status !== 'en attente' && p.status !== 'annulé');
   const win = done.filter((p) => p.status === 'gagné').length;
   const loss = done.length - win;
-  return { total: list.length, win, loss, pending: list.length - done.length, rate: done.length ? Math.round((win / done.length) * 100) : 0 };
+  const pending = list.filter((p) => p.status === 'en attente').length;
+  return { total: list.length, win, loss, pending, rate: done.length ? Math.round((win / done.length) * 100) : 0 };
 }
 
 function bilanText(entry, list) {
+  // Même bilan minimal que les stratégies existantes (predictor.js).
   const b = bilanOf(list);
   return (
-    '📊 STATISTIQUE 📈\n\n' +
-    `🧠 Stratégie IA : ${entry.name}\n\n` +
-    `🟢 GAIN : ${b.win}\n` +
-    `🔴 PERTE : ${b.loss}\n\n` +
-    `✅ Taux de réussite : ${b.rate} %`
+    '📊 STATISTIQUE 📈\n\n\n' +
+    `🟢 GAIN : ${b.win}\n\n` +
+    `🔴 PERTE : ${b.loss}`
   );
 }
 
@@ -590,16 +830,44 @@ async function tick() {
     const games = orderedGames();
     if (games.length >= 12) certifyDiscoveries();
     const closed = verify(games);
-    for (const pred of closed) await update(pred);
+    for (const pred of closed) {
+      // Le filtre « pertes rapprochées » voit TOUJOURS le résultat réel,
+      // publié ou non (voir updateSilentGate ci-dessus) — sinon il ne
+      // pourrait jamais détecter une série de pertes restées silencieuses.
+      updateSilentGate(pred);
+      if (pred.messages.length) { await update(pred); continue; }
+      // Retenue EXPRÈS par le filtre « pertes rapprochées » (silentMode actif
+      // et pas encore armé au moment de sa création) : elle reste silencieuse
+      // par conception, on ne la publie pas a posteriori.
+      if (pred.silentHeld) continue;
+      // CORRECTIF « prédiction jamais vue » : une prédiction qui n'a JAMAIS
+      // été publiée avant sa résolution pour une AUTRE raison (ex.
+      // requireCombo actif et jamais confirmée par une 2ᵉ règle, ou un échec
+      // d'envoi Telegram passé inaperçu) était clôturée en silence par
+      // verify() ci-dessus — gagnée ou perdue, rien n'apparaissait jamais sur
+      // le canal. On publie désormais le résultat final dans ce cas : pour
+      // une prédiction jamais envoyée on utilise send() (pas update(), qui ne
+      // fait rien sans message existant), avec son statut déjà réglé
+      // (gagné/perdu) par verify() — le message affiche directement le
+      // résultat, jamais une prédiction « en attente » obsolète.
+      if (pred.status === 'gagné' || pred.status === 'perdu') await send(pred);
+      // une prédiction 'annulé' (données illisibles, voir verify() plus haut)
+      // jamais envoyée n'est PAS publiée a posteriori : ce n'est pas un vrai
+      // résultat de jeu, l'annoncer publiquement serait juste trompeur.
+    }
     const created = mergeCombos(makePredictions(games));
     // prédictions encore valables mais jamais publiées (canal absent, erreur
-    // Telegram, bot redémarré) : on retente l'envoi à chaque tour.
+    // Telegram, filtre pas encore armé, bot redémarré) : on retente l'envoi
+    // à chaque tour — c'est aussi ce qui permet à une prédiction retenue par
+    // le filtre « pertes rapprochées » de partir dès que celui-ci s'arme.
     const last = lastFinishedNumber(games);
     const unsent = panel.predictions.filter(
       (p) => p.status === 'en attente' && !p.messages.length && p.target > last && !created.includes(p),
     );
     for (const pred of [...created, ...unsent]) {
       if (panel.requireCombo && !pred.combo) continue;
+      if (panel.silentMode && !panel.silentGate.armed) { pred.silentHeld = true; continue; }
+      pred.silentHeld = false;
       if (pred.messages.length && !pred.resend) continue;
       pred.resend = false;
       // combo confirmé sur une prédiction DÉJÀ envoyée : on modifie le
@@ -628,14 +896,10 @@ async function tick() {
 // ---------------------------------------------------------------------------
 function globalBilanText() {
   const b = bilanOf(panel.predictions);
-  const nb = new Set(panel.predictions.flatMap((p) => p.sources.map((s) => s.id))).size;
   return (
-    '📊 BILAN GLOBAL — PRÉDICTIONS IA 🤖\n\n' +
-    `🧠 Stratégies IA ayant prédit : ${nb}\n` +
-    `🎯 Prédictions : ${b.total}\n\n` +
-    `🟢 GAIN : ${b.win}\n` +
-    `🔴 PERTE : ${b.loss}\n\n` +
-    `✅ Taux de réussite : ${b.rate} %`
+    '📊 STATISTIQUE 📈\n\n\n' +
+    `🟢 GAIN : ${b.win}\n\n` +
+    `🔴 PERTE : ${b.loss}`
   );
 }
 
@@ -685,6 +949,7 @@ function status() {
     ...config(),
     running: panel.enabled,
     formatPreview: fmt.formatPreview(panel.format, { maxR: panel.maxR }),
+    silentGate: { ...panel.silentGate },
     certified: panel.certified.map((c) => ({
       id: c.id, type: c.type, name: c.name, finding: c.finding, motif: c.motif || '',
       rate: c.rate, sample: c.sample, used: c.used || 0, quota: panel.perStrategy,

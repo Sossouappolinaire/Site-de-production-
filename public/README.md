@@ -82,6 +82,16 @@ Les statistiques et les analyses IA décrivent uniquement un historique observé
 Elles ne garantissent pas le résultat d'un jeu et ne doivent pas être présentées
 comme une certitude.
 
+## Version 6.1 — Comptage 2/2
+
+- L'analyse du lot compare toujours **3/2, 3/3 et 2/2**. Une case cochée
+  autorise uniquement la prédiction de cette catégorie : si une autre catégorie
+  est la plus faible, aucune prédiction n'est envoyée.
+- Le nombre de prédictions par lot est configurable de 1 à 10. Pour le lot
+  1→30 : `1` programme le jeu 35, `2` programme 35 et 45, `3` programme 35,
+  45 et 55. Les lots suivants suivent la même règle avec un intervalle de 10.
+- Chaque cible conserve sa propre vérification et affiche `✅0️⃣`, `✅1️⃣`, etc.
+
 ## Analyseur IA
 
 Les adresses publiques de l'API sont définies dans `config.js` :
@@ -256,3 +266,19 @@ le compte est créé immédiatement en statut « en attente » et une fenêtre
 « Merci de patienter » récapitule les informations. C'est l'administrateur
 qui accepte le compte et accorde un temps d'accès depuis le panneau
 « Utilisateurs ».
+
+## 🛠 Réparation IA (nouveau)
+
+Page `#/ai-repair` du tableau de bord (bouton « 🛠 Réparation IA » dans le menu et sur l'accueil).
+
+1. **Envoyer à l'IA** : on écrit ce qui ne va pas ; l'IA (Groq, `ai-repair.js`) lit l'inventaire du projet
+   et les extraits de code pertinents, puis liste les problèmes identifiés (fichier, gravité, détail).
+2. **Corriger** : l'IA corrige les problèmes un par un et écrit directement les fichiers
+   (sauvegarde automatique dans `.repair-backups/`, contrôle de syntaxe `node --check` avant écriture).
+   Le pourcentage d'avancement s'affiche et progresse jusqu'à 100 %.
+3. **Analyser** : à 100 %, le bouton d'analyse relit le code corrigé et confirme si tous les
+   problèmes sont bien réglés (score sur 100 + contrôle de syntaxe de tout le projet).
+
+Routes : `GET /api/ai/repair`, `POST /api/ai/repair/diagnose|fix|verify|reset` (administrateur uniquement).
+Clé Groq : `GROQ_API_KEY` (déjà présente dans `config.js`), modèle réglable via `GROQ_MODEL`.
+Le palier gratuit Groq limite le débit (8000 tokens/min) : les erreurs 429 sont réessayées automatiquement.

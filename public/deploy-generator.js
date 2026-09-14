@@ -203,6 +203,14 @@ function hasSuit(game, suit) {
   const want = normSuit(suit);
   return !!want && handSuits(game).includes(want);
 }
+// équivalents côté BANQUIER — utilisés par la stratégie « Carte disparue →
+// retour banquier » (kind 'suit-banquier'), qui se vérifie sur la main du
+// banquier plutôt que celle du joueur (voir matches()/resultText() plus bas).
+function bankerHandSuits(game) { return game ? strategies.suitsOf(game.bankerSuits) : []; }
+function hasSuitBanker(game, suit) {
+  const want = normSuit(suit);
+  return !!want && bankerHandSuits(game).includes(want);
+}
 
 function maxFinishedNumber() {
   let max = 0;
@@ -332,7 +340,10 @@ function evaluate() {
       strategyName: def.name,
       kind: hit.kind,
       target: hit.target,
-      suit: hit.suit ? (hit.kind === 'suit' ? normSuit(hit.suit) : hit.suit) : null,
+      suit: hit.suit ? (hit.kind === 'suit' || hit.kind === 'suit-banquier' ? normSuit(hit.suit) : hit.suit) : null,
+      // carte précise (rang+costume) — uniquement pour « Carte disparue →
+      // retour banquier » (kind 'carte-banquier').
+      card: hit.card || null,
       cardsLabel: hit.cardsLabel || null,
       wantPlayer: hit.wantPlayer != null ? hit.wantPlayer : null,
       wantBanker: hit.wantBanker != null ? hit.wantBanker : null,
@@ -376,6 +387,16 @@ function matches(pred, game) {
     if (pred.wantBanker != null && game.bankerCards !== pred.wantBanker) return false;
     return true;
   }
+  // « Carte disparue → retour banquier » : carte exacte chez le BANQUIER
+  // (ancien format).
+  if (pred.kind === 'carte-banquier') {
+    return (game.banker || []).includes(pred.card);
+  }
+  // même stratégie, format actuel : costume chez le BANQUIER (kind
+  // 'suit-banquier'), pas le joueur.
+  if (pred.kind === 'suit-banquier') {
+    return hasSuitBanker(game, pred.suit);
+  }
   return hasSuit(game, pred.suit);
 }
 
@@ -383,6 +404,8 @@ function resultText(pred, game) {
   if (!game) return null;
   if (pred.kind === 'parity') return \`joueur \${game.playerValue ?? '—'} (\${parityOf(game) || '—'})\`;
   if (pred.kind === 'cards') return \`joueur \${game.playerCards}/banquier \${game.bankerCards}\`;
+  if (pred.kind === 'carte-banquier') return \`banquier \${(game.banker || []).join(' ') || '—'}\`;
+  if (pred.kind === 'suit-banquier') return bankerHandSuits(game).join(' ') || '—';
   return handSuits(game).join(' ');
 }
 

@@ -76,23 +76,24 @@ function hasSuit(game, suit, hand = 'joueur') {
 // ---------------------------------------------------------------------------
 // 1) Carte précise (rang + costume) observée au jeu a → costume au jeu a+k
 // ---------------------------------------------------------------------------
+// Chaque carte est mesurée à SA position exacte dans la main (1ère/2e/3e
+// carte reçue), pas seulement « présente quelque part » — c'est ce qui
+// permet un déclencheur du type « 4❤️ en 2e position du banquier » plutôt
+// que « 4❤️ vu chez le banquier » sans précision.
 function mineCardRules(games) {
-  const buckets = new Map(); // clé -> { support, hits:{suit:count}, hand, token, k }
+  const buckets = new Map(); // clé -> { support, hits:{suit:count}, hand, pos, token, k, occ:[] }
   for (let i = 0; i < games.length; i += 1) {
     const g = games[i];
     for (const hand of ['joueur', 'banquier']) {
       const cards = hand === 'joueur' ? g.playerCards : g.bankerCards;
-      const tokens = new Set();
-      for (const card of cards) {
+      cards.forEach((card, posIdx) => {
         const parsed = parseCard(card);
-        if (parsed) tokens.add(parsed.token);
-      }
-      for (const token of tokens) {
+        if (!parsed) return;
         for (let k = 1; k <= MAX_OFFSET; k += 1) {
           const target = games[i + k];
           if (!target) continue;
-          const key = `${hand}|${token}|${k}`;
-          if (!buckets.has(key)) buckets.set(key, { hand, token, k, support: 0, hits: {}, hitPos: {} });
+          const key = `${hand}|${posIdx}|${parsed.token}|${k}`;
+          if (!buckets.has(key)) buckets.set(key, { hand, pos: posIdx, token: parsed.token, k, support: 0, hits: {}, hitPos: {}, occ: [] });
           const b = buckets.get(key);
           b.support += 1;
           for (const suit of SUITS) {
@@ -102,27 +103,41 @@ function mineCardRules(games) {
             b.hitPos[suit] = b.hitPos[suit] || {};
             b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
           }
+          // occurrence CONCRÈTE (numéro de jeu réel, pas juste un compteur) —
+          // sert à répondre à l'acheteur « ce déclencheur a été utilisé pour
+          // prédire le jeu X » (voir shop.js/explainTrigger). On garde les
+          // 60 dernières par bucket : largement assez pour l'historique
+          // affiché au client, sans faire grossir l'objet indéfiniment.
+          if (Number.isFinite(g.number) && Number.isFinite(target.number)) {
+            b.occ.push({ from: g.number, to: target.number, suits: target.playerSuits || [] });
+            if (b.occ.length > 60) b.occ.shift();
+          }
         }
-      }
+      });
     }
   }
   return rankBuckets(buckets, (b, suit, rate) => {
+    const triggerPosTxt = posLabel(b.pos) ? ` (${posLabel(b.pos)})` : '';
     const pos = dominantPosLabel(b, suit);
     const posTxt = pos ? ` en ${pos}` : '';
     return {
       kind: 'carte',
-      finding: `Quand le ${b.hand} a ${b.token} au jeu a, ${suit} apparaît${posTxt} dans la main du joueur au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
+      finding: `Quand le ${b.hand} a ${b.token}${triggerPosTxt} au jeu a, ${suit} apparaît${posTxt} dans la main du joueur au jeu a+${b.k} : ${rate}% (${b.hits[suit]}/${b.support}).`,
       proposal: {
-        name: `${b.token} (${b.hand}) → ${suit}${posTxt} au jeu a+${b.k}`,
-        logic: `Dès que ${b.token} est vu dans la main du ${b.hand} au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k} (main du joueur).`,
-        trigger: `${b.token} présent dans la main du ${b.hand}`,
+        name: `${b.token}${triggerPosTxt} (${b.hand}) → ${suit}${posTxt} au jeu a+${b.k}`,
+        logic: `Dès que ${b.token} est vu${triggerPosTxt} dans la main du ${b.hand} au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k} (main du joueur).`,
+        trigger: `${b.token} vu${triggerPosTxt} dans la main du ${b.hand}`,
         target: `jeu a+${b.k}`,
         position: pos,
+        triggerPosition: posLabel(b.pos),
         suggestedLead: b.k,
         minimumSample: 20,
         evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%)${posTxt ? `, majoritairement${posTxt}` : ''}.`,
         risks: "Régularité observée sur un échantillon court : à laisser tourner en mode silencieux avant publication.",
         compatibleExisting: 'costume',
+        // historique concret des déclenchements (jeu a → jeu a+k, résultat) —
+        // voir commentaire sur b.occ ci-dessus.
+        occurrences: b.occ.map((o) => ({ from: o.from, to: o.to, hit: o.suits.includes(suit) })),
       },
     };
   });
@@ -175,7 +190,121 @@ function mineValueRules(games) {
 }
 
 // ---------------------------------------------------------------------------
-// 3) Enchaînement de costumes : ♦️ au jeu a → ♣️ au jeu a+1
+// 3) Match nul (égalité) avec un point donné au jeu a → costume au jeu a+k
+//    Exemple demandé : « après une égalité avec 12 [c'est-à-dire point du
+//    joueur] au jeu a, tel costume revient au jeu a+k ».
+// ---------------------------------------------------------------------------
+function mineTieValueRules(games) {
+  const buckets = new Map();
+  for (let i = 0; i < games.length; i += 1) {
+    const g = games[i];
+    if (g.winner !== 'Égalité' || g.playerValue == null) continue;
+    for (let k = 1; k <= MAX_OFFSET; k += 1) {
+      const target = games[i + k];
+      if (!target) continue;
+      const key = `nul|${g.playerValue}|${k}`;
+      if (!buckets.has(key)) buckets.set(key, { hand: 'joueur', token: `égalité à ${g.playerValue}`, value: g.playerValue, k, support: 0, hits: {}, hitPos: {} });
+      const b = buckets.get(key);
+      b.support += 1;
+      for (const suit of SUITS) {
+        const idx = (target.playerSuits || []).indexOf(suit);
+        if (idx === -1) continue;
+        b.hits[suit] = (b.hits[suit] || 0) + 1;
+        b.hitPos[suit] = b.hitPos[suit] || {};
+        b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
+      }
+    }
+  }
+  return rankBuckets(buckets, (b, suit, rate) => {
+    const pos = dominantPosLabel(b, suit);
+    const posTxt = pos ? ` en ${pos}` : '';
+    return {
+      kind: 'egalite',
+      finding: `Après une égalité à ${b.value} points (joueur) au jeu a, ${suit} revient${posTxt} au jeu a+${b.k} dans ${rate}% des cas (${b.hits[suit]}/${b.support}).`,
+      proposal: {
+        name: `Égalité ${b.value} → ${suit}${posTxt} au jeu a+${b.k}`,
+        logic: `Quand le jeu se termine par une égalité avec ${b.value} points côté joueur au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k}.`,
+        trigger: `égalité avec point joueur = ${b.value}`,
+        target: `jeu a+${b.k}`,
+        position: pos,
+        suggestedLead: b.k,
+        minimumSample: 20,
+        evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%)${posTxt ? `, majoritairement${posTxt}` : ''}.`,
+        risks: "Les égalités sont rares : l'échantillon met plus de temps à devenir fiable, vérifier sur davantage de jeux avant publication.",
+        compatibleExisting: 'matchnul',
+      },
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 4) Forme de la main (nb de cartes joueur / banquier, + point du joueur) au
+//    jeu a → costume au jeu a+k.
+//    Exemple demandé : « si le joueur a 2 cartes et le banquier a 3 cartes et
+//    que le point [vaut V] au jeu a, tel costume revient au jeu a+k ».
+// ---------------------------------------------------------------------------
+function mineHandShapeRules(games) {
+  const buckets = new Map();
+  for (let i = 0; i < games.length; i += 1) {
+    const g = games[i];
+    const pCount = (g.playerCards || []).length;
+    const bCount = (g.bankerCards || []).length;
+    if (!pCount || !bCount || g.playerValue == null) continue;
+    for (let k = 1; k <= MAX_OFFSET; k += 1) {
+      const target = games[i + k];
+      if (!target) continue;
+      const key = `forme|${pCount}|${bCount}|${g.playerValue}|${k}`;
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          hand: 'joueur',
+          token: `${pCount} cartes joueur / ${bCount} cartes banquier, point ${g.playerValue}`,
+          pCount, bCount, value: g.playerValue, k, support: 0, hits: {}, hitPos: {},
+        });
+      }
+      const b = buckets.get(key);
+      b.support += 1;
+      for (const suit of SUITS) {
+        const idx = (target.playerSuits || []).indexOf(suit);
+        if (idx === -1) continue;
+        b.hits[suit] = (b.hits[suit] || 0) + 1;
+        b.hitPos[suit] = b.hitPos[suit] || {};
+        b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
+      }
+    }
+  }
+  // ces conditions (3 critères combinés) sont bien plus rares qu'un simple
+  // point : on exige un peu moins d'observations, sinon rien ne remonte jamais.
+  return rankBuckets(buckets, (b, suit, rate) => {
+    const pos = dominantPosLabel(b, suit);
+    const posTxt = pos ? ` en ${pos}` : '';
+    return {
+      kind: 'forme',
+      finding: `Quand le joueur a ${b.pCount} carte(s), le banquier ${b.bCount} et que le joueur totalise ${b.value} points au jeu a, ${suit} revient${posTxt} au jeu a+${b.k} dans ${rate}% des cas (${b.hits[suit]}/${b.support}).`,
+      proposal: {
+        name: `${b.pCount}c/${b.bCount}c point ${b.value} → ${suit}${posTxt} au jeu a+${b.k}`,
+        logic: `Quand le joueur reçoit ${b.pCount} carte(s), le banquier ${b.bCount}, et que le point du joueur vaut ${b.value} au jeu a, prédire ${suit}${posTxt} sur le jeu a+${b.k}.`,
+        trigger: `${b.pCount} carte(s) joueur, ${b.bCount} carte(s) banquier, point joueur = ${b.value}`,
+        target: `jeu a+${b.k}`,
+        position: pos,
+        suggestedLead: b.k,
+        minimumSample: 15,
+        evidence: `${b.hits[suit]} confirmations sur ${b.support} observations (${rate}%)${posTxt ? `, majoritairement${posTxt}` : ''}.`,
+        risks: 'Condition à 3 critères combinés : échantillon naturellement plus petit, à confirmer sur davantage de jeux avant publication.',
+        compatibleExisting: 'costume',
+      },
+    };
+  }, 70);
+}
+
+// ---------------------------------------------------------------------------
+// 5) Enchaînement de costumes : ♦️ au jeu a → ♣️ au jeu a+1
+//
+// DÉSACTIVÉ à la demande : ce type de déclencheur (« tel costume est suivi
+// de tel autre ») n'est plus proposé par l'analyseur, ni son cousin le
+// « remplacement de costume conseillé » (voir suitReplacements ci-dessous,
+// et mine() en bas de fichier qui ne les appelle plus). La fonction reste
+// définie mais n'est appelée nulle part, pour pouvoir la réactiver
+// facilement si besoin plus tard.
 // ---------------------------------------------------------------------------
 function mineSuitChains(games) {
   const buckets = new Map();
@@ -233,7 +362,18 @@ function rankBuckets(buckets, build, minRate = MIN_RATE) {
       if (rate < minRate) continue;
       const built = build(b, suit, rate);
       if (built.proposal) { built.proposal.rate = rate; built.proposal.support = b.support; }
-      const rule = { kind: built.kind, hand: b.hand || 'joueur', token: b.token, value: b.value != null ? b.value : null, k: b.k, suit };
+      const rule = {
+        kind: built.kind, hand: b.hand || 'joueur', token: b.token,
+        value: b.value != null ? b.value : null, k: b.k, suit,
+        // position exacte (0/1/2) du déclencheur dans la main — uniquement
+        // renseignée pour les règles « carte » (voir mineCardRules) ; null
+        // sinon, pour ne pas exiger une position sur les autres types.
+        pos: b.pos != null ? b.pos : null,
+        // uniquement renseignés pour les règles « forme de la main »
+        // (voir mineHandShapeRules) — null pour les autres kinds.
+        pCount: b.pCount != null ? b.pCount : null,
+        bCount: b.bCount != null ? b.bCount : null,
+      };
       out.push({ score: rate * Math.log2(b.support + 1), rate, support: b.support, hits: b.hits[suit] || 0, suit, rule, ...built });
     }
   }
@@ -366,6 +506,10 @@ function compareDays(todayGames, pastDays = []) {
 // au jeu ciblé. Si un autre costume est nettement plus fréquent, l'analyseur
 // conseille de le remplacer : « quand le déclencheur est vu, prédis ♣️ à la
 // place de ♦️ — d'après mes analyses ».
+// DÉSACTIVÉ à la demande (voir commentaire au-dessus de mineSuitChains) :
+// « quand ❤️ est vu, remplace la prédiction par ♦️ » n'est plus proposé.
+// La fonction reste définie pour une éventuelle réactivation future, mais
+// n'est plus appelée par mine() ci-dessous.
 function suitReplacements(games, lead = 2) {
   const out = [];
   for (const suit of SUITS) {
@@ -407,7 +551,11 @@ function suitReplacements(games, lead = 2) {
 // ---------------------------------------------------------------------------
 function mine(rawGames = [], options = {}) {
   const games = normalize(rawGames);
+  // `lead` n'est plus utilisé qu'en cas de réactivation future de
+  // suitReplacements() (désactivée, voir plus haut) ; conservé pour la
+  // compatibilité de l'appel (options.lead reste accepté sans erreur).
   const lead = Number(options.lead) || 2;
+  void lead;
   if (games.length < 12) {
     return {
       sample: games.length,
@@ -422,7 +570,13 @@ function mine(rawGames = [], options = {}) {
   const discovered = [
     ...mineCardRules(games),
     ...mineValueRules(games),
-    ...mineSuitChains(games),
+    ...mineTieValueRules(games),
+    ...mineHandShapeRules(games),
+    // CORRECTIF (demande) : mineSuitChains() n'est plus incluse — elle
+    // proposait des « chaînes » de costumes (♦️ suivi de ♣️, etc.), un type
+    // de déclencheur explicitement écarté. Les fonctions ci-dessus la
+    // remplacent avec des conditions plus riches (égalité + point, forme de
+    // la main + point) plutôt qu'un simple enchaînement de costumes.
     ...mineWinnerSequences(games),
   ].sort((a, b) => b.score - a.score);
 
@@ -443,7 +597,9 @@ function mine(rawGames = [], options = {}) {
     findings: [...day.findings, ...kept.map((k) => k.finding)],
     proposals: [...day.proposals, ...kept.map((k) => k.proposal)],
     discoveries: kept.map(({ kind, rate, support, hits, suit, rule, finding, proposal }) => ({ kind, rate, support: support || 0, hits: hits || 0, suit, rule: rule || null, finding, proposal })),
-    replacements: suitReplacements(games, lead),
+    // CORRECTIF (demande) : plus de « remplacement de costume conseillé »
+    // (voir suitReplacements ci-dessus, désactivée) — toujours vide désormais.
+    replacements: [],
     dayMatches: day.matches,
     note: null,
   };

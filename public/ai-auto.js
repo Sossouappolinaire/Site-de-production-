@@ -12,6 +12,7 @@ const db = require('./db');
 const { state } = require('./predictor');
 const cumulative = require('./cumulative');
 const advisor = require('./strategy-advisor');
+const formation = require('./formation');
 
 const auto = {
   enabled: config.AI_AUTO_ENABLED !== false,
@@ -56,6 +57,15 @@ function trackRate(item, rate) {
   return item;
 }
 
+function sanitizeOccurrences(list) {
+  if (!Array.isArray(list)) return null;
+  const clean = list
+    .filter((o) => o && Number.isFinite(o.from) && Number.isFinite(o.to))
+    .map((o) => ({ from: o.from, to: o.to, hit: !!o.hit }))
+    .slice(-30); // les 30 plus récentes suffisent pour l'explication client
+  return clean.length ? clean : null;
+}
+
 function saveProposal(proposal, origin = 'auto-local') {
   if (!proposal || !proposal.name) return null;
   const rate = proposalRate(proposal);
@@ -72,6 +82,11 @@ function saveProposal(proposal, origin = 'auto-local') {
   if (existing) {
     trackRate(existing, rate);
     existing.support = Number(proposal.support) || existing.support || null;
+    // historique concret des déclenchements (voir pattern-miner.js/mineCardRules)
+    // — rafraîchi à chaque mesure pour que le client voie les occurrences les
+    // plus récentes, pas seulement celles connues au moment de la création.
+    const occ = sanitizeOccurrences(proposal.occurrences);
+    if (occ) existing.occurrences = occ;
     if (rate < MIN_STRATEGY_RATE) {
       state.aiStrategies = (state.aiStrategies || []).filter((s) => s.id !== existing.id);
       if (db.ready) db.deleteAiStrategy(existing.id).catch(() => {});
@@ -93,6 +108,10 @@ function saveProposal(proposal, origin = 'auto-local') {
     rate,
     support: Number(proposal.support) || null,
     compatibleExisting: strategies.BY_KEY[proposal.compatibleExisting] ? proposal.compatibleExisting : null,
+    // uniquement présent pour les propositions du moteur LOCAL (voir
+    // pattern-miner.js) — les propositions de l'IA distante (Pollinations/
+    // Gemini/Groq) restent en texte libre, sans historique rejouable.
+    occurrences: sanitizeOccurrences(proposal.occurrences),
     origin,
     createdAt: new Date().toISOString(),
     active: false,
@@ -226,7 +245,13 @@ function runLocal() {
 }
 
 async function runRemote() {
-  if (!ai.keyLooksValid()) return null;
+  // CORRECTIF : ce garde ne testait QUE la clé Pollinations — si l'admin
+  // n'avait configuré QUE Gemini, Groq ou OpenRouter (sans Pollinations),
+  // l'analyse automatique ne se lançait JAMAIS, alors que chat()/
+  // chatAttempts() (voir ai-analyzer.js) sait très bien utiliser n'importe
+  // lequel de ces fournisseurs. On accepte maintenant n'importe quelle clé
+  // configurée, comme le fait déjà l'appel réel plus bas.
+  if (!ai.keyLooksValid() && !ai.geminiConfigured() && !ai.groqConfigured() && !ai.openrouterConfigured()) return null;
   const games = [...(state.history || [])].slice(0, 60);
   if (games.length < 6) return null;
   try {
@@ -234,7 +259,7 @@ async function runRemote() {
     const result = await ai.analyze({
       games,
       pastDays,
-      objective: "Analyse automatique en temps réel : cherche aussi des régularités nouvelles (carte précise suivie d'un costume, décalages a+1/a+2/a+3, répétition d'une journée déjà jouée) et propose les remplacements de costume utiles aux stratégies existantes.",
+      objective: "Analyse automatique en temps réel : cherche aussi des régularités nouvelles (carte précise À UNE POSITION PRÉCISE de la main suivie d'un costume, ex. 4❤️ en 2e position du banquier → ♦️ à a+2, égalité avec un point donné, forme de la main [nb de cartes joueur/banquier] avec un point donné, décalages a+1/a+2/a+3, répétition d'une journée déjà jouée). Ne propose ni enchaînement de costumes (chaîne) ni remplacement de costume conseillé pour une stratégie existante — ces deux types sont explicitement écartés.",
     });
     auto.lastRemoteAt = Date.now();
     auto.lastError = null;
@@ -269,6 +294,16 @@ function start(onChange) {
       .then(() => runRemote())
       .then((r) => { if (r && onChange) onChange(); })
       .catch((e) => { auto.lastError = e.message; auto.lastRemoteAt = Date.now(); });
+    // formation (constat « après une perte/rattrapage, N prédictions
+    // validées d'affilée ») : recalculée sur ce même cycle (~3 min) plutôt
+    // que sur le cycle local (15 s), car son moteur interroge plusieurs
+    // fois la base par stratégie (retour du costume, miroir, backtest du
+    // mode silencieux) — inutile de la relancer aussi souvent que l'avis.
+    formation.run({ remote: false }).catch(() => {});
+    // rafraîchit aussi le statut quota/validité des clés IA (voir
+    // ai.refreshQuotaStatus()) au même rythme, pour que le badge affiché
+    // sur la page Analyseur IA reste à jour sans attendre un clic manuel.
+    ai.refreshQuotaStatus().catch(() => {});
   };
   tickLocal();
   localTimer = setInterval(tickLocal, config.AI_LOCAL_INTERVAL_MS);
@@ -293,7 +328,7 @@ function stop() {
 function status() {
   return {
     ...auto,
-    keyConfigured: ai.keyLooksValid(),
+    keyConfigured: ai.keyLooksValid() || ai.geminiConfigured() || ai.groqConfigured() || ai.openrouterConfigured(),
     model: config.POLLINATIONS.MODEL,
     localIntervalMs: config.AI_LOCAL_INTERVAL_MS,
     remoteIntervalMs: config.AI_REMOTE_INTERVAL_MS,

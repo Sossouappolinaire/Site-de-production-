@@ -11,6 +11,7 @@
 const config = require('./config');
 const fmt = require('./formats');
 const strategies = require('./strategies');
+const db = require('./db');
 
 const BADGES = ['0⃣', '1⃣', '2⃣', '3⃣', '4⃣', '5⃣', '6⃣', '7⃣', '8⃣', '9⃣'];
 const SUITS = strategies.SUITS;
@@ -42,6 +43,7 @@ const state = {
   freshFinished: [],       // tours terminés depuis la dernière évaluation
   startedAt: Date.now(),
   announcements: [],       // historique des annonces de position (filtre « double perte »)
+  siteChannels: [],        // canaux « vitrine » du site (voir section dédiée plus bas)
 };
 
 // ---------------------------------------------------------------------------
@@ -133,6 +135,9 @@ function setStrategyConfig(key, patch = {}) {
   // stratégie « Prédiction dans l'ombre » : jeux d'absence minimum + périmètre
   if (patch.absence !== undefined) next.absence = Math.max(1, Math.min(30, parseInt(patch.absence, 10) || 4));
   if (patch.scope !== undefined) next.scope = patch.scope === 'joueur' ? 'joueur' : 'tous';
+  // stratégie « Dominant Baccarat » : écart minimum (en jeux) entre deux
+  // prédictions successives de cette stratégie
+  if (key === 'dominant' && patch.gap !== undefined) next.gap = Math.max(1, Math.min(20, parseInt(patch.gap, 10) || 3));
   // mode silencieux 1 — RÉSERVÉ à la stratégie « ombre », et OBLIGATOIRE pour
   // elle : ombre fonctionne exclusivement via ce filtre, `silent` ne peut donc
   // jamais y être désactivé (patch.silent est ignoré pour cette clé). Pour
@@ -184,6 +189,13 @@ function setStrategyConfig(key, patch = {}) {
   // un seul token API pour toute l'application (réglages) : plus de token par stratégie
   delete next.token;
   if (patch.bilan !== undefined) next.bilan = !!patch.bilan;
+  // ajustement automatique par l'IA (voir strategies.js/defaultsFor) : simple
+  // interrupteur, effectif seulement pour les stratégies à costume (voir
+  // aiSuitOverride() plus bas, appelée depuis evaluate()).
+  if (patch.aiAuto !== undefined) next.aiAuto = !!patch.aiAuto;
+  // message de perte + formation VIP (voir loss-notice.js) — case par
+  // stratégie, désactivée par défaut (voir strategies.js/defaultsFor).
+  if (patch.lossNoticeEnabled !== undefined) next.lossNoticeEnabled = !!patch.lossNoticeEnabled;
   state.strategies[key] = next;
   // ⚠️ Chaque mode possède ses PROPRES réglages : on ne remet à zéro l'état
   // d'un mode que si l'une de SES valeurs a réellement changé. Un simple
@@ -929,12 +941,33 @@ function hasSuit(game, suit) {
   return handSuits(game).includes(want);
 }
 
+// équivalents côté BANQUIER — utilisés par la stratégie « Carte disparue →
+// retour banquier » (kind 'suit-banquier'), qui se vérifie sur la main du
+// banquier plutôt que celle du joueur (voir matches()/resultText()).
+function bankerHandSuits(game) {
+  if (!game) return [];
+  return strategies.suitsOf(game.bankerSuits);
+}
+
+function hasSuitBanker(game, suit) {
+  const want = normSuit(suit);
+  if (!want) return false;
+  return bankerHandSuits(game).includes(want);
+}
+
 function suitForNumber(n) {
   return strategies.suitForNumber(n);
 }
 
 function nextTarget(current) {
+  // CORRECTIF (demande) : les jeux vont de 1 à config.MAX_GAME_NUMBER (1440)
+  // avant le retour à 1 (nouveau sabot). suitForNumber(n) est une formule
+  // purement mathématique sur n : elle répond « vrai » pour n'importe quel
+  // n, y compris au-delà de 1440, donc en fin de sabot la boucle pouvait
+  // retourner une cible qui ne sera jamais jouée avant le rebouclage. On
+  // arrête la recherche dès qu'on dépasse la borne au lieu de continuer.
   for (let n = current + config.LEAD; n < current + 40; n++) {
+    if (n > config.MAX_GAME_NUMBER) return null;
     if (suitForNumber(n)) return n;
   }
   return null;
@@ -946,6 +979,15 @@ function nextTarget(current) {
 let onFinishedHook = null;
 function setOnFinished(fn) { onFinishedHook = fn; }
 
+// déclenché UNE fois par vrai nouveau sabot (retour du jeu à #N1) — utilisé
+// par shoe-report.js pour envoyer le rapport PDF des déclencheurs fiables.
+// CORRECTIF : plusieurs modules doivent réagir à un nouveau sabot (bot.js
+// pour le rapport PDF, after-loss.js pour remettre à zéro ses compteurs —
+// voir plus bas) ; un seul callback à la fois écrasait le précédent, donc
+// on garde désormais une LISTE d'écouteurs plutôt qu'un unique callback.
+const onShoeResetHooks = [];
+function setOnShoeReset(fn) { if (typeof fn === 'function') onShoeResetHooks.push(fn); }
+
 // ---------------------------------------------------------------------------
 // Nouveau sabot : la table repart au jeu n°1
 // ---------------------------------------------------------------------------
@@ -954,6 +996,11 @@ function setOnFinished(fn) { onFinishedHook = fn; }
 // calculées étaient donc considérées comme « déjà jouées » et PLUS AUCUNE
 // prédiction ne sortait après l'envoi du bilan.
 function resetShoe(reason = 'nouveau sabot') {
+  // capturé AVANT le nettoyage : nombre de jeux réellement joués dans le
+  // sabot qui vient de se terminer — sert à distinguer une VRAIE fin de
+  // journée (sabot presque complet) d'une remise à zéro isolée/anormale
+  // (voir sendBilanIfDayOver() dans bot.js, branché via setOnShoeReset).
+  const previousMax = maxFinishedNumber();
   state.games.clear();
   state.history = [];
   state.freshFinished = [];
@@ -969,6 +1016,11 @@ function resetShoe(reason = 'nouveau sabot') {
   // compteur de sabots : le bot s'en sert pour publier le bilan complet
   // (toutes les stratégies + prédictions IA) dès que le jeu repart à 1.
   state.shoeSeq = (state.shoeSeq || 0) + 1;
+  // asynchrone et volontairement non bloquant : resetShoe() reste synchrone,
+  // la génération du PDF et l'envoi Telegram se font en arrière-plan.
+  for (const hook of onShoeResetHooks) {
+    try { Promise.resolve(hook(reason, state.shoeSeq, previousMax)).catch(() => {}); } catch (_) {}
+  }
   return true;
 }
 
@@ -1036,10 +1088,18 @@ function registerGames(games) {
 
 function detectLive() {
   const all = [...state.games.values()].sort((a, b) => a.number - b.number);
-  const dealing = all.filter((g) => !g.finished && g.dealing);
-  if (dealing.length) return dealing[0];
-  const pending = all.filter((g) => !g.finished);
-  if (pending.length) return pending[0];
+  // CORRECTIF « la parité ne prédit plus » : on prenait le PREMIER jeu non
+  // terminé de la table. Un ancien tour resté « non terminé » dans le flux
+  // (relevé incomplet, tour jamais clôturé) figeait donc le jeu « en direct »
+  // sur un vieux numéro — et la seule stratégie qui lit le direct (Pair /
+  // Impair) ne voyait plus jamais arriver ses déclencheurs. On ne considère
+  // désormais comme « en direct » qu'un tour situé APRÈS le dernier tour
+  // terminé, et on garde le plus récent d'entre eux.
+  const maxDone = maxFinishedNumber();
+  const current = all.filter((g) => !g.finished && Number(g.number) >= maxDone);
+  const dealing = current.filter((g) => g.dealing);
+  if (dealing.length) return dealing[dealing.length - 1];
+  if (current.length) return current[current.length - 1];
   return state.lastFinished;
 }
 
@@ -1063,6 +1123,49 @@ function bumpCounters(round) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Ajustement automatique par l'IA (voir strategies.js/defaultsFor, champ
+// `aiAuto`, désactivé par défaut) — UNIQUEMENT pour les stratégies qui
+// prédisent un COSTUME (kind 'suit' ou 'suit-banquier' — Match nul et
+// Pair/Impair n'en ont pas, ce réglage n'a alors aucun effet pour elles).
+//
+// Principe : à partir de l'historique RÉEL des prédictions déjà résolues de
+// CETTE stratégie (state.predictions, gagné/perdu uniquement — annulé exclu),
+// on calcule le taux de réussite obtenu pour chacun des 4 costumes. Si le
+// costume que la stratégie s'apprête à jouer a un taux nettement inférieur à
+// un autre costume — échantillon suffisant des deux côtés — on substitue ce
+// dernier. Sinon (pas assez de recul, ou aucun autre costume nettement
+// meilleur), la stratégie prédit normalement, costume inchangé.
+const AI_AUTO_MIN_SAMPLE = 5;  // observations minimum par costume comparé
+const AI_AUTO_MIN_EDGE = 15;   // avance minimum (points de %) exigée pour basculer
+
+function suitPerformance(key) {
+  const rates = {};
+  for (const s of SUITS) {
+    const list = state.predictions.filter(
+      (p) => p.strategy === key && p.suit === s && (p.status === 'gagné' || p.status === 'perdu'),
+    );
+    const win = list.filter((p) => p.status === 'gagné').length;
+    rates[s] = { win, total: list.length, rate: list.length ? Math.round((win / list.length) * 100) : null };
+  }
+  return rates;
+}
+
+function aiSuitOverride(key, hit) {
+  const rates = suitPerformance(key);
+  const current = rates[hit.suit];
+  const currentRate = current && current.total >= AI_AUTO_MIN_SAMPLE ? current.rate : 0;
+  let best = null;
+  for (const s of SUITS) {
+    if (s === hit.suit) continue;
+    const r = rates[s];
+    if (!r || r.total < AI_AUTO_MIN_SAMPLE) continue;
+    if (!best || r.rate > best.rate) best = { suit: s, ...r };
+  }
+  if (!best || best.rate - currentRate < AI_AUTO_MIN_EDGE) return null;
+  return best;
+}
+
 function onFinished(round) {
   state.lastFinished = round;
   state.history.unshift(round);
@@ -1076,6 +1179,82 @@ function onFinished(round) {
 // ---------------------------------------------------------------------------
 // Prédiction : toutes les stratégies actives sont évaluées
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Stratégies actuellement jugées FIABLES — utilisé par la stratégie
+// « Collecte IA » (voir strategies.js/collecte) pour savoir QUELLES sources
+// relayer, et avec quel nombre de rattrapages. Require() PARESSEUX (à
+// l'intérieur de la fonction, pas en tête de fichier) : formation.js
+// requiert lui-même predictor.js (pour `state`) — un require() en tête de
+// predictor.js créerait un cycle (predictor.js → formation.js → predictor.js
+// encore en cours de chargement, exports incomplets). Appelé ici, bien après
+// le démarrage complet de l'appli, ce risque n'existe plus : le module est
+// déjà entièrement chargé et mis en cache par Node.
+// NOTE IMPORTANTE : la sélection ne se base PLUS sur un taux de réussite (ni
+// celui de l'Avis IA/strategy-advisor.js, ni un seuil de % côté Formation).
+// Seule compte la Formation (formation.js) : « reliable » veut dire qu'un
+// CONSEIL (une formation — combien de prédictions rejouer d'affilée après
+// une perte/rattrapage) a pu être établi avec un échantillon suffisant. Le
+// taux (`f.rate`) n'est conservé ici qu'à titre INFORMATIF (affiché dans le
+// message « reason » de la Collecte), jamais utilisé pour choisir ou classer
+// les sources — voir aussi collecte.detect() dans strategies.js qui départage
+// désormais par la formation (longueur de la série conseillée / échantillon)
+// et non par un pourcentage.
+// Taux minimum EXIGÉ (règle de taux de la Formation, identique à
+// formation-relay.js/MIN_RATE) : une source dont le taux mesuré est sous ce
+// seuil n'est plus relayée, même si un conseil de formation existe.
+const FORMATION_MIN_RATE = 91;
+const FORMATION_MIN_SUPPORT = 5;
+
+function bestStrategyKeys() {
+  const keys = new Set();
+  const rates = {};
+  const formationInfo = {};
+  try {
+    const formation = require('./formation');
+    for (const f of formation.runtime.strategies || []) {
+      const rate = Number(f.rate);
+      const support = Number(f.support) || 0;
+      // règle de taux : conseil de formation ÉTABLI *et* taux mesuré >= 91%
+      // sur un échantillon suffisant.
+      if (f.reliable && Number.isFinite(rate) && rate >= FORMATION_MIN_RATE && support >= FORMATION_MIN_SUPPORT) {
+        keys.add(f.key);
+        rates[f.key] = f.rate; // informatif uniquement
+        formationInfo[f.key] = { length: f.formationLength || 0, support: f.support || 0 };
+      }
+    }
+  } catch (_) { /* formation pas encore chargée/calculée : on continue avec ce qu'on a */ }
+  return { keys, rates, formationInfo };
+}
+
+// « Prédit (IA) » (predit.js) est une stratégie IA à part entière, mais elle
+// vit HORS de strategies.LIST (son propre panneau, son propre stockage —
+// predit.panel.predictions — voir predit.js) : ses prédictions n'atterrissent
+// donc jamais dans state.predictions. Sans ce pont, la Collecte ne pourrait
+// JAMAIS la relayer, même quand la Formation la juge fiable (formation.js
+// calcule pourtant bien un conseil pour la clé 'predit', voir formation.js/run).
+// On la traduit ici dans le même format que les prédictions classiques, pour
+// que collecte.detect() (strategies.js) puisse la traiter EXACTEMENT comme
+// n'importe quelle autre stratégie source. Require() PARESSEUX pour la même
+// raison que formation.js/strategy-advisor.js : predit.js requiert lui-même
+// predictor.js (pour `state`) en tête de fichier — un require() en tête de
+// predictor.js créerait un cycle.
+function preditAsPredictions() {
+  try {
+    const predit = require('./predit');
+    return (predit.panel.predictions || []).map((p) => ({
+      strategy: 'predit',
+      strategyName: 'Prédit (IA)',
+      kind: 'suit',
+      suit: p.suit,
+      label: p.suit,
+      trigger: p.trigger,
+      target: p.target,
+      reason: p.motif || '',
+      id: p.id,
+    }));
+  } catch (_) { return []; } // predit pas encore chargé : rien à ajouter pour l'instant
+}
+
 function evaluate() {
   initStrategies();
   syncCostume();
@@ -1087,6 +1266,7 @@ function evaluate() {
     ? [...state.freshFinished].sort((a, b) => a.number - b.number)
     : state.lastFinished ? [state.lastFinished] : [];
   state.freshFinished = [];
+  const { keys: bestKeys, rates: bestRates, formationInfo } = bestStrategyKeys();
   const jobs = [];
   for (const def of strategies.LIST) {
     const cfg = state.strategies[def.key];
@@ -1100,12 +1280,39 @@ function evaluate() {
   for (const [def, cfg, source] of jobs) {
     let hit = null;
     try {
-      hit = def.detect(source, cfg, { counters: state.counters, games: state.games });
+      // TOUTES les stratégies doivent pouvoir être collectées par la
+      // Collecte IA, y compris « Prédit (IA) » (predit.js) qui vit hors de
+      // strategies.LIST : on étend uniquement SA vue des prédictions
+      // (jamais celle des autres stratégies, pour ne rien changer à leur
+      // propre logique de gap/anti-doublon).
+      const predictionsForDetect = def.key === 'collecte'
+        ? state.predictions.concat(preditAsPredictions())
+        : state.predictions;
+      hit = def.detect(source, cfg, { counters: state.counters, games: state.games, predictions: predictionsForDetect, bestKeys, bestRates, formationInfo });
     } catch (e) {
       state.lastError = `${def.key}: ${e.message}`;
       continue;
     }
     if (!hit) continue;
+    // ajustement automatique par l'IA (voir aiSuitOverride ci-dessus) : ne
+    // s'applique que si le bouton est activé pour CETTE stratégie et que le
+    // signal détecté est bien un costume (les autres kinds — parity, cards —
+    // n'ont rien à substituer).
+    if (cfg.aiAuto && (hit.kind === 'suit' || hit.kind === 'suit-banquier')) {
+      const better = aiSuitOverride(def.key, hit);
+      if (better) {
+        const fromSuit = hit.suit;
+        const fromLabel = hit.label || hit.suit;
+        const fromRate = suitPerformance(def.key)[fromSuit]?.rate ?? 0;
+        hit = {
+          ...hit,
+          suit: better.suit,
+          label: better.suit,
+          reason: `${hit.reason} · 🤖 IA : ${fromLabel} remplacé par ${better.suit} ` +
+            `(${better.rate}% sur ${better.total} contre ${fromRate}% pour ${fromLabel})`,
+        };
+      }
+    }
     if (state.predictions.some((p) => p.strategy === def.key && p.target === hit.target)) continue;
     // règle 1 : un jeu déclencheur n'est traité qu'une seule fois
     const trigKey = hit.trigger != null ? `${def.key}:${hit.trigger}` : null;
@@ -1116,6 +1323,16 @@ function evaluate() {
       if (trigKey) state.triggersDone[trigKey] = true;
       continue;
     }
+    // CORRECTIF (demande) : les jeux vont de 1 à config.MAX_GAME_NUMBER
+    // (1440) avant le retour à 1 (nouveau sabot). Une stratégie déclenchée
+    // en toute fin de sabot peut calculer une cible au-delà de cette borne
+    // (ex. 1442) qui ne sera jamais jouée avant le rebouclage : on l'ignore
+    // au lieu de publier une prédiction qui restera « en attente » pour
+    // toujours. Le déclencheur est marqué consommé, comme pour une cible déjà passée.
+    if (hit.target > config.MAX_GAME_NUMBER) {
+      if (trigKey) state.triggersDone[trigKey] = true;
+      continue;
+    }
 
     const pred = {
       id: `${def.key}-${hit.target}-${Date.now()}`,
@@ -1123,18 +1340,31 @@ function evaluate() {
       strategyName: def.name,
       kind: hit.kind,
       target: hit.target,
-      suit: hit.suit ? (hit.kind === 'suit' ? normSuit(hit.suit) : hit.suit) : null,
+      suit: hit.suit ? (hit.kind === 'suit' || hit.kind === 'suit-banquier' ? normSuit(hit.suit) : hit.suit) : null,
+      // carte précise (rang+costume, ex. « 4❤️ ») — uniquement pour la
+      // stratégie « Carte disparue → retour banquier » (kind 'carte-banquier').
+      card: hit.card || null,
       cardsLabel: hit.cardsLabel || null,
       wantPlayer: hit.wantPlayer != null ? hit.wantPlayer : null,
       wantBanker: hit.wantBanker != null ? hit.wantBanker : null,
       label: hit.label || hit.suit || '',
       reason: hit.reason || '',
       meta: hit.meta || null,
-      hand: 'joueur',
+      // « carte-banquier » (ancien format) et « suit-banquier » (stratégie
+      // « Carte disparue → retour banquier ») se vérifient sur la main du
+      // BANQUIER — toutes les autres stratégies restent sur la main du
+      // joueur (voir matches()).
+      hand: hit.kind === 'carte-banquier' || hit.kind === 'suit-banquier' ? 'banquier' : 'joueur',
       trigger: hit.trigger != null ? hit.trigger : null,
       from: source.number,
       step: 0,
-      maxR: cfg.maxR,
+      // hit.maxR (optionnel) permet à une stratégie de FIXER elle-même le
+      // nombre de rattrapages de LA prédiction envoyée, au lieu d'hériter du
+      // réglage fixe cfg.maxR de la stratégie. Utilisé par « Collecte IA »
+      // (strategies.js/collecte) : le nombre de rattrapages suit le conseil
+      // de Formation (formationLength) de la stratégie SOURCE relayée,
+      // jamais un réglage indépendant de la Collecte.
+      maxR: hit.maxR != null ? hit.maxR : cfg.maxR,
       counter: hit.counter != null ? hit.counter : null,
       b: cfg.b || 0,
       format: hit.format || cfg.format,
@@ -1145,12 +1375,35 @@ function evaluate() {
       result: null,
       hitNumber: null,
       messages: [],
+      // CORRECTIF « bilans cumulés » : numéro de sabot au moment de la
+      // création, pour pouvoir distinguer une prédiction du jour qui vient
+      // de commencer de celles du jour précédent en cas de besoin de debug.
+      shoe: state.shoeSeq || 0,
     };
     if (trigKey) state.triggersDone[trigKey] = true;
     state.predictions.unshift(pred);
     out.push(pred);
   }
-  state.predictions = state.predictions.slice(0, 300);
+  // CORRECTIF MAJEUR « prédiction bloquée sans vérification » : l'ancien
+  // `state.predictions.slice(0, 300)` coupait le tableau SANS regarder si une
+  // prédiction encore « en attente » se trouvait au-delà de la 300ᵉ place —
+  // elle disparaissait alors du tableau AVANT sa résolution, et son message
+  // Telegram restait figé sur « ⏳ En attente du résultat... » pour toujours,
+  // le bot ne la revoyant plus jamais dans verify(). Désormais on garde TOUTE
+  // prédiction « en attente », quelle que soit sa position, et on ne plafonne
+  // à 300 que le nombre de prédictions déjà RÉSOLUES (gagné/perdu/annulé) —
+  // en partant des plus récentes, comme avant.
+  if (state.predictions.length > 300) {
+    const keep = [];
+    let resolvedCount = 0;
+    for (const p of state.predictions) {
+      if (p.status === 'en attente' || resolvedCount < 300) {
+        keep.push(p);
+        if (p.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    state.predictions = keep;
+  }
   return out;
 }
 
@@ -1174,6 +1427,17 @@ function matches(pred, game) {
     if (pred.wantBanker != null && game.bankerCards !== pred.wantBanker) return false;
     return true;
   }
+  // « Carte disparue → retour banquier » : on vérifie la carte EXACTE
+  // (rang+costume) dans la main du BANQUIER, pas juste un costume dans la
+  // main du joueur comme les autres stratégies (voir strategies.js).
+  if (pred.kind === 'carte-banquier') {
+    return (game.banker || []).includes(pred.card);
+  }
+  // « Carte disparue → retour banquier » (nouvelle version) : costume
+  // vérifié sur la main du BANQUIER, pas celle du joueur.
+  if (pred.kind === 'suit-banquier') {
+    return hasSuitBanker(game, pred.suit);
+  }
   return hasSuit(game, pred.suit);
 }
 
@@ -1181,6 +1445,8 @@ function resultText(pred, game) {
   if (!game) return null;
   if (pred.kind === 'parity') return `joueur ${game.playerValue ?? '—'} (${parityOf(game) || '—'})`;
   if (pred.kind === 'cards') return `joueur ${game.playerCards}/banquier ${game.bankerCards}`;
+  if (pred.kind === 'carte-banquier') return `banquier ${(game.banker || []).join(' ') || '—'}`;
+  if (pred.kind === 'suit-banquier') return bankerHandSuits(game).join(' ') || '—';
   return handSuits(game).join(' ');
 }
 
@@ -1260,7 +1526,10 @@ function predictionText(p) {
   const g = p.game || null;
   return fmt.renderMessage(p.format || state.format, {
     gameNumber: p.target,
-    suit: p.suit,
+    // pour « carte-banquier », p.suit est null : on affiche la carte exacte
+    // à la place (ex. « 4❤️ ») — les gabarits de tg-formats.js retombent
+    // simplement sur le texte fourni si ce n'est pas un costume reconnu.
+    suit: p.suit || p.card,
     cardsLabel: p.cardsLabel,
     strategy: p.strategyName || p.strategy,
     maxR: p.maxR != null ? p.maxR : state.maxR,
@@ -1325,17 +1594,49 @@ function parityRuntime() {
 }
 
 // ---------------------------------------------------------------------------
+// Compteur d'avancement de la dizaine en cours — stratégie « Comptage par
+// dizaine » (voir strategies.js/dizaine). Purement informatif pour le
+// panneau admin : le déclenchement réel ne dépend QUE de game.number % 10,
+// recalculé à froid à chaque tour (voir dizaine.detect), donc ce compteur
+// n'influence jamais la prédiction elle-même — il sert juste à visualiser
+// où on en est. Entièrement dérivé de state.lastFinished (aucun état à
+// maintenir à part, donc aucun risque de désynchronisation) : repart de 0 à
+// chaque nouvelle dizaine, et affiche bien 0/10 juste après le tour
+// déclencheur (#N10, #N20…) où la prédiction vient d'être envoyée.
+function dizaineCounterView() {
+  const cfg = state.strategies.dizaine || strategies.defaultsFor('dizaine');
+  const lead = Math.max(1, Math.min(20, parseInt(cfg.lead, 10) || 4));
+  const last = state.lastFinished ? state.lastFinished.number : 0;
+  let decadeStart;
+  let count;
+  if (last <= 0) {
+    decadeStart = 1;
+    count = 0;
+  } else if (last % 10 === 0) {
+    // dizaine tout juste bouclée à l'instant : la prédiction vient d'être
+    // envoyée (ou tentée) pour #N(last+lead) — on remet le compteur à 0 et
+    // on bascule déjà sur la dizaine suivante.
+    decadeStart = last + 1;
+    count = 0;
+  } else {
+    decadeStart = Math.floor((last - 1) / 10) * 10 + 1;
+    count = last - decadeStart + 1;
+  }
+  const decadeEnd = decadeStart + 9;
+  return { count, of: 10, decadeStart, decadeEnd, nextTarget: decadeEnd + lead, lead };
+}
+
+// ---------------------------------------------------------------------------
 // Bilan envoyé sur Telegram quand le jeu reprend
 // ---------------------------------------------------------------------------
-function bilanText(key) {
-  const s = stats(key);
-  const def = key ? strategies.BY_KEY[key] : null;
+function bilanText(key, list) {
+  // Bilan VOLONTAIREMENT MINIMAL (demande admin) : uniquement le titre, les
+  // gains et les pertes. Pas de nom de stratégie, pas de taux de réussite.
+  const s = list ? statsFrom(list, key) : stats(key);
   return (
-    '📊 STATISTIQUE 📈\n\n' +
-    (def ? `🧠 Stratégie : ${def.name}\n\n` : '') +
-    `🟢 GAIN : ${s.win}\n` +
-    `🔴 PERTE : ${s.loss}\n\n\n` +
-    `✅ Taux de réussite : ${s.rate} %`
+    '📊 STATISTIQUE 📈\n\n\n' +
+    `🟢 GAIN : ${s.win}\n\n` +
+    `🔴 PERTE : ${s.loss}`
   );
 }
 
@@ -1412,17 +1713,86 @@ function strategyGames(key, limit = 12) {
   return { live, upcoming, games: rows, counters: counterView(), stats: stats(key), bilan: bilanText(key), gate: gateView(key) };
 }
 
-function stats(key) {
-  const list = key ? state.predictions.filter((p) => p.strategy === key) : state.predictions;
-  const done = list.filter((p) => p.status !== 'en attente' && p.status !== 'annulé');
+// CORRECTIF « bilans cumulés » : statsFrom() calcule les stats à partir
+// d'une LISTE explicite plutôt que de toujours relire state.predictions en
+// direct. stats(key) garde l'ancien comportement (lecture live, pour
+// l'affichage du tableau de bord). bilanText(key, list) accepte désormais
+// un instantané figé — voir flushBilans() dans bot.js pour pourquoi c'est
+// nécessaire : sans ça, un bilan envoyé pendant plusieurs secondes
+// (plusieurs canaux Telegram) pouvait lire des prédictions du jour SUIVANT,
+// déjà créées et parfois déjà résolues entre-temps par un tick concurrent.
+function statsFrom(list, key) {
+  const arr = key ? list.filter((p) => p.strategy === key) : list;
+  const done = arr.filter((p) => p.status !== 'en attente' && p.status !== 'annulé');
   const win = done.filter((p) => p.status === 'gagné').length;
   return {
-    total: list.length,
+    total: arr.length,
     win,
     loss: done.length - win,
-    pending: list.length - done.length,
+    pending: arr.length - done.length,
     rate: done.length ? Math.round((win / done.length) * 100) : 0,
   };
+}
+function stats(key) { return statsFrom(state.predictions, key); }
+
+// CORRECTIF « bilans remis à zéro après redémarrage » : state.predictions
+// (utilisé par stats()/bilanText()) est un tableau en RAM, vide au
+// démarrage — alors que la base garde tout durablement (voir
+// db.restorePredictions()). On recharge donc ici, une fois, juste après la
+// connexion à la base (voir l'appel dans bot.js, au même endroit que les
+// autres restoreFromDb() des panneaux) — pour que les bilans par stratégie
+// survivent à une veille/redéploiement au lieu de repartir de zéro.
+async function restorePredictions() {
+  if (!db.ready) return 0;
+  let rows;
+  try { rows = await db.restorePredictions(300); }
+  catch (e) { state.lastError = `restauration prédictions: ${e.message}`; return 0; }
+  if (!rows || !rows.length) return 0;
+  // ne restaure qu'au tout premier démarrage : si des prédictions ont déjà
+  // été générées dans CETTE session (cas peu probable vu l'ordre d'appel,
+  // mais par sécurité), on ne les écrase pas.
+  if (state.predictions.length) return 0;
+  state.predictions = rows.map((row) => {
+    const status = row.status === 'gagne' ? 'gagné' : row.status === 'perdu' ? 'perdu' : row.status === 'attente' ? 'en attente' : (row.status || 'en attente');
+    const hand = row.hand === 'banquier' ? 'banquier' : 'joueur';
+    return {
+      id: `db-${row.id}`,
+      strategy: row.strategy || 'costume',
+      strategyName: (strategies.BY_KEY[row.strategy] || {}).name || row.strategy,
+      // NOTE : la base ne stocke pas `kind` — on le déduit de la main visée.
+      // Suffisant pour l'affichage des bilans ; une prédiction encore
+      // « attente » restaurée après un redémarrage sera revérifiée avec
+      // cette déduction (majoritairement correcte, les stratégies « carte »
+      // étant minoritaires).
+      kind: hand === 'banquier' ? 'suit-banquier' : 'suit',
+      target: Number(row.target),
+      suit: row.suit && row.suit !== '-' ? row.suit : null,
+      card: null,
+      cardsLabel: null,
+      wantPlayer: null,
+      wantBanker: null,
+      label: row.label || row.suit || '',
+      reason: row.reason || '',
+      meta: null,
+      hand,
+      trigger: null,
+      from: null,
+      step: row.rattrapage || 0,
+      maxR: row.max_r != null ? row.max_r : 0,
+      counter: row.b_counter != null ? row.b_counter : null,
+      b: row.b_value || 0,
+      format: null,
+      template: null,
+      sentAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+      status,
+      badge: null,
+      result: null,
+      hitNumber: row.hit_number != null ? Number(row.hit_number) : null,
+      messages: [],
+      shoe: -1, // restaurée depuis la base : numéro de sabot d'origine inconnu
+    };
+  });
+  return state.predictions.length;
 }
 
 
@@ -1472,8 +1842,9 @@ function predictionRow(p) {
     strategyName: p.strategyName || p.strategy,
     target: p.target,
     trigger: p.trigger != null ? p.trigger : null,
-    label: p.label || p.suit || '',
+    label: p.label || p.suit || p.card || '',
     suit: p.suit || null,
+    card: p.card || null,
     kind: p.kind,
     status: p.status,
     badge: p.badge,
@@ -1487,6 +1858,112 @@ function predictionRow(p) {
     gate: p.gate || null,
     createdAt: p.sentAt || null,
     text: predictionMessage(p),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// « Canaux » du site — vitrines internes (aucun lien avec Telegram) : un
+// administrateur crée un canal avec un nom et l'associe à UNE stratégie ; les
+// utilisateurs le voient dans la liste « Canaux » du site et, en l'ouvrant,
+// retrouvent le fil des prédictions de cette stratégie mis en forme EXACTEMENT
+// comme les messages envoyés sur Telegram (même texte, via predictionMessage),
+// précédé du bilan courant de la stratégie (même carte que /bilan Telegram).
+// ---------------------------------------------------------------------------
+let siteChannelSeq = Date.now();
+
+function siteChannelsView() {
+  return state.siteChannels.map((c) => {
+    const def = strategies.BY_KEY[c.strategy];
+    const preds = state.predictions.filter((p) => p.strategy === c.strategy && p.messages && p.messages.length);
+    const lastPred = preds[preds.length - 1] || null;
+    const msgs = Array.isArray(c.messages) ? c.messages : [];
+    const lastMsg = msgs.length ? msgs[msgs.length - 1] : null;
+    const lastIsMsg = !!lastMsg && (!lastPred || (lastMsg.at || 0) > (lastPred.sentAt || 0));
+    const s = stats(c.strategy);
+    return {
+      id: c.id,
+      name: c.name,
+      strategy: c.strategy,
+      strategyName: def ? def.name : c.strategy,
+      lastText: lastIsMsg ? lastMsg.text : (lastPred ? predictionMessage(lastPred) : null),
+      lastAt: lastIsMsg ? lastMsg.at : (lastPred ? lastPred.sentAt : null),
+      lastStatus: lastIsMsg ? null : (lastPred ? lastPred.status : null),
+      stats: s,
+    };
+  });
+}
+
+function addSiteChannel(name, strategyKey) {
+  const clean = String(name || '').trim();
+  if (!clean) return { ok: false, error: 'Nom du canal requis.' };
+  const def = strategies.BY_KEY[strategyKey];
+  if (!def) return { ok: false, error: 'Stratégie invalide.' };
+  const entry = { id: ++siteChannelSeq, name: clean, strategy: strategyKey, messages: [] };
+  state.siteChannels.push(entry);
+  return { ok: true, channel: entry };
+}
+
+function removeSiteChannel(id) {
+  const idx = state.siteChannels.findIndex((c) => String(c.id) === String(id));
+  if (idx === -1) return { ok: false, error: 'Canal introuvable.' };
+  state.siteChannels.splice(idx, 1);
+  return { ok: true };
+}
+
+// message écrit par un visiteur (ou par l'IA en réponse) dans le fil de
+// discussion d'un canal du site — indépendant des cartes de prédiction,
+// stocké et persisté avec le canal (voir persist() dans bot.js, qui
+// réécrit déjà state.siteChannels tel quel à chaque sauvegarde).
+function addSiteChannelMessage(id, { sender, text, at } = {}) {
+  const c = state.siteChannels.find((x) => String(x.id) === String(id));
+  if (!c) return null;
+  if (!Array.isArray(c.messages)) c.messages = [];
+  const entry = { sender: sender || '—', text: String(text || '').trim(), at: at || Date.now() };
+  if (!entry.text) return null;
+  c.messages.push(entry);
+  c.messages = c.messages.slice(-200);
+  return entry;
+}
+
+// fil affiché à l'ouverture d'un canal : bilan de la stratégie + prédictions
+// réellement publiées (celles qui sont réellement parties dans un canal
+// Telegram, `messages.length`) MÊLÉES, dans l'ordre chronologique, aux
+// messages écrits par les visiteurs et aux réponses de l'IA — comme un vrai
+// fil de discussion. `limit` borne le nombre total de bulles renvoyées.
+function siteChannelFeed(id, limit = 30) {
+  const c = state.siteChannels.find((x) => String(x.id) === String(id));
+  if (!c) return null;
+  const def = strategies.BY_KEY[c.strategy];
+  const predictionItems = state.predictions
+    .filter((p) => p.strategy === c.strategy && p.status !== 'en attente' && p.messages && p.messages.length)
+    .map((p) => ({
+      key: `pred-${p.target}-${p.sentAt || 0}`,
+      kind: 'prediction',
+      sender: c.name,
+      target: p.target,
+      status: p.status,
+      step: p.step,
+      text: predictionMessage(p),
+      at: p.sentAt || 0,
+    }));
+  const chatItems = (Array.isArray(c.messages) ? c.messages : []).map((m, i) => ({
+    key: `chat-${i}-${m.at}`,
+    kind: 'chat',
+    sender: m.sender,
+    text: m.text,
+    at: m.at,
+  }));
+  const items = [...predictionItems, ...chatItems]
+    .sort((a, b) => (a.at || 0) - (b.at || 0))
+    .slice(-Math.max(1, Math.min(200, limit)));
+  return {
+    id: c.id,
+    name: c.name,
+    strategy: c.strategy,
+    strategyName: def ? def.name : c.strategy,
+    bilan: bilanText(c.strategy),
+    stats: stats(c.strategy),
+    items,
   };
 }
 
@@ -1523,10 +2000,16 @@ module.exports = {
   SUITS,
   predictionRow,
   predictionsPanel,
+  siteChannelsView,
+  addSiteChannel,
+  removeSiteChannel,
+  addSiteChannelMessage,
+  siteChannelFeed,
   evaluate,
   verify,
   registerGames,
   setOnFinished,
+  setOnShoeReset,
   setOnGateChange,
   setOnConfirm,
   fulfillAnnouncement,
@@ -1538,11 +2021,14 @@ module.exports = {
   nextTarget,
   handSuits,
   hasSuit,
+  hasSuitBanker,
   predictionText,
   predictionMessage,
   liveText,
   recentGames,
   stats,
+  statsFrom,
+  restorePredictions,
   BADGES,
   parityOf,
   parityRuntime,
@@ -1572,6 +2058,6 @@ module.exports = {
   noteClosed,
   queueFloor,
   shadowRuntime,
-  syncCostume,
+  dizaineCounterView,
   pullCostume,
 };

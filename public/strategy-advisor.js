@@ -176,7 +176,12 @@ async function run({ remote = false } = {}) {
         : `Analyse portant sur ${cov.label}. Pas encore assez de prédictions terminées pour classer les stratégies : laisser le cumul se remplir.`,
     };
 
-    if (remote && ai.keyLooksValid()) {
+    // CORRECTIF (même bug que ai-auto.js) : ne teste plus QUE la clé
+    // Pollinations — chat()/chatAttempts() (ai-analyzer.js) sait utiliser
+    // Gemini, Groq ou OpenRouter tout aussi bien ; les avis IA sur les
+    // stratégies doivent donc se déclencher avec N'IMPORTE laquelle de ces
+    // clés configurée, pas seulement Pollinations.
+    if (remote && (ai.keyLooksValid() || ai.geminiConfigured() || ai.groqConfigured() || ai.openrouterConfigured())) {
       try {
         const games = [...(state.history || [])].slice(0, 80);
         const res = await ai.analyze({

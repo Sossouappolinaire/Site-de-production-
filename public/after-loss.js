@@ -21,13 +21,22 @@
 //    (silencieuses), et c'est la 3ᵉ qui est relayée.
 //  • Une fois la prédiction relayée, le panneau repart à zéro pour cette
 //    stratégie (il attend un nouveau déclencheur parmi les cases cochées).
+//  • Canal et format par stratégie suivie (facultatifs) : chaque stratégie
+//    peut avoir son propre canal Telegram et/ou son propre format de
+//    prédiction, indépendants du canal/format global du panneau. Si l'un des
+//    deux est laissé vide à l'ajout/modification, cette stratégie utilise le
+//    canal/format du panneau (comportement d'origine). Ça permet d'envoyer
+//    chaque stratégie suivie vers un canal différent, ou plusieurs vers le
+//    même canal, au choix.
 'use strict';
 
+const appConfig = require('./config');
 const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
-const { state, setStrategyConfig } = require('./predictor');
+const { state, setStrategyConfig, hasSuit, hasSuitBanker, parityOf, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
+const lossNotice = require('./loss-notice');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
 
@@ -37,13 +46,33 @@ const TRIGGER_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage
 const panel = {
   enabled: true,
   channels: [],   // canaux Telegram où sont relayées les prédictions « après perte »
+  // canal DU SITE (vitrine interne, voir predictor.js siteChannelsView) où le
+  // relais est ÉGALEMENT publié — indépendant des canaux Telegram ci-dessus :
+  // les deux destinations sont utilisées en parallèle, chacune facultative.
+  // null = aucun canal du site choisi (comportement d'origine, Telegram
+  // uniquement).
+  siteChannelId: null,
   format: 1,      // format de prédiction utilisé pour les messages relayés
   maxR: 1,        // nombre de rattrapage affiché sur le message relayé
+  // message de perte + formation VIP (voir loss-notice.js) — désactivé par
+  // défaut (demande admin), indépendant du panneau lui-même.
+  lossNoticeEnabled: false,
   // trackers : [{ id, key, name, triggers:{r1:{enabled,n}, r2:{...}, r3:{...}, perdue:{...}},
   //               counting, armedTrigger, armedNeeded, armedSeen, armed, armedAt,
   //               lastSeenTarget, sentCount, lastSentAt, createdAt }]
   trackers: [],
   history: [],    // journal des relais envoyés (les 100 derniers)
+  // CORRECTIF « prédictions non vérifiées » : chaque message relayé (forward
+  // et forwardRepeat) est désormais mémorisé ici avec son chatId/messageId
+  // Telegram, pour pouvoir être revérifié comme une prédiction normale (voir
+  // verifyPending) et édité avec le vrai résultat (✅/❌) une fois connu.
+  pendingMessages: [],
+  // BILAN (demande admin) : dès qu'une prédiction relayée est VÉRIFIÉE, son
+  // résultat est comptabilisé ici (compteur de bilan par stratégie suivie),
+  // puis l'entrée est effacée du suivi et n'est JAMAIS réenregistrée en base
+  // (voir markResolved / persist ci-dessous). Seules les prédictions encore
+  // « en attente » sont persistées.
+  tally: {},      // { [trackerId]: { win, loss, cancelled, total, lastAt } }
   sentCount: 0,
   lastSentAt: null,
   lastScanAt: null,
@@ -76,8 +105,10 @@ function parseChannels(value) {
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
+  if (patch.siteChannelId !== undefined) panel.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
   if (patch.format !== undefined) panel.format = fmt.clampFormat(patch.format);
   if (patch.maxR !== undefined) panel.maxR = Math.max(0, Math.min(9, parseInt(patch.maxR, 10) || 0));
+  if (patch.lossNoticeEnabled !== undefined) panel.lossNoticeEnabled = !!patch.lossNoticeEnabled;
   persist();
   return config();
 }
@@ -86,18 +117,44 @@ function config() {
   return {
     enabled: panel.enabled,
     channels: panel.channels,
+    siteChannelId: panel.siteChannelId,
     format: panel.format,
     maxR: panel.maxR,
+    lossNoticeEnabled: panel.lossNoticeEnabled,
   };
 }
 
 // ---------------------------------------------------------------------------
 // Stratégies disponibles pour le choix (barre de déroulement)
 // ---------------------------------------------------------------------------
+// PONT ENTRE PANNEAUX (demande admin) : chaque configuration déjà enregistrée
+// ici (« Prédit après une perte ») ET chaque combo déjà enregistré dans
+// « Combinaisons » (combined.js) devient lui-même une SOURCE sélectionnable,
+// exactement comme une stratégie existante — clé `after:<id>` pour un
+// tracker de ce panneau, `combo:<id>` pour un combo de l'autre. On ne
+// duplique rien : chaque panneau vérifie déjà ses propres relais un par un
+// (panel.pendingMessages + verifyPending(), voir plus bas) — on expose
+// simplement cette liste déjà résolue à qui la demande (voir
+// trackerPredictions() ci-dessous et pendingFor() exporté en bas de fichier).
+// Require() PARESSEUX de combined.js : les deux panneaux sont des modules
+// « frères » (ni l'un ni l'autre ne requiert normalement l'autre), un
+// require() en tête de fichier créerait ici un cycle bidirectionnel
+// (after-loss.js → combined.js → after-loss.js). Appelé seulement à
+// l'intérieur de options()/trackerPredictions(), bien après le démarrage
+// complet de l'appli, ce risque n'existe plus.
+function combinedOptions() {
+  try {
+    const combined = require('./combined');
+    return (combined.panel.trackers || []).map((t) => ({ key: `combo:${t.id}`, name: `Combinaison — ${t.name}`, group: 'Combinaisons' }));
+  } catch (_) { return []; }
+}
+
 function options() {
   return [
     ...strategies.LIST.map((s) => ({ key: s.key, name: s.name })),
     { key: 'ia', name: 'Stratégie IA (Prédit)' },
+    ...panel.trackers.map((t) => ({ key: `after:${t.id}`, name: t.name, group: 'Stratégies enregistrées' })),
+    ...combinedOptions(),
   ];
 }
 
@@ -139,7 +196,149 @@ function sanitizeRepeat(input) {
   return {
     enabled: !!src.enabled,
     lead: Math.max(1, Math.min(50, parseInt(src.lead, 10) || 5)),
+    // 'meme'   : republie le MÊME costume que celui qui vient de perdre (comportement d'origine).
+    // 'miroir' : regarde le costume RÉELLEMENT sorti sur la main du joueur au
+    //            jeu perdu, et republie son miroir (❤️↔♦️, ♠️↔♣️ — voir
+    //            strategies.MIRROR), plutôt que de rejouer le costume raté.
+    mode: src.mode === 'miroir' ? 'miroir' : 'meme',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Option « série de même costume » (indépendante des déclencheurs et de la
+// répétition après perte) : on surveille les prédictions de la stratégie
+// suivie ; dès que `count` prédictions CONSÉCUTIVES portent le MÊME costume
+// (ex. 794♦️, 810♦️, 815♦️ avec count = 3), le bot publie automatiquement
+// `nj` nouvelles prédictions de ce même costume, espacées de `n` jeux à
+// partir du dernier jeu de la série (a + n, a + 2n, …).
+// Exemple : count = 3, n = 4, nj = 4 → après 815♦️ : 819♦️, 823♦️, 827♦️,
+// 831♦️. Nombre de rattrapage et format sont propres à cette option
+// (vides = réglages du panneau / de la stratégie).
+// ---------------------------------------------------------------------------
+function sanitizeStreak(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : fmt.clampFormat(src.format);
+  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
+  return {
+    enabled: !!src.enabled,
+    count: Math.max(2, Math.min(10, parseInt(src.count, 10) || 3)),
+    n: Math.max(1, Math.min(50, parseInt(src.n, 10) || 4)),
+    nj: Math.max(1, Math.min(20, parseInt(src.nj, 10) || 4)),
+    maxR: maxRRaw,
+    format: fmtRaw,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Option « comptage dizaine » (indépendante des autres options) :
+//   • On surveille les prédictions de la stratégie suivie ; dès que `count`
+//     prédictions CONSÉCUTIVES portent le MÊME costume (ex. 134♦️, 144♦️,
+//     154♦️ avec count = 3), on lance une session de comptage.
+//   • 1ʳᵉ prédiction de la session : dernier jeu de la série + `n`
+//     (ex. 154 + 8 = 162♦️).
+//   • Ensuite, on ATTEND que la prédiction précédente soit vérifiée
+//     (gagnée/perdue) avant de publier la suivante, à +`ni` (ex. 172♦️,
+//     182♦️, 192♦️ avec ni = 10).
+//   • La session s'arrête après `nk` prédictions publiées (ex. Nk = 4), puis
+//     le panneau attend une nouvelle série pour repartir.
+//   • Nombre de rattrapage et format sont propres à cette option (vides =
+//     réglages du panneau / de la stratégie).
+// ---------------------------------------------------------------------------
+function sanitizeDecade(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : fmt.clampFormat(src.format);
+  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
+  return {
+    enabled: !!src.enabled,
+    count: Math.max(2, Math.min(10, parseInt(src.count, 10) || 3)),
+    n: Math.max(1, Math.min(100, parseInt(src.n, 10) || 8)),
+    ni: Math.max(1, Math.min(100, parseInt(src.ni, 10) || 10)),
+    nk: Math.max(1, Math.min(20, parseInt(src.nk, 10) || 4)),
+    maxR: maxRRaw,
+    format: fmtRaw,
+  };
+}
+
+// Progression LIVE de l'option « série de même costume » (compteur affiché
+// dans le panneau : ex. 1/2 puis 2/2 avant le déclenchement) et session de
+// publication en cours (ex. 3/4 prédits publiés). Les deux sont ENREGISTRÉES
+// avec le tracker (voir persist/applySaved) : au redémarrage le comptage
+// reprend là où il s'était arrêté au lieu de repartir de zéro.
+function sanitizeStreakProgress(input) {
+  if (!input || typeof input !== 'object') return null;
+  const seen = Math.max(0, parseInt(input.seen, 10) || 0);
+  const count = Math.max(2, parseInt(input.count, 10) || 2);
+  return { suit: input.suit || null, seen, count, updatedAt: input.updatedAt || Date.now() };
+}
+
+function sanitizeStreakSession(input) {
+  if (!input || typeof input !== 'object') return null;
+  const total = Math.max(1, parseInt(input.total, 10) || 1);
+  const sent = Math.max(0, parseInt(input.sent, 10) || 0);
+  if (!input.suit) return null;
+  return { suit: input.suit, sent, total, end: Number(input.end) || 0, startedAt: input.startedAt || Date.now() };
+}
+
+function sanitizeDecadeSession(input) {
+  if (!input || typeof input !== 'object') return null;
+  const last = parseInt(input.last, 10);
+  const sent = parseInt(input.sent, 10);
+  if (!Number.isFinite(last) || !input.suit) return null;
+  return { suit: input.suit, last, sent: Number.isFinite(sent) ? sent : 1, startedAt: input.startedAt || Date.now() };
+}
+
+// ---------------------------------------------------------------------------
+// Canal(x) et format PROPRES à une stratégie suivie — facultatifs. Une
+// stratégie sans réglage propre utilise le canal/format du panneau (comme
+// avant). Ça permet d'envoyer chaque stratégie suivie dans un canal
+// différent, ou plusieurs dans le même canal, au choix.
+// ---------------------------------------------------------------------------
+// Nom personnalisé donné à la configuration : c'est sous ce nom qu'elle
+// apparaît partout ailleurs comme une stratégie existante (sélecteurs des
+// panneaux « Répétition costume », « Combinaisons », « VIP »…).
+function sanitizeName(input) {
+  const t = String(input == null ? '' : input).trim().replace(/\s+/g, ' ');
+  return t ? t.slice(0, 60) : null;
+}
+
+function sanitizeTrackerFormat(input) {
+  if (input === undefined || input === null || input === '') return null;
+  return fmt.clampFormat(input);
+}
+
+// canal DU SITE : on ne valide pas contre la liste courante ici (elle peut
+// changer indépendamment, et un id momentanément inconnu ne doit pas
+// empêcher d'enregistrer les autres réglages) — l'envoi silencieusement
+// n'échoue que si l'id ne correspond à aucun canal au moment du relais réel
+// (voir postToSiteChannel). '' ou null = pas de canal du site choisi.
+function sanitizeSiteChannelId(input) {
+  if (input === undefined || input === null || input === '') return null;
+  return String(input);
+}
+
+function effectiveChannels(tracker) {
+  return (tracker.channels && tracker.channels.length) ? tracker.channels : panel.channels;
+}
+
+function effectiveFormat(tracker) {
+  return (tracker.format !== null && tracker.format !== undefined) ? tracker.format : panel.format;
+}
+
+function effectiveSiteChannelId(tracker) {
+  return (tracker.siteChannelId !== null && tracker.siteChannelId !== undefined) ? tracker.siteChannelId : panel.siteChannelId;
+}
+
+// publie le relais dans le canal DU SITE choisi (en plus, ou à la place, du
+// canal Telegram) — n'importe qui l'ouvrant sur le site voit apparaître le
+// même texte que celui envoyé sur Telegram, avec le nom de la stratégie
+// suivie comme expéditeur. Si l'id ne correspond plus à aucun canal du site
+// (supprimé entre-temps), on l'ignore silencieusement (pas d'erreur bloquante
+// pour l'envoi Telegram, qui reste indépendant).
+function postToSiteChannel(tracker, text) {
+  const id = effectiveSiteChannelId(tracker);
+  if (!id) return false;
+  const entry = addSiteChannelMessage(id, { sender: tracker.name, text });
+  return !!entry;
 }
 
 // type de résultat d'une prédiction terminée : 'r0' (gagné direct — jamais
@@ -155,6 +354,68 @@ function resultLabel(kind) {
 }
 
 // ---------------------------------------------------------------------------
+// Compteur de bilan + effacement des prédictions vérifiées (demande admin)
+// ---------------------------------------------------------------------------
+function tallyFor(trackerId) {
+  const key = trackerId || 'panel';
+  if (!panel.tally[key]) panel.tally[key] = { win: 0, loss: 0, cancelled: 0, total: 0, lastAt: null };
+  return panel.tally[key];
+}
+
+function tallyView(trackerId) {
+  const t = tallyFor(trackerId);
+  const done = t.win + t.loss;
+  return { ...t, rate: done ? Math.round((t.win / done) * 1000) / 10 : 0 };
+}
+
+// Marque une entrée comme résolue : on l'envoie UNE SEULE FOIS au compteur de
+// bilan de sa stratégie suivie (garde `counted`), puis elle devient effaçable
+// (voir sweepResolved) et ne sera plus jamais persistée.
+function markResolved(entry, status) {
+  entry.status = status;
+  entry.resolvedAt = Date.now();
+  if (entry.counted) return;
+  entry.counted = true;
+  const t = tallyFor(entry.trackerId);
+  if (status === 'gagné') t.win += 1;
+  else if (status === 'perdu') t.loss += 1;
+  else t.cancelled += 1;
+  t.total += 1;
+  t.lastAt = entry.resolvedAt;
+}
+
+// Effacement : une prédiction déjà vérifiée n'est gardée en mémoire que le
+// temps court nécessaire aux statistiques de la session (répétition, séries) —
+// jamais en base.
+function sweepResolved() {
+  const cutoff = Date.now() - 6 * 3600 * 1000;
+  panel.pendingMessages = panel.pendingMessages.filter(
+    (e) => e.status === 'en attente' || (e.resolvedAt && e.resolvedAt >= cutoff)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ANTI-DOUBLON D'ENVOI (demande admin) : un même jeu cible ne doit jamais être
+// relayé deux fois — ni par la même stratégie suivie (tick qui se chevauche,
+// répétition + série qui tombent sur la même cible), ni par deux stratégies
+// suivies qui pointent vers le même canal avec la même prédiction.
+// ---------------------------------------------------------------------------
+function isDuplicateRelay(tracker, target, suit) {
+  const chans = effectiveChannels(tracker);
+  const site = effectiveSiteChannelId(tracker);
+  return panel.pendingMessages.some((e) => {
+    if (Number(e.target) !== Number(target)) return false;
+    if (e.trackerId === tracker.id) return true;       // même stratégie suivie
+    if (String(e.suit) !== String(suit)) return false; // prédiction différente
+    const other = panel.trackers.find((t) => t.id === e.trackerId);
+    if (!other) return false;
+    const oCh = effectiveChannels(other);
+    const oSite = effectiveSiteChannelId(other);
+    return (site && oSite === site) || oCh.some((c) => chans.includes(c));
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Persistance
 // ---------------------------------------------------------------------------
 function persist() {
@@ -162,6 +423,10 @@ function persist() {
     config: config(),
     trackers: panel.trackers,
     history: panel.history,
+    // une prédiction DÉJÀ VÉRIFIÉE n'est jamais enregistrée : seules les
+    // prédictions encore en attente de résultat sont sauvegardées.
+    pendingMessages: panel.pendingMessages.filter((e) => e.status === 'en attente'),
+    tally: panel.tally,
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -190,8 +455,10 @@ function applySaved(saved) {
   if (saved.config) {
     panel.enabled = saved.config.enabled !== false;
     panel.channels = parseChannels(saved.config.channels);
+    panel.siteChannelId = sanitizeSiteChannelId(saved.config.siteChannelId);
     panel.format = fmt.clampFormat(saved.config.format);
     panel.maxR = Math.max(0, Math.min(9, parseInt(saved.config.maxR, 10) || 0));
+    panel.lossNoticeEnabled = !!saved.config.lossNoticeEnabled;
   }
   if (Array.isArray(saved.trackers)) {
     panel.trackers = saved.trackers.map((t) => ({
@@ -204,6 +471,17 @@ function applySaved(saved) {
       // proche : envoi dès la prédiction suivante après une perte).
       triggers: t.triggers ? sanitizeTriggers(t.triggers) : defaultTriggers(),
       repeat: sanitizeRepeat(t.repeat),
+      streak: sanitizeStreak(t.streak),
+      decade: sanitizeDecade(t.decade),
+      lastDecadeEnd: Number.isFinite(Number(t.lastDecadeEnd)) ? Number(t.lastDecadeEnd) : 0,
+      decadeSession: sanitizeDecadeSession(t.decadeSession),
+      lastStreakEnd: Number.isFinite(Number(t.lastStreakEnd)) ? Number(t.lastStreakEnd) : 0,
+      // compteurs persistés (reprise après redémarrage)
+      streakProgress: sanitizeStreakProgress(t.streakProgress),
+      streakSession: sanitizeStreakSession(t.streakSession),
+      channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
+      siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
+      format: sanitizeTrackerFormat(t.format),
       lastRepeatSource: Number.isFinite(Number(t.lastRepeatSource)) ? Number(t.lastRepeatSource) : 0,
       counting: !!t.counting,
       armedTrigger: t.armedTrigger || null,
@@ -218,6 +496,23 @@ function applySaved(saved) {
     }));
   }
   if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
+  if (saved.tally && typeof saved.tally === 'object') {
+    panel.tally = {};
+    for (const [k, v] of Object.entries(saved.tally)) {
+      panel.tally[k] = {
+        win: Number(v && v.win) || 0,
+        loss: Number(v && v.loss) || 0,
+        cancelled: Number(v && v.cancelled) || 0,
+        total: Number(v && v.total) || 0,
+        lastAt: (v && v.lastAt) || null,
+      };
+    }
+  }
+  if (Array.isArray(saved.pendingMessages)) {
+    // Au redémarrage on ne recharge QUE les prédictions encore en attente :
+    // celles déjà vérifiées ont été comptées au bilan puis effacées.
+    panel.pendingMessages = saved.pendingMessages.filter((e) => e && e.status === 'en attente');
+  }
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
@@ -226,8 +521,28 @@ function applySaved(saved) {
 // ---------------------------------------------------------------------------
 // Gestion des stratégies suivies (trackers)
 // ---------------------------------------------------------------------------
+// Vue « prédiction » des relais DÉJÀ ENVOYÉS et suivis par CE panneau, pour
+// une stratégie suivie donnée (trackerId) — même forme que les prédictions
+// normales (target/suit/status/step/maxR), pour être consommée à l'identique
+// par ce fichier lui-même (self-chaining, clé `after:<id>`) ET par
+// combined.js (clé `after:<id>` là-bas aussi, voir combined.js/pendingFor).
+// Exportée en bas de fichier.
+function pendingFor(trackerId) {
+  return panel.pendingMessages
+    .filter((e) => e.trackerId === trackerId)
+    .map((e) => ({ target: e.target, suit: e.suit, kind: e.kind || 'suit', status: e.status, step: e.step, maxR: e.maxR }))
+    .sort((a, b) => a.target - b.target);
+}
+
 function trackerPredictions(key) {
   if (key === 'ia') return [...predit.panel.predictions].sort((a, b) => a.target - b.target);
+  if (key.startsWith('after:')) return pendingFor(key.slice('after:'.length));
+  if (key.startsWith('combo:')) {
+    try {
+      const combined = require('./combined'); // require paresseux, voir combinedOptions() plus haut
+      return combined.pendingFor(key.slice('combo:'.length));
+    } catch (_) { return []; }
+  }
   return state.predictions.filter((p) => p.strategy === key).sort((a, b) => a.target - b.target);
 }
 
@@ -236,13 +551,64 @@ function currentMaxTarget(key) {
   return list.length ? list[list.length - 1].target : 0;
 }
 
-function addTracker(key, triggers, repeat) {
+// ---------------------------------------------------------------------------
+// CORRECTIF « doublons de configuration » (demande admin) : avant d'ajouter
+// une nouvelle stratégie suivie, on vérifie si une stratégie suivie
+// EXISTANTE surveille déjà la MÊME stratégie source, avec le(s) MÊME(S)
+// canal(aux)/canal du site ET le MÊME format de prédiction — un cas quasi
+// certainement involontaire (deux trackers qui vont relayer exactement la
+// même chose, au même endroit). On ne bloque pas silencieusement : on
+// renvoie la liste des configurations en conflit pour que l'appelant (API/
+// front-end) puisse afficher une fenêtre de confirmation avant de forcer
+// l'ajout (voir extra.force ci-dessous).
+// ---------------------------------------------------------------------------
+function findConfigConflicts(key, channels, siteChannelId, format) {
+  const chOut = (channels && channels.length) ? channels : panel.channels;
+  const siteOut = (siteChannelId !== null && siteChannelId !== undefined) ? siteChannelId : panel.siteChannelId;
+  const fmtOut = (format !== null && format !== undefined) ? format : panel.format;
+  return panel.trackers.filter((t) => {
+    if (t.key !== key) return false;
+    const tCh = effectiveChannels(t);
+    const tSite = effectiveSiteChannelId(t);
+    const tFmt = effectiveFormat(t);
+    if (tFmt !== fmtOut) return false;
+    if (tSite !== siteOut) return false;
+    if (tCh.length !== chOut.length) return false;
+    return tCh.every((c) => chOut.includes(c));
+  });
+}
+
+function addTracker(key, triggers, repeat, extra = {}) {
   const opt = optionByKey(key);
   if (!opt) throw new Error("Stratégie inconnue pour le suivi « après perte »");
   const clean = sanitizeTriggers(triggers);
   const cleanRepeat = sanitizeRepeat(repeat);
-  if (!cleanRepeat.enabled && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
-    throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte ».");
+  const cleanStreak = sanitizeStreak(extra.streak);
+  const customName = sanitizeName(extra.name);
+  const cleanDecade = sanitizeDecade(extra.decade);
+  if (!cleanRepeat.enabled && !cleanStreak.enabled && !cleanDecade.enabled && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
+    throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte », « série de même costume » ou « comptage dizaine ».");
+  }
+  const wantedChannels = parseChannels(extra.channels);
+  const wantedSiteChannelId = sanitizeSiteChannelId(extra.siteChannelId);
+  const wantedFormat = sanitizeTrackerFormat(extra.format);
+  if (!extra.force) {
+    const conflicts = findConfigConflicts(opt.key, wantedChannels, wantedSiteChannelId, wantedFormat);
+    if (conflicts.length) {
+      const err = new Error(
+        `Une stratégie suivie avec exactement le(s) même(s) canal(aux) et le même format existe déjà pour « ${opt.name} » — confirme pour l'ajouter quand même (sinon ce sera un doublon).`
+      );
+      err.code = 'DUPLICATE_CONFIG';
+      err.conflicts = conflicts.map((t) => ({
+        id: t.id,
+        name: t.name,
+        channels: effectiveChannels(t),
+        siteChannelId: effectiveSiteChannelId(t),
+        format: effectiveFormat(t),
+        triggers: t.triggers,
+      }));
+      throw err;
+    }
   }
   // La stratégie suivie doit être ACTIVE pour produire de nouvelles
   // prédictions (voir evaluate() dans predictor.js, qui ignore les
@@ -254,9 +620,24 @@ function addTracker(key, triggers, repeat) {
   const tracker = {
     id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     key: opt.key,
-    name: opt.name,
+    // nom personnalisé (facultatif) : c'est celui affiché partout, y compris
+    // dans les listes de stratégies existantes des autres panneaux.
+    name: customName || opt.name,
     triggers: clean,
     repeat: cleanRepeat,
+    streak: cleanStreak,
+    decade: cleanDecade,
+    lastDecadeEnd: currentMaxTarget(opt.key),
+    decadeSession: null,
+    // on ne rejoue pas les séries déjà terminées au moment de l'ajout.
+    lastStreakEnd: currentMaxTarget(opt.key),
+    streakProgress: null,
+    streakSession: null,
+    // canal(x) et format propres à cette stratégie ; vides → hérite du
+    // canal/format global du panneau (voir effectiveChannels/effectiveFormat).
+    channels: wantedChannels,
+    siteChannelId: wantedSiteChannelId,
+    format: wantedFormat,
     // on ne rejoue pas les pertes déjà passées au moment de l'ajout.
     lastRepeatSource: currentMaxTarget(opt.key),
     counting: false,
@@ -283,8 +664,10 @@ function updateTracker(id, patch = {}) {
   if (patch.triggers !== undefined) {
     const clean = sanitizeTriggers(patch.triggers);
     const willHaveRepeat = patch.repeat !== undefined ? sanitizeRepeat(patch.repeat).enabled : tracker.repeat.enabled;
-    if (!willHaveRepeat && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
-      throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte ».");
+    const willHaveStreak = patch.streak !== undefined ? sanitizeStreak(patch.streak).enabled : !!(tracker.streak && tracker.streak.enabled);
+    const willHaveDecade = patch.decade !== undefined ? sanitizeDecade(patch.decade).enabled : !!(tracker.decade && tracker.decade.enabled);
+    if (!willHaveRepeat && !willHaveStreak && !willHaveDecade && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
+      throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte », « série de même costume » ou « comptage dizaine ».");
     }
     tracker.triggers = clean;
     // un changement de réglages annule un décompte en cours, pour repartir
@@ -298,6 +681,33 @@ function updateTracker(id, patch = {}) {
   }
   if (patch.repeat !== undefined) {
     tracker.repeat = sanitizeRepeat(patch.repeat);
+  }
+  if (patch.name !== undefined) {
+    const nextName = sanitizeName(patch.name);
+    if (nextName) tracker.name = nextName;
+  }
+  if (patch.streak !== undefined) {
+    tracker.streak = sanitizeStreak(patch.streak);
+    tracker.streakProgress = null;
+    tracker.streakSession = null;
+    // on repart des séries À VENIR après un changement de réglage.
+    tracker.lastStreakEnd = currentMaxTarget(tracker.key);
+  }
+  if (patch.decade !== undefined) {
+    tracker.decade = sanitizeDecade(patch.decade);
+    // changement de réglage : on annule la session en cours et on repart des
+    // séries À VENIR.
+    tracker.decadeSession = null;
+    tracker.lastDecadeEnd = currentMaxTarget(tracker.key);
+  }
+  if (patch.channels !== undefined) {
+    tracker.channels = parseChannels(patch.channels);
+  }
+  if (patch.siteChannelId !== undefined) {
+    tracker.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
+  }
+  if (patch.format !== undefined) {
+    tracker.format = sanitizeTrackerFormat(patch.format);
   }
   persist();
   return tracker;
@@ -341,32 +751,289 @@ function adviceForTracker(tracker) {
 // ---------------------------------------------------------------------------
 // Relais Telegram
 // ---------------------------------------------------------------------------
-function relayText(tracker, pred, advice) {
-  const out = fmt.renderMessage(panel.format, {
+function relayText(tracker, pred) {
+  const out = fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: pred.target,
-    suit: pred.suit,
+    suit: pred.suit || pred.card, // 'carte-banquier' : pas de costume, on affiche la carte
     strategy: tracker.name,
     maxR: panel.maxR,
     status: 'en attente',
     rattrapage: 0,
   }, null);
-  if (advice) out.text = `${out.text}\n\n${advice}`;
+  // Le conseil (adviceForTracker) n'est plus ajouté aux messages de
+  // prédiction envoyés sur Telegram — il reste disponible ailleurs
+  // (panneau/API) si besoin, mais ne doit jamais polluer le relais.
   return out;
 }
 
-async function forward(tracker, pred) {
+// ---------------------------------------------------------------------------
+// Vérification des messages relayés — CORRECTIF.
+// Avant ce correctif, un message envoyé par forward()/forwardRepeat() restait
+// affiché « ⌛ en attente » pour toujours dans le canal configuré : il n'était
+// jamais rapproché du vrai résultat du jeu, contrairement aux prédictions
+// normales (voir verify() dans predictor.js, qui ne regarde QUE
+// state.predictions — les relais de ce panneau n'y figurent pas). On
+// mémorise donc désormais, pour chaque relais, son (ou ses) chatId/messageId
+// Telegram, puis on revérifie le résultat réel comme le fait predictor.verify()
+// (mêmes règles : tour illisible = on saute sans consommer de rattrapage,
+// rattrapage jusqu'à panel.maxR, annulation après 6 tours illisibles
+// d'affilée) et on ÉDITE le message avec le vrai résultat (✅/❌).
+// ---------------------------------------------------------------------------
+function pushPending(tracker, pred, messages) {
+  if (!messages.length) return;
+  panel.pendingMessages.push({
+    id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    trackerId: tracker.id,
+    target: pred.target,
+    suit: pred.suit || pred.card, // 'carte-banquier' : pas de costume, on affiche la carte
+    kind: pred.kind || 'suit',
+    strategyName: tracker.name,
+    format: effectiveFormat(tracker),
+    maxR: panel.maxR,
+    step: 0,
+    gap: 0,
+    skipped: 0,
+    status: 'en attente',
+    messages,
+    createdAt: Date.now(),
+    resolvedAt: null,
+  });
+  // CORRECTIF (identique à predictor.js/predit.js) : ne jamais couper une
+  // entrée encore « en attente » — sinon son message Telegram reste bloqué
+  // sans vérification pour toujours. On garde TOUTE entrée en attente, et on
+  // plafonne à 200 seulement le nombre d'entrées déjà RÉSOLUES (les plus
+  // récentes conservées en priorité — le tableau grandit par push(), donc en
+  // partant de la fin).
+  if (panel.pendingMessages.length > 200) {
+    const keep = [];
+    let resolvedCount = 0;
+    for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
+      const e = panel.pendingMessages[i];
+      if (e.status === 'en attente' || resolvedCount < 200) {
+        keep.unshift(e);
+        if (e.status !== 'en attente') resolvedCount += 1;
+      }
+    }
+    panel.pendingMessages = keep;
+  }
+}
+
+function editPending(entry, statusFr) {
   const bot = typeof sender === 'function' ? sender() : null;
-  if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
-  if (!panel.channels.length) { panel.lastError = "Aucun canal configuré pour « Prédiction après perte »"; return false; }
-  const advice = adviceForTracker(tracker);
-  const out = relayText(tracker, pred, advice);
+  if (!bot) return;
+  const out = fmt.renderMessage(entry.format, {
+    gameNumber: entry.target,
+    suit: entry.suit || entry.card,
+    strategy: entry.strategyName,
+    maxR: entry.maxR,
+    status: statusFr,
+    rattrapage: entry.step,
+  }, null);
+  for (const m of entry.messages) {
+    bot.editMessageText(out.text, {
+      chat_id: m.chatId, message_id: m.messageId,
+      ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}),
+    }).catch(() => {
+      // le message a pu être supprimé du canal entre-temps : pas bloquant
+    });
+  }
+  // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
+  // dans CES MÊMES canaux — identique à bot.js/updateResult() et
+  // predit.js/update(), ici pour le relais « après perte ». CASE PAR
+  // STRATÉGIE (ici : panel.lossNoticeEnabled), désactivée par défaut — les
+  // deux réglages (général + celui-ci) doivent être activés à la fois.
+  if (statusFr === 'perdu' && panel.lossNoticeEnabled && lossNotice.getSettings().enabled) {
+    const noticeText = lossNotice.buildText();
+    for (const m of entry.messages) {
+      bot.sendMessage(m.chatId, noticeText).catch(() => {});
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CORRECTIF MAJEUR — nouveau sabot (retour du jeu à #N1) :
+//
+// Deux bugs distincts venaient de là, tous deux causés par des compteurs qui
+// comparaient les numéros de jeu SANS savoir qu'un nouveau sabot était
+// reparti de zéro :
+//
+//  1) Les relais déjà envoyés mais pas encore résolus (`panel.pendingMessages`,
+//     ex. #N100, #N110… restés « en attente » indéfiniment sur la capture
+//     d'écran) visaient des numéros de l'ANCIEN sabot. Une fois le sabot
+//     remis à zéro, ces numéros n'existent plus jamais dans `state.games`
+//     (vidé par resetShoe) : `verifyPending()` les prenait pour des jeux
+//     « pas encore joués » et attendait pour toujours un résultat qui ne
+//     viendrait jamais.
+//
+//  2) `tracker.lastSeenTarget` / `tracker.lastRepeatSource` gardaient le
+//     dernier grand numéro de l'ancien sabot (ex. 232). Comme les nouvelles
+//     prédictions du nouveau sabot repartent à des numéros petits (1, 2, 3…),
+//     la condition `pred.target <= tracker.lastSeenTarget` restait VRAIE pour
+//     toutes les prédictions à venir : plus aucune n'était jamais traitée —
+//     le suivi « après perte » restait bloqué jusqu'au prochain redémarrage
+//     du bot.
+//
+// On s'abonne donc au même événement « nouveau sabot » que le rapport PDF
+// (voir setOnShoeReset dans predictor.js, désormais multi-écouteurs) pour
+// remettre tout ça à plat à chaque fois.
+setOnShoeReset(() => {
+  for (const t of panel.trackers) {
+    t.lastSeenTarget = 0;
+    t.lastRepeatSource = 0;
+    // un armement/comptage en cours visait l'ancien sabot : on le repart
+    // proprement plutôt que de le laisser « armé » sur un contexte obsolète.
+    t.counting = false;
+    t.armedTrigger = null;
+    t.armedNeeded = 0;
+    t.armedSeen = 0;
+    t.armed = false;
+    t.armedAt = null;
+    // « comptage dizaine » : la session visait l'ancien sabot.
+    t.decadeSession = null;
+    t.lastDecadeEnd = 0;
+    t.lastStreakEnd = 0;
+    t.streakProgress = null;
+    t.streakSession = null;
+  }
+  let cancelled = 0;
+  for (const entry of panel.pendingMessages) {
+    if (entry.status !== 'en attente') continue;
+    // Pas d'edit Telegram ici : il n'existe pas de statut « annulé » dans le
+    // rendu des messages (mapStatus() le traiterait comme « en attente », donc
+    // l'édition n'afficherait rien de différent) — comme pour les prédictions
+    // normales annulées par resetShoe() dans predictor.js, le message reste
+    // affiché tel quel sur Telegram, mais n'est plus suivi ni compté ici.
+    markResolved(entry, 'annulé');
+    cancelled += 1;
+  }
+  if (cancelled) panel.lastError = null;
+  persist();
+});
+
+function maxFinishedGameNumber() {
+  let max = 0;
+  for (const g of state.games.values()) if (g.finished && g.number > max) max = g.number;
+  return max;
+}
+
+// ---------------------------------------------------------------------------
+// CORRECTIF « prédictions doublées / anciennes envoyées » (demande admin) :
+// avant ce correctif, forward()/forwardSynth() relayaient AVEUGLÉMENT la
+// cible calculée (prédiction armée, répétition, série, dizaine…) sans jamais
+// vérifier si le jeu en live avait déjà DÉPASSÉ ce numéro. Ça pouvait arriver
+// après un redémarrage du bot, un retard de tick, ou un tracker ajouté sur
+// une stratégie déjà avancée dans le sabot : la cible calculée tombait alors
+// sur un jeu déjà joué (voire déjà vérifié ailleurs) — d'où l'impression de
+// « prédiction ancienne » ou de doublon (le même relais pouvait ensuite être
+// réévalué comme gagné/perdu quasi instantanément par verifyPending()).
+// Règle demandée : on ne lance JAMAIS une prédiction dont le numéro cible
+// n'est pas STRICTEMENT SUPÉRIEUR au numéro du jeu en live (ou, à défaut, au
+// dernier jeu terminé connu) — même logique que evaluate() dans
+// predictor.js (`hit.target <= maxFinishedNumber()`), étendue ici à tous les
+// relais de ce panneau.
+// ---------------------------------------------------------------------------
+function currentLiveNumber() {
+  const doneMax = maxFinishedGameNumber();
+  const liveNum = state.live ? Number(state.live.number) || 0 : 0;
+  return Math.max(doneMax, liveNum);
+}
+
+function isAlreadyPastLive(target) {
+  return Number(target) <= currentLiveNumber();
+}
+
+async function verifyPending() {
+  const maxDone = maxFinishedGameNumber();
+  for (const entry of panel.pendingMessages) {
+    if (entry.status !== 'en attente') continue;
+    let guard = 0;
+    while (entry.status === 'en attente' && guard++ <= entry.maxR + entry.gap + 8) {
+      const num = entry.target + entry.step + entry.gap;
+      const g = state.games.get(num);
+      const usable = !!g && g.finished && g.complete !== false;
+      if (!usable) {
+        if (num + 2 <= maxDone) {
+          entry.gap += 1;
+          entry.skipped = (entry.skipped || 0) + 1;
+          if (entry.skipped > 6) {
+            markResolved(entry, 'annulé');
+            break;
+          }
+          continue;
+        }
+        break; // le tour n'est pas encore joué : on réessaiera au prochain tick
+      }
+      // 'carte-banquier' (ancien format, carte exacte) et 'suit-banquier'
+      // (stratégie « Carte disparue → retour banquier » actuelle, costume) se
+      // vérifient tous deux sur la main du BANQUIER — toutes les autres
+      // stratégies restent sur la main du joueur (entry.suit contient la
+      // carte ou le costume selon le cas, voir pushPending ci-dessus).
+      const won = entry.kind === 'parity'
+        ? parityOf(g) === entry.suit
+        : entry.kind === 'carte-banquier'
+          ? (g.banker || []).includes(entry.suit)
+          : entry.kind === 'suit-banquier'
+            ? hasSuitBanker(g, entry.suit)
+            : hasSuit(g, entry.suit);
+      if (won) {
+        markResolved(entry, 'gagné');
+        editPending(entry, 'gagné');
+        break;
+      }
+      if (entry.step >= entry.maxR) {
+        markResolved(entry, 'perdu');
+        editPending(entry, 'perdu');
+        break;
+      }
+      entry.step += 1;
+    }
+  }
+  // ménage : les entrées vérifiées, déjà comptées au bilan, sont effacées.
+  sweepResolved();
+}
+
+async function forward(tracker, pred) {
+  // GARDE « jeu en live » — voir isAlreadyPastLive() ci-dessus : on ne relaie
+  // jamais une cible déjà dépassée par le jeu en cours (ancienne prédiction).
+  if (isAlreadyPastLive(pred.target)) {
+    panel.lastError = `Relais ignoré pour « ${tracker.name} » : jeu #N${pred.target} déjà dépassé par le live (#N${currentLiveNumber()}) — prédiction non lancée pour éviter un envoi ancien/en double.`;
+    return false;
+  }
+  if (isDuplicateRelay(tracker, pred.target, pred.suit || pred.card)) {
+    panel.lastError = `Relais ignoré pour « ${tracker.name} » : une prédiction pour le jeu #N${pred.target} a déjà été envoyée (doublon évité).`;
+    return false;
+  }
+  const targetChannels = effectiveChannels(tracker);
+  const siteChannelId = effectiveSiteChannelId(tracker);
+  if (!targetChannels.length && !siteChannelId) {
+    panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni Telegram, ni canal du site, sur la stratégie ou le panneau)`;
+    return false;
+  }
+  const out = relayText(tracker, pred);
   let ok = false;
   const errors = [];
-  for (const id of panel.channels) {
-    try {
-      await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
-      ok = true;
-    } catch (e) { errors.push(`${id} : ${e.message}`); }
+  const sentMessages = [];
+  // canal(x) Telegram — facultatif, indépendant du canal du site ci-dessous.
+  if (targetChannels.length) {
+    const bot = typeof sender === 'function' ? sender() : null;
+    if (!bot) {
+      errors.push('Aucun token Telegram configuré');
+    } else {
+      for (const id of targetChannels) {
+        try {
+          const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+          sentMessages.push({ chatId: id, messageId: m.message_id });
+          ok = true;
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
+      }
+    }
+  }
+  // canal DU SITE — facultatif, publié en parallèle du/des canal(aux)
+  // Telegram ci-dessus ; l'un n'empêche jamais l'autre.
+  if (siteChannelId) {
+    const posted = postToSiteChannel(tracker, out.text);
+    if (posted) ok = true;
+    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;
@@ -378,10 +1045,16 @@ async function forward(tracker, pred) {
       trackerId: tracker.id,
       trackerName: tracker.name,
       target: pred.target,
-      suit: pred.suit,
+      suit: pred.suit || pred.card, // 'carte-banquier' : pas de costume, on affiche la carte
       sentAt: Date.now(),
     });
     panel.history = panel.history.slice(0, 100);
+    // CORRECTIF : on mémorise ce relais pour qu'il soit vérifié comme les
+    // prédictions normales (voir verifyPending) au lieu de rester bloqué
+    // « en attente » indéfiniment dans le canal. (Le canal du site n'a pas
+    // de messageId à éditer : seuls les envois Telegram, s'il y en a, sont
+    // mémorisés ici.)
+    if (sentMessages.length) pushPending(tracker, pred, sentMessages);
   } else if (errors.length) {
     panel.lastError = errors[0];
   }
@@ -474,26 +1147,64 @@ function adviceForRepeat(tracker, lead) {
   return `${base} Résultat passé sans tendance nette — laisser l'échantillon grandir avant de conclure.`;
 }
 
-async function forwardRepeat(tracker, synth, advice) {
-  const bot = typeof sender === 'function' ? sender() : null;
-  if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
-  if (!panel.channels.length) { panel.lastError = "Aucun canal configuré pour « Prédiction après perte »"; return false; }
-  const out = fmt.renderMessage(panel.format, {
+async function forwardRepeat(tracker, synth) {
+  return forwardSynth(tracker, synth, {
+    label: `${tracker.name} — même costume après perte (+${tracker.repeat.lead})`,
+    historyName: `${tracker.name} (répétition)`,
+  });
+}
+
+// envoi générique d'une prédiction SYNTHÉTIQUE (répétition après perte,
+// série de même costume) — même canaux/format/vérification qu'un relais
+// normal, seul le libellé de stratégie (et éventuellement le format et le
+// nombre de rattrapage) change.
+async function forwardSynth(tracker, synth, opts = {}) {
+  // GARDE « jeu en live » — identique à forward() ci-dessus, pour les relais
+  // synthétiques (répétition, série de costume, comptage dizaine).
+  if (isAlreadyPastLive(synth.target)) {
+    panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : jeu #N${synth.target} déjà dépassé par le live (#N${currentLiveNumber()}) — prédiction non lancée pour éviter un envoi ancien/en double.`;
+    return false;
+  }
+  if (isDuplicateRelay(tracker, synth.target, synth.suit)) {
+    panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : une prédiction pour le jeu #N${synth.target} a déjà été envoyée (doublon évité).`;
+    return false;
+  }
+  const targetChannels = effectiveChannels(tracker);
+  const siteChannelId = effectiveSiteChannelId(tracker);
+  if (!targetChannels.length && !siteChannelId) {
+    panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni Telegram, ni canal du site, sur la stratégie ou le panneau)`;
+    return false;
+  }
+  const out = fmt.renderMessage(opts.format !== undefined && opts.format !== null ? fmt.clampFormat(opts.format) : effectiveFormat(tracker), {
     gameNumber: synth.target,
     suit: synth.suit,
-    strategy: `${tracker.name} — même costume après perte (+${tracker.repeat.lead})`,
-    maxR: panel.maxR,
+    strategy: opts.label || tracker.name,
+    maxR: (opts.maxR !== undefined && opts.maxR !== null) ? opts.maxR : panel.maxR,
     status: 'en attente',
     rattrapage: 0,
   }, null);
-  if (advice) out.text = `${out.text}\n\n${advice}`;
+  // Idem : plus de conseil ajouté au message de prédiction envoyé.
   let ok = false;
   const errors = [];
-  for (const id of panel.channels) {
-    try {
-      await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
-      ok = true;
-    } catch (e) { errors.push(`${id} : ${e.message}`); }
+  const sentMessages = [];
+  if (targetChannels.length) {
+    const bot = typeof sender === 'function' ? sender() : null;
+    if (!bot) {
+      errors.push('Aucun token Telegram configuré');
+    } else {
+      for (const id of targetChannels) {
+        try {
+          const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
+          sentMessages.push({ chatId: id, messageId: m.message_id });
+          ok = true;
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
+      }
+    }
+  }
+  if (siteChannelId) {
+    const posted = postToSiteChannel(tracker, out.text);
+    if (posted) ok = true;
+    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;
@@ -503,12 +1214,14 @@ async function forwardRepeat(tracker, synth, advice) {
     tracker.lastSentAt = Date.now();
     panel.history.unshift({
       trackerId: tracker.id,
-      trackerName: `${tracker.name} (répétition)`,
+      trackerName: opts.historyName || tracker.name,
       target: synth.target,
       suit: synth.suit,
       sentAt: Date.now(),
     });
     panel.history = panel.history.slice(0, 100);
+    // CORRECTIF : idem forward() — ce relais est désormais suivi et vérifié.
+    if (sentMessages.length) pushPending(tracker, synth, sentMessages);
   } else if (errors.length) {
     panel.lastError = errors[0];
   }
@@ -517,7 +1230,9 @@ async function forwardRepeat(tracker, synth, advice) {
 
 // parcourt les prédictions déjà résolues de la stratégie suivie ; chaque
 // perte NON encore traitée pour la répétition déclenche l'envoi d'une
-// nouvelle prédiction (même costume, +lead), indépendamment des
+// nouvelle prédiction — soit le MÊME costume (mode 'meme', +lead), soit le
+// MIROIR du costume réellement sorti sur la main du joueur ce jeu-là (mode
+// 'miroir', voir sanitizeRepeat ci-dessus) — indépendamment des
 // déclencheurs rattrapage/perdue ci-dessus.
 async function processRepeat(tracker) {
   if (!tracker.repeat || !tracker.repeat.enabled) return;
@@ -527,10 +1242,187 @@ async function processRepeat(tracker) {
     if (pred.status === 'en attente') break; // pas encore résolue, on la retraite au prochain tour
     tracker.lastRepeatSource = pred.target;
     if (pred.status !== 'perdu' || !pred.suit) continue;
+    let repeatSuit = pred.suit;
+    if (tracker.repeat.mode === 'miroir') {
+      // costume réellement sorti sur la main du JOUEUR au jeu perdu (celui
+      // qui a fait perdre la prédiction) — on prend la 1ère carte de la
+      // main dans l'ordre de distribution, en repli mémoire (state.games)
+      // si la partie n'est plus en base.
+      const g = state.games.get(pred.target);
+      const actualSuits = g ? strategies.suitsOf(g.playerSuits) : [];
+      const actualSuit = actualSuits[0] || null;
+      const mirror = actualSuit ? strategies.MIRROR[actualSuit] : null;
+      if (!mirror) continue; // jeu introuvable ou costume non reconnu → on ignore ce tour
+      repeatSuit = mirror;
+    }
     const lead = tracker.repeat.lead;
-    const synth = { target: pred.target + lead, suit: pred.suit };
-    const advice = adviceForRepeat(tracker, lead);
-    await forwardRepeat(tracker, synth, advice);
+    const nextTarget = pred.target + lead;
+    // CORRECTIF (demande) : un jeu va de 1 à appConfig.MAX_GAME_NUMBER (1440)
+    // avant le retour à 1 (nouveau sabot) — une répétition calculée au-delà
+    // ne sera jamais jouée avant le rebouclage, on l'ignore.
+    if (nextTarget > appConfig.MAX_GAME_NUMBER) continue;
+    const synth = { target: nextTarget, suit: repeatSuit, kind: pred.kind || 'suit' };
+    await forwardRepeat(tracker, synth);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// « Série de même costume » : dès que `count` prédictions consécutives de la
+// stratégie suivie portent le même costume, on publie `nj` nouvelles
+// prédictions de ce costume, espacées de `n` jeux (a+n, a+2n, …) à partir du
+// dernier jeu de la série.
+// ---------------------------------------------------------------------------
+function detectStreaks(list, count) {
+  const out = [];
+  let run = [];
+  for (const p of list) {
+    const suit = p.suit || null;
+    if (!suit) { run = []; continue; }
+    if (run.length && run[run.length - 1].suit === suit) run.push(p);
+    else run = [p];
+    if (run.length === count) {
+      out.push({ suit, end: run[run.length - 1].target, members: run.map((x) => x.target) });
+      run = []; // on repart à zéro : une même série ne déclenche qu'une fois
+    }
+  }
+  return out;
+}
+
+// Progression live : nombre de prédictions consécutives du même costume déjà
+// observées depuis la dernière série consommée (ex. 1/2, 2/2). Recalculée à
+// chaque tick puis enregistrée sur le tracker.
+function streakProgressOf(tracker) {
+  const st = tracker.streak;
+  if (!st || !st.enabled) return null;
+  const list = trackerPredictions(tracker.key).filter((p) => Number(p.target) > (tracker.lastStreakEnd || 0));
+  let suit = null;
+  let run = 0;
+  for (const p of list) {
+    if (!p.suit) { run = 0; suit = null; continue; }
+    if (suit === p.suit) run += 1;
+    else { suit = p.suit; run = 1; }
+    if (run >= st.count) { run = 0; suit = null; } // série complète : déjà consommée
+  }
+  return { suit, seen: run, count: st.count, updatedAt: Date.now() };
+}
+
+async function processStreak(tracker) {
+  const st = tracker.streak;
+  if (!st || !st.enabled) { tracker.streakProgress = null; tracker.streakSession = null; return; }
+
+  // 1) session de publication en cours (reprise après redémarrage incluse) :
+  //    on continue la série de `nj` prédits là où on s'était arrêté.
+  const open = tracker.streakSession;
+  if (open && open.sent < open.total) {
+    for (let i = open.sent + 1; i <= open.total; i++) {
+      const target = open.end + (st.n * i);
+      if (target > appConfig.MAX_GAME_NUMBER) { open.sent = open.total; break; }
+      const ok = await forwardSynth(tracker, { target, suit: open.suit, kind: 'suit' }, {
+        label: `${tracker.name} — série de ${st.count} ${open.suit} (+${st.n}) — prédit ${i}/${open.total}`,
+        historyName: `${tracker.name} (série ${st.count}× même costume ${i}/${open.total})`,
+        format: st.format,
+        maxR: st.maxR,
+      });
+      if (!ok) break; // on retentera au prochain tour, le compteur est conservé
+      open.sent = i;
+    }
+    if (open.sent >= open.total) tracker.streakSession = null;
+    tracker.streakProgress = streakProgressOf(tracker);
+    return;
+  }
+
+  // 2) détection d'une nouvelle série de `count` prédictions consécutives.
+  const list = trackerPredictions(tracker.key);
+  const streaks = detectStreaks(list, st.count);
+  for (const s of streaks) {
+    if (s.end <= (tracker.lastStreakEnd || 0)) continue;
+    tracker.lastStreakEnd = s.end;
+    tracker.streakSession = { suit: s.suit, sent: 0, total: st.nj, end: s.end, startedAt: Date.now() };
+    const sess = tracker.streakSession;
+    for (let i = 1; i <= st.nj; i++) {
+      const target = s.end + (st.n * i);
+      if (target > appConfig.MAX_GAME_NUMBER) { sess.sent = sess.total; break; }
+      const ok = await forwardSynth(tracker, { target, suit: s.suit, kind: 'suit' }, {
+        label: `${tracker.name} — série de ${st.count} ${s.suit} (+${st.n}) — prédit ${i}/${st.nj}`,
+        historyName: `${tracker.name} (série ${st.count}× même costume ${i}/${st.nj})`,
+        format: st.format,
+        maxR: st.maxR,
+      });
+      if (!ok) break;
+      sess.sent = i;
+    }
+    if (tracker.streakSession && tracker.streakSession.sent >= tracker.streakSession.total) tracker.streakSession = null;
+    break; // une seule série traitée par tour
+  }
+  tracker.streakProgress = streakProgressOf(tracker);
+}
+
+// ---------------------------------------------------------------------------
+// « Comptage dizaine » — voir sanitizeDecade() plus haut pour la règle.
+// ---------------------------------------------------------------------------
+function lastKnownGameNumber() {
+  let max = 0;
+  for (const n of state.games.keys()) { const v = Number(n); if (Number.isFinite(v) && v > max) max = v; }
+  return max;
+}
+
+// une cible relayée est considérée VÉRIFIÉE quand son message de suivi n'est
+// plus « en attente » (voir verifyPending). Repli (aucun message suivi, ex.
+// canal du site uniquement) : le jeu et ses rattrapages ont été joués.
+function decadeTargetVerified(tracker, target, maxR) {
+  for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
+    const e = panel.pendingMessages[i];
+    if (e.trackerId === tracker.id && e.target === target) return e.status !== 'en attente';
+  }
+  return lastKnownGameNumber() >= target + Math.max(0, maxR || 0);
+}
+
+async function processDecade(tracker) {
+  const dc = tracker.decade;
+  if (!dc || !dc.enabled) return;
+  const maxR = (dc.maxR !== undefined && dc.maxR !== null) ? dc.maxR : panel.maxR;
+  const label = (suit) => `${tracker.name} — comptage dizaine ${suit} (+${dc.ni})`;
+
+  // 1) session en cours : on ne publie la suivante qu'APRÈS vérification de
+  //    la précédente, jusqu'à atteindre Nk prédictions.
+  const s = tracker.decadeSession;
+  if (s) {
+    if (s.sent >= dc.nk) { tracker.decadeSession = null; return; }
+    if (!decadeTargetVerified(tracker, s.last, maxR)) return; // on attend le résultat
+    const target = s.last + dc.ni;
+    if (target > appConfig.MAX_GAME_NUMBER) { tracker.decadeSession = null; return; }
+    const ok = await forwardSynth(tracker, { target, suit: s.suit, kind: 'suit' }, {
+      label: label(s.suit),
+      historyName: `${tracker.name} (comptage dizaine ${s.sent + 1}/${dc.nk})`,
+      format: dc.format,
+      maxR: dc.maxR,
+    });
+    if (!ok) return; // échec d'envoi : on retentera au prochain tour
+    s.last = target;
+    s.sent += 1;
+    if (s.sent >= dc.nk) tracker.decadeSession = null;
+    return;
+  }
+
+  // 2) pas de session : on cherche une nouvelle série de `count` prédictions
+  //    consécutives du même costume.
+  const list = trackerPredictions(tracker.key);
+  const streaks = detectStreaks(list, dc.count);
+  for (const st of streaks) {
+    if (st.end <= (tracker.lastDecadeEnd || 0)) continue;
+    tracker.lastDecadeEnd = st.end;
+    const first = st.end + dc.n;
+    if (first > appConfig.MAX_GAME_NUMBER) continue;
+    const ok = await forwardSynth(tracker, { target: first, suit: st.suit, kind: 'suit' }, {
+      label: `${tracker.name} — comptage dizaine ${st.suit} (série de ${dc.count}, +${dc.n})`,
+      historyName: `${tracker.name} (comptage dizaine 1/${dc.nk})`,
+      format: dc.format,
+      maxR: dc.maxR,
+    });
+    if (!ok) continue;
+    tracker.decadeSession = { suit: st.suit, last: first, sent: 1, startedAt: Date.now() };
+    if (dc.nk <= 1) tracker.decadeSession = null;
+    return; // une seule session à la fois
   }
 }
 
@@ -542,7 +1434,12 @@ async function tick() {
     for (const tracker of panel.trackers) {
       await processTracker(tracker);
       await processRepeat(tracker);
+      await processStreak(tracker);
+      await processDecade(tracker);
     }
+    // CORRECTIF : sans cet appel, les messages déjà relayés restaient
+    // « ⌛ en attente » pour toujours — voir le commentaire sur verifyPending.
+    await verifyPending();
     panel.lastScanAt = Date.now();
   } catch (e) {
     panel.lastError = e.message;
@@ -655,8 +1552,88 @@ async function optimizeTracker(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Déclencheurs fiables (≥ seuil), calculés directement sur l'historique réel
+// d'UNE stratégie — sans qu'un tracker « après perte » existe pour elle.
+// Réutilise simulateCombo (backtest) sur les mêmes règles que backtestTracker.
+// Utilisé par shoe-report.js pour le rapport PDF envoyé à chaque nouveau
+// sabot (voir la boucle principale dans bot.js).
+// ---------------------------------------------------------------------------
+function triggersAboveThreshold(key, name, minRatePct = 75, minSample = 2) {
+  const history = trackerPredictions(key).filter((p) => p.status === 'gagné' || p.status === 'perdu');
+  const results = [];
+  for (const kind of TRIGGER_KEYS) {
+    for (let n = 0; n <= 10; n++) {
+      const r = simulateCombo(history, kind, n);
+      if (r.sends >= minSample) {
+        const ratePct = Math.round(r.rate * 1000) / 10;
+        if (ratePct >= minRatePct) {
+          results.push({ kind, label: resultLabel(kind), n, sends: r.sends, wins: r.wins, ratePct });
+        }
+      }
+    }
+  }
+  results.sort((a, b) => b.ratePct - a.ratePct || b.sends - a.sends || a.n - b.n);
+  return { key, name, sampleSize: history.length, triggers: results };
+}
+
+function allTriggersAboveThreshold(minRatePct = 75, minSample = 2) {
+  return strategies.LIST.map((def) => triggersAboveThreshold(def.key, def.name, minRatePct, minSample));
+}
+
+// ---------------------------------------------------------------------------
 // Statut (pour le tableau de bord)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Compteurs affichés dans le panneau (« 1/2 », « 3/4 »…). Chaque valeur vient
+// d'un champ persisté du tracker, donc l'affichage reprend tel quel après un
+// redémarrage.
+// ---------------------------------------------------------------------------
+function countersFor(t) {
+  const out = [];
+  const st = t.streak || null;
+  if (st && st.enabled) {
+    const pr = t.streakProgress || { suit: null, seen: 0, count: st.count };
+    out.push({
+      key: 'streak',
+      label: `Série de même costume${pr.suit ? ` (${pr.suit})` : ''}`,
+      value: `${Math.min(pr.seen || 0, st.count)}/${st.count}`,
+      done: (pr.seen || 0) >= st.count,
+      hint: `${st.count} prédits du même costume → ${st.nj} prédit(s) espacés de +${st.n}`,
+    });
+    const sess = t.streakSession;
+    if (sess) {
+      out.push({
+        key: 'streakSend',
+        label: `Prédits publiés (série ${sess.suit})`,
+        value: `${sess.sent || 0}/${sess.total || st.nj}`,
+        done: false,
+        hint: `à partir de #N${sess.end} par pas de +${st.n}`,
+      });
+    }
+  }
+  const dc = t.decade || null;
+  if (dc && dc.enabled) {
+    const s = t.decadeSession;
+    out.push({
+      key: 'decade',
+      label: 'Comptage dizaine',
+      value: s ? `${s.sent || 0}/${dc.nk}` : `0/${dc.nk}`,
+      done: false,
+      hint: s ? `costume ${s.suit}, dernier #N${s.last}, pas +${dc.ni}` : `en attente d'une série de ${dc.count} même costume`,
+    });
+  }
+  if (t.counting || t.armed) {
+    out.push({
+      key: 'trigger',
+      label: `Décompte ${resultLabel(t.armedTrigger)}`,
+      value: t.armed ? `${t.armedNeeded || 0}/${t.armedNeeded || 0}` : `${t.armedSeen || 0}/${t.armedNeeded || 0}`,
+      done: !!t.armed,
+      hint: t.armed ? 'la prochaine prédiction est relayée' : 'prédictions laissées passer',
+    });
+  }
+  return out;
+}
+
 function status() {
   return {
     ...config(),
@@ -665,12 +1642,26 @@ function status() {
     options: options(),
     triggerKeys: TRIGGER_KEYS,
     triggerLabels: TRIGGER_LABELS,
+    // canaux du site disponibles pour le sélecteur (panneau + par stratégie
+    // suivie) — même liste que la page « Canaux » (voir siteChannelsView).
+    siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     trackers: panel.trackers.map((t) => ({
       id: t.id,
       key: t.key,
       name: t.name,
       triggers: t.triggers,
       repeat: t.repeat,
+      streak: t.streak || sanitizeStreak(null),
+      lastStreakEnd: t.lastStreakEnd || 0,
+      streakProgress: t.streakProgress || null,
+      streakSession: t.streakSession || null,
+      counters: countersFor(t),
+      decade: t.decade || sanitizeDecade(null),
+      lastDecadeEnd: t.lastDecadeEnd || 0,
+      decadeSession: t.decadeSession || null,
+      channels: t.channels,
+      siteChannelId: t.siteChannelId,
+      format: t.format,
       counting: t.counting,
       armedTrigger: t.armedTrigger,
       armedNeeded: t.armedNeeded,
@@ -680,8 +1671,16 @@ function status() {
       sentCount: t.sentCount,
       lastSentAt: t.lastSentAt,
       createdAt: t.createdAt,
+      bilan: tallyView(t.id),
     })),
     history: panel.history.slice(0, 20),
+    pendingVerification: panel.pendingMessages.filter((e) => e.status === 'en attente').length,
+    bilan: Object.values(panel.tally).reduce((acc, t) => ({
+      win: acc.win + (t.win || 0),
+      loss: acc.loss + (t.loss || 0),
+      cancelled: acc.cancelled + (t.cancelled || 0),
+      total: acc.total + (t.total || 0),
+    }), { win: 0, loss: 0, cancelled: 0, total: 0 }),
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -692,5 +1691,6 @@ function status() {
 module.exports = {
   panel, status, config, configure, restore, restoreFromDb, setSender, tick, test,
   parseChannels, options, addTracker, updateTracker, removeTracker,
-  backtestTracker, optimizeTracker, TRIGGER_KEYS, TRIGGER_LABELS,
+  backtestTracker, optimizeTracker, triggersAboveThreshold, allTriggersAboveThreshold,
+  TRIGGER_KEYS, TRIGGER_LABELS, pendingFor, tallyView, findConfigConflicts,
 };

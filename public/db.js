@@ -126,6 +126,7 @@ ALTER TABLE ai_strategies ADD COLUMN IF NOT EXISTS rate_min NUMERIC;
 ALTER TABLE ai_strategies ADD COLUMN IF NOT EXISTS rate_max NUMERIC;
 ALTER TABLE ai_strategies ADD COLUMN IF NOT EXISTS observations INT NOT NULL DEFAULT 1;
 ALTER TABLE ai_strategies ADD COLUMN IF NOT EXISTS rate_history JSONB;
+ALTER TABLE ai_strategies ADD COLUMN IF NOT EXISTS occurrences JSONB;
 
 -- Toutes les analyses IA sont conservées séparément des stratégies proposées.
 -- Le payload JSONB garde les découvertes, résumés et résultats complets.
@@ -429,20 +430,39 @@ async function clearPredictions(key) {
     : q(`DELETE FROM predictions`);
 }
 
+// CORRECTIF « bilans remis à zéro après redémarrage » : state.predictions
+// (côté predictor.js) ne vit qu'en RAM et repart vide à chaque redémarrage
+// du process (veille/redéploiement Render), alors que cette table, elle,
+// garde tout durablement. On recharge donc au démarrage : TOUTES les
+// prédictions encore « attente » (à re-suivre), + les `limit` dernières
+// prédictions résolues (gagne/perdu/annulé), toutes stratégies confondues —
+// même logique de plafond que state.predictions en fonctionnement normal.
+async function restorePredictions(limit = 300) {
+  const r = await q(
+    `(SELECT * FROM predictions WHERE status = 'attente')
+     UNION ALL
+     (SELECT * FROM predictions WHERE status <> 'attente' ORDER BY id DESC LIMIT $1)
+     ORDER BY id DESC`,
+    [limit]
+  );
+  return r ? r.rows : [];
+}
+
 // ---- stratégies IA (créées automatiquement ou manuellement, >= 75%) --------
 async function saveAiStrategy(item) {
   return q(
     `INSERT INTO ai_strategies (id, name, logic, trigger_txt, target_txt, evidence, risks,
         rate, support, minimum_sample, compatible_existing, origin, active, created_at,
-        rate_min, rate_max, observations, rate_history)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, coalesce($14, now()), $15,$16,$17,$18)
+        rate_min, rate_max, observations, rate_history, occurrences)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, coalesce($14, now()), $15,$16,$17,$18,$19)
      ON CONFLICT (id) DO UPDATE SET
        name=EXCLUDED.name, logic=EXCLUDED.logic, trigger_txt=EXCLUDED.trigger_txt,
        target_txt=EXCLUDED.target_txt, evidence=EXCLUDED.evidence, risks=EXCLUDED.risks,
        rate=EXCLUDED.rate, support=EXCLUDED.support, minimum_sample=EXCLUDED.minimum_sample,
        compatible_existing=EXCLUDED.compatible_existing, origin=EXCLUDED.origin,
        active=EXCLUDED.active, rate_min=EXCLUDED.rate_min, rate_max=EXCLUDED.rate_max,
-       observations=EXCLUDED.observations, rate_history=EXCLUDED.rate_history`,
+       observations=EXCLUDED.observations, rate_history=EXCLUDED.rate_history,
+       occurrences=EXCLUDED.occurrences`,
     [
       item.id, item.name, item.logic || null, item.trigger || null, item.target || null,
       item.evidence || null, item.risks || null, item.rate, item.support || null,
@@ -452,6 +472,7 @@ async function saveAiStrategy(item) {
       item.rateMax != null ? item.rateMax : item.rate,
       item.observations || 1,
       JSON.stringify(item.rateHistory || []),
+      JSON.stringify(item.occurrences || []),
     ]
   );
 }
@@ -478,6 +499,7 @@ async function loadAiStrategies() {
     rateMax: row.rate_max == null ? (row.rate == null ? null : Number(row.rate)) : Number(row.rate_max),
     observations: row.observations == null ? 1 : Number(row.observations),
     rateHistory: Array.isArray(row.rate_history) ? row.rate_history : [],
+    occurrences: Array.isArray(row.occurrences) ? row.occurrences : [],
   }));
 }
 
@@ -663,12 +685,23 @@ async function gameByNumber(n) {
   return r && r.rows[0] ? r.rows[0] : null;
 }
 
+// plage de jeux [minNumber, maxNumber] (bornes incluses), triés par numéro —
+// utilisé par formation.js pour vérifier, en UNE requête, si un costume perdu
+// réapparaît sur la main du joueur aux jeux qui suivent une perte.
+async function gamesInRange(minNumber, maxNumber) {
+  const r = await q(
+    `SELECT number, player_suits FROM games WHERE number >= $1 AND number <= $2 ORDER BY number`,
+    [Number(minNumber), Number(maxNumber)]
+  );
+  return r ? r.rows : [];
+}
+
 // prédictions d'une date
 async function predictionsByDate(dateStr, limit = 200) {
   const d = normalizeDate(dateStr);
   if (!d) return [];
   const r = await q(
-    `SELECT target, suit, hand, max_r, status, rattrapage, hit_number, created_at
+    `SELECT target, suit, hand, max_r, status, rattrapage, hit_number, created_at, strategy
        FROM predictions WHERE played_on = $1 ORDER BY target DESC LIMIT $2`, [d, limit]);
   return r ? r.rows : [];
 }
@@ -729,11 +762,12 @@ module.exports = {
   connect, status, saveGame, gamesByDate, dailySummary, exec, rows,
   savePrediction, closePrediction, predictionsByNumber, setSetting, getSetting, normalizeDate,
   saveStrategy, loadStrategies, deleteStrategy, strategyStats, strategyPredictions, clearPredictions,
+  restorePredictions,
   saveGate, loadGates,
   saveAnnouncement, deleteAnnouncement, loadAnnouncements,
   saveAiStrategy, loadAiStrategies, deleteAiStrategy, pruneAiStrategies,
   saveAiAnalysis, loadAiAnalyses,
-  lastGames, gameByNumber, predictionsByDate, predictionSummary,
+  lastGames, gameByNumber, gamesInRange, predictionsByDate, predictionSummary,
   overview, availableDates, readOnlyQuery,
   saveAppConfig, loadAppConfig, savePreditState, loadPreditState, saveAfterLossState, loadAfterLossState,
   dump, allSettings, lastPredictions, strategyRows, tableCounts,

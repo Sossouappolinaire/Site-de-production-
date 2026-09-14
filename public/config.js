@@ -64,7 +64,7 @@ const OPENROUTER = {
   // sans préavis) : si ce modèle disparaît, remplacez-le (liste à jour sur
   // https://openrouter.ai/models?fmt=free) via OPENROUTER_MODEL, sans toucher
   // au code.
-  MODEL: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
+  MODEL: process.env.OPENROUTER_MODEL || 'minimax/minimax-m3:free',
 };
 
 // ---------------------------------------------------------------------------
@@ -98,8 +98,17 @@ const DB_URL = process.env.DATABASE_URL || (ON_RENDER ? DB_INTERNAL : DB_EXTERNA
 
 module.exports = {
   BOT_TOKEN: process.env.BOT_TOKEN || '',
+  SHOP_BOT_TOKEN: process.env.SHOP_BOT_TOKEN || '',
   ADMIN_ID: Number(process.env.ADMIN_ID || 0),
   PORT: Number(process.env.PORT || 10000),
+
+  // URL publique du site déployé — utilisée pour construire le lien
+  // « Voir mon code » envoyé au client dans le bot boutique (pointe vers
+  // succes.html avec la référence de sa réservation). Render fournit
+  // RENDER_EXTERNAL_URL automatiquement ; sinon définir PUBLIC_URL à la
+  // main (ex. en local). Sans l'une des deux, ce bouton n'est simplement
+  // pas envoyé (seul le bouton « Payer » reste).
+  PUBLIC_URL: (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, ''),
 
   // Base PostgreSQL Render (en dur — se connecte sans variable Render).
   DATABASE_URL: DB_URL,
@@ -117,6 +126,14 @@ module.exports = {
   POLLINATIONS_API_KEY: POLLINATIONS.API_KEY,
   POLLINATIONS_BASE_URL: `${POLLINATIONS.BASE_URL}/v1`,
   POLLINATIONS_MODEL: POLLINATIONS.MODEL,
+
+  // SebPay (paiement Mobile Money, second fournisseur au choix de l'admin à
+  // côté de Money Fusion — voir shop.js/getPaymentProvider et paiement.js).
+  // Racine de l'API : POST {SEBPAY_API_URL}/api/v1/collections etc.
+  SEBPAY_API_URL: process.env.SEBPAY_API_URL || 'https://newapi.sebpay.bj',
+  // Ces deux valeurs par défaut sont vides — l'admin les saisit depuis le
+  // panneau Boutique → Paiement (stockées via store.js, pas ici en dur, car
+  // propres à chaque déploiement/compte).
 
   // Fournisseurs IA prioritaires (avec clé), utilisés avant Pollinations.
   // OPENROUTER est le service PAR DÉFAUT (essayé en premier).
@@ -146,8 +163,24 @@ module.exports = {
   // Règles de prédiction.
   SUIT_BY_LAST_DIGIT: { 2: '♦️', 5: '❤️', 6: '♣️', 9: '♠️' },
   LEAD: 2,
+  // Un sabot/journée va du jeu n°1 au jeu n°1440 : au-delà, le numéro
+  // n'existera jamais avant le retour à 1 (nouveau sabot). Toute cible de
+  // prédiction calculée au-delà doit être ignorée plutôt que publiée pour
+  // un jeu qui ne se produira pas — voir nextTarget() dans predictor.js.
+  MAX_GAME_NUMBER: 1440,
   DEFAULT_HAND: 'joueur',
   DEFAULT_B: Number(process.env.B || 3),
   DEFAULT_MAX_R: Number(process.env.MAX_R || 2),
   DEFAULT_FORMAT: Number(process.env.TG_FORMAT || 1),
+
+  // Bilan quotidien : envoyé UNE SEULE FOIS quand les numéros de jeu
+  // REPARTENT À 1 (fin de sabot), mais seulement si le sabot qui vient de
+  // se terminer a atteint AU MOINS ce nombre de jeux — c'est-à-dire qu'il
+  // est bien allé jusqu'au bout de la journée (jeu n°1440), et pas une
+  // remise à zéro isolée/anormale en plein milieu de la journée (coupure
+  // réseau, redémarrage du site source…). Une petite marge est laissée
+  // sous 1440 (au lieu d'exiger 1440 pile) car le tout dernier tour peut
+  // parfois manquer ou arriver incomplet dans le flux 1xbet juste avant le
+  // rebouclage — voir isNewShoe()/registerGames() dans predictor.js.
+  BILAN_MIN_GAMES: Number(process.env.BILAN_MIN_GAMES || 1430),
 };

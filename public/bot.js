@@ -5,29 +5,48 @@ const api = require('./api');
 const store = require('./store');
 const db = require('./db');
 const predit = require('./predit');
+const game21Predict = require('./game21-predict');
 const auth = require('./auth');
 const aiAuto = require('./ai-auto');
 const ai = require('./ai-analyzer');
+const aiQa = require('./ai-qa');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
+const combined = require('./combined');
+const suitStreak = require('./suit-streak');
+const cardsCount = require('./cards-count');
+const vip = require('./vip');
+const formationRelay = require('./formation-relay');
+const shoeReport = require('./shoe-report');
+const aiRepair = require('./ai-repair');
+const shop = require('./shop');
+const paiement = require('./paiement');
+const mirrorCounter = require('./mirror-counter');
+const dataTransfer = require('./data-transfer');
+const lossNotice = require('./loss-notice');
 const {
-  state, evaluate, verify, registerGames, setOnFinished, setOnGateChange, setOnConfirm,
+  state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
   initStrategies, setStrategyConfig, resetStrategy, strategyChannels, parityRuntime,
   bilanText, canSend, noteGateSent, gateView, autoView, noteSent, shadowRuntime, sweepAutoUnlock, unlockGate,
   fulfillAnnouncement, announcementsFor, queueFloor,
-  setOnAnnouncementSave, setOnAnnouncementDelete, restoreAnnouncements,
+  setOnAnnouncementSave, setOnAnnouncementDelete, restoreAnnouncements, restorePredictions,
 } = require('./predictor');
 
 let bot = null;
+let shopBot = null;
 let loopStarted = false;
 
 const saved = store.read();
 state.botToken = saved.botToken || config.BOT_TOKEN || '';
+// Token API dédié EXCLUSIVEMENT à la boutique de stratégies (shop.js) —
+// jamais partagé avec le bot principal ni avec un autre service.
+state.shopBotToken = saved.shopBotToken || config.SHOP_BOT_TOKEN || '';
 state.adminId = saved.adminId || config.ADMIN_ID;
 if (Array.isArray(saved.channels)) state.channels = saved.channels;
 if (Array.isArray(saved.activeChannels)) state.activeChannels = saved.activeChannels;
+if (Array.isArray(saved.siteChannels)) state.siteChannels = saved.siteChannels;
 if (saved.B) state.B = saved.B;
 if (saved.maxR != null) state.maxR = saved.maxR;
 state.hand = 'joueur';
@@ -38,18 +57,23 @@ if (Array.isArray(saved.aiAnalyses)) state.aiAnalyses = saved.aiAnalyses;
 if (Array.isArray(saved.aiStrategies)) state.aiStrategies = saved.aiStrategies;
 initStrategies();
 
-// jour calendaire (UTC) du dernier bilan envoyé — persisté pour ne pas
-// renvoyer/re-déclencher deux fois le même jour après un redémarrage.
-let lastBilanDate = saved.lastBilanDate || null;
+// numéro de sabot (state.shoeSeq) pour lequel le bilan a déjà été envoyé —
+// persisté pour ne pas en renvoyer un second après un redémarrage.
+let lastBilanShoeSeq = saved.lastBilanShoeSeq || 0;
 
-// date du jour à Abidjan (Côte d'Ivoire, GMT+0 toute l'année, pas d'heure
-// d'été) — sert à faire partir le bilan à 00h00 heure ivoirienne.
-const abidjanFmt = new Intl.DateTimeFormat('fr-CA', {
-  timeZone: 'Africa/Abidjan', year: 'numeric', month: '2-digit', day: '2-digit',
-});
-function abidjanDateString(d = new Date()) {
-  return abidjanFmt.format(d); // "YYYY-MM-DD"
-}
+// CORRECTIF « bilan pendant l'envoi des prédictions » : le hook de reset de
+// sabot (setOnShoeReset) est appelé en « fire-and-forget » par
+// resetShoe()/registerGames() — nécessaire pour ne jamais bloquer
+// resetShoe(), qui doit rester synchrone (d'autres écouteurs en dépendent :
+// shoe-report.js, after-loss.js). On ne lance donc PAS flushBilans()
+// directement depuis ce hook : on se contente de MÉMORISER qu'un bilan est
+// dû, et c'est tick() ci-dessous qui l'exécute et l'ATTEND explicitement,
+// juste après registerGames() et AVANT evaluate()/broadcast() — donc avant
+// toute diffusion de prédiction du nouveau jour. Comme les tick() ne se
+// chevauchent jamais (garde `ticking`), le bilan est ainsi garanti de
+// s'envoyer intégralement, un jour à la fois, sans jamais se mélanger avec
+// l'envoi des prédictions.
+let pendingBilan = null;
 
 // CORRECTIF : quand `persist()` est appelée alors que la base n'est pas
 // joignable (coupure, veille Render Free…), l'écriture DB est silencieusement
@@ -64,9 +88,11 @@ let dbDirty = false;
 function persist() {
   store.patch({
     botToken: state.botToken,
+    shopBotToken: state.shopBotToken,
     adminId: state.adminId,
     channels: state.channels,
     activeChannels: state.activeChannels,
+    siteChannels: state.siteChannels,
     B: state.B,
     maxR: state.maxR,
     hand: 'joueur',
@@ -75,7 +101,7 @@ function persist() {
     strategies: state.strategies,
     aiAnalyses: state.aiAnalyses,
     aiStrategies: state.aiStrategies,
-    lastBilanDate,
+    lastBilanShoeSeq,
   });
   if (db.ready) {
     // configuration complète (token, admin, canaux) : elle est relue au démarrage
@@ -84,12 +110,17 @@ function persist() {
       adminId: state.adminId || 0,
       channels: state.channels || [],
       activeChannels: state.activeChannels || [],
+      siteChannels: state.siteChannels || [],
       B: state.B,
       maxR: state.maxR,
       format: state.format,
       template: state.template || '',
       savedAt: new Date().toISOString(),
     });
+    // token de la boutique : clé séparée, jamais mêlée à saveAppConfig()
+    // (qui ne concerne que le bot principal).
+    db.setSetting('shop_bot_token', state.shopBotToken || '');
+    db.setSetting('site_channels', JSON.stringify(state.siteChannels || []));
     db.setSetting('B', state.B);
     db.setSetting('maxR', state.maxR);
     db.setSetting('format', state.format);
@@ -136,6 +167,8 @@ function listChannels() {
 
 const HELP =
   '🎴 *Bot Baccara 1xbet — main du JOUEUR*\n\n' +
+  'ℹ️ La boutique de stratégies (/start, /boutique, /langue) est sur son ' +
+  'propre bot Telegram — ce bot-ci ne gère que les prédictions et l\'admin.\n\n' +
   '*Jeu*\n' +
   '/live — jeu réellement en cours (cartes + costumes joueur)\n' +
   '/stats — statistiques des prédictions\n' +
@@ -185,7 +218,10 @@ const HELP =
   '/derniers [n] — derniers jeux enregistrés\n' +
   '/jeu <numéro> — fiche complète d\'un jeu\n' +
   '/pred [date] — prédictions enregistrées + taux\n' +
-  '/sql <SELECT ...> — requête de lecture seule';
+  '/sql <SELECT ...> — requête de lecture seule\n\n' +
+  '*Export / Import*\n' +
+  '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA)\n' +
+  '/importer — puis envoie un fichier .xlsx (ou envoie-le directement, sans /importer) pour restaurer la configuration';
 
 function settingsText() {
   return (
@@ -214,9 +250,90 @@ function wire(b) {
   });
   b.on('channel_post', (m) => rememberChannel(m.chat));
 
-  b.onText(/^\/(start|aide|help)/, (msg) =>
+  // ---------------------------------------------------------------------
+  // La boutique de stratégies (shop.js) vit désormais sur son PROPRE bot
+  // Telegram, avec son propre token (voir wireShop() + state.shopBotToken
+  // ci-dessous) : le bot principal ne gère plus /boutique, /langue, /start
+  // ni la saisie des codes de paiement.
+  // ---------------------------------------------------------------------
+
+  // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une
+  // commande (ne commence pas par /) est transmis à l'IA générale
+  // (ai-qa.js) qui répond au nom de « Bak Sossou IA » en s'appuyant sur les
+  // vraies données du bot. isAdmin détermine seulement si les détails
+  // techniques d'une éventuelle erreur IA sont visibles (jamais montrés à un
+  // utilisateur normal).
+  b.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+    if (!msg.chat || msg.chat.type !== 'private') return;
+
+    try {
+      const entry = await aiQa.ask(msg.text, { isAdmin: isAdmin(msg) });
+      await b.sendMessage(msg.chat.id, entry.answer);
+    } catch (_) {
+      // question vide ou erreur imprévue : on reste silencieux plutôt que
+      // de spammer l'utilisateur avec un message d'erreur technique.
+    }
+  });
+
+  b.onText(/^\/(aide|help)/, (msg) =>
     b.sendMessage(msg.chat.id, HELP, { parse_mode: 'Markdown' })
   );
+
+  // ---------------------------------------------------------------------
+  // Export / import complet de la configuration (tokens, canaux, format,
+  // configuration de chaque stratégie, stratégies créées par l'IA,
+  // historique des analyses IA) en un classeur Excel — réservé à
+  // l'administrateur : le fichier contient les tokens API en clair.
+  // ---------------------------------------------------------------------
+  b.onText(/^\/exporter\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    try {
+      const buffer = dataTransfer.exportBuffer();
+      const filename = `baccara-config-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      await b.sendDocument(
+        msg.chat.id,
+        buffer,
+        { caption: '📦 Export complet de la configuration (tokens, canaux, stratégies, stratégies IA, analyses IA).' },
+        { filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+      );
+    } catch (e) {
+      await b.sendMessage(msg.chat.id, `❌ Export impossible : ${e.message}`);
+    }
+  });
+
+  b.onText(/^\/importer\b/, (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    b.sendMessage(
+      msg.chat.id,
+      "📥 Envoie maintenant le fichier .xlsx à importer (ou envoie-le directement à tout moment, sans passer par /importer)."
+    );
+  });
+
+  // n'importe quel document .xlsx envoyé par l'administrateur déclenche
+  // l'import — pas besoin d'avoir tapé /importer juste avant.
+  b.on('message', async (msg) => {
+    if (!msg.document) return;
+    if (!isAdmin(msg)) return; // silencieux : un compte non-admin n'a même pas confirmation que la fonctionnalité existe
+    const name = String(msg.document.file_name || '');
+    if (!/\.xlsx$/i.test(name)) return; // ignore les autres pièces jointes
+    try {
+      const link = await b.getFileLink(msg.document.file_id);
+      const resp = await fetch(link);
+      if (!resp.ok) throw new Error(`Téléchargement du fichier impossible (HTTP ${resp.status}).`);
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const report = dataTransfer.importBuffer(buffer);
+      persist();
+      if (db.ready) await saveConfigsToDb();
+      const lines = ['✅ Import terminé.'];
+      if (report.applied.length) lines.push(`Appliqué : ${report.applied.join(', ')}`);
+      if (report.skipped.length) lines.push(`Feuilles absentes dans ce fichier (ignorées, réglages actuels conservés) : ${report.skipped.join(', ')}`);
+      lines.push("⚠️ Si le token du bot a changé, redémarre la connexion (Réglages → Bot Telegram → Enregistrer et redémarrer).");
+      await b.sendMessage(msg.chat.id, lines.join('\n'));
+    } catch (e) {
+      await b.sendMessage(msg.chat.id, `❌ Import impossible : ${e.message}`);
+    }
+  });
 
   // /jeu SEUL = jeu en cours ; /jeu <n> est traité plus bas (fiche d'un jeu de la base)
   b.onText(/^\/(?:live|encours)\b|^\/jeu(?:@\w+)?\s*$/, (msg) =>
@@ -393,7 +510,7 @@ function wire(b) {
     );
   });
 
-  b.onText(/^\/pred(?:ictions)?(?:\s+(\S+))?/, async (msg, m) => {
+  b.onText(/^\/pred(?:ictions)?\b(?:\s+(\S+))?$/, async (msg, m) => {
     if (!db.ready) return b.sendMessage(msg.chat.id, '🔴 Aucune base de données connectée (/setdb).');
     const sum = await db.predictionSummary(m[1]);
     if (!sum) return b.sendMessage(msg.chat.id, '⚠️ Date invalide. Exemple : /pred 2/04/2026');
@@ -926,7 +1043,17 @@ function wire(b) {
     b.sendMessage(msg.chat.id, `📊 Bilan publié : ${r.strategies.length} stratégie(s) + IA (${r.ai.ok ? 'envoyé' : r.ai.error || 'non envoyé'}).`);
   });
 
-  b.onText(/^\/stats/, (msg) => {
+  // déclenchement manuel du rapport PDF de fin de sabot (déclencheurs ≥75%
+  // des 7 stratégies + conseil ciblé) — utile pour le tester sans attendre
+  // un vrai retour du jeu à #N1.
+  b.onText(/^\/rapportsabot\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    b.sendMessage(msg.chat.id, '📄 Génération du rapport en cours…');
+    const ok = await sendShoeReport('commande /rapportsabot', state.shoeSeq || 0);
+    if (!ok) b.sendMessage(msg.chat.id, "❌ Échec de l'envoi (aucun token, aucun administrateur configuré, ou erreur — voir les logs).");
+  });
+
+  b.onText(/^\/stats\b/, (msg) => {
     const s = stats();
     b.sendMessage(
       msg.chat.id,
@@ -937,6 +1064,312 @@ function wire(b) {
         }).join('\n') +
         `\n\nTour live : ${state.live ? '#N' + state.live.number : '—'}`
     );
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Bot DÉDIÉ à la boutique de stratégies (shop.js) — token API totalement
+// séparé de celui du bot principal (state.botToken). Ce bot ne gère QUE :
+// accueil multilingue, liste de stratégies, saisie du code de paiement,
+// explication IA restreinte à la stratégie achetée. Voir shop.js.
+// ---------------------------------------------------------------------------
+function wireShop(b) {
+  b.on('polling_error', (e) => { state.shopBotError = e.message; });
+
+  function langKeyboard() {
+    return { inline_keyboard: shop.LANGS.map((l) => [{ text: `${l.flag} ${l.label}`, callback_data: `lang:${l.code}` }]) };
+  }
+
+  async function sendWelcome(chatId) {
+    await b.sendMessage(chatId, shop.t('welcome', 'fr'), { parse_mode: 'Markdown', reply_markup: langKeyboard() });
+  }
+
+  async function sendShopMenu(chatId, userId, lang) {
+    // Les stratégies déjà achetées par CET utilisateur ne réapparaissent
+    // plus dans la liste principale — elles restent accessibles via le
+    // bouton « Mes stratégies » (voir myitems:list ci-dessous).
+    const items = shop.listActive().filter((it) => !shop.hasUnlocked(userId, it.id));
+    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}${Number.isFinite(it.price) ? ' — ' + it.price + '€' : ''}`, callback_data: `shop:${it.id}` }]);
+    if (shop.listUnlocked(userId).length) {
+      rows.push([{ text: shop.t('myItemsButton', lang), callback_data: 'myitems:list' }]);
+    }
+    rows.push([{ text: shop.t('supportButton', lang), callback_data: 'support:start' }]);
+    await b.sendMessage(chatId, items.length ? shop.t('shopIntro', lang) : shop.t('noItems', lang), { reply_markup: { inline_keyboard: rows } });
+  }
+
+  async function sendMyItemsMenu(chatId, userId, lang) {
+    const items = shop.listUnlocked(userId);
+    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}`, callback_data: `shop:${it.id}` }]);
+    await b.sendMessage(chatId, items.length ? shop.t('myItemsIntro', lang) : shop.t('noItemsUnlocked', lang), { reply_markup: { inline_keyboard: rows } });
+  }
+
+  // Présentation d'une stratégie débloquée (code accepté, ou réouverture
+  // depuis « Mes stratégies ») + les deux boutons de suite : « Répondre-moi »
+  // (pose une question à l'IA sur cette stratégie) et « J'ai compris »
+  // (remerciement + conseil de formation, voir shop.closingMessage). La
+  // saisie libre au clavier reste TOUJOURS possible en parallèle (voir le
+  // handler 'message' plus bas, qui route déjà vers explain()/closingMessage
+  // selon le texte tapé) — les boutons ne font que rendre ces deux actions
+  // explicites, sans rien retirer à l'ancien fonctionnement au clavier.
+  async function sendUnlockedPresentation(chatId, userId, item, lang) {
+    shop.setActiveItem(userId, item.id);
+    const text = await shop.fullPresentation(item, lang);
+    await b.sendMessage(chatId, text);
+    const buttons = [[
+      { text: shop.t('askButton', lang), callback_data: `strategy:ask:${item.id}` },
+      { text: shop.t('understoodButton', lang), callback_data: `strategy:understood:${item.id}` },
+    ]];
+    await b.sendMessage(chatId, shop.t('canAsk', lang), { reply_markup: { inline_keyboard: buttons } });
+  }
+
+  b.on('callback_query', async (q) => {
+    try {
+      const data = String(q.data || '');
+      const chatId = q.message && q.message.chat && q.message.chat.id;
+      const userId = q.from && q.from.id;
+      if (!chatId || !userId) return b.answerCallbackQuery(q.id);
+
+      if (data.startsWith('lang:')) {
+        const lang = data.slice(5);
+        shop.setLang(userId, lang);
+        await b.answerCallbackQuery(q.id, { text: shop.t('langSaved', lang) });
+        await sendShopMenu(chatId, userId, lang);
+        return;
+      }
+      if (data.startsWith('strategy:ask:')) {
+        const itemId = data.slice('strategy:ask:'.length);
+        const lang = shop.getLang(userId) || 'fr';
+        shop.setActiveItem(userId, itemId); // garantit le routage vers l'IA (explain()) au prochain message tapé
+        await b.answerCallbackQuery(q.id);
+        await b.sendMessage(chatId, shop.t('askPrompt', lang));
+        return;
+      }
+      if (data.startsWith('strategy:understood:')) {
+        const itemId = data.slice('strategy:understood:'.length);
+        const item = shop.getItem(itemId);
+        const lang = shop.getLang(userId) || 'fr';
+        await b.answerCallbackQuery(q.id);
+        if (!item) return;
+        const closing = await shop.closingMessage(item, lang);
+        await b.sendMessage(chatId, closing);
+        // Explication détaillée du déclencheur (uniquement pour un
+        // déclencheur IA — voir shop.explainTrigger).
+        const explanation = shop.explainTrigger(item);
+        if (explanation) await b.sendMessage(chatId, explanation);
+        return;
+      }
+      if (data === 'support:start') {
+        const lang = shop.getLang(userId) || 'fr';
+        shop.setPendingSupport(userId, true);
+        await b.answerCallbackQuery(q.id);
+        await b.sendMessage(chatId, shop.t('supportAskAmount', lang));
+        return;
+      }
+      if (data === 'myitems:list') {
+        const lang = shop.getLang(userId) || 'fr';
+        await b.answerCallbackQuery(q.id);
+        await sendMyItemsMenu(chatId, userId, lang);
+        return;
+      }
+      if (data.startsWith('support:pay:')) {
+        const lang = shop.getLang(userId) || 'fr';
+        const amountUsd = Number(data.slice('support:pay:'.length));
+        await b.answerCallbackQuery(q.id);
+        if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
+        const rate = shop.getUsdToXof();
+        const amountLocal = Math.round(amountUsd * rate);
+        const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
+        const pay = await paiement.initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal });
+        if (pay.ok) {
+          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: pay.checkoutUrl }]];
+          await b.sendMessage(chatId, shop.t('supportPayIntro', lang), { reply_markup: { inline_keyboard: buttons } });
+          return;
+        }
+        console.error('Soutien (initiation) :', pay.error);
+        return;
+      }
+      if (data.startsWith('shop:')) {
+        const itemId = data.slice(5);
+        const item = shop.getItem(itemId);
+        const lang = shop.getLang(userId) || 'fr';
+        if (!item || !item.active) {
+          await b.answerCallbackQuery(q.id);
+          return b.sendMessage(chatId, shop.t('itemInactive', lang));
+        }
+        if (shop.hasUnlocked(userId, itemId)) {
+          // déjà acheté : on rouvre directement le mode questions, sans redemander le code.
+          await b.answerCallbackQuery(q.id);
+          return sendUnlockedPresentation(chatId, userId, item, lang);
+        }
+        shop.setPendingCode(userId, itemId);
+        await b.answerCallbackQuery(q.id);
+        // Lien de paiement direct Money Fusion (paiement.js, SANS appel API —
+        // voir commentaire en tête de ce fichier) : le lien est construit
+        // localement (id du modèle + montant + nom du client), pas de
+        // vérification automatique du paiement. La saisie manuelle d'un
+        // code reste possible en parallèle (ex. code donné par l'admin par
+        // un autre moyen), voir le handler 'message' plus bas.
+        const payAmountLocal = shop.paymentAmountFor(item);
+        {
+          // Verrou de 3 minutes sur CETTE stratégie (voir paiement.js) : tant
+          // qu'un autre acheteur a une réservation active dessus, on ne
+          // relance pas de nouveau paiement — ça évite que deux acheteurs
+          // se voient attribuer/afficher en même temps le même code (unique
+          // et partagé tant qu'il n'a pas été consommé), qui pourrait être
+          // régénéré pour l'un pendant que l'autre le croit encore valide.
+          const lock = paiement.lockItem(itemId, userId);
+          if (!lock) {
+            return b.sendMessage(chatId, shop.t('itemLocked', lang));
+          }
+          const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
+          // Fenêtre d'information envoyée DÈS que le verrou de 3 minutes est
+          // obtenu (avant même de générer le lien de paiement) : elle
+          // confirme au client qu'il est désormais prioritaire sur cette
+          // stratégie et personne d'autre ne pourra lancer de paiement
+          // pendant ce délai.
+          const infoText = shop.t('reservationInfo', lang)
+            .replace('{lastName}', q.from.last_name || '—')
+            .replace('{firstName}', q.from.first_name || '—')
+            .replace('{userId}', String(userId))
+            .replace('{strategy}', item.aiName);
+          await b.sendMessage(chatId, infoText);
+          const pay = await paiement.initiatePayment({
+            item: { ...item, payAmountLocal },
+            userId,
+            chatId,
+            lang,
+            buyerName,
+          });
+          if (pay.ok) {
+            // Le code COURANT de la stratégie est attaché à cette réservation
+            // avec 10s de délai (pas immédiatement au clic) : tant que ce
+            // délai n'est pas écoulé, succes.html affiche « code pas encore
+            // disponible » si le client clique trop vite sur « Voir mon
+            // code ». Passé les 10s, le code apparaît sur succes.html au
+            // clic sur ce bouton — jamais envoyé dans le chat Telegram. On
+            // revérifie juste avant l'attachement que CETTE réservation
+            // précise (pay.ref) est toujours active : si elle a expiré
+            // entre-temps (voir paiement.js — expireRecord, déclenché par le
+            // minuteur de 3 min posé à l'initiation), on n'attache rien.
+            // UNIQUEMENT pour Money Fusion (lien fixe, confirmation par
+            // simple arrivée sur succes.html) : pour SebPay, le code n'est
+            // attaché qu'à la confirmation RÉELLE du webhook (voir
+            // paiement.confirmSebpayPayment, server.js — POST
+            // /api/sebpay/webhook), jamais par ce minuteur aveugle.
+            if (pay.provider !== 'sebpay') {
+              setTimeout(() => {
+                const rec = paiement.getRecord(pay.ref);
+                if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
+                paiement.attachCode(pay.ref, item.code);
+              }, 10000);
+            }
+            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: pay.checkoutUrl }]];
+            await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
+            // 30s après avoir ouvert le lien de paiement, rappel : le client
+            // peut aussi taper directement un code déjà en sa possession
+            // (ex. donné par l'admin) — pas de vérification automatique du
+            // paiement en mode lien direct, donc ce message reste utile même
+            // après avoir cliqué sur Payer, tant que rien n'est débloqué.
+            setTimeout(() => {
+              if (shop.hasUnlocked(userId, itemId)) return; // déjà débloqué entre-temps, inutile de relancer
+              b.sendMessage(chatId, shop.t('askCode', lang)).catch((e) => {
+                console.error('Paiement (rappel code) :', e.message);
+              });
+            }, 30000);
+            return;
+          }
+          paiement.unlockItem(itemId); // l'initiation a échoué : on relâche le verrou immédiatement
+          console.error('Paiement (initiation) :', pay.error);
+        }
+        return b.sendMessage(chatId, shop.t('askCode', lang));
+      }
+      await b.answerCallbackQuery(q.id);
+    } catch (e) {
+      // AVANT : l'erreur était totalement avalée (catch (_) {}) — un clic sur
+      // un bouton (langue, stratégie...) qui échouait en interne ne laissait
+      // AUCUNE trace : le bouton semblait "ne pas répondre" sans qu'on sache
+      // pourquoi. On log désormais l'erreur et on la garde visible dans
+      // /api/shop/bot (state.shopBotError), comme pour polling_error.
+      console.error('Boutique — erreur callback_query (' + (q.data || '?') + ') :', e && e.message);
+      state.shopBotError = e && e.message ? e.message : String(e);
+      try { await b.answerCallbackQuery(q.id); } catch (__) {}
+    }
+  });
+
+  b.onText(/^\/boutique/, async (msg) => {
+    const userId = msg.from.id;
+    const lang = shop.getLang(userId);
+    if (!lang) return sendWelcome(msg.chat.id);
+    return sendShopMenu(msg.chat.id, userId, lang);
+  });
+
+  b.onText(/^\/langue/, (msg) => sendWelcome(msg.chat.id));
+  b.onText(/^\/start/, (msg) => sendWelcome(msg.chat.id));
+
+  // Code de paiement saisi une fois avec succès → CODE EXPIRÉ immédiatement
+  // (voir shop.redeem()) : un nouveau code est régénéré automatiquement pour
+  // cette stratégie, donc l'ancien code ne peut plus servir à personne.
+  b.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+    if (!msg.chat || msg.chat.type !== 'private') return;
+    const userId = msg.from && msg.from.id;
+    if (!userId) return;
+    const lang = shop.getLang(userId);
+    if (!lang) return sendWelcome(msg.chat.id);
+
+    // Montant de soutien en $ attendu (bouton « Soutien » du menu) : on
+    // valide le nombre, on affiche l'équivalent en F CFA, et on propose un
+    // bouton « Payer » (voir callback support:pay:<montant> plus haut).
+    if (shop.getPendingSupport(userId)) {
+      const amountUsd = Number(String(msg.text).replace(',', '.').trim());
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+        return b.sendMessage(msg.chat.id, shop.t('supportAmountInvalid', lang));
+      }
+      shop.clearPendingSupport(userId);
+      const rate = shop.getUsdToXof();
+      const amountLocal = Math.round(amountUsd * rate);
+      const text = shop.t('supportAmountShown', lang)
+        .replace('{usd}', String(amountUsd))
+        .replace('{francs}', String(amountLocal));
+      const buttons = [[{ text: `💛 ${shop.t('payButton', lang)}`, callback_data: `support:pay:${amountUsd}` }]];
+      return b.sendMessage(msg.chat.id, text, { reply_markup: { inline_keyboard: buttons } });
+    }
+
+    const pendingItemId = shop.getPendingCode(userId);
+    if (pendingItemId) {
+      const r = shop.redeem(userId, pendingItemId, msg.text);
+      if (r.ok) {
+        await b.sendMessage(msg.chat.id, shop.t('unlockedHeader', lang));
+        return sendUnlockedPresentation(msg.chat.id, userId, r.item, lang);
+      }
+      if (r.reason === 'used') return b.sendMessage(msg.chat.id, shop.t('codeUsed', lang));
+      if (r.reason === 'inactive') return b.sendMessage(msg.chat.id, shop.t('itemInactive', lang));
+      return b.sendMessage(msg.chat.id, shop.t('codeWrong', lang));
+    }
+    const activeItemId = shop.getActiveItem(userId);
+    if (activeItemId) {
+      const item = shop.getItem(activeItemId);
+      if (item) {
+        // L'acheteur signale qu'il a compris (fr/en/ar/ru/es, voir
+        // shop.isUnderstoodMessage) → on conclut la présentation : remerciement
+        // + bonne chance + vrai conseil du panneau Formation pour CETTE
+        // stratégie (voir shop.closingMessage / formation.js), au lieu de
+        // renvoyer ça à l'IA de Q&A comme une question ordinaire.
+        if (shop.isUnderstoodMessage(msg.text)) {
+          const closing = await shop.closingMessage(item, lang);
+          await b.sendMessage(msg.chat.id, closing);
+          // Explication détaillée du déclencheur (uniquement pour un
+          // déclencheur IA — voir shop.explainTrigger, retourne null pour
+          // une stratégie du catalogue existant, qui n'en a pas besoin).
+          const explanation = shop.explainTrigger(item);
+          if (explanation) await b.sendMessage(msg.chat.id, explanation);
+          return;
+        }
+        const answer = await shop.explain(item, msg.text, lang);
+        return b.sendMessage(msg.chat.id, answer);
+      }
+    }
+    return sendShopMenu(msg.chat.id, userId, lang);
   });
 }
 
@@ -952,6 +1385,14 @@ function deactivate(id) {
 }
 
 async function startBot(token) {
+  // Validation AVANT toute mutation d'état / persistance : un token en
+  // conflit avec celui de la boutique ne doit jamais être enregistré, même
+  // temporairement (sinon un redémarrage ultérieur repartirait bloqué).
+  const nextToken = token ? token.trim() : state.botToken;
+  if (nextToken && state.shopBotToken && nextToken === state.shopBotToken) {
+    state.botError = 'Ce token est déjà utilisé par la boutique : configure un token différent pour le bot principal.';
+    return { ok: false, error: state.botError };
+  }
   if (token) state.botToken = token.trim();
   persist();
   state.botError = null;
@@ -984,6 +1425,108 @@ function botStatus() {
     tokenMasked: state.botToken ? state.botToken.slice(0, 8) + '••••••' + state.botToken.slice(-4) : null,
     adminId: state.adminId,
     error: state.botError || null,
+  };
+}
+
+// Déconnexion volontaire : arrête le polling, efface le token en mémoire ET
+// en base (data.json + PostgreSQL via persist()), afin qu'aucun ancien token
+// ne reste actif ni ne revienne après un redémarrage. L'API Telegram cesse de
+// répondre pour ce bot jusqu'à ce qu'un nouveau token soit configuré.
+async function disconnectBot() {
+  if (bot) {
+    try { await bot.stopPolling({ cancel: true }); } catch (_) {}
+    bot = null;
+  }
+  state.botToken = '';
+  state.botUsername = null;
+  state.botError = null;
+  persist();
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Cycle de vie du bot DÉDIÉ à la boutique — token strictement séparé du bot
+// principal (voir wireShop() et la vérification croisée ci-dessus/ci-dessous :
+// aucun des deux bots ne démarre si les deux tokens sont identiques).
+// ---------------------------------------------------------------------------
+// Paiement confirmé automatiquement (arrivée du client sur succes.html
+// après validation Money Fusion, voir paiement.js/markPaidOnArrival) :
+// - achat de stratégie (record.kind === 'item') : le code reste uniquement
+//   sur succes.html ; le client doit le copier et l'envoyer au bot.
+// - soutien (record.kind === 'support') : AUCUN code n'est envoyé, juste un
+//   message de remerciement personnalisé (voir shop.supportThanksMessage).
+// Enregistrée une seule fois (le handler regarde `shopBot` à l'appel, pas à
+// l'enregistrement, donc il fonctionne même si le bot redémarre entre-temps).
+// ---------------------------------------------------------------------------
+paiement.setPaidHandler(async (record) => {
+  if (record.kind === 'support') {
+    if (!shopBot) return;
+    try {
+      await shopBot.sendMessage(record.chatId, shop.supportThanksMessage(record, record.lang));
+    } catch (e) { console.error('Soutien (envoi Telegram après paiement) :', e.message); }
+    return;
+  }
+});
+
+// À l'expiration, seul le code courant lié à ce paiement est remplacé.
+// Aucun message « Code accepté » n'est envoyé automatiquement.
+paiement.setExpiredHandler(async (record) => {
+  if (record.kind === 'item') shop.expirePaymentCode(record.itemId, record.code);
+});
+
+async function startShopBot(token) {
+  // Même garde-fou que startBot() ci-dessus, dans l'autre sens : rien n'est
+  // persisté si le token entre en conflit avec celui du bot principal.
+  const nextToken = token ? token.trim() : state.shopBotToken;
+  if (nextToken && state.botToken && nextToken === state.botToken) {
+    state.shopBotError = 'Ce token est déjà utilisé par le bot principal : configure un token différent, réservé uniquement à la boutique.';
+    return { ok: false, error: state.shopBotError };
+  }
+  if (token) state.shopBotToken = token.trim();
+  persist();
+  state.shopBotError = null;
+  if (shopBot) {
+    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
+    shopBot = null;
+  }
+  if (!state.shopBotToken) {
+    state.shopBotError = 'Aucun token configuré';
+    return { ok: false, error: state.shopBotError };
+  }
+  try {
+    shopBot = new TelegramBot(state.shopBotToken, { polling: true });
+    wireShop(shopBot);
+    const me = await shopBot.getMe();
+    state.shopBotUsername = me.username;
+    return { ok: true, username: me.username };
+  } catch (e) {
+    state.shopBotError = e.message;
+    shopBot = null;
+    return { ok: false, error: e.message };
+  }
+}
+
+// Déconnexion volontaire du bot boutique — même logique que disconnectBot()
+// ci-dessus, côté token séparé (voir shop_bot_token dans persist()).
+async function disconnectShopBot() {
+  if (shopBot) {
+    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
+    shopBot = null;
+  }
+  state.shopBotToken = '';
+  state.shopBotUsername = null;
+  state.shopBotError = null;
+  persist();
+  return { ok: true };
+}
+
+function shopBotStatus() {
+  return {
+    running: !!shopBot,
+    username: state.shopBotUsername || null,
+    tokenSet: !!state.shopBotToken,
+    tokenMasked: state.shopBotToken ? state.shopBotToken.slice(0, 8) + '••••••' + state.shopBotToken.slice(-4) : null,
+    error: state.shopBotError || null,
   };
 }
 
@@ -1055,7 +1598,6 @@ function dropSender(token) {
 const bilanPending = new Set();
 let lastLiveNumber = null;
 let lastShoeSeq = 0;
-let firstTick = true;
 // CORRECTIF : setInterval(tick, 1500ms) ne garantit pas qu'un tick se termine
 // avant que le suivant démarre. Si un tour (appel réseau, envoi Telegram) est
 // lent, deux exécutions de tick() pouvaient se chevaucher et repérer TOUTES
@@ -1063,28 +1605,55 @@ let firstTick = true;
 // pas encore mis à jour par la première) → double envoi dans le canal public.
 let ticking = false;
 
-async function sendBilan(key) {
+async function sendBilan(key, snapshot) {
   const cfg = state.strategies[key] || {};
   if (cfg.bilan === false) return;
   const sender = senderFor();
   if (!sender) return;
-  const text = bilanText(key);
+  // CORRECTIF « bilans cumulés » : snapshot figé fourni par flushBilans()
+  // (voir plus bas) — sans lui (appel manuel /bilan sur UNE stratégie via
+  // le panneau admin), on retombe sur l'état live, comportement inchangé.
+  const text = bilanText(key, snapshot);
   for (const id of strategyChannels(key)) {
     try { await sender.sendMessage(id, text); countSent(key); }
     catch (e) { console.error('Bilan non envoyé', id, e.message); }
   }
 }
 
-// Publie le bilan COMPLET (un par jour calendaire) : chaque stratégie ayant
-// prédit + les prédictions IA, puis remet les compteurs à zéro sur le site.
+// Déclenche le bilan complet UNIQUEMENT quand le sabot qui vient de se
+// terminer représente une VRAIE journée (au moins config.BILAN_MIN_GAMES
+// jeux joués) — filtre les remises à zéro isolées/anormales en cours de
+// journée. Une seule fois par sabot (garde lastBilanShoeSeq, persistée).
+// CORRECTIF : ne fait plus qu'ENREGISTRER la demande — voir pendingBilan
+// ci-dessus et son traitement (await) dans tick().
+function sendBilanIfDayOver(reason, seq, previousMax) {
+  if (!previousMax || previousMax < config.BILAN_MIN_GAMES) return; // pas une vraie fin de journée
+  if (seq === lastBilanShoeSeq) return;                              // déjà envoyé pour ce sabot
+  pendingBilan = { reason, seq, previousMax };
+}
+
+// Publie le bilan COMPLET : chaque stratégie ayant prédit + les prédictions
+// IA, puis remet les compteurs à zéro sur le site. Appelée par
+// sendBilanIfDayOver() ci-dessus (fin de journée réelle) ou manuellement
+// (commande /bilan).
 async function flushBilans(reason = 'nouveau jour') {
   bilanPending.clear();
+  // CORRECTIF « bilans cumulés » : instantané figé de state.predictions AU
+  // MOMENT où le bilan démarre. L'envoi Telegram (plusieurs canaux, un par
+  // stratégie) prend plusieurs secondes ; pendant ce temps, le jeu reprend
+  // déjà au numéro 1 et de NOUVELLES prédictions du jour suivant sont créées
+  // (et parfois même déjà résolues) par le tick() en cours. Sans cet
+  // instantané, bilanText(key) relisait l'état LIVE à chaque itération de la
+  // boucle ci-dessous et mélangeait les résultats du jour qui vient de
+  // commencer avec ceux du jour qui vient de se terminer — d'où le bilan
+  // qui « cumule » jour 1 et jour 2.
+  const snapshot = state.predictions.slice();
   const keys = strategies.LIST
     .map((d) => d.key)
-    .filter((key) => state.predictions.some((p) => p.strategy === key));
+    .filter((key) => snapshot.some((p) => p.strategy === key));
   const done = [];
   for (const key of keys) {
-    try { await sendBilan(key); done.push(key); }
+    try { await sendBilan(key, snapshot); done.push(key); }
     catch (e) { console.error('Bilan non envoyé', key, e.message); }
   }
   let ai = { ok: false, error: 'panneau Prédit indisponible' };
@@ -1094,7 +1663,13 @@ async function flushBilans(reason = 'nouveau jour') {
   // que les prédictions déjà TERMINÉES (gagné/perdu/annulé) de la vue en
   // cours — celles encore « en attente » restent affichées (en cours), et
   // l'historique complet reste consultable en base de données (/pred, /jeux…).
-  state.predictions = state.predictions.filter((p) => p.status === 'en attente');
+  // CORRECTIF « bilans cumulés » : on ne retire QUE les prédictions qui
+  // faisaient partie de l'instantané envoyé ci-dessus ET qui sont désormais
+  // résolues. Une prédiction créée APRÈS l'instantané (déjà le jour suivant)
+  // n'est jamais retirée ici, même si elle s'est résolue entre-temps — elle
+  // sera comptée dans SON PROPRE bilan, au prochain retour à 1.
+  const snapshotIds = new Set(snapshot.map((p) => p.id));
+  state.predictions = state.predictions.filter((p) => p.status === 'en attente' || !snapshotIds.has(p.id));
   console.log(`📊 Bilan (${reason}) : ${done.join(', ') || 'aucune stratégie'} • IA : ${ai.ok ? 'envoyé' : ai.error}`);
   return { strategies: done, ai };
 }
@@ -1320,6 +1895,19 @@ async function updateResult(pred) {
       try { await sender.sendMessage(m.chatId, text, { reply_to_message_id: m.messageId, ...(parse_mode ? { parse_mode } : {}) }); } catch (_) {}
     }
   }
+  // message de perte + rappel formation VIP (voir loss-notice.js), envoyé
+  // dans CES MÊMES canaux — pour TOUTE stratégie, existante comme IA (voir
+  // aussi predit.js/update() pour le panneau « Prédit IA »). CASE PAR
+  // STRATÉGIE (state.strategies[pred.strategy].lossNoticeEnabled — voir
+  // strategies.js/defaultsFor), désactivée par défaut — les deux réglages
+  // (général + celui-ci) doivent être activés à la fois.
+  const stratCfg = state.strategies[pred.strategy];
+  if (pred.status === 'perdu' && pred.messages.length && stratCfg && stratCfg.lossNoticeEnabled && lossNotice.getSettings().enabled) {
+    const noticeText = lossNotice.buildText();
+    for (const m of pred.messages) {
+      try { await sender.sendMessage(m.chatId, noticeText); } catch (_) {}
+    }
+  }
 }
 
 // Reconnexion automatique de la base : si elle n'est pas joignable au démarrage
@@ -1356,6 +1944,21 @@ async function tick() {
     const games = await api.fetchGames();
     state.lastError = null;
     registerGames(games);
+
+    // CORRECTIF « bilan pendant l'envoi des prédictions / un bilan par jour » :
+    // traité et ATTENDU ici, avant tout le reste (verify/evaluate/broadcast)
+    // — voir pendingBilan plus haut. Comme tick() ne se chevauche jamais
+    // (garde `ticking`), aucune prédiction (nouvelle ou « ombre ») ne peut
+    // être diffusée tant que l'envoi du bilan n'est pas terminé.
+    if (pendingBilan) {
+      const { seq, previousMax } = pendingBilan;
+      pendingBilan = null;
+      if (seq !== lastBilanShoeSeq) {
+        lastBilanShoeSeq = seq;
+        persist();
+        await flushBilans(`journée terminée (${previousMax} jeux, retour à 1)`);
+      }
+    }
 
     // déblocage automatique des stratégies bloquées depuis plus de 10 minutes
     const freed = sweepAutoUnlock();
@@ -1421,18 +2024,11 @@ async function tick() {
       await broadcast(stuck);
     }
 
-    // CORRECTIF : le bilan partait à CHAQUE nouveau sabot (donc plusieurs fois
-    // par jour, dès que le jeu repartait au n°1). On publie désormais UN SEUL
-    // bilan par jour, à 00h00 heure d'Abidjan (Côte d'Ivoire, GMT+0 toute
-    // l'année). Le jour est comparé au dernier jour où un bilan a été envoyé
-    // (persisté, pour ne pas en renvoyer un second après un redémarrage le
-    // même jour).
-    const today = abidjanDateString();
-    if (!firstTick && lastBilanDate && today !== lastBilanDate) {
-      await flushBilans('nouveau jour (00h00 Abidjan)');
-    }
-    if (lastBilanDate !== today) { lastBilanDate = today; persist(); }
-    firstTick = false;
+    // Le bilan (résumé complet : toutes stratégies + IA) part désormais
+    // directement au moment où le sabot se termine (numéros revenus à 1),
+    // via le hook sendBilanIfDayOver() ci-dessous — voir sa définition pour
+    // la logique « vraie fin de journée » (filtrage des remises à zéro
+    // isolées) et la garde anti-doublon (lastBilanShoeSeq).
 
     const preds = evaluate();
     for (const pred of preds) await broadcast(pred);
@@ -1440,9 +2036,40 @@ async function tick() {
     // panneau « Prédit » : prédictions certifiées à 100% (IA)
     await predit.tick();
 
+    // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
+    // cartes exactes et cartes de valeur sur leurs canaux respectifs.
+    await game21Predict.tick();
+
     // panneau « Prédiction après perte » : relais de la prochaine prédiction
     // d'une stratégie suivie (existante ou IA) après N pertes consécutives.
     await afterLoss.tick();
+
+    // panneau « Formation » : pour chaque stratégie cochée, lecture de la
+    // formation après une perte, puis publication de la prédiction confirmée
+    // (et du « Bingo » si elle est gagnée) dans le canal configuré.
+    await formationRelay.tick();
+
+    // panneau « Prédiction combinée pour costume joueur » : sources multiples
+    // (stratégies + formations), déclencheur consécutif par niveau de
+    // rattrapage, prédiction synthétisée même costume/inverse +w.
+    await combined.tick();
+
+    // panneau « Série de costume » : sélection d'UNE source (stratégie, IA
+    // ou formation), série de N prédictions consécutives de MÊME costume —
+    // déclenchement immédiat si aucune perte dans la série, sinon attente du
+    // retour de ce costume avant de déclencher (voir suit-streak.js).
+    await suitStreak.tick();
+
+    // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
+    // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur début+34
+    // déclenchées quand le jeu en live arrive à −3/−2 de la cible (voir cards-count.js).
+    await cardsCount.tick();
+
+    // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
+    // relais des 2 prochaines prédictions d'une stratégie cochée après 3
+    // pertes consécutives, ou après 3 prédictions consécutives du même
+    // costume, dans le canal VIP configuré (voir vip.js).
+    await vip.tick();
   } catch (e) {
     state.lastError = e.message;
   } finally {
@@ -1503,6 +2130,23 @@ async function applyDbConfigs() {
     if (Array.isArray(app.activeChannels) && app.activeChannels.length) {
       state.activeChannels = app.activeChannels; restored.push('canaux actifs');
     }
+    if (Array.isArray(app.siteChannels) && app.siteChannels.length) {
+      state.siteChannels = app.siteChannels; restored.push('canaux du site');
+    }
+  }
+  // token de la boutique : restauré depuis sa clé dédiée (jamais depuis
+  // loadAppConfig(), réservé au bot principal) — garantit la séparation
+  // même après un redémarrage.
+  const shopToken = await db.getSetting('shop_bot_token');
+  if (shopToken) { state.shopBotToken = shopToken; restored.push('token boutique'); }
+  if (!state.siteChannels.length) {
+    const rawSiteChannels = await db.getSetting('site_channels');
+    if (rawSiteChannels) {
+      try {
+        const parsed = JSON.parse(rawSiteChannels);
+        if (Array.isArray(parsed) && parsed.length) { state.siteChannels = parsed; restored.push('canaux du site'); }
+      } catch (_) { /* ignore */ }
+    }
   }
   const rows = await db.loadStrategies();
   const loaded = [];
@@ -1546,6 +2190,19 @@ async function applyDbConfigs() {
   const announcementRows = await db.loadAnnouncements();
   restoreAnnouncements(announcementRows);
 
+  // CORRECTIF « bouton Créé par moi avec IA » : même raisonnement que les
+  // annonces ci-dessus — sans cette restauration, la liste des stratégies
+  // créées par l'IA repartirait vide à chaque redémarrage (y compris celui
+  // déclenché automatiquement juste après une création, voir server.js).
+  const createdKeysRaw = await db.getSetting('ai_created_strategy_keys');
+  const createdHistoryRaw = await db.getSetting('ai_created_strategy_history');
+  try {
+    aiRepair.restoreCreated(
+      createdKeysRaw ? JSON.parse(createdKeysRaw) : null,
+      createdHistoryRaw ? JSON.parse(createdHistoryRaw) : null,
+    );
+  } catch (_) { /* données corrompues — on repart d'une liste vide, pas bloquant */ }
+
   // Stratégies IA : la base est la source de vérité (data.json est perdu à
   // chaque redéploiement/redémarrage sur les plateformes sans disque persistant).
   const aiRows = await db.loadAiStrategies();
@@ -1582,16 +2239,105 @@ async function applyDbConfigs() {
   });
   await predit.restoreFromDb();
   await afterLoss.restoreFromDb();
+  await combined.restoreFromDb();
+  await suitStreak.restoreFromDb();
+  await cardsCount.restoreFromDb();
+  await vip.restoreFromDb();
+  // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
+  // depuis la base les prédictions encore « en attente » + les dernières
+  // résolues, pour que gagné/perdu/total ne repartent pas à zéro à chaque
+  // redémarrage du process.
+  const restoredCount = await restorePredictions();
+  if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
+  await shop.loadFromDb();
+  await paiement.loadFromDb();
+  await mirrorCounter.loadFromDb();
+  await lossNotice.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
+}
+
+// ---------------------------------------------------------------------------
+// « Rapport de fin de sabot » : dès que le jeu revient à #N1 (nouveau sabot,
+// voir resetShoe() dans predictor.js), on génère le PDF listant, pour
+// CHACUNE des 7 stratégies, les déclencheurs « après perte » dont le taux
+// mesuré sur l'historique réel est ≥ 75%, avec un conseil ciblé — puis on
+// l'envoie en document Telegram à l'ADMINISTRATEUR (c'est une analyse
+// interne, pas une prédiction à publier dans un canal public).
+// ---------------------------------------------------------------------------
+let shoeReportBusy = false;
+async function sendShoeReport(reason, seq) {
+  if (shoeReportBusy) return false; // pas deux rapports en parallèle si plusieurs resets rapprochés
+  const sender = senderFor();
+  if (!sender || !state.adminId) return false;
+  shoeReportBusy = true;
+  try {
+    const { pdf } = await shoeReport.generate();
+    await sender.sendDocument(
+      state.adminId,
+      pdf,
+      { caption: `📄 Rapport de fin de sabot #${seq} (${reason}) — déclencheurs ≥ ${shoeReport.MIN_RATE}% des 7 stratégies.` },
+      { filename: `rapport-sabot-${seq}.pdf`, contentType: 'application/pdf' }
+    );
+    return true;
+  } catch (e) {
+    console.error('Rapport de fin de sabot : envoi échoué —', e.message);
+    return false;
+  } finally {
+    shoeReportBusy = false;
+  }
 }
 
 async function startLoop() {
   predit.restore();
   predit.setSender(senderFor);
+  game21Predict.restore();
+  game21Predict.setSender(senderFor);
   afterLoss.restore();
   afterLoss.setSender(senderFor);
+  combined.restore();
+  combined.setSender(senderFor);
+  suitStreak.restore();
+  suitStreak.setSender(senderFor);
+  cardsCount.restore();
+  cardsCount.setSender(senderFor);
+  vip.restore();
+  vip.setSender(senderFor);
+  formationRelay.restore();
+  formationRelay.setSender(senderFor);
+  // Compteur « Taux Miroir » : édite le même message à chaque jeu terminé
+  // (voir setOnFinished ci-dessous) plutôt que d'en renvoyer un nouveau —
+  // retombe sur un nouvel envoi si l'édition échoue (message trop
+  // vieux/supprimé côté Telegram) ou après chaque reset horaire.
+  mirrorCounter.setSender(async (channelId, text, messageId) => {
+    const sender = senderFor();
+    if (!sender) throw new Error('Aucun token API configuré dans les réglages.');
+    if (messageId) {
+      try {
+        await sender.editMessageText(text, { chat_id: channelId, message_id: messageId });
+        return messageId;
+      } catch (e) {
+        // message trop vieux/supprimé, ou contenu strictement identique
+        // (Telegram répond alors "message is not modified") : dans les deux
+        // cas on retente un envoi neuf plutôt que de laisser tomber.
+      }
+    }
+    const msg = await sender.sendMessage(channelId, text);
+    return msg.message_id;
+  });
+  mirrorCounter.scheduleHourlyReset();
   // base de données : chaque jeu terminé est archivé par date
-  setOnFinished((round) => { if (db.ready) db.saveGame(round); });
+  setOnFinished((round) => {
+    if (db.ready) db.saveGame(round);
+    mirrorCounter.bump(round);
+    mirrorCounter.publish(round.number).catch((e) => console.error('Compteur (Taux Miroir) :', e.message));
+  });
+  // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
+  // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
+  setOnShoeReset((reason, seq) => sendShoeReport(reason, seq));
+  // bilan complet (toutes stratégies + IA) — envoyé quand les numéros
+  // reviennent à 1 ET que le sabot qui vient de se terminer représente une
+  // vraie journée (voir sendBilanIfDayOver ci-dessus pour le seuil).
+  setOnShoeReset((reason, seq, previousMax) => sendBilanIfDayOver(reason, seq, previousMax));
   setOnGateChange((key, g) => { if (db.ready) db.saveGate(key, g); });
   setOnAnnouncementSave((entry) => { if (db.ready) db.saveAnnouncement(entry); });
   setOnAnnouncementDelete((id) => { if (db.ready) db.deleteAnnouncement(id); });
@@ -1613,8 +2359,17 @@ async function startLoop() {
     loopStarted = true;
     setInterval(tick, config.POLL_INTERVAL_MS);
     tick();
+    // Vente automatique des déclencheurs IA >93% (shop.js/syncAutoIaListings) :
+    // intervalle dédié, séparé du tick jeu-par-jeu (1.5s) — la génération du
+    // nom de code par l'IA peut prendre plusieurs secondes, ça ne doit jamais
+    // ralentir le suivi des jeux en direct. « fire and forget » volontaire.
+    setInterval(() => {
+      shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
+    }, 60 * 1000);
+    shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
   }
   startBot();
+  startShopBot();
 }
 
-module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs };
+module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };

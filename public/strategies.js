@@ -18,6 +18,10 @@ const SUITS = ['♦️', '❤️', '♣️', '♠️'];
 
 // table des inverses (Stratégie Dominant)
 const INVERSE = { '❤️': '♣️', '♣️': '❤️', '♦️': '♠️', '♠️': '♦️' };
+// table du « miroir » (demande admin, distincte de l'inverse ci-dessus) :
+// utilisée par la « répétition après perte » (after-loss.js, mode 'miroir')
+// — ❤️↔♦️ (les deux costumes rouges), ♠️↔♣️ (les deux costumes noirs).
+const MIRROR = { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' };
 
 // normalisation d'un costume : '❤' '♥' '♥️' → '❤️'
 function normSuit(s) {
@@ -90,11 +94,17 @@ const dominant = {
     "Filtre obligatoire : joueur 3 cartes ET banquier 3 cartes. On mélange les " +
     "6 cartes, on compte les couleurs. S'il y a un dominant fort (une couleur " +
     "au moins 2 fois, sans égalité), on joue TOUJOURS son inverse " +
-    "(♥️↔♣️, ♦️↔♠️) sur le tour +2. Vérification sur la main du joueur.",
-  defaults: { enabled: true, format: 1, maxR: 2, b: 0, lead: 2, template: null, channels: [] },
+    "(♥️↔♣️, ♦️↔♠️) sur le tour +2. Vérification sur la main du joueur. " +
+    "Deux garde-fous avant l'envoi : (1) écart minimum (3 jeux par défaut) " +
+    "entre deux prédictions de cette stratégie ; (2) compteur de costumes sur " +
+    "3 jeux (le déclencheur et les 2 précédents) — si le costume à prédire " +
+    "est apparu sur la main du JOUEUR dans 2 jeux CONSÉCUTIFS parmi ces 3 " +
+    "(ex. déclencheur au jeu 23 : venu aux jeux 21 et 22, ou venu aux jeux 22 " +
+    "et 23), le déclencheur est ignoré.",
+  defaults: { enabled: true, format: 1, maxR: 2, b: 0, lead: 2, gap: 3, template: null, channels: [] },
   usesB: false,
   source: 'finished',
-  detect(game, cfg) {
+  detect(game, cfg, ctx) {
     if (!game || !game.finished) return null;
     if (game.playerCards !== 3 || game.bankerCards !== 3) return null; // filtre obligatoire
     const six = [...suitsOf(game.playerSuits), ...suitsOf(game.bankerSuits)];
@@ -103,13 +113,43 @@ const dominant = {
     if (!dom) return null;
     const suit = INVERSE[dom];
     if (!suit) return null;
+
+    // garde-fou 1 : écart minimum entre deux prédictions « dominant » — on
+    // regarde la dernière prédiction déjà émise par CETTE stratégie (la plus
+    // récente est en tête, voir predictor.js/evaluate → unshift) et on exige
+    // au moins `gap` jeux d'écart entre son déclencheur et celui-ci.
+    const gapNeeded = Math.max(1, Math.min(20, parseInt(cfg && cfg.gap, 10) || 3));
+    const predictions = (ctx && ctx.predictions) || [];
+    const lastDominant = predictions.find((p) => p.strategy === 'dominant');
+    if (lastDominant && lastDominant.from != null && (game.number - lastDominant.from) < gapNeeded) {
+      return null; // trop proche de la précédente prédiction « dominant »
+    }
+
+    // garde-fou 2 : compteur de costumes sur 3 jeux — le déclencheur (n) et
+    // les 2 jeux qui le précèdent immédiatement (n-1, n-2). On bloque
+    // UNIQUEMENT si le costume à prédire est apparu sur la main du JOUEUR
+    // dans 2 jeux CONSÉCUTIFS parmi ces 3 : (n-2 ET n-1) OU (n-1 ET n).
+    // Exemple : déclencheur au jeu 23 → on regarde 21, 22 et 23. S'il est
+    // venu aux jeux 21 ET 22 → on ignore. S'il est venu aux jeux 22 ET 23 →
+    // on ignore aussi. Une seule occurrence isolée (ni consécutive ni
+    // répétée) ne bloque pas la prédiction.
+    const games = (ctx && ctx.games) || new Map();
+    const playerHasSuitAt = (n) => {
+      const g = n === game.number ? game : games.get(n);
+      return g ? suitsOf(g.playerSuits).includes(suit) : false;
+    };
+    const atN2 = playerHasSuitAt(game.number - 2);
+    const atN1 = playerHasSuitAt(game.number - 1);
+    const atN0 = playerHasSuitAt(game.number);
+    if ((atN2 && atN1) || (atN1 && atN0)) return null;
+
     return {
       kind: 'suit',
       target: game.number + (cfg.lead || 2),
       suit,
       label: suit,
       reason: `dominant ${dom} (${reason}) → inverse ${suit}`,
-      meta: { dominant: dom, count },
+      meta: { dominant: dom, count, gap: gapNeeded },
     };
   },
 };
@@ -237,6 +277,23 @@ function varCounterAt(index, varN) {
   return varN - (index % varN);
 }
 
+// CORRECTIF (demande admin, « pourquoi elle n'envoie pas les prédictions
+// d'avance ») : cette stratégie attendait `game.finished` — c'est-à-dire la
+// fin COMPLÈTE du tour (les deux mains, joueur ET banquier) — avant de
+// pouvoir lire le point du joueur. Or au baccara, le banquier joue APRÈS le
+// joueur et sa 3e carte éventuelle ne change jamais le point du joueur : dès
+// que la main du JOUEUR est complète, son point est définitivement connu,
+// souvent plusieurs secondes avant la fin réelle du tour. Règle du baccara :
+// avec 2 cartes, la main du joueur est déjà complète (aucune 3e carte ne
+// viendra) si son total vaut 6, 7, 8 ou 9 ; en dessous (0 à 5), une 3e carte
+// est toujours tirée. Avec 3 cartes, la main est de toute façon complète.
+function playerHandComplete(game) {
+  const cards = Number(game.playerCards) || 0;
+  if (cards >= 3) return true;
+  if (cards === 2) return game.playerValue != null && game.playerValue >= 6;
+  return false;
+}
+
 const parite = {
   key: 'parite',
   name: 'Pair / Impair (VAR)',
@@ -246,9 +303,11 @@ const parite = {
     "Sur chaque déclencheur il lit le POINT DU JOUEUR : point pair → prédiction " +
     "IMPAIR, point impair → prédiction PAIR. Le jeu cible est déclencheur + " +
     "décalage, et la vérification porte sur la parité du point du joueur du jeu " +
-    "cible, puis sur les rattrapages configurés. Au redémarrage la séquence est " +
-    "reconstruite mathématiquement : le bot attend simplement le prochain " +
-    "déclencheur, sans rejouer le passé.",
+    "cible, puis sur les rattrapages configurés. La prédiction est calculée dès " +
+    "que la main du JOUEUR est complète sur le jeu déclencheur (sans attendre " +
+    "la main du banquier ni la fin totale du tour), ce qui l'envoie en avance. " +
+    "Au redémarrage la séquence est reconstruite mathématiquement : le bot " +
+    "attend simplement le prochain déclencheur, sans rejouer le passé.",
   defaults: {
     enabled: true,
     format: 80,
@@ -262,16 +321,54 @@ const parite = {
     channels: [],
   },
   usesB: false,
-  source: 'finished',
+  // CORRECTIF : passé de 'finished' à 'live' — le point du joueur (donc la
+  // parité) est connu dès que SA main est complète, pas besoin d'attendre la
+  // fin totale du tour (voir playerHandComplete ci-dessus et le commentaire
+  // au-dessus de la définition). `game` ici est le tour EN COURS (state.live).
+  source: 'live',
   detect(game, cfg, ctx) {
-    if (!game || !game.finished) return null;
+    if (!game) return null;
     const { start, varN, dec } = normParity(cfg);
-    if (game.number < start) return null;                 // pas encore démarré
-    // Règle : la prédiction part IMMÉDIATEMENT sur le jeu déclencheur lui-même.
-    // Si le jeu terminé n'appartient pas à la séquence, on n'invente rien.
-    if (triggerIndexOf(game.number, start, varN) < 0) return null;
-    const trig = game.number;
-    const src = game;
+    // CORRECTIF « pair/impair n'envoie pas en avance » : le jeu EN DIRECT ne
+    // livre pas toujours le point du joueur avant la fin du tour. Dans ce cas
+    // le déclencheur était perdu et plus aucune prédiction ne partait.
+    // On prend donc, dans l'ordre : le jeu en direct s'il est déjà lisible,
+    // sinon le DERNIER déclencheur déjà terminé dont la cible n'est pas encore
+    // jouée — la prédiction part ainsi toujours avant le jeu cible.
+    const games = (ctx && ctx.games) ? ctx.games : new Map();
+    const live = Number(game.number) || 0;
+    // CORRECTIF « la parité ne prédit plus » (3 bugs cumulés) :
+    //  1) la fenêtre de recherche était calculée sur le jeu EN DIRECT et
+    //     s'arrêtait dès que `trigger + décalage` passait sous `live`. Comme
+    //     deux relevés peuvent être espacés de plusieurs jeux, le déclencheur
+    //     était déclaré « trop tard » alors que le jeu cible n'était PAS encore
+    //     joué → aucune prédiction. On compare désormais à la borne réelle :
+    //     le dernier jeu TERMINÉ (maxDone). Tant que la cible n'est pas
+    //     terminée, la prédiction reste valable.
+    //  2) la fenêtre (décalage + 6) était plus courte que l'écart entre deux
+    //     déclencheurs (9 à 10 jeux) : élargie à décalage + 12.
+    //  3) sur un jeu déjà TERMINÉ, playerHandComplete() exigeait un nombre de
+    //     cartes lisible ; quand le flux ne le renvoyait pas, le déclencheur
+    //     était ignoré bien que le point du joueur soit connu. Un jeu terminé
+    //     avec un point joueur lisible est désormais toujours accepté.
+    let maxDone = 0;
+    for (const g of games.values()) {
+      if (g && g.finished && Number(g.number) > maxDone) maxDone = Number(g.number);
+    }
+    if (game.finished && live > maxDone) maxDone = live;
+    let src = null;
+    for (let n = live; n >= Math.max(start, live - (dec + 12)); n--) {
+      if (triggerIndexOf(n, start, varN) < 0) continue;
+      if (n + dec <= maxDone) break;           // jeu cible déjà terminé : trop tard
+      const g = n === live ? game : games.get(n);
+      if (!g) continue;
+      if (g.playerValue == null) continue;
+      if (!g.finished && !playerHandComplete(g)) continue;
+      src = g;
+      break;
+    }
+    if (!src) return null;
+    const trig = Number(src.number);
     const pv = src.playerValue;
     if (pv == null) return null;
     const pair = pv % 2 === 0;
@@ -285,7 +382,8 @@ const parite = {
       trigger: trig,
       reason:
         `déclencheur #N${trig} • point joueur ${pv} (${pair ? 'pair' : 'impair'}) → ` +
-        `prédiction ${suit.toUpperCase()} sur #N${trig + dec} (décalage ${dec})`,
+        `prédiction ${suit.toUpperCase()} sur #N${trig + dec} (décalage ${dec}) — ` +
+        `envoyée avant le jeu cible`,
       meta: {
         trigger: trig,
         index: idx,
@@ -378,6 +476,84 @@ const absente = {
 
 
 // ---------------------------------------------------------------------------
+// 5bis) Prédiction dans l'ombre (Banquier) — retour d'un costume sur la main
+// du BANQUIER uniquement (demande admin)
+// ---------------------------------------------------------------------------
+// Règle identique à « Prédiction dans l'ombre (Joueur) » mais inversée :
+// on surveille en silence les 4 costumes de la main du BANQUIER UNIQUEMENT
+// (le joueur n'entre jamais en compte). Dès qu'un costume est absent de la
+// main du banquier pendant AU MOINS `absence` jeux consécutifs (4 par
+// défaut), il passe en état « surveillé ». Aucune prédiction n'est émise
+// pendant l'absence : le bot attend son RETOUR sur la main du banquier,
+// aussi longtemps qu'il faut. Le jeu où il RÉAPPARAÎT devient le
+// déclencheur : on prédit ce même costume chez le BANQUIER au jeu
+// déclencheur + `lead` (4 par défaut), vérifié sur la main du banquier +
+// rattrapages configurés.
+//   ❤️ absent (banquier) aux jeux 1-2-3 → rien … ❤️ revient au jeu 7 →
+//   prédiction ❤️ chez le banquier sur le jeu 11 (7 + 4).
+// Vérification sur la main du BANQUIER (kind 'suit-banquier', voir
+// predictor.js/matches()). Pas de mode silencieux 1 : ce mode reste réservé
+// à « ombre » (voir public/index.html, `s.key === 'ombre'`) — rien à
+// exclure ici, cette stratégie n'a jamais eu ce bloc dans le panneau. Le
+// déclencheur automatique générique (perte/rattrapage + N) reste disponible.
+const carteBanquier = {
+  key: 'carteBanquier',
+  name: 'Carte disparue → retour banquier',
+  about:
+    "Surveillance silencieuse des 4 costumes de la main du BANQUIER " +
+    "uniquement (le joueur n'est jamais pris en compte). Un costume absent " +
+    "de la main du banquier pendant au moins 3 jeux consécutifs (réglable) " +
+    "est mis sous surveillance. Aucune prédiction n'est émise pendant " +
+    "l'absence : le bot attend son RETOUR sur la main du banquier, aussi " +
+    "longtemps qu'il faut. Le jeu du retour devient le déclencheur et le " +
+    "même costume est prédit chez le BANQUIER au jeu +4 (réglable). " +
+    "Exemple : ❤️ absent de la main du banquier aux jeux 1 à 3, retour au " +
+    "jeu 7 → prédiction ❤️ chez le banquier sur le jeu 11. Pas de mode " +
+    "silencieux pour cette stratégie.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 4,
+    absence: 3,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const games = (ctx && ctx.games) || new Map();
+    const need = Math.max(1, Math.min(30, parseInt(cfg && cfg.absence, 10) || 3));
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 4));
+    const scope = 'banquier'; // fixe : uniquement la main du banquier, jamais le joueur
+    const present = SUITS.filter((s) => suitPresent(game, s, scope));
+    if (!present.length) return null;
+    let best = null;
+    for (const suit of present) {
+      const gap = absenceBefore(games, game.number, suit, scope);
+      if (gap >= need && (!best || gap > best.gap)) best = { suit, gap };
+    }
+    if (!best) return null;
+    return {
+      kind: 'suit-banquier',
+      target: game.number + lead,
+      suit: best.suit,
+      label: best.suit,
+      trigger: game.number,
+      reason:
+        `${best.suit} absent de la main du BANQUIER pendant ${best.gap} jeux consécutifs ` +
+        `(#N${game.number - best.gap} → #N${game.number - 1}), retour au jeu ` +
+        `#N${game.number} → prédiction ${best.suit} chez le banquier sur ` +
+        `#N${game.number + lead} (+${lead})`,
+      meta: { absence: best.gap, need, lead, scope, returnedAt: game.number },
+    };
+  },
+};
+
+
+// ---------------------------------------------------------------------------
 // 6) Prédiction dans l'ombre — retour d'une carte après une longue absence
 // ---------------------------------------------------------------------------
 // Règle : on surveille les 4 costumes en silence. Dès qu'un costume est absent
@@ -391,6 +567,7 @@ function suitPresent(g, suit, scope) {
   const ps = suitsOf(g.playerSuits);
   const bs = suitsOf(g.bankerSuits);
   if (scope === 'joueur') return ps.includes(suit);
+  if (scope === 'banquier') return bs.includes(suit);
   return ps.includes(suit) || bs.includes(suit);
 }
 
@@ -476,7 +653,361 @@ const ombre = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, ombre];
+// ---------------------------------------------------------------------------
+// 7) Prédiction dans l'ombre (Joueur) — retour d'un costume sur la main du
+//    JOUEUR UNIQUEMENT (le banquier n'entre jamais en compte, contrairement à
+//    la stratégie « ombre » qui peut surveiller les deux mains).
+// ---------------------------------------------------------------------------
+// Règle : on surveille en silence les 4 costumes de la main du JOUEUR. Dès
+// qu'un costume est absent de la main du joueur pendant AU MOINS `absence`
+// jeux consécutifs (4 par défaut), il passe en état « surveillé ». Aucune
+// prédiction n'est émise pendant l'absence : le bot attend son RETOUR sur la
+// main du joueur, aussi longtemps qu'il faut. Le jeu où il RÉAPPARAÎT devient
+// le déclencheur : on prédit ce même costume au jeu déclencheur + `lead`
+// (4 par défaut), vérifié sur la main du joueur + rattrapages configurés.
+//   ❤️ absent (joueur) aux jeux 1-2-3-4 → rien … ❤️ revient au jeu 8 →
+//   prédiction ❤️ sur le jeu 12 (8 + 4).
+const ombreJoueur = {
+  key: 'ombreJoueur',
+  name: "Prédiction dans l'ombre (Joueur)",
+  about:
+    "Surveillance silencieuse des 4 costumes de la main du JOUEUR uniquement " +
+    "(le banquier n'est jamais pris en compte). Un costume absent de la main " +
+    "du joueur pendant au moins 4 jeux consécutifs (réglable) est mis sous " +
+    "surveillance. Aucune prédiction n'est émise pendant l'absence : le bot " +
+    "attend son RETOUR sur la main du joueur, aussi longtemps qu'il faut. Le " +
+    "jeu du retour devient le déclencheur et le même costume est prédit au " +
+    "jeu +4 (réglable). Exemple : ❤️ absent de la main du joueur aux jeux 1 à " +
+    "4, retour au jeu 8 → prédiction ❤️ sur le jeu 12.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 4,
+    absence: 4,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const games = (ctx && ctx.games) || new Map();
+    const need = Math.max(1, Math.min(30, parseInt(cfg && cfg.absence, 10) || 4));
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 4));
+    const scope = 'joueur'; // fixe : uniquement la main du joueur, jamais le banquier
+    const present = SUITS.filter((s) => suitPresent(game, s, scope));
+    if (!present.length) return null;
+    let best = null;
+    for (const suit of present) {
+      const gap = absenceBefore(games, game.number, suit, scope);
+      if (gap >= need && (!best || gap > best.gap)) best = { suit, gap };
+    }
+    if (!best) return null;
+    return {
+      kind: 'suit',
+      target: game.number + lead,
+      suit: best.suit,
+      label: best.suit,
+      trigger: game.number,
+      reason:
+        `${best.suit} absent de la main du JOUEUR pendant ${best.gap} jeux consécutifs ` +
+        `(#N${game.number - best.gap} → #N${game.number - 1}), retour au jeu ` +
+        `#N${game.number} → prédiction ${best.suit} sur #N${game.number + lead} (+${lead})`,
+      meta: { absence: best.gap, need, lead, scope, returnedAt: game.number },
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// 9) Comptage par dizaine — costume faible (demande admin)
+// ---------------------------------------------------------------------------
+// Découpage du sabot en tranches de 10 jeux (#N1-10, #N11-20, #N21-30…).
+// Dès qu'un jeu se termine sur un multiple de 10 (déclencheur, ex. #N10), on
+// compte, sur les 10 jeux qui viennent de s'écouler (#N1 à #N10), combien de
+// fois chacun des 4 costumes est apparu dans la main du JOUEUR (chaque carte
+// compte, pas juste présence/absence). Le costume le PLUS RARE de cette
+// dizaine (le « costume faible ») est prédit sur le 4ᵉ jeu de la dizaine
+// SUIVANTE, c'est-à-dire déclencheur + 4 (réglable) — ex. dizaine #N1-10 →
+// prédiction sur #N14. En cas d'égalité entre plusieurs costumes les plus
+// rares, ordre déterministe ♦️❤️♣️♠️ (comme pour « absente »).
+const dizaine = {
+  key: 'dizaine',
+  name: 'Comptage par dizaine — costume faible',
+  about:
+    "Découpe le sabot en tranches de 10 jeux. À la fin de chaque dizaine " +
+    "(#N10, #N20, #N30…), compte combien de fois chacun des 4 costumes est " +
+    "apparu dans la main du JOUEUR sur ces 10 jeux — comptage « vote » : un " +
+    "costume compte 1 seule fois par main, même s'il apparaît sur 2 cartes " +
+    "(ex. ♦️♦️❤️ → 1♦️ + 1❤️, jamais 2♦️) — et retient le costume le PLUS " +
+    "RARE (« costume faible »). Ce costume est prédit sur le 4ᵉ jeu de la " +
+    "dizaine suivante (déclencheur + 4, réglable) — ex. dizaine #N1 à #N10 " +
+    "→ prédiction sur #N14. Nécessite au moins 6 des 10 jeux lisibles pour " +
+    "un comptage fiable, sinon aucune prédiction n'est émise pour cette " +
+    "dizaine.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 4,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    if (game.number % 10 !== 0) return null; // déclencheur uniquement en fin de dizaine (#N10, #N20…)
+    const start = game.number - 9;
+    if (start < 1) return null; // pas assez de recul pour la toute première dizaine
+    const games = (ctx && ctx.games) || new Map();
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 4));
+    const counts = { '♦️': 0, '❤️': 0, '♣️': 0, '♠️': 0 };
+    let readable = 0;
+    for (let n = start; n <= game.number; n++) {
+      const g = games.get(n);
+      if (!g || !g.finished) continue;
+      const suits = new Set(suitsOf(g.playerSuits)); // comptage "vote" : un costume ne compte qu'UNE fois par main, même s'il apparaît sur 2 cartes (ex. ♦️♦️❤️ → 1♦️ + 1❤️)
+      if (!suits.size) continue;
+      readable += 1;
+      for (const s of suits) if (counts[s] !== undefined) counts[s] += 1;
+    }
+    if (readable < 6) return null; // dizaine trop peu lisible : comptage jugé pas assez fiable
+    let weak = null;
+    for (const s of SUITS) {
+      if (!weak || counts[s] < counts[weak]) weak = s;
+    }
+    const detail = SUITS.map((s) => `${s}:${counts[s]}`).join(' ');
+    return {
+      kind: 'suit',
+      target: game.number + lead,
+      suit: weak,
+      label: weak,
+      trigger: game.number,
+      reason:
+        `Dizaine #N${start} à #N${game.number} (${readable}/10 jeux lisibles) — ` +
+        `comptage main JOUEUR ${detail} → costume le plus rare : ${weak} → ` +
+        `prédiction sur #N${game.number + lead} (+${lead})`,
+      meta: { start, end: game.number, readable, counts, lead },
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// 10) Costume faible sur 2 cartes (miroir) — demande admin
+// ---------------------------------------------------------------------------
+// Filtre obligatoire : joueur 2 cartes ET banquier 2 cartes (mains « naturelles »,
+// sans 3ᵉ carte). On regroupe les 4 costumes de ces 4 cartes par COULEUR
+// (rouge : ❤️+♦️ / noir : ♠️+♣️) et on repère la couleur MINORITAIRE. Le
+// costume faible est celui de cette couleur minoritaire qui est réellement
+// apparu (le plus souvent si les deux costumes de cette couleur sont
+// présents) — ex. joueur ❤️❤️, banquier ♣️♦️ → rouge 3 (❤️❤️♦️), noir 1 (♣️)
+// → couleur faible = noir → costume faible = ♣️ (seul costume noir présent).
+// On prédit alors le MIROIR (même couleur) de ce costume faible — ici ♠️,
+// miroir de ♣️ — sur la main du JOUEUR au tour +2 (réglable).
+function weakSuitOf(fourSuits) {
+  const count = { '♦️': 0, '❤️': 0, '♣️': 0, '♠️': 0 };
+  for (const s of fourSuits) if (count[s] != null) count[s] += 1;
+  const red = count['❤️'] + count['♦️'];
+  const black = count['♠️'] + count['♣️'];
+  if (red === black) return { count, red, black, weak: null, reason: `rouge ${red} / noir ${black} : égalité, aucun signal` };
+  const [a, b] = red < black ? ['❤️', '♦️'] : ['♠️', '♣️'];
+  let weak;
+  if (count[a] > count[b]) weak = a;
+  else if (count[b] > count[a]) weak = b;
+  else weak = fourSuits.find((s) => s === a || s === b) || null; // égalité au sein de la couleur faible : on garde le 1er apparu
+  return { count, red, black, weak, reason: `rouge ${red} / noir ${black} → costume faible : ${weak}` };
+}
+
+const costumeFaible = {
+  key: 'costumeFaible',
+  name: 'Costume faible sur 2 cartes (miroir)',
+  about:
+    "Filtre obligatoire : joueur 2 cartes ET banquier 2 cartes (mains " +
+    "naturelles, sans 3ᵉ carte). On regroupe les 4 costumes des 4 cartes par " +
+    "couleur (rouge ❤️+♦️ / noir ♠️+♣️) et on retient la couleur MINORITAIRE. " +
+    "Le costume faible est celui, parmi les 2 costumes de cette couleur, qui " +
+    "est réellement apparu (le plus présent en cas des 2). On prédit ensuite " +
+    "le MIROIR de ce costume faible (❤️↔♦️, ♠️↔♣️) sur la main du JOUEUR au " +
+    "tour +2 (réglable) — ex. joueur ❤️❤️ / banquier ♣️♦️ → rouge 3, noir 1 " +
+    "→ costume faible ♣️ → prédiction ♠️. Aucune prédiction si les 2 couleurs " +
+    "sont à égalité.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 2,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    if (game.playerCards !== 2 || game.bankerCards !== 2) return null; // filtre obligatoire : mains naturelles des 2 côtés
+    const four = [...suitsOf(game.playerSuits), ...suitsOf(game.bankerSuits)];
+    if (four.length !== 4) return null;
+    const { weak, reason } = weakSuitOf(four);
+    if (!weak) return null;
+    const suit = MIRROR[weak];
+    if (!suit) return null;
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 2));
+    return {
+      kind: 'suit',
+      target: game.number + lead,
+      suit,
+      label: suit,
+      trigger: game.number,
+      reason:
+        `Jeu #N${game.number} — joueur ${four.slice(0, 2).join('')} / banquier ${four.slice(2).join('')} — ` +
+        `${reason} → miroir : ${suit} → prédiction sur #N${game.number + lead} (+${lead})`,
+      meta: { fourSuits: four, weak, lead },
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// 11) Collecte IA — relais des meilleures stratégies existantes (demande admin)
+// ---------------------------------------------------------------------------
+// Ne détecte RIEN par elle-même : à chaque jeu terminé, elle regarde si une
+// AUTRE stratégie vient d'émettre une prédiction sur ce même jeu déclencheur
+// (voir ctx.predictions, injecté par predictor.js/evaluate() — cette
+// stratégie DOIT rester la DERNIÈRE de LIST pour que toutes les autres aient
+// déjà pu être évaluées sur ce même jeu avant elle, voir evaluate()). Si
+// cette stratégie source a actuellement un CONSEIL DE FORMATION établi
+// (formation.js : un « conseil » — combien de prédictions rejouer d'affilée
+// après une perte/rattrapage — a pu être dégagé avec un échantillon
+// suffisant), la Collecte copie EXACTEMENT la même prédiction
+// (costume/carte/parité, MÊME JEU CIBLE — donc le même décalage a+n que la
+// source a elle-même déjà calculé, quel qu'il soit : a+1, a+3, a+n…) sous
+// son propre nom, avec son propre canal. IMPORTANT : ni le taux de réussite
+// des stratégies existantes, ni celui de l'Avis IA (strategy-advisor.js),
+// n'entrent en jeu ici — seul compte le conseil de formation APPLIQUÉ. S'il
+// y a plusieurs sources avec un conseil établi sur le même jeu déclencheur,
+// celle dont la formation est la plus établie (série conseillée la plus
+// longue, puis à égalité l'échantillon le plus large — ctx.formationInfo,
+// voir predictor.js) est retenue, jamais celle qui affiche le meilleur %.
+// Le nombre de RATTRAPAGES envoyés avec la prédiction relayée n'est pas non
+// plus un réglage indépendant de la Collecte : il suit exactement le N que
+// la Formation a établi pour la stratégie source (formationInfo.length —
+// combien de prédictions il faut rejouer d'affilée après une perte/
+// rattrapage pour cette stratégie), voir hit.maxR ci-dessous et predictor.js.
+const FORMATION_MAXR = 3; // rattrapage uniforme imposé aux relais Formation
+
+const collecte = {
+  key: 'collecte',
+  name: 'Collecte IA — meilleures stratégies',
+  about:
+    "Ne détecte rien par elle-même : elle surveille en continu le conseil " +
+    "de Formation (formation.js) des autres stratégies — combien de " +
+    "prédictions rejouer d'affilée après une perte/rattrapage. Dès qu'une " +
+    "stratégie a un conseil de formation ÉTABLI et APPLIQUÉ, la Collecte " +
+    "copie EXACTEMENT sa prédiction (costume, carte, ou parité selon le cas " +
+    "— même jeu cible, donc le MÊME décalage a+n déjà calculé par la " +
+    "source) sous son propre nom. Le nombre de rattrapages envoyés suit " +
+    "aussi le conseil de Formation de la source (le N établi), jamais un " +
+    "réglage indépendant. S'il y a plusieurs sources avec un conseil établi " +
+    "sur le même jeu déclencheur, la formation la plus établie (série la " +
+    "plus longue, puis échantillon le plus large) est retenue — jamais un " +
+    "taux de réussite, ni celui des stratégies existantes ni celui de " +
+    "l'Avis IA. La stratégie « Carte disparue → retour banquier » et la " +
+    "stratégie « Pair/Impair » ne sont JAMAIS relayées : la Collecte ne " +
+    "prédit et ne vérifie QUE des costumes ('suit') pour le joueur, jamais " +
+    "le banquier (suit-banquier), une parité (parity) ou un nombre de " +
+    "cartes (cards). Deux prédictions de la Collecte ne peuvent jamais " +
+    "tomber à moins de 3 jeux d'écart l'une de l'autre. Pas de réglage de " +
+    "costume ou d'absence ici : seuls le format et le canal de diffusion " +
+    "se règlent, comme le reste hérite directement de la stratégie source.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const predictions = (ctx && ctx.predictions) || [];
+    const bestKeys = (ctx && ctx.bestKeys) || new Set();
+    if (!bestKeys.size) return null; // aucune stratégie jugée fiable pour l'instant : rien à relayer
+    const candidates = predictions.filter(
+      (p) => p.strategy !== 'collecte'
+        // la Collecte ne prédit et ne vérifie QUE des COSTUMES pour le
+        // JOUEUR (kind 'suit') : ça exclut automatiquement, quel que soit
+        // leur taux ou leur formation établie —
+        //  • « Carte disparue → retour banquier » (kind 'suit-banquier',
+        //    ancien format 'carte-banquier') : prédit/vérifie le banquier ;
+        //  • « Pair/Impair » (parite, kind 'parity') : ne prédit pas un
+        //    costume, mais la parité de la somme ;
+        //  • « Match nul » (matchnul, kind 'cards') : prédit un nombre de
+        //    cartes, pas un costume.
+        && p.kind === 'suit'
+        && p.trigger === game.number
+        && bestKeys.has(p.strategy),
+    );
+    if (!candidates.length) return null;
+    // Départage par la FORMATION (conseil établi), jamais par un taux : on
+    // garde la série conseillée la plus longue, et à égalité l'échantillon
+    // (support) le plus large. bestRates n'est conservé que pour l'afficher
+    // à titre informatif dans le message ci-dessous.
+    const formationInfo = (ctx && ctx.formationInfo) || {};
+    const bestRates = (ctx && ctx.bestRates) || {};
+    let source = candidates[0];
+    for (const c of candidates) {
+      const cur = formationInfo[c.strategy] || { length: 0, support: 0 };
+      const best = formationInfo[source.strategy] || { length: 0, support: 0 };
+      if (cur.length > best.length || (cur.length === best.length && cur.support > best.support)) source = c;
+    }
+    const srcFormation = formationInfo[source.strategy];
+    // Le nombre de rattrapages de LA prédiction relayée suit le N établi par
+    // la Formation pour la stratégie source (srcFormation.length) — jamais
+    // le réglage maxR indépendant de la Collecte. Repli sur cfg.maxR
+    // uniquement si, cas limite, aucune longueur de formation n'est connue
+    // pour cette source (ne devrait pas arriver : bestKeys exige déjà un
+    // conseil de formation établi pour entrer dans les candidats).
+    // RATTRAPAGE UNIFORME (demande admin) : toute prédiction issue de la
+    // Formation part avec EXACTEMENT 3 rattrapages — plus de 1, 2 ou 5 selon
+    // la longueur de formation de la source.
+    const maxR = FORMATION_MAXR;
+
+    // écart minimum de 3 jeux entre deux prédictions Collecte : si le jeu
+    // cible retenu tombe à moins de 3 jeux de la dernière prédiction déjà
+    // relayée par la Collecte (quelle que soit sa source ou son statut),
+    // on ne relaie pas cette occurrence — même si la source elle-même a un
+    // conseil de formation établi.
+    const lastTarget = predictions
+      .filter((p) => p.strategy === 'collecte')
+      .reduce((max, p) => (max == null || p.target > max ? p.target : max), null);
+    if (lastTarget != null && Math.abs(source.target - lastTarget) < 3) return null;
+
+    return {
+      kind: source.kind,
+      target: source.target,
+      suit: source.suit || null,
+      card: source.card || null,
+      cardsLabel: source.cardsLabel || null,
+      wantPlayer: source.wantPlayer != null ? source.wantPlayer : null,
+      wantBanker: source.wantBanker != null ? source.wantBanker : null,
+      label: source.label || source.suit || source.card || '',
+      trigger: game.number,
+      maxR,
+      reason:
+        `Relais de « ${source.strategyName || source.strategy} » (conseil de formation appliqué` +
+        `${srcFormation ? ` : ${srcFormation.length} validation(s) d'affilée conseillée(s) sur ${srcFormation.support} observation(s) → ${maxR} rattrapage(s) suivi(s)` : ''}` +
+        `${bestRates[source.strategy] != null ? `, ${bestRates[source.strategy]}% à titre indicatif` : ''}) — ` +
+        `même prédiction copiée (même décalage a+n que la source) : ${source.reason || ''}`,
+      meta: { sourceStrategy: source.strategy, sourceRef: source.id || null },
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, costumeFaible, collecte];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {
@@ -522,6 +1053,25 @@ function defaultsFor(key) {
     shadowChannels: [],
     publishedChannelInfos: [],
     shadowChannelInfos: [],
+    // --- Ajustement automatique par l'IA (commun à TOUTES les stratégies) ---
+    // Désactivé par défaut : la stratégie prédit alors normalement, selon sa
+    // seule logique (voir strategies.js). Si activé, et UNIQUEMENT pour les
+    // stratégies qui prédisent un COSTUME (kind 'suit' / 'suit-banquier'),
+    // predictor.js compare — au moment de chaque nouvelle prédiction — le
+    // taux de réussite récent du costume que la stratégie s'apprête à jouer
+    // avec celui des 3 autres costumes pour CETTE MÊME stratégie. Si un autre
+    // costume affiche un net avantage (échantillon et écart suffisants), il
+    // est substitué automatiquement (voir aiSuitOverride() dans predictor.js).
+    // Sans quoi (bouton désactivé, ou stratégie sans costume comme « Match nul »
+    // ou « Pair/Impair »), rien ne change : comportement normal.
+    aiAuto: false,
+    // message de perte + formation VIP (voir loss-notice.js) — CASE PAR
+    // STRATÉGIE, désactivée par défaut (demande admin) : rien n'est envoyé
+    // pour une stratégie tant que l'admin ne l'a pas explicitement activée
+    // ici, même si le réglage général (Système → Message de perte) est
+    // activé — les deux doivent être vrais à la fois (voir bot.js —
+    // updateResult).
+    lossNoticeEnabled: false,
     ...JSON.parse(JSON.stringify(s.defaults)),
   };
 }
@@ -531,6 +1081,6 @@ function catalog() {
 }
 
 module.exports = {
-  LIST, BY_KEY, SUITS, INVERSE, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
+  LIST, BY_KEY, SUITS, INVERSE, MIRROR, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
   normParity, triggerAt, triggerIndexOf, lastTriggerAtOrBefore, nextTriggerAfter, triggerSequence, varCounterAt,
 };
