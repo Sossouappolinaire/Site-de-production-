@@ -1588,11 +1588,102 @@ function allTriggersAboveThreshold(minRatePct = 75, minSample = 2) {
 // d'un champ persisté du tracker, donc l'affichage reprend tel quel après un
 // redémarrage.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// CORRECTIF (demande) : compteurs par COSTUME (les 4) pour la stratégie
+// suivie. Le compteur « série de même costume » restait bloqué à 0/3 tant que
+// le relais automatique n'avait pas tourné, et il ne montrait qu'un seul
+// costume. On calcule donc ici, en direct depuis les prédictions de la
+// stratégie sélectionnée :
+//   • la série CONSÉCUTIVE en cours pour chacun des 4 costumes (0 pour les
+//     costumes qui ne sont pas celui de la série en cours),
+//   • le total de prédictions par costume,
+//   • les dernières prédictions (numéro + costume) telles que la stratégie
+//     les a envoyées, pour vérifier la configuration d'un coup d'œil.
+// ---------------------------------------------------------------------------
+function suitStatsFor(t) {
+  const list = trackerPredictions(t.key).filter((p) => p && p.suit);
+  const totals = {};
+  for (const s of strategies.SUITS) totals[s] = 0;
+  let curSuit = null;
+  let run = 0;
+  for (const p of list) {
+    const s = strategies.normSuit(p.suit);
+    if (!s) { curSuit = null; run = 0; continue; }
+    if (totals[s] !== undefined) totals[s] += 1;
+    if (s === curSuit) run += 1;
+    else { curSuit = s; run = 1; }
+  }
+  const st = t.streak || null;
+  const dc = t.decade || null;
+  const need = (st && st.enabled) ? st.count : ((dc && dc.enabled) ? dc.count : 0);
+  return {
+    need,
+    total: list.length,
+    current: { suit: curSuit, run },
+    suits: strategies.SUITS.map((s) => ({
+      suit: s,
+      total: totals[s] || 0,
+      run: s === curSuit ? run : 0,
+      need,
+      done: need > 0 && s === curSuit && run >= need,
+    })),
+    lastPredictions: list.slice(-8).map((p) => ({
+      target: p.target,
+      suit: strategies.normSuit(p.suit) || p.suit,
+      status: p.status || 'en attente',
+    })),
+  };
+}
+
+// Résumé « configuration exacte » affiché sous la stratégie sélectionnée :
+// nom donné, stratégie source, règles actives et exemple concret calculé sur
+// la dernière prédiction réellement reçue.
+function configSummaryFor(t) {
+  const src = optionByKey(t.key);
+  const stats = suitStatsFor(t);
+  const last = stats.lastPredictions[stats.lastPredictions.length - 1] || null;
+  const rules = [];
+  for (const k of TRIGGER_KEYS) {
+    const tr = (t.triggers || {})[k];
+    if (tr && tr.enabled) rules.push(`${resultLabel(k)} → relais après ${tr.n} prédiction(s) laissée(s) passer`);
+  }
+  const rp = t.repeat || null;
+  if (rp && rp.enabled) rules.push(`Après perte : re-prédit le costume ${rp.mode === 'miroir' ? 'miroir' : 'identique'} à +${rp.lead}`);
+  const st = t.streak || null;
+  let example = null;
+  if (st && st.enabled) {
+    rules.push(`Série de ${st.count} prédictions consécutives du même costume → ${st.nj} prédiction(s) espacées de +${st.n}`);
+    const base = last ? Number(last.target) : 0;
+    const suit = (stats.current.suit) || (last && last.suit) || strategies.SUITS[0];
+    if (base) {
+      const seq = [];
+      for (let i = 1; i <= st.nj; i++) seq.push(`${base + st.n * i}${suit}`);
+      example = `Exemple : ${st.count}× ${suit} d'affilée jusqu'à #N${base} → le bot prédit ${seq.join(', ')}`;
+    } else {
+      example = `Exemple : ${st.count}× ♦️ d'affilée jusqu'à #N815 → 819♦️, 823♦️… (${st.nj} prédictions, pas +${st.n})`;
+    }
+  }
+  const dc = t.decade || null;
+  if (dc && dc.enabled) {
+    rules.push(`Comptage dizaine : série de ${dc.count} même costume → 1ʳᵉ à +${dc.n}, puis +${dc.ni} après chaque résultat, ${dc.nk} au total`);
+  }
+  return {
+    name: t.name,
+    sourceKey: t.key,
+    sourceName: src ? src.name : t.key,
+    rules,
+    example,
+    lastPrediction: last,
+    suitStats: stats,
+  };
+}
+
 function countersFor(t) {
   const out = [];
   const st = t.streak || null;
   if (st && st.enabled) {
-    const pr = t.streakProgress || { suit: null, seen: 0, count: st.count };
+    // recalcul LIVE : ne dépend plus du dernier passage du relais automatique
+    const pr = streakProgressOf(t) || t.streakProgress || { suit: null, seen: 0, count: st.count };
     out.push({
       key: 'streak',
       label: `Série de même costume${pr.suit ? ` (${pr.suit})` : ''}`,
@@ -1656,6 +1747,8 @@ function status() {
       streakProgress: t.streakProgress || null,
       streakSession: t.streakSession || null,
       counters: countersFor(t),
+      suitStats: suitStatsFor(t),
+      summary: configSummaryFor(t),
       decade: t.decade || sanitizeDecade(null),
       lastDecadeEnd: t.lastDecadeEnd || 0,
       decadeSession: t.decadeSession || null,
