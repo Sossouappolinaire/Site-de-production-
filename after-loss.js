@@ -67,6 +67,12 @@ const panel = {
   // Telegram, pour pouvoir être revérifié comme une prédiction normale (voir
   // verifyPending) et édité avec le vrai résultat (✅/❌) une fois connu.
   pendingMessages: [],
+  // BILAN (demande admin) : dès qu'une prédiction relayée est VÉRIFIÉE, son
+  // résultat est comptabilisé ici (compteur de bilan par stratégie suivie),
+  // puis l'entrée est effacée du suivi et n'est JAMAIS réenregistrée en base
+  // (voir markResolved / persist ci-dessous). Seules les prédictions encore
+  // « en attente » sont persistées.
+  tally: {},      // { [trackerId]: { win, loss, cancelled, total, lastAt } }
   sentCount: 0,
   lastSentAt: null,
   lastScanAt: null,
@@ -320,6 +326,68 @@ function resultLabel(kind) {
 }
 
 // ---------------------------------------------------------------------------
+// Compteur de bilan + effacement des prédictions vérifiées (demande admin)
+// ---------------------------------------------------------------------------
+function tallyFor(trackerId) {
+  const key = trackerId || 'panel';
+  if (!panel.tally[key]) panel.tally[key] = { win: 0, loss: 0, cancelled: 0, total: 0, lastAt: null };
+  return panel.tally[key];
+}
+
+function tallyView(trackerId) {
+  const t = tallyFor(trackerId);
+  const done = t.win + t.loss;
+  return { ...t, rate: done ? Math.round((t.win / done) * 1000) / 10 : 0 };
+}
+
+// Marque une entrée comme résolue : on l'envoie UNE SEULE FOIS au compteur de
+// bilan de sa stratégie suivie (garde `counted`), puis elle devient effaçable
+// (voir sweepResolved) et ne sera plus jamais persistée.
+function markResolved(entry, status) {
+  entry.status = status;
+  entry.resolvedAt = Date.now();
+  if (entry.counted) return;
+  entry.counted = true;
+  const t = tallyFor(entry.trackerId);
+  if (status === 'gagné') t.win += 1;
+  else if (status === 'perdu') t.loss += 1;
+  else t.cancelled += 1;
+  t.total += 1;
+  t.lastAt = entry.resolvedAt;
+}
+
+// Effacement : une prédiction déjà vérifiée n'est gardée en mémoire que le
+// temps court nécessaire aux statistiques de la session (répétition, séries) —
+// jamais en base.
+function sweepResolved() {
+  const cutoff = Date.now() - 6 * 3600 * 1000;
+  panel.pendingMessages = panel.pendingMessages.filter(
+    (e) => e.status === 'en attente' || (e.resolvedAt && e.resolvedAt >= cutoff)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ANTI-DOUBLON D'ENVOI (demande admin) : un même jeu cible ne doit jamais être
+// relayé deux fois — ni par la même stratégie suivie (tick qui se chevauche,
+// répétition + série qui tombent sur la même cible), ni par deux stratégies
+// suivies qui pointent vers le même canal avec la même prédiction.
+// ---------------------------------------------------------------------------
+function isDuplicateRelay(tracker, target, suit) {
+  const chans = effectiveChannels(tracker);
+  const site = effectiveSiteChannelId(tracker);
+  return panel.pendingMessages.some((e) => {
+    if (Number(e.target) !== Number(target)) return false;
+    if (e.trackerId === tracker.id) return true;       // même stratégie suivie
+    if (String(e.suit) !== String(suit)) return false; // prédiction différente
+    const other = panel.trackers.find((t) => t.id === e.trackerId);
+    if (!other) return false;
+    const oCh = effectiveChannels(other);
+    const oSite = effectiveSiteChannelId(other);
+    return (site && oSite === site) || oCh.some((c) => chans.includes(c));
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Persistance
 // ---------------------------------------------------------------------------
 function persist() {
@@ -327,7 +395,10 @@ function persist() {
     config: config(),
     trackers: panel.trackers,
     history: panel.history,
-    pendingMessages: panel.pendingMessages,
+    // une prédiction DÉJÀ VÉRIFIÉE n'est jamais enregistrée : seules les
+    // prédictions encore en attente de résultat sont sauvegardées.
+    pendingMessages: panel.pendingMessages.filter((e) => e.status === 'en attente'),
+    tally: panel.tally,
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -394,21 +465,22 @@ function applySaved(saved) {
     }));
   }
   if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
-  if (Array.isArray(saved.pendingMessages)) {
-    // CORRECTIF (même règle qu'ailleurs) : au redémarrage, on ne rejette pas
-    // les entrées encore « en attente » au-delà de 200 — seules les entrées
-    // déjà résolues sont plafonnées (tableau construit par push(), donc en
-    // partant de la fin, les plus récentes en priorité).
-    const keep = [];
-    let resolvedCount = 0;
-    for (let i = saved.pendingMessages.length - 1; i >= 0; i--) {
-      const e = saved.pendingMessages[i];
-      if (e.status === 'en attente' || resolvedCount < 200) {
-        keep.unshift(e);
-        if (e.status !== 'en attente') resolvedCount += 1;
-      }
+  if (saved.tally && typeof saved.tally === 'object') {
+    panel.tally = {};
+    for (const [k, v] of Object.entries(saved.tally)) {
+      panel.tally[k] = {
+        win: Number(v && v.win) || 0,
+        loss: Number(v && v.loss) || 0,
+        cancelled: Number(v && v.cancelled) || 0,
+        total: Number(v && v.total) || 0,
+        lastAt: (v && v.lastAt) || null,
+      };
     }
-    panel.pendingMessages = keep;
+  }
+  if (Array.isArray(saved.pendingMessages)) {
+    // Au redémarrage on ne recharge QUE les prédictions encore en attente :
+    // celles déjà vérifiées ont été comptées au bilan puis effacées.
+    panel.pendingMessages = saved.pendingMessages.filter((e) => e && e.status === 'en attente');
   }
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
@@ -448,6 +520,33 @@ function currentMaxTarget(key) {
   return list.length ? list[list.length - 1].target : 0;
 }
 
+// ---------------------------------------------------------------------------
+// CORRECTIF « doublons de configuration » (demande admin) : avant d'ajouter
+// une nouvelle stratégie suivie, on vérifie si une stratégie suivie
+// EXISTANTE surveille déjà la MÊME stratégie source, avec le(s) MÊME(S)
+// canal(aux)/canal du site ET le MÊME format de prédiction — un cas quasi
+// certainement involontaire (deux trackers qui vont relayer exactement la
+// même chose, au même endroit). On ne bloque pas silencieusement : on
+// renvoie la liste des configurations en conflit pour que l'appelant (API/
+// front-end) puisse afficher une fenêtre de confirmation avant de forcer
+// l'ajout (voir extra.force ci-dessous).
+// ---------------------------------------------------------------------------
+function findConfigConflicts(key, channels, siteChannelId, format) {
+  const chOut = (channels && channels.length) ? channels : panel.channels;
+  const siteOut = (siteChannelId !== null && siteChannelId !== undefined) ? siteChannelId : panel.siteChannelId;
+  const fmtOut = (format !== null && format !== undefined) ? format : panel.format;
+  return panel.trackers.filter((t) => {
+    if (t.key !== key) return false;
+    const tCh = effectiveChannels(t);
+    const tSite = effectiveSiteChannelId(t);
+    const tFmt = effectiveFormat(t);
+    if (tFmt !== fmtOut) return false;
+    if (tSite !== siteOut) return false;
+    if (tCh.length !== chOut.length) return false;
+    return tCh.every((c) => chOut.includes(c));
+  });
+}
+
 function addTracker(key, triggers, repeat, extra = {}) {
   const opt = optionByKey(key);
   if (!opt) throw new Error("Stratégie inconnue pour le suivi « après perte »");
@@ -457,6 +556,27 @@ function addTracker(key, triggers, repeat, extra = {}) {
   const cleanDecade = sanitizeDecade(extra.decade);
   if (!cleanRepeat.enabled && !cleanStreak.enabled && !cleanDecade.enabled && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
     throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte », « série de même costume » ou « comptage dizaine ».");
+  }
+  const wantedChannels = parseChannels(extra.channels);
+  const wantedSiteChannelId = sanitizeSiteChannelId(extra.siteChannelId);
+  const wantedFormat = sanitizeTrackerFormat(extra.format);
+  if (!extra.force) {
+    const conflicts = findConfigConflicts(opt.key, wantedChannels, wantedSiteChannelId, wantedFormat);
+    if (conflicts.length) {
+      const err = new Error(
+        `Une stratégie suivie avec exactement le(s) même(s) canal(aux) et le même format existe déjà pour « ${opt.name} » — confirme pour l'ajouter quand même (sinon ce sera un doublon).`
+      );
+      err.code = 'DUPLICATE_CONFIG';
+      err.conflicts = conflicts.map((t) => ({
+        id: t.id,
+        name: t.name,
+        channels: effectiveChannels(t),
+        siteChannelId: effectiveSiteChannelId(t),
+        format: effectiveFormat(t),
+        triggers: t.triggers,
+      }));
+      throw err;
+    }
   }
   // La stratégie suivie doit être ACTIVE pour produire de nouvelles
   // prédictions (voir evaluate() dans predictor.js, qui ignore les
@@ -479,9 +599,9 @@ function addTracker(key, triggers, repeat, extra = {}) {
     lastStreakEnd: currentMaxTarget(opt.key),
     // canal(x) et format propres à cette stratégie ; vides → hérite du
     // canal/format global du panneau (voir effectiveChannels/effectiveFormat).
-    channels: parseChannels(extra.channels),
-    siteChannelId: sanitizeSiteChannelId(extra.siteChannelId),
-    format: sanitizeTrackerFormat(extra.format),
+    channels: wantedChannels,
+    siteChannelId: wantedSiteChannelId,
+    format: wantedFormat,
     // on ne rejoue pas les pertes déjà passées au moment de l'ajout.
     lastRepeatSource: currentMaxTarget(opt.key),
     counting: false,
@@ -739,8 +859,7 @@ setOnShoeReset(() => {
     // l'édition n'afficherait rien de différent) — comme pour les prédictions
     // normales annulées par resetShoe() dans predictor.js, le message reste
     // affiché tel quel sur Telegram, mais n'est plus suivi ni compté ici.
-    entry.status = 'annulé';
-    entry.resolvedAt = Date.now();
+    markResolved(entry, 'annulé');
     cancelled += 1;
   }
   if (cancelled) panel.lastError = null;
@@ -751,6 +870,32 @@ function maxFinishedGameNumber() {
   let max = 0;
   for (const g of state.games.values()) if (g.finished && g.number > max) max = g.number;
   return max;
+}
+
+// ---------------------------------------------------------------------------
+// CORRECTIF « prédictions doublées / anciennes envoyées » (demande admin) :
+// avant ce correctif, forward()/forwardSynth() relayaient AVEUGLÉMENT la
+// cible calculée (prédiction armée, répétition, série, dizaine…) sans jamais
+// vérifier si le jeu en live avait déjà DÉPASSÉ ce numéro. Ça pouvait arriver
+// après un redémarrage du bot, un retard de tick, ou un tracker ajouté sur
+// une stratégie déjà avancée dans le sabot : la cible calculée tombait alors
+// sur un jeu déjà joué (voire déjà vérifié ailleurs) — d'où l'impression de
+// « prédiction ancienne » ou de doublon (le même relais pouvait ensuite être
+// réévalué comme gagné/perdu quasi instantanément par verifyPending()).
+// Règle demandée : on ne lance JAMAIS une prédiction dont le numéro cible
+// n'est pas STRICTEMENT SUPÉRIEUR au numéro du jeu en live (ou, à défaut, au
+// dernier jeu terminé connu) — même logique que evaluate() dans
+// predictor.js (`hit.target <= maxFinishedNumber()`), étendue ici à tous les
+// relais de ce panneau.
+// ---------------------------------------------------------------------------
+function currentLiveNumber() {
+  const doneMax = maxFinishedGameNumber();
+  const liveNum = state.live ? Number(state.live.number) || 0 : 0;
+  return Math.max(doneMax, liveNum);
+}
+
+function isAlreadyPastLive(target) {
+  return Number(target) <= currentLiveNumber();
 }
 
 async function verifyPending() {
@@ -767,8 +912,7 @@ async function verifyPending() {
           entry.gap += 1;
           entry.skipped = (entry.skipped || 0) + 1;
           if (entry.skipped > 6) {
-            entry.status = 'annulé';
-            entry.resolvedAt = Date.now();
+            markResolved(entry, 'annulé');
             break;
           }
           continue;
@@ -788,28 +932,33 @@ async function verifyPending() {
             ? hasSuitBanker(g, entry.suit)
             : hasSuit(g, entry.suit);
       if (won) {
-        entry.status = 'gagné';
-        entry.resolvedAt = Date.now();
+        markResolved(entry, 'gagné');
         editPending(entry, 'gagné');
         break;
       }
       if (entry.step >= entry.maxR) {
-        entry.status = 'perdu';
-        entry.resolvedAt = Date.now();
+        markResolved(entry, 'perdu');
         editPending(entry, 'perdu');
         break;
       }
       entry.step += 1;
     }
   }
-  // ménage : on ne garde pas indéfiniment les entrées déjà résolues.
-  const cutoff = Date.now() - 24 * 3600 * 1000;
-  panel.pendingMessages = panel.pendingMessages.filter(
-    (e) => e.status === 'en attente' || !e.resolvedAt || e.resolvedAt >= cutoff
-  );
+  // ménage : les entrées vérifiées, déjà comptées au bilan, sont effacées.
+  sweepResolved();
 }
 
 async function forward(tracker, pred) {
+  // GARDE « jeu en live » — voir isAlreadyPastLive() ci-dessus : on ne relaie
+  // jamais une cible déjà dépassée par le jeu en cours (ancienne prédiction).
+  if (isAlreadyPastLive(pred.target)) {
+    panel.lastError = `Relais ignoré pour « ${tracker.name} » : jeu #N${pred.target} déjà dépassé par le live (#N${currentLiveNumber()}) — prédiction non lancée pour éviter un envoi ancien/en double.`;
+    return false;
+  }
+  if (isDuplicateRelay(tracker, pred.target, pred.suit || pred.card)) {
+    panel.lastError = `Relais ignoré pour « ${tracker.name} » : une prédiction pour le jeu #N${pred.target} a déjà été envoyée (doublon évité).`;
+    return false;
+  }
   const targetChannels = effectiveChannels(tracker);
   const siteChannelId = effectiveSiteChannelId(tracker);
   if (!targetChannels.length && !siteChannelId) {
@@ -966,6 +1115,16 @@ async function forwardRepeat(tracker, synth) {
 // normal, seul le libellé de stratégie (et éventuellement le format et le
 // nombre de rattrapage) change.
 async function forwardSynth(tracker, synth, opts = {}) {
+  // GARDE « jeu en live » — identique à forward() ci-dessus, pour les relais
+  // synthétiques (répétition, série de costume, comptage dizaine).
+  if (isAlreadyPastLive(synth.target)) {
+    panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : jeu #N${synth.target} déjà dépassé par le live (#N${currentLiveNumber()}) — prédiction non lancée pour éviter un envoi ancien/en double.`;
+    return false;
+  }
+  if (isDuplicateRelay(tracker, synth.target, synth.suit)) {
+    panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : une prédiction pour le jeu #N${synth.target} a déjà été envoyée (doublon évité).`;
+    return false;
+  }
   const targetChannels = effectiveChannels(tracker);
   const siteChannelId = effectiveSiteChannelId(tracker);
   if (!targetChannels.length && !siteChannelId) {
@@ -1367,9 +1526,16 @@ function status() {
       sentCount: t.sentCount,
       lastSentAt: t.lastSentAt,
       createdAt: t.createdAt,
+      bilan: tallyView(t.id),
     })),
     history: panel.history.slice(0, 20),
     pendingVerification: panel.pendingMessages.filter((e) => e.status === 'en attente').length,
+    bilan: Object.values(panel.tally).reduce((acc, t) => ({
+      win: acc.win + (t.win || 0),
+      loss: acc.loss + (t.loss || 0),
+      cancelled: acc.cancelled + (t.cancelled || 0),
+      total: acc.total + (t.total || 0),
+    }), { win: 0, loss: 0, cancelled: 0, total: 0 }),
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -1381,5 +1547,5 @@ module.exports = {
   panel, status, config, configure, restore, restoreFromDb, setSender, tick, test,
   parseChannels, options, addTracker, updateTracker, removeTracker,
   backtestTracker, optimizeTracker, triggersAboveThreshold, allTriggersAboveThreshold,
-  TRIGGER_KEYS, TRIGGER_LABELS, pendingFor,
+  TRIGGER_KEYS, TRIGGER_LABELS, pendingFor, tallyView, findConfigConflicts,
 };
