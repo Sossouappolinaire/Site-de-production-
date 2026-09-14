@@ -444,7 +444,15 @@
         window.location.href = '/login.html' + qs;
         throw new Error(data.error || 'Session expirée.');
       }
-      if (!res.ok) throw new Error(data.error || `Erreur ${res.status}`);
+      if (!res.ok) {
+        const err = new Error(data.error || `Erreur ${res.status}`);
+        // CORRECTIF « doublons de configuration » : on transporte le corps
+        // JSON complet de l'erreur (ex. code + conflicts) pour que l'appelant
+        // puisse afficher une fenêtre détaillée sans refaire l'appel.
+        err.data = data;
+        err.status = res.status;
+        throw err;
+      }
       return data;
     }
     function toast(message, type = '') {
@@ -1630,6 +1638,19 @@ Faites-en bon usage !
       const siteChannelId = val(`${prefix}-siteChannel`);
       return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat };
     }
+    // Compteurs live des configurations (ex. « 1/2 » puis « 2/2 » pour deux
+    // prédits du même costume). Les valeurs viennent du serveur, où elles sont
+    // enregistrées en base : elles ne repartent pas de zéro au redémarrage.
+    // Nom donné à la configuration : sous ce nom elle apparaît ensuite dans les
+    // listes de stratégies existantes des autres panneaux.
+    function afterLossNameRow(prefix, name, placeholder) {
+      return `<div class="field" style="margin-top:10px"><label>Nom de la stratégie (visible dans les autres panneaux)</label><input id="${prefix}-name" value="${esc(name || '')}" placeholder="${esc(placeholder || 'ex. Rattrapage ♦️ +4')}"></div>`;
+    }
+    function afterLossCounters(t) {
+      const list = t.counters || [];
+      if (!list.length) return '';
+      return `<div class="notice" style="margin:10px 0"><b>Compteurs en cours</b><div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${list.map(c => `<span class="tag ${c.done ? 'good' : 'warn'}" title="${esc(c.hint || '')}">${esc(c.label)} : <b>${esc(c.value)}</b></span>`).join('')}</div></div>`;
+    }
     function afterLossPage() {
       setNav('after-loss');
       const p = snapshot.afterLoss || {};
@@ -1658,6 +1679,8 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Stratégies suivies</span><h2 style="margin-top:7px">${trackers.length} stratégie(s)</h2></div></div>
           ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.armed ? 'warn' : (t.counting ? 'warn' : 'good')}">${t.armed ? 'En attente de la prochaine prédiction' : (t.counting ? `Décompte en cours : ${esc(String(t.armedSeen))}/${esc(String(t.armedNeeded))}` : 'Surveillance')}</span></div>
             <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
+            ${afterLossNameRow('trk-' + t.id, t.name, t.name)}
+            ${afterLossCounters(t)}
             <div id="opt-result-${esc(t.id)}"></div>
             ${afterLossTriggerRows('trk-' + t.id, t.triggers)}
             ${afterLossRepeatRow('trk-' + t.id, t.repeat)}
@@ -1672,6 +1695,7 @@ Faites-en bon usage !
       const opts = (snapshot.afterLoss?.options || []).map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('');
       openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot ou la stratégie IA, puis coche au moins un type de résultat déclencheur et le N à attendre pour chacun.</p></div></div>
         <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
+        ${afterLossNameRow('new', '', 'ex. Rattrapage ♦️ +4')}
         ${afterLossTriggerRows('new', { perdue: { enabled: true, n: 0 } })}
         ${afterLossRepeatRow('new', { enabled: false, lead: 5 })}
         ${afterLossStreakRow('new', null, snapshot.formatCount)}
@@ -1679,15 +1703,39 @@ Faites-en bon usage !
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
-    async function addAfterLossTracker() {
+    async function addAfterLossTracker(force) {
       const key = val('newTrackerKey');
       const triggers = readAfterLossTriggers('new');
       const repeat = readAfterLossRepeat('new');
       const streak = readAfterLossStreak('new');
       const decade = readAfterLossDecade('new');
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
-      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, streak, decade, channels, siteChannelId, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
-      catch (e) { toast(e.message, 'error'); }
+      const payload = { key, name: val('new-name'), triggers, repeat, streak, decade, channels, siteChannelId, format, force: !!force };
+      try { await api('/api/after-loss/trackers', 'POST', payload); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      catch (e) {
+        // CORRECTIF « doublons de configuration » : au lieu d'un simple toast
+        // d'erreur, on affiche une fenêtre listant la (les) configuration(s)
+        // déjà identique(s), avec la possibilité de confirmer quand même.
+        if (e.status === 409 && e.data && e.data.code === 'DUPLICATE_CONFIG') {
+          showAfterLossConflictModal(e.data.conflicts || [], payload);
+          return;
+        }
+        toast(e.message, 'error');
+      }
+    }
+    function showAfterLossConflictModal(conflicts, payload) {
+      const rows = conflicts.map(c => `<tr>
+        <td>${esc(c.name)}</td>
+        <td class="mono">${esc((c.channels || []).join(', ') || '—')}</td>
+        <td>${esc(c.siteChannelId != null ? String(c.siteChannelId) : '—')}</td>
+        <td>${esc(String(c.format))}</td>
+      </tr>`).join('');
+      openModal(`<div class="modal-head"><div><span class="eyebrow">⚠️ Configuration déjà utilisée</span><h3 style="margin-top:8px">Cette stratégie suivie existe déjà avec les mêmes réglages</h3><p class="small" style="margin:0">Même stratégie suivie, même(s) canal(aux)/canal du site ET même format de prédiction qu'une configuration déjà enregistrée ci-dessous. Ajouter quand même créera un doublon (deux relais identiques pour le même résultat).</p></div></div>
+        <table style="margin-top:10px"><thead><tr><th>Stratégie suivie existante</th><th>Canal(aux)</th><th>Canal du site</th><th>Format</th></tr></thead><tbody>${rows}</tbody></table>
+        <div class="modal-actions" style="margin-top:14px">
+          <button class="button small danger" onclick="addAfterLossTracker(true)">Ajouter quand même</button>
+          <button class="button small ghost" onclick="addAfterLossTrackerModal()">Modifier les réglages</button>
+        </div>`);
     }
     async function updateAfterLossTriggers(id) {
       const triggers = readAfterLossTriggers('trk-' + id);
@@ -1695,7 +1743,7 @@ Faites-en bon usage !
       const streak = readAfterLossStreak('trk-' + id);
       const decade = readAfterLossDecade('trk-' + id);
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, streak, decade, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { name: val('trk-' + id + '-name'), triggers, repeat, streak, decade, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function optimizeAfterLossTracker(id) {
