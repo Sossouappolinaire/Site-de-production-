@@ -77,11 +77,29 @@ function sanitizeSiteChannelId(value) {
   return Number.isFinite(n) ? n : String(value);
 }
 
-// Sources sélectionnables : toutes les stratégies existantes + la stratégie IA.
+// Sources sélectionnables : toutes les stratégies existantes, la stratégie IA,
+// ET les configurations enregistrées dans « Prédiction après perte » /
+// « Combinaisons », qui se comportent ici exactement comme une stratégie
+// existante (elles apparaissent sous le nom donné à l'enregistrement).
+// Require() PARESSEUX : ces panneaux ne se requièrent pas au chargement.
+function savedPanelOptions() {
+  const out = [];
+  try {
+    const afterLoss = require('./after-loss');
+    for (const t of afterLoss.panel.trackers || []) out.push({ key: `after:${t.id}`, name: t.name });
+  } catch (_) {}
+  try {
+    const combined = require('./combined');
+    for (const t of combined.panel.trackers || []) out.push({ key: `combo:${t.id}`, name: t.name });
+  } catch (_) {}
+  return out;
+}
+
 function options() {
   return [
     ...strategies.LIST.map((s) => ({ key: s.key, name: s.name })),
     { key: 'ia', name: 'Stratégie IA (Prédit)' },
+    ...savedPanelOptions(),
   ];
 }
 
@@ -229,6 +247,12 @@ function ensureTracker(key) {
 
 function sourcePredictions(key) {
   if (key === 'ia') return [...predit.panel.predictions].sort((a, b) => a.target - b.target);
+  if (key.startsWith('after:')) {
+    try { return require('./after-loss').pendingFor(key.slice('after:'.length)); } catch (_) { return []; }
+  }
+  if (key.startsWith('combo:')) {
+    try { return require('./combined').pendingFor(key.slice('combo:'.length)); } catch (_) { return []; }
+  }
   return state.predictions.filter((p) => p.strategy === key).sort((a, b) => a.target - b.target);
 }
 

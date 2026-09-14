@@ -114,7 +114,7 @@ function config() {
 function afterLossOptions() {
   try {
     const afterLoss = require('./after-loss');
-    return (afterLoss.panel.trackers || []).map((t) => ({ key: `after:${t.id}`, name: `Après perte — ${t.name}`, group: 'Après perte' }));
+    return (afterLoss.panel.trackers || []).map((t) => ({ key: `after:${t.id}`, name: t.name, group: 'Stratégies enregistrées' }));
   } catch (_) { return []; }
 }
 

@@ -1837,11 +1837,19 @@ app.post('/api/after-loss/trackers', async (req, res) => {
   try {
     const key = req.body && req.body.key;
     const t = afterLoss.addTracker(key, req.body && req.body.triggers, req.body && req.body.repeat, {
+      // nom donné à la configuration : elle apparaît ensuite sous ce nom dans
+      // les listes de stratégies existantes des autres panneaux.
+      name: req.body && req.body.name,
       channels: req.body && req.body.channels,
       siteChannelId: req.body && req.body.siteChannelId,
       format: req.body && req.body.format,
       streak: req.body && req.body.streak,
       decade: req.body && req.body.decade,
+      // CORRECTIF « doublons de configuration » : force=true (renvoyé par le
+      // front-end après confirmation de l'admin sur la fenêtre d'avertissement)
+      // permet de créer quand même le tracker malgré un conflit détecté (voir
+      // findConfigConflicts() dans after-loss.js).
+      force: !!(req.body && req.body.force),
     });
     // la stratégie suivie a été activée automatiquement par addTracker() —
     // on persiste ce changement comme le fait la route /api/strategies/:key,
@@ -1851,7 +1859,15 @@ app.post('/api/after-loss/trackers', async (req, res) => {
       if (db.ready) await db.saveStrategy(key, strategies.BY_KEY[key].name, state.strategies[key]);
     }
     res.json({ ok: true, tracker: t, afterLoss: afterLoss.status() });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    // CORRECTIF « doublons de configuration » : statut dédié (409 = conflit)
+    // + la liste des configurations en conflit, pour que le front-end affiche
+    // une fenêtre listant les différentes configurations avant de forcer.
+    if (e.code === 'DUPLICATE_CONFIG') {
+      return res.status(409).json({ error: e.message, code: e.code, conflicts: e.conflicts || [] });
+    }
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.put('/api/after-loss/trackers/:id', (req, res) => {
