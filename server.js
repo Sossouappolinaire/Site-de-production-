@@ -1840,6 +1840,8 @@ app.post('/api/after-loss/trackers', async (req, res) => {
       // nom donné à la configuration : elle apparaît ensuite sous ce nom dans
       // les listes de stratégies existantes des autres panneaux.
       name: req.body && req.body.name,
+      // catégorie de configuration choisie dans le panneau (1, 2 ou 3)
+      category: req.body && req.body.category,
       channels: req.body && req.body.channels,
       siteChannelId: req.body && req.body.siteChannelId,
       format: req.body && req.body.format,
