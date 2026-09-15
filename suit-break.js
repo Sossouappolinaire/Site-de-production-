@@ -268,7 +268,10 @@ function applySaved(saved) {
       maxR: sanitizeTrackerMaxR(t.maxR),
       streakSuit: null,
       streakCount: 0,
-      lastSeenTarget: 0,
+      // null = panneau « non amorcé » : au premier passage on se cale sur la
+      // dernière prédiction DÉJÀ existante de la source sans la rejouer, pour
+      // ne JAMAIS renvoyer d'anciennes prédictions déjà passées dans le canal.
+      lastSeenTarget: null,
       seen: [],
       readCount: 0,
       fireCount: 0,
@@ -360,6 +363,17 @@ async function processTracker(tracker) {
     if (!trust.ok) return; // formation pas (ou plus) fiable : on ne traite rien ce tour-ci
   }
   const list = trackerPredictions(tracker.key);
+  // AMORÇAGE (démarrage / nouveau sabot) : on ne rejoue jamais les
+  // prédictions déjà présentes. On se cale simplement sur la dernière et on
+  // n'envoie rien ce tour-ci : seules les prédictions FUTURES de la source
+  // pourront alimenter la série puis la rupture.
+  if (tracker.lastSeenTarget === null || tracker.lastSeenTarget === undefined) {
+    tracker.lastSeenTarget = list.length ? list[list.length - 1].target : 0;
+    tracker.streakSuit = null;
+    tracker.streakCount = 0;
+    tracker.seen = [];
+    return;
+  }
   // CORRECTIF : le numéro de jeu repart à 1 à chaque nouveau sabot. Si la
   // source repart nettement en dessous du curseur, on remet le curseur à zéro
   // au lieu d'ignorer toutes les nouvelles prédictions.
@@ -548,7 +562,7 @@ async function verifyPending() {
 // compteurs remis à zéro (demande admin).
 setOnShoeReset(() => {
   for (const t of panel.trackers) {
-    t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0;
+    t.lastSeenTarget = null; t.streakSuit = null; t.streakCount = 0;
     t.seen = []; t.readCount = 0; t.fireCount = 0; t.lastFireAt = null;
     t.sentCount = 0; t.lastSentAt = null;
   }
@@ -607,7 +621,7 @@ function statusView() {
       readCount: t.readCount || 0,
       fireCount: t.fireCount || 0,
       lastFireAt: t.lastFireAt || null,
-      lastSeenTarget: t.lastSeenTarget || 0,
+      lastSeenTarget: t.lastSeenTarget == null ? 0 : t.lastSeenTarget,
       sourcePredictions: trackerPredictions(t.key)
         .slice(-15)
         .map((p) => ({ target: p.target, suit: p.suit || null, status: p.status || 'en attente' }))
