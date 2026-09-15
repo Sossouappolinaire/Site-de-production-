@@ -2166,6 +2166,29 @@ Faites-en bon usage !
       const siteChannelId = val(`${prefix}-siteChannel`);
       return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat, maxR: rawMaxR === '' ? null : rawMaxR };
     }
+    // Vérification à l'écran (demande admin) : on montre exactement ce que le
+    // bouton rupture a LU de la stratégie source, combien de fois, et les
+    // prédictions qu'il a lui-même envoyées — pour pouvoir contrôler la règle.
+    function suitBreakTrackerAudit(t) {
+      const seen = t.seen || [];
+      const src = t.sourcePredictions || [];
+      const pend = t.pending || [];
+      return `<div class="route-card" style="margin-top:14px">
+        <div class="route-title"><i></i><strong>Contrôle du fonctionnement</strong></div>
+        <dl><dt>Prédictions lues de la source</dt><dd>${esc(String(t.readCount || 0))}</dd>
+        <dt>Ruptures déclenchées</dt><dd>${esc(String(t.fireCount || 0))}</dd>
+        <dt>Dernière rupture</dt><dd>${formatDate(t.lastFireAt)}</dd>
+        <dt>Série en cours</dt><dd>${t.streakCount ? `${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))} (N = ${esc(String(t.n))})` : `aucune (N = ${esc(String(t.n))})`}</dd>
+        <dt>Dernier numéro lu</dt><dd>${t.lastSeenTarget ? '#N' + esc(String(t.lastSeenTarget)) : '—'}</dd></dl>
+        <p class="small muted" style="margin:10px 0 4px"><strong>Prédictions de la stratégie source (les plus récentes)</strong></p>
+        ${src.length ? `<table><thead><tr><th>Jeu</th><th>Costume</th><th>Résultat</th></tr></thead><tbody>${src.map(p => `<tr><td class="mono">#N${esc(String(p.target))}</td><td>${esc(p.suit || '—')}</td><td>${esc(p.status || '—')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">La source n\'a aucune prédiction en mémoire pour le moment.</div>'}
+        <p class="small muted" style="margin:12px 0 4px"><strong>Ce que la rupture a lu, pas à pas</strong></p>
+        ${seen.length ? `<table><thead><tr><th>Jeu</th><th>Costume lu</th><th>Effet</th><th>Heure</th></tr></thead><tbody>${seen.map(e => `<tr><td class="mono">#N${esc(String(e.target))}</td><td>${esc(e.suit || '—')}</td><td>${esc(e.note || '—')}</td><td>${formatDate(e.at)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Rien de lu depuis le démarrage / le nouveau sabot.</div>'}
+        <p class="small muted" style="margin:12px 0 4px"><strong>Prédictions envoyées par cette rupture</strong></p>
+        ${pend.length ? `<table><thead><tr><th>Jeu</th><th>Costume prédit</th><th>Rattrapage</th><th>État</th></tr></thead><tbody>${pend.map(e => `<tr><td class="mono">#N${esc(String(e.target))}</td><td>${esc(e.suit || '—')}</td><td>${esc(String(e.step || 0))}/${esc(String(e.maxR ?? 0))}</td><td>${esc(e.status || '—')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucune prédiction envoyée pour l\'instant.</div>'}
+      </div>`;
+    }
+
     function suitBreakPage() {
       setNav('suit-break');
       const p = snapshot.suitBreak || {};
@@ -2194,6 +2217,7 @@ Faites-en bon usage !
             ${suitBreakSettingsRow('sb-' + t.id, t)}
             ${suitBreakChannelFormatRow('sb-' + t.id, t)}
             <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="sb-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+            ${suitBreakTrackerAudit(t)}
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateSuitBreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeSuitBreakTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Source</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
