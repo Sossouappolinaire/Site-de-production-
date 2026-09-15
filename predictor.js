@@ -1007,10 +1007,22 @@ function resetShoe(reason = 'nouveau sabot') {
   state.triggersDone = {};
   state.lastFinished = null;
   for (const s of SUITS) state.counters[s] = 0;
-  // les prédictions encore en attente visaient l'ancien sabot : elles sont closes
-  for (const p of state.predictions) {
-    if (p.status === 'en attente') { p.status = 'annulé'; p.badge = '♻️'; }
-  }
+  // CORRECTIF « anciennes prédictions confondues avec les récentes » (demande
+  // admin) : avant ce correctif, les prédictions de l'ancien sabot étaient
+  // seulement marquées « annulé » puis laissées dans state.predictions,
+  // plafonnées à 300 résolues. Comme les numéros de jeu REPARTENT À 1 à
+  // chaque nouveau sabot, et que les listes « X dernières prédictions »
+  // trient par NUMÉRO DE JEU croissant (pas par date d'envoi), une vieille
+  // prédiction de l'ancien sabot avec un grand numéro (ex. #N1438, #N1439,
+  // #N1440) se retrouvait affichée comme la PLUS RÉCENTE devant une vraie
+  // prédiction du nouveau sabot avec un petit numéro (ex. #N60) — donnant
+  // l'impression que le bot « confondait » des costumes alors qu'il
+  // mélangeait simplement deux sabots différents. On purge donc maintenant
+  // ENTIÈREMENT state.predictions (mémoire) ET la table `predictions` (base)
+  // dès qu'un nouveau sabot démarre : plus aucune prédiction de l'ancien
+  // sabot ne peut réapparaître dans une liste ou un compteur.
+  state.predictions = [];
+  if (db.ready) db.clearPredictions().catch((error) => { state.lastError = error.message; });
   state.shoeResetAt = Date.now();
   state.shoeResetReason = reason;
   // compteur de sabots : le bot s'en sert pour publier le bilan complet
