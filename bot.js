@@ -307,18 +307,56 @@ function fmtDate(d) {
 }
 
 function wire(b) {
-  b.on('polling_error', (e) => { state.botError = e.message; });
+  b.on('polling_error', (e) => {
+    state.botError = e.message;
+    // CORRECTIF « le token ne répond à aucune commande » : si un webhook est
+    // encore actif sur ce token (configuré une fois par erreur, ou laissé par
+    // un ancien hébergement), Telegram refuse TOUT getUpdates avec une erreur
+    // 409 Conflict — le bot peut alors continuer d'ENVOYER des prédictions,
+    // mais ne reçoit plus jamais aucune commande. On supprime donc le webhook
+    // dès qu'on voit ce conflit, puis le polling reprend tout seul.
+    if (/409|conflict|webhook/i.test(e.message || '')) {
+      b.deleteWebHook().catch(() => {});
+    }
+  });
   b.on('my_chat_member', (u) => {
     const status = u.new_chat_member && u.new_chat_member.status;
     if (['administrator', 'member', 'creator'].includes(status)) rememberChannel(u.chat);
   });
+
+  // ---------------------------------------------------------------------
+  // Commandes envoyées DANS un canal (channel_post) — CORRECTIF : avant,
+  // seules /stop /start /planifier /statut étaient reconnues ici, toutes les
+  // autres commandes (/statut, /strategies, /ombre, /ia…) restaient sans
+  // réponse quand on les écrivait dans le canal d'une stratégie, parce que
+  // node-telegram-bot-api n'applique ses handlers onText() qu'aux messages
+  // (update.message), jamais aux publications de canal (update.channel_post).
+  // On rejoue donc chaque publication de canal à travers les handlers
+  // onText() du bot, exactement comme un message privé de l'admin.
+  // ---------------------------------------------------------------------
   b.on('channel_post', (m) => {
     rememberChannel(m.chat);
     if (!m.text) return;
     const cmd = parsePredictionControlCommand(m.text);
-    if (!cmd) return;
-    const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`);
-    if (reply) b.sendMessage(m.chat.id, reply).catch(() => {});
+    if (cmd) {
+      const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`);
+      if (reply) b.sendMessage(m.chat.id, reply, { parse_mode: 'Markdown' }).catch(() => {
+        b.sendMessage(m.chat.id, reply).catch(() => {});
+      });
+      return;
+    }
+    if (!m.text.startsWith('/')) return;
+    // Telegram interdit nativement à un non-administrateur de publier dans un
+    // canal : la seule présence de cette publication prouve qu'elle vient d'un
+    // administrateur du canal. On la présente donc aux handlers onText() comme
+    // venant de l'administrateur du bot (les commandes réservées à l'admin
+    // restent ainsi utilisables depuis le canal).
+    const asMessage = {
+      ...m,
+      from: m.from || { id: Number(state.adminId) || 0, is_bot: false, first_name: 'Canal' },
+    };
+    try { b.processUpdate({ update_id: 0, message: asMessage }); }
+    catch (e) { console.error('Commande de canal :', e.message); }
   });
 
   // ---------------------------------------------------------------------
@@ -345,6 +383,19 @@ function wire(b) {
       // question vide ou erreur imprévue : on reste silencieux plutôt que
       // de spammer l'utilisateur avec un message d'erreur technique.
     }
+  });
+
+  // CORRECTIF : /start, /stop, /planifier et /statut n'étaient traités QUE
+  // dans un canal (handler channel_post ci-dessus) — en message privé ou dans
+  // un groupe, le bot ne répondait donc rien du tout, ce qui donnait
+  // l'impression que « le token ne répond à aucune commande ». Elles sont
+  // désormais aussi disponibles en privé/groupe pour l'administrateur.
+  b.onText(/^\/(?:start|stop|statut|planifier)\b/i, (msg) => {
+    const cmd = parsePredictionControlCommand(msg.text);
+    if (!cmd) return;
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const reply = runPredictionControlCommand(cmd, 'administrateur');
+    if (reply) b.sendMessage(msg.chat.id, reply).catch(() => {});
   });
 
   b.onText(/^\/(aide|help)/, (msg) =>
@@ -1145,7 +1196,11 @@ function wire(b) {
 // explication IA restreinte à la stratégie achetée. Voir shop.js.
 // ---------------------------------------------------------------------------
 function wireShop(b) {
-  b.on('polling_error', (e) => { state.shopBotError = e.message; });
+  b.on('polling_error', (e) => {
+    state.shopBotError = e.message;
+    // même correctif que le bot principal : un webhook actif bloque getUpdates
+    if (/409|conflict|webhook/i.test(e.message || '')) b.deleteWebHook().catch(() => {});
+  });
 
   function langKeyboard() {
     return { inline_keyboard: shop.LANGS.map((l) => [{ text: `${l.flag} ${l.label}`, callback_data: `lang:${l.code}` }]) };
@@ -1476,13 +1531,38 @@ async function startBot(token) {
     return { ok: false, error: state.botError };
   }
   try {
-    bot = new TelegramBot(state.botToken, { polling: true });
+    // CORRECTIF PRINCIPAL « aucune commande ne répond » : on démarre d'abord
+    // SANS polling, on supprime tout webhook resté actif sur ce token (sinon
+    // Telegram rejette chaque getUpdates avec 409 Conflict : les prédictions
+    // partent toujours, mais AUCUNE commande n'arrive jamais), puis seulement
+    // ensuite on lance la réception des mises à jour — en demandant
+    // explicitement les publications de canal (channel_post), nécessaires
+    // pour les commandes écrites dans le canal d'une stratégie.
+    bot = new TelegramBot(state.botToken, {
+      polling: {
+        autoStart: false, // démarré à la main, après deleteWebHook (voir plus bas)
+        params: {
+          timeout: 30,
+          // liste explicite : sans « channel_post », les commandes écrites
+          // dans le canal d'une stratégie n'arrivent jamais au bot.
+          allowed_updates: JSON.stringify([
+            'message', 'edited_message', 'channel_post', 'edited_channel_post',
+            'callback_query', 'my_chat_member', 'chat_member',
+          ]),
+        },
+      },
+    });
     wire(bot);
-    const me = await bot.getMe();
+    const me = await bot.getMe(); // valide le token avant de lancer le polling
     state.botUsername = me.username;
+    try { await bot.deleteWebHook({ drop_pending_updates: false }); }
+    catch (e) { console.error('Suppression du webhook impossible :', e.message); }
+    await bot.startPolling({ restart: true });
+    console.log('🤖 Bot principal @' + me.username + ' : réception des commandes active (privé, groupes et canaux).');
     return { ok: true, username: me.username };
   } catch (e) {
     state.botError = e.message;
+    if (bot) { try { await bot.stopPolling({ cancel: true }); } catch (_) {} }
     bot = null;
     return { ok: false, error: e.message };
   }
@@ -1565,13 +1645,22 @@ async function startShopBot(token) {
     return { ok: false, error: state.shopBotError };
   }
   try {
-    shopBot = new TelegramBot(state.shopBotToken, { polling: true });
+    // Même correctif que pour le bot principal : webhook supprimé avant de
+    // lancer la réception, sinon aucune commande de la boutique n'arrive.
+    shopBot = new TelegramBot(state.shopBotToken, {
+      polling: { autoStart: false, params: { timeout: 30 } },
+    });
     wireShop(shopBot);
     const me = await shopBot.getMe();
     state.shopBotUsername = me.username;
+    try { await shopBot.deleteWebHook({ drop_pending_updates: false }); }
+    catch (e) { console.error('Boutique : suppression du webhook impossible :', e.message); }
+    await shopBot.startPolling({ restart: true });
+    console.log('🛍️ Bot boutique @' + me.username + ' : réception des commandes active.');
     return { ok: true, username: me.username };
   } catch (e) {
     state.shopBotError = e.message;
+    if (shopBot) { try { await shopBot.stopPolling({ cancel: true }); } catch (_) {} }
     shopBot = null;
     return { ok: false, error: e.message };
   }
