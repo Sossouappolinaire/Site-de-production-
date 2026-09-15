@@ -221,6 +221,9 @@ function restore() {
     const saved = (store.read() || {}).suitBreak;
     if (saved) applySaved(saved);
   } catch (_) {}
+  // on réécrit tout de suite l'état nettoyé : aucune prédiction stockée ne
+  // survit au démarrage, ni en mémoire ni en base.
+  persist();
   return config();
 }
 
@@ -229,8 +232,8 @@ async function restoreFromDb() {
   try {
     const raw = await db.getSetting('suit_break_state');
     if (raw) applySaved(JSON.parse(raw));
-    else persist();
-  } catch (_) { persist(); }
+  } catch (_) {}
+  persist();
   return config();
 }
 
@@ -243,6 +246,17 @@ function applySaved(saved) {
     panel.maxR = Math.max(0, Math.min(9, parseInt(saved.config.maxR, 10) || 0));
   }
   if (Array.isArray(saved.trackers)) {
+    // CORRECTIF « bouton rupture figé sur un costume » (demande admin) :
+    // avant, la série (streakSuit/streakCount) ET le curseur lastSeenTarget
+    // étaient restaurés depuis la base au démarrage. Or les prédictions des
+    // stratégies sont, elles, PURGÉES à chaque nouveau sabot / redémarrage.
+    // Résultat : le panneau gardait éternellement « ♦️ ×N » et, comme
+    // lastSeenTarget valait un grand numéro de l'ancien sabot, TOUTES les
+    // nouvelles prédictions (numéros repartis à 1) étaient ignorées — donc
+    // plus aucune rupture correcte, et les relais envoyés ne correspondaient
+    // ni aux prédictions ni au numéro réellement prédits.
+    // Désormais : AU DÉMARRAGE, aucune prédiction ni série n'est conservée —
+    // on repart toujours de zéro, seuls les réglages sont restaurés.
     panel.trackers = saved.trackers.map((t) => ({
       id: t.id,
       key: t.key,
@@ -252,30 +266,25 @@ function applySaved(saved) {
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: t.format ? fmt.clampFormat(t.format) : null,
       maxR: sanitizeTrackerMaxR(t.maxR),
-      streakSuit: t.streakSuit || null,
-      streakCount: Number.isFinite(Number(t.streakCount)) ? Number(t.streakCount) : 0,
-      lastSeenTarget: Number.isFinite(Number(t.lastSeenTarget)) ? Number(t.lastSeenTarget) : 0,
-      sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
-      lastSentAt: t.lastSentAt || null,
+      streakSuit: null,
+      streakCount: 0,
+      lastSeenTarget: 0,
+      seen: [],
+      readCount: 0,
+      fireCount: 0,
+      lastFireAt: null,
+      sentCount: 0,
+      lastSentAt: null,
       createdAt: t.createdAt || Date.now(),
     }));
   }
-  if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
-  if (Array.isArray(saved.pendingMessages)) {
-    const keep = [];
-    let resolvedCount = 0;
-    for (let i = saved.pendingMessages.length - 1; i >= 0; i--) {
-      const e = saved.pendingMessages[i];
-      if (e.status === 'en attente' || resolvedCount < 200) {
-        keep.unshift(e);
-        if (e.status !== 'en attente') resolvedCount += 1;
-      }
-    }
-    panel.pendingMessages = keep;
-  }
-  if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
-  panel.lastSentAt = saved.lastSentAt || null;
-  panel.lastScanAt = saved.lastScanAt || null;
+  // Aucune prédiction stockée n'est rejouée au démarrage (mémoire ET base) :
+  // l'historique et les messages en attente repartent vides.
+  panel.history = [];
+  panel.pendingMessages = [];
+  panel.sentCount = 0;
+  panel.lastSentAt = null;
+  panel.lastScanAt = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +306,10 @@ function addTracker(key, extra = {}) {
     streakCount: 0,
     // on ne rejoue pas l'historique déjà passé au moment de l'ajout.
     lastSeenTarget: currentMaxTarget(opt.key),
+    seen: [],
+    readCount: 0,
+    fireCount: 0,
+    lastFireAt: null,
     sentCount: 0,
     lastSentAt: null,
     createdAt: Date.now(),
@@ -319,6 +332,7 @@ function updateTracker(id, patch = {}) {
     // repartir proprement sur les nouvelles règles.
     tracker.streakSuit = null;
     tracker.streakCount = 0;
+    tracker.seen = [];
   }
   if (patch.channels !== undefined) tracker.channels = parseChannels(patch.channels);
   if (patch.siteChannelId !== undefined) tracker.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
@@ -346,27 +360,46 @@ async function processTracker(tracker) {
     if (!trust.ok) return; // formation pas (ou plus) fiable : on ne traite rien ce tour-ci
   }
   const list = trackerPredictions(tracker.key);
+  // CORRECTIF : le numéro de jeu repart à 1 à chaque nouveau sabot. Si la
+  // source repart nettement en dessous du curseur, on remet le curseur à zéro
+  // au lieu d'ignorer toutes les nouvelles prédictions.
+  if (list.length && list[0].target + 10 < tracker.lastSeenTarget) {
+    tracker.lastSeenTarget = 0; tracker.streakSuit = null; tracker.streakCount = 0; tracker.seen = [];
+  }
   for (const pred of list) {
     if (pred.target <= tracker.lastSeenTarget) continue;
-    if (pred.status === 'en attente') break; // pas encore résolue : on la retraite au prochain tour
+    // CORRECTIF : on ne dépend PLUS du résultat (gagné/perdu) pour compter la
+    // prédiction. La règle du panneau est « peu importe gagné/perdu », et
+    // attendre la résolution faisait rater les prédictions purgées entre-temps
+    // (série bloquée sur un seul costume).
     tracker.lastSeenTarget = pred.target;
     const suit = pred.suit;
     if (!suit) continue; // ce panneau ne suit que les prédictions de costume (parité/cartes non gérées)
+    tracker.readCount = (tracker.readCount || 0) + 1;
 
+    let note = '';
     if (suit === tracker.streakSuit) {
       // la série en cours continue (peu importe gagné/perdu).
       tracker.streakCount += 1;
+      note = `série ${suit} ×${tracker.streakCount}`;
     } else {
       // rupture par rapport à la série précédente : si elle avait atteint N,
       // c'est LA rupture qui déclenche — sur ce même numéro, avec le
       // costume ORIGINAL de la série (pas le nouveau costume observé ici).
       if (tracker.streakSuit && tracker.streakCount >= tracker.n) {
+        note = `RUPTURE → prédiction ${tracker.streakSuit} sur #${pred.target}`;
+        tracker.fireCount = (tracker.fireCount || 0) + 1;
+        tracker.lastFireAt = Date.now();
         await fire(tracker, pred, tracker.streakSuit);
+      } else {
+        note = `nouvelle série ${suit} ×1`;
       }
       // le costume de cette prédiction démarre une nouvelle série.
       tracker.streakSuit = suit;
       tracker.streakCount = 1;
     }
+    // journal visible dans la configuration : ce que le panneau a réellement lu
+    tracker.seen = [{ target: pred.target, suit, status: pred.status || 'en attente', note, at: Date.now() }, ...(tracker.seen || [])].slice(0, 25);
   }
 }
 
@@ -510,15 +543,22 @@ async function verifyPending() {
   panel.pendingMessages = panel.pendingMessages.filter((e) => e.status === 'en attente' || !e.resolvedAt || e.resolvedAt >= cutoff);
 }
 
+// Nouveau sabot (le jeu repart au numéro 1 en direct) : purge TOTALE du
+// panneau — plus aucune prédiction stockée en mémoire ni en base, séries et
+// compteurs remis à zéro (demande admin).
 setOnShoeReset(() => {
   for (const t of panel.trackers) {
     t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0;
+    t.seen = []; t.readCount = 0; t.fireCount = 0; t.lastFireAt = null;
+    t.sentCount = 0; t.lastSentAt = null;
   }
   for (const entry of panel.pendingMessages) {
-    if (entry.status !== 'en attente') continue;
-    entry.status = 'annulé';
-    entry.resolvedAt = Date.now();
+    if (entry.status === 'en attente') editPending(entry, 'annulé');
   }
+  panel.pendingMessages = [];
+  panel.history = [];
+  panel.sentCount = 0;
+  panel.lastSentAt = null;
   persist();
 });
 
@@ -563,6 +603,16 @@ function statusView() {
       id: t.id, key: t.key, name: t.name, n: t.n,
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
       streakSuit: t.streakSuit, streakCount: t.streakCount,
+      seen: (t.seen || []).slice(0, 25),
+      readCount: t.readCount || 0,
+      fireCount: t.fireCount || 0,
+      lastFireAt: t.lastFireAt || null,
+      lastSeenTarget: t.lastSeenTarget || 0,
+      sourcePredictions: trackerPredictions(t.key)
+        .slice(-15)
+        .map((p) => ({ target: p.target, suit: p.suit || null, status: p.status || 'en attente' }))
+        .reverse(),
+      pending: pendingFor(t.id).slice().reverse(),
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),
