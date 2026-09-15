@@ -374,6 +374,7 @@
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
+        <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/vip" data-nav="vip">VIP</a>
         <a href="#/formation" data-nav="formation">Formation</a>
@@ -609,6 +610,7 @@
         ${card('#/after-loss', '↩️', 'Prédiction après perte', `${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)`)}
         ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
@@ -624,7 +626,7 @@
       <div class="home-grid">
         ${card(null, '♻️', 'Réinitialiser stratégies', 'Restaurer les valeurs du code', 'resetAllStrategies()')}
         ${card('#/database', '🗄', 'Base de données', 'Historique enregistré')}
-        ${card('#/formats', '📐', 'Formats', '89 formats de prédiction')}
+        ${card('#/formats', '📐', 'Formats', `${snapshot.formatCount || 101} formats de prédiction`)}
         ${card('#/settings', '⚙️', 'Configuration', 'Bot, base, réglages')}
         ${snapshot.role === 'admin' ? card('#/users', '👥', 'Utilisateurs', "Valider les inscriptions, accorder un temps") : ''}
         ${snapshot.role === 'admin' ? card('#/deploy', '🚀', 'Déploiement', 'Générer un bot autonome par stratégie') : ''}
@@ -2120,6 +2122,130 @@ Faites-en bon usage !
       try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); suitStreakPage(); toast('Source retirée.'); }
       catch (e) { toast(e.message, 'error'); }
     }
+
+    // -------------------------------------------------------------------
+    // « Rupture de costume » (voir suit-break.js) — sélection d'UNE source
+    // (stratégie existante, IA « Prédit », ou Formation), série de N
+    // prédictions CONSÉCUTIVES de MÊME costume (peu importe gagné/perdu),
+    // puis attente de la RUPTURE (prochaine prédiction d'un costume
+    // différent) : la rupture déclenche SUR SON PROPRE numéro (pas de
+    // décalage), en prédisant le costume ORIGINAL de la série. Même schéma
+    // d'écran que « Répétition de costume », sans le champ mode/décalage.
+    // -------------------------------------------------------------------
+    function suitBreakSiteChannelOptions(currentId) {
+      const list = snapshot.suitBreak?.siteChannels || [];
+      const cur = currentId === null || currentId === undefined ? '' : String(currentId);
+      const opts = list.map(c => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+      return `<option value="">— aucun —</option>${opts}`;
+    }
+    function suitBreakSettingsRow(prefix, t) {
+      const n = t?.n ?? 2;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="max-width:260px;margin:0"><label style="font-size:11px">Prédictions consécutives même costume (N)</label><input id="${prefix}-n" type="number" min="2" max="20" value="${esc(String(n))}"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Dès que N prédictions consécutives de même costume sont observées (peu importe gagné/perdu), le panneau attend la prochaine prédiction : si elle est encore du même costume, on continue d'attendre ; dès qu'elle est d'un costume différent (la rupture), on prédit sur CE numéro-là le costume original de la série, avec le rattrapage configuré.</p>`;
+    }
+    function readSuitBreakSettings(prefix) {
+      return { n: val(`${prefix}-n`) };
+    }
+    function suitBreakChannelFormatRow(prefix, tracker) {
+      const t = tracker || {};
+      const channels = (t.channels || []).join(', ');
+      const format = (t.format === null || t.format === undefined) ? '' : t.format;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram propre (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+        <div class="field" style="flex:1;min-width:160px;margin:0"><label style="font-size:11px">Canal du site propre (optionnel)</label><select id="${prefix}-siteChannel">${suitBreakSiteChannelOptions(t.siteChannelId)}</select></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format propre (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = format du panneau"></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Rattrapage propre (optionnel)</label><input id="${prefix}-maxR" type="number" min="0" max="9" value="${(t.maxR === null || t.maxR === undefined) ? '' : esc(String(t.maxR))}" placeholder="vide = panneau"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Laisse ces champs vides/« aucun » pour utiliser les réglages du panneau (en haut de la page).</p>`;
+    }
+    function readSuitBreakChannelFormat(prefix) {
+      const rawFormat = val(`${prefix}-format`);
+      const rawMaxR = val(`${prefix}-maxR`);
+      const siteChannelId = val(`${prefix}-siteChannel`);
+      return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat, maxR: rawMaxR === '' ? null : rawMaxR };
+    }
+    function suitBreakPage() {
+      setNav('suit-break');
+      const p = snapshot.suitBreak || {};
+      const trackers = p.trackers || [];
+      const history = p.history || [];
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Série par costume</span><h2 style="margin-top:7px">Rupture de costume</h2><p class="small">Choisis une source (stratégie existante, IA « Prédit », ou Formation). Définis N = combien de prédictions consécutives du MÊME costume observer avant d'armer l'attente — une prédiction d'un autre costume casse la série en cours. Une fois N atteint, le panneau attend la prochaine RUPTURE (costume différent) pour prédire, sur ce même numéro, le costume original de la série.</p></div><div class="toolbar"><button class="button primary" onclick="addSuitBreakTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="suitBreakPage()">Actualiser</button></div></div>
+        <div class="two-col">
+          <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit les ruptures de costume, sauf source avec son propre canal.</p>
+            <div class="field"><label>ID ou @nom du canal</label><input id="suitBreakChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveSuitBreakChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="suitBreakTest()">Envoyer un test</button><button class="button small danger" onclick="removeSuitBreakChannel()">Retirer</button></div>
+            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}
+            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine, page « Canaux »)</label><select id="suitBreakSiteChannel">${suitBreakSiteChannelOptions(p.siteChannelId)}</select></div>
+            <p class="small muted" style="margin:6px 0 0">Indépendant du canal Telegram ci-dessus : les deux reçoivent en parallèle si les deux sont configurés.</p>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveSuitBreak()">Enregistrer le canal du site</button></div></div>
+          <div class="panel"><h3>Réglages du panneau</h3>
+            <label class="check"><input id="suitBreakEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer la rupture de costume</label>
+            <div class="two-col" style="margin-top:16px">
+              <div class="field"><label>Nombre de rattrapage</label><input id="suitBreakMaxR" type="number" min="0" max="9" value="${esc(String(p.maxR ?? 1))}"></div>
+              <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="suitBreakFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
+            </div>
+            <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveSuitBreak()">Enregistrer</button></div></div>
+        </div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.streakCount >= t.n ? 'warn' : 'good'}">${t.streakCount >= t.n ? `Armé — attend la rupture de ${esc(t.streakSuit || '')} (×${esc(String(t.streakCount))})` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}` : 'Surveillance')}</span></div>
+            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
+            ${suitBreakSettingsRow('sb-' + t.id, t)}
+            ${suitBreakChannelFormatRow('sb-' + t.id, t)}
+            <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="sb-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateSuitBreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeSuitBreakTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
+          ${history.length ? `<table><thead><tr><th>Source</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
+    }
+    function addSuitBreakTrackerModal() {
+      const opts = optsHtmlGlobal(snapshot.suitBreak?.options || []);
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle source suivie</span><h3 style="margin-top:8px">Ajouter une source</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot, la stratégie IA « Prédit », ou une Formation, puis définis N.</p></div></div>
+        <div class="field"><label>Source</label><select id="newSuitBreakKey">${opts}</select></div>
+        ${suitBreakSettingsRow('sbnew', null)}
+        ${suitBreakChannelFormatRow('sbnew', { channels: [], format: null, siteChannelId: null })}
+        <div class="field"><label>Nom de cette source <span class="small">(optionnel — vide = nom de la source)</span></label><input id="sbnew-name" placeholder="Ex. Rupture costume Dominant"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addSuitBreakTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function addSuitBreakTracker() {
+      const key = val('newSuitBreakKey');
+      const { n } = readSuitBreakSettings('sbnew');
+      const { channels, siteChannelId, format, maxR } = readSuitBreakChannelFormat('sbnew');
+      const name = val('sbnew-name');
+      try {
+        await api('/api/suit-break/trackers', 'POST', { key, n, channels, siteChannelId, format, maxR, name });
+        closeModal(); await refresh(); suitBreakPage();
+        toast('Source ajoutée à la rupture de costume.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function updateSuitBreakTracker(id) {
+      const { n } = readSuitBreakSettings('sb-' + id);
+      const { channels, siteChannelId, format, maxR } = readSuitBreakChannelFormat('sb-' + id);
+      const name = val(`sb-${id}-name`);
+      try { await api(`/api/suit-break/trackers/${encodeURIComponent(id)}`, 'PUT', { n, channels, siteChannelId, format, maxR, name }); await refresh(); suitBreakPage(); toast('Réglages mis à jour.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeSuitBreakTracker(id) {
+      try { await api(`/api/suit-break/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); suitBreakPage(); toast('Source retirée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveSuitBreak() {
+      const rawSite = val('suitBreakSiteChannel');
+      try { await api('/api/suit-break/config', 'POST', { enabled: $('#suitBreakEnabled')?.checked, maxR: val('suitBreakMaxR'), format: val('suitBreakFormat'), channels: ids(val('suitBreakChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); suitBreakPage(); toast('Panneau « Rupture de costume » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveSuitBreakChannel() {
+      const list = ids(val('suitBreakChannel'));
+      if (!list.length) return toast('Indique un ID ou @nom de canal.', 'error');
+      try { const r = await api('/api/suit-break/channel', 'POST', { channelId: list[0] }); await refresh(); suitBreakPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeSuitBreakChannel() { try { await api('/api/suit-break/channel', 'DELETE'); await refresh(); suitBreakPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function suitBreakTest() {
+      try { const r = await api('/api/suit-break/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
     // -----------------------------------------------------------------------
     // « Comptage 2/2 » (voir cards-count.js) : comptage 3/2, 3/3, 2/2 par
     // lot de 30 jeux, prédictions début+34/+44/+54 quand 2/2 est la plus faible.
@@ -3141,6 +3267,7 @@ Faites-en bon usage !
         else if (h === '#/after-loss') afterLossPage();
         else if (h === '#/combined') combinedPage();
         else if (h === '#/suit-streak') suitStreakPage();
+        else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
