@@ -23,6 +23,7 @@ const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const suitBreak = require('./suit-break');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
@@ -336,6 +337,7 @@ app.get('/api/state', async (req, res) => {
     afterLoss: afterLoss.status(),
     combined: combined.status(),
     suitStreak: suitStreak.status(),
+    suitBreak: suitBreak.status(),
     cardsCount: cardsCount.status(),
     vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
@@ -2100,6 +2102,73 @@ app.put('/api/suit-streak/trackers/:id', (req, res) => {
 app.delete('/api/suit-streak/trackers/:id', (req, res) => {
   suitStreak.removeTracker(req.params.id);
   res.json(suitStreak.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Rupture de costume » (voir suit-break.js) — nouveau bouton (demande
+// admin) : sélection d'UNE source (stratégie, IA, ou formation), série de N
+// prédictions CONSÉCUTIVES de MÊME costume, puis attente de la RUPTURE
+// (prochaine prédiction d'un costume différent) — la rupture déclenche sur
+// SON PROPRE numéro (pas de décalage), en prédisant le costume ORIGINAL de
+// la série, avec le nombre de rattrapage configuré.
+// ---------------------------------------------------------------------------
+app.get('/api/suit-break', (req, res) => res.json(suitBreak.status()));
+
+app.post('/api/suit-break/config', (req, res) => {
+  suitBreak.configure(req.body || {});
+  res.json(suitBreak.status());
+});
+
+app.post('/api/suit-break/channel', async (req, res) => {
+  const idsList = suitBreak.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  suitBreak.configure({ channels: idsList });
+  const notice = await suitBreak.test();
+  res.json({ ok: true, channel: check.chat, notice, suitBreak: suitBreak.status() });
+});
+
+app.delete('/api/suit-break/channel', (req, res) => {
+  suitBreak.configure({ channels: [] });
+  res.json(suitBreak.status());
+});
+
+app.post('/api/suit-break/test', async (req, res) => {
+  const r = await suitBreak.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/suit-break/scan', async (req, res) => {
+  await suitBreak.tick();
+  res.json(suitBreak.status());
+});
+
+app.post('/api/suit-break/trackers', async (req, res) => {
+  try {
+    const t = suitBreak.addTracker(req.body && req.body.key, {
+      n: req.body && req.body.n,
+      channels: req.body && req.body.channels,
+      siteChannelId: req.body && req.body.siteChannelId,
+      format: req.body && req.body.format,
+      maxR: req.body && req.body.maxR,
+      name: req.body && req.body.name,
+    });
+    res.json({ ok: true, tracker: t, suitBreak: suitBreak.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/suit-break/trackers/:id', (req, res) => {
+  try {
+    const t = suitBreak.updateTracker(req.params.id, req.body || {});
+    if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    res.json({ ok: true, tracker: t, suitBreak: suitBreak.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/suit-break/trackers/:id', (req, res) => {
+  suitBreak.removeTracker(req.params.id);
+  res.json(suitBreak.status());
 });
 
 // Optimisation IA : teste chaque déclencheur (rattrapage 1/2/3, perdue) x

@@ -960,5 +960,70 @@
     "sentCount": 0,
     "lastSentAt": null,
     "lastScanAt": 1789459393310
+  },
+  "suitBreak": {
+    "config": {
+      "enabled": true,
+      "channels": [],
+      "siteChannelId": null,
+      "format": 1,
+      "maxR": 1
+    },
+    "trackers": [
+      {
+        "id": "sb-1789498464258-iqnmx",
+        "key": "costume",
+        "name": "Costume par numéro",
+        "n": 2,
+        "channels": [
+          -100123
+        ],
+        "siteChannelId": null,
+        "format": null,
+        "maxR": 1,
+        "streakSuit": "❤",
+        "streakCount": 1,
+        "lastSeenTarget": 3,
+        "sentCount": 1,
+        "lastSentAt": 1789498464262,
+        "createdAt": 1789498464258
+      }
+    ],
+    "history": [
+      {
+        "trackerId": "sb-1789498464258-iqnmx",
+        "trackerName": "Costume par numéro",
+        "target": 3,
+        "suit": "♦",
+        "sourceTarget": 3,
+        "sentAt": 1789498464262
+      }
+    ],
+    "pendingMessages": [
+      {
+        "id": "p-1789498464262-z08b9",
+        "trackerId": "sb-1789498464258-iqnmx",
+        "target": 3,
+        "suit": "♦",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "gagné",
+        "messages": [
+          {
+            "chatId": -100123,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1789498464262,
+        "resolvedAt": 1789498464262
+      }
+    ],
+    "sentCount": 1,
+    "lastSentAt": 1789498464262,
+    "lastScanAt": 1789498464266
   }
 }

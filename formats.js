@@ -7,7 +7,7 @@
 
 const tg = require('./tg-formats');
 
-const FORMAT_COUNT = 89;   // 89 = format ROYAL CLUB (Jeu · costume · Dogon · Résultat)
+const FORMAT_COUNT = 101;  // 90-91 = ÉTOILE/ÉCLAIR BACCARA · 92-101 = 10 formats proposés (ChatGPT)
 
 // costumes utilisés par le moteur (avec sélecteur emoji) -> clés de tg-formats
 function normalizeSuit(suit) {

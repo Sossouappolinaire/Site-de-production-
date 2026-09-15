@@ -1,5 +1,5 @@
-// tg-formats.js — Formats de messages Telegram pour Baccarat Pro (N°1 à N°88)
-// Fichier dédié aux 77 formats de prédiction — aucun saut de numéro.
+// tg-formats.js — Formats de messages Telegram pour Baccarat Pro (N°1 à N°101)
+// Fichier dédié aux formats de prédiction — aucun saut de numéro.
 // Importer avec : const { buildTgMessage, buildPredictionMsg, buildResultMsg, ... } = require('./tg-formats');
 
 'use strict';
@@ -1074,6 +1074,137 @@ function buildTgMessage(formatId, {
           `⭐️ 𝐑𝐎𝐘𝐀𝐋 𝐂𝐋𝐔𝐁 💎\\n` +
           `🎱 𝐉𝐄𝐔 #𝐍${gameNumber} · ${cible89} · 𝐃𝐎𝐆𝐎𝐍 +${boldNum(maxR)}\\n` +
           `💠 𝐑𝐄𝐒𝐔𝐋𝐓𝐀𝐓 ➜ ${sl89}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 90 : ÉTOILE BACCARA (format demandé, variante de 88) ────────
+    case 90: {
+      const cible90 = suit === 'pair' || suit === 'impair'
+        ? (suit === 'pair' ? 'PAIR' : 'IMPAIR')
+        : cardsLabel ? cardsLabel : emoji;
+      let sl90 = '';
+      if (status === 'gagne')      sl90 = `  ·  ✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}`;
+      else if (status === 'perdu') sl90 = '  ·  ❌';
+      return {
+        text:
+          `🌟ÉTOILE 🌟𝐁𝐀𝐂𝐂𝐀𝐑𝐀 🌟\n` +
+          `🎱 Jeu #N${gameNumber}  ·  ${cible90}  ·  Dogon +${maxR}${sl90}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 91 : ÉCLAIR BACCARA (format demandé, variante de 88) ────────
+    case 91: {
+      const cible91 = suit === 'pair' || suit === 'impair'
+        ? (suit === 'pair' ? 'PAIR' : 'IMPAIR')
+        : cardsLabel ? cardsLabel : emoji;
+      let sl91 = '';
+      if (status === 'gagne')      sl91 = `  ·  ✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}`;
+      else if (status === 'perdu') sl91 = '  ·  ❌';
+      return {
+        text:
+          `🥇ÉCLAIR  🌟𝐁𝐀𝐂𝐂𝐀𝐑𝐀 🥇\n` +
+          `🎱 Jeu #N${gameNumber}  ·  ${cible91}  ·  Dogon +${maxR}${sl91}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 92 : Minimal (proposé par ChatGPT) ───────────────────────────
+    case 92: {
+      let sl92 = '';
+      if (status === 'gagne')      sl92 = `\n✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}`;
+      else if (status === 'perdu') sl92 = '\n❌';
+      return {
+        text: `🎯 #${gameNumber}\n🔮 Prédiction : ${emoji}${sl92}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 93 : Avec statut (proposé par ChatGPT) ───────────────────────
+    case 93: {
+      const sl93 = status === null ? '⏳' : status === 'gagne' ? `✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}` : '❌';
+      return {
+        text: `🌈 Jeu #${gameNumber}\n🔹 Prédiction : ${emoji}\n🌹 Statut : ${sl93}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 94 : Très court (proposé par ChatGPT) ────────────────────────
+    case 94: {
+      const sl94 = status === null ? '⏳' : status === 'gagne' ? `✅ Gagné ${RATR_EMOJI[rattrapage] ?? rattrapage}` : '❌ Perdu';
+      return {
+        text: `#${gameNumber} → ${emoji}\n${sl94}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 95 : Style premium (proposé par ChatGPT) ─────────────────────
+    case 95: {
+      const sl95 = status === null ? '⏳' : status === 'gagne' ? `✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}` : '❌';
+      return {
+        text: `⚜️ JEU #${gameNumber}\n🎯 PRÉDICTION : ${emoji}\n🔰 STATUT : ${sl95}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 96 : Avec niveau (proposé par ChatGPT) ───────────────────────
+    case 96: {
+      let sl96 = '';
+      if (status === 'gagne')      sl96 = `\n📊 Statut : ✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}`;
+      else if (status === 'perdu') sl96 = '\n📊 Statut : ❌';
+      return {
+        text: `🎯 #${gameNumber}\n${emoji} Costume prédit\n🔥 Risque : ${maxR}${sl96}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 97 : Deux choix (proposé par ChatGPT — le moteur ne suit
+    // qu'un seul costume ; le second est affiché comme repère indicatif) ────
+    case 97: {
+      let sl97 = '';
+      if (status === 'gagne')      sl97 = `\n✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}`;
+      else if (status === 'perdu') sl97 = '\n❌';
+      return {
+        text: `🎯 #${gameNumber}\n🔮 ${emoji} / ❓\n📊 2 Possibilités${sl97}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 98 : Poursuite (proposé par ChatGPT) ─────────────────────────
+    case 98: {
+      let sl98 = '';
+      if (status === 'gagne')      sl98 = `\n✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}`;
+      else if (status === 'perdu') sl98 = '\n❌';
+      return {
+        text: `🌈 #${gameNumber}\n🔹 Prédiction : ${emoji}\n💧 Poursuite : +${maxR}${sl98}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 99 : Très compact pour Telegram (proposé par ChatGPT) ───────
+    case 99: {
+      const sl99 = status === null ? '⏳' : status === 'gagne' ? `✅${RATR_EMOJI[rattrapage] ?? rattrapage}` : '❌';
+      return {
+        text: `⚜️ #${gameNumber} | ${emoji} | ${sl99}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 100 : Avec résultat (proposé par ChatGPT) ────────────────────
+    case 100: {
+      const sl100 = status === null ? '⏳ En attente' : status === 'gagne' ? `✅ WIN ${RATR_EMOJI[rattrapage] ?? rattrapage}` : '❌ PERDU';
+      return {
+        text: `🎯 #${gameNumber}\n🔮 Prédit : ${emoji}\n🎲 Résultat : ${status === null ? '⏳' : emoji}\n${sl100}`,
+        parse_mode: null,
+      };
+    }
+
+    // ── Format 101 : Style bot (proposé par ChatGPT) ────────────────────────
+    case 101: {
+      const sl101 = status === null ? '⏳ En attente' : status === 'gagne' ? `✅ GAGNÉ ${RATR_EMOJI[rattrapage] ?? rattrapage}` : '❌ PERDU';
+      return {
+        text: `🤖 PREDICTION #${gameNumber}\n${emoji} Costume : ${emoji}\n🔰 Signal : ${maxR}\n${sl101}`,
         parse_mode: null,
       };
     }

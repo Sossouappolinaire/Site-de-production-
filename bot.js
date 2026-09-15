@@ -15,6 +15,7 @@ const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const suitBreak = require('./suit-break');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const formationRelay = require('./formation-relay');
@@ -2233,6 +2234,13 @@ async function tick() {
     // retour de ce costume avant de déclencher (voir suit-streak.js).
     await suitStreak.tick();
 
+    // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
+    // IA ou formation), série de N prédictions consécutives de MÊME costume
+    // puis attente de la RUPTURE (prochain costume différent) — la rupture
+    // déclenche sur son propre numéro, en prédisant le costume original
+    // (voir suit-break.js).
+    await suitBreak.tick();
+
     // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
     // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur début+34
     // déclenchées quand le jeu en live arrive à −3/−2 de la cible (voir cards-count.js).
@@ -2414,6 +2422,7 @@ async function applyDbConfigs() {
   await afterLoss.restoreFromDb();
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
+  await suitBreak.restoreFromDb();
   await cardsCount.restoreFromDb();
   await vip.restoreFromDb();
   await predictionControl.restoreFromDb();
@@ -2472,6 +2481,8 @@ async function startLoop() {
   combined.setSender(senderFor);
   suitStreak.restore();
   suitStreak.setSender(senderFor);
+  suitBreak.restore();
+  suitBreak.setSender(senderFor);
   cardsCount.restore();
   cardsCount.setSender(senderFor);
   vip.restore();
