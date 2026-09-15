@@ -602,6 +602,17 @@ async function loadAfterLossState() {
   try { return JSON.parse(raw); } catch (_) { return null; }
 }
 
+// ---- interrupteur global « arrêter/démarrer/planifier les prédictions » ----
+async function savePredictionControlState(value) {
+  return setSetting('prediction_control_state', JSON.stringify(value || {}));
+}
+
+async function loadPredictionControlState() {
+  const raw = await getSetting('prediction_control_state');
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+
 // ---- panneau base de données : tout ce qui est stocké ----------------------
 async function allSettings() {
   const r = await q(`SELECT key, value FROM settings ORDER BY key`);
@@ -770,6 +781,7 @@ module.exports = {
   lastGames, gameByNumber, gamesInRange, predictionsByDate, predictionSummary,
   overview, availableDates, readOnlyQuery,
   saveAppConfig, loadAppConfig, savePreditState, loadPreditState, saveAfterLossState, loadAfterLossState,
+  savePredictionControlState, loadPredictionControlState,
   dump, allSettings, lastPredictions, strategyRows, tableCounts,
   get ready() { return ready; },
 };

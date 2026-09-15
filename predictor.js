@@ -1065,6 +1065,25 @@ function signatureOf(g) {
 }
 
 function registerGames(games) {
+  // Vérification « restauration après déploiement » — une seule fois, au
+  // tout premier lot de jeux reçu après un restorePredictions() (voir
+  // là-bas). Même règle que isNewShoe() : si les jeux réellement en direct
+  // sont nettement en dessous du plus grand numéro restauré (table qui a
+  // rebouclé pendant que le bot était hors ligne), les prédictions
+  // restaurées sont d'un sabot révolu → purge complète (mémoire + base).
+  if (state.pendingRestoreCheck != null) {
+    const numbers = (games || []).map((g) => g.number).filter((n) => Number.isFinite(n));
+    if (numbers.length) {
+      const minIn = Math.min(...numbers);
+      const maxIn = Math.max(...numbers);
+      const stale = (maxIn + 10 < state.pendingRestoreCheck) || (minIn <= 1 && state.pendingRestoreCheck > 10);
+      if (stale) {
+        state.predictions = [];
+        if (db.ready) db.clearPredictions().catch((error) => { state.lastError = error.message; });
+      }
+    }
+    state.pendingRestoreCheck = null; // vérifié une fois, on ne revient plus dessus
+  }
   if (isNewShoe(games)) resetShoe();
   // CORRECTIF : l'API renvoie les jeux du plus RÉCENT au plus ancien. Il faut les
   // traiter dans l'ordre CROISSANT, sinon « lastFinished » devient le jeu le plus
@@ -1804,6 +1823,17 @@ async function restorePredictions() {
       shoe: -1, // restaurée depuis la base : numéro de sabot d'origine inconnu
     };
   });
+  // CORRECTIF « vieilles prédictions qui reviennent après un déploiement »
+  // (demande admin) : restorePredictions() recharge tout ce qui reste en
+  // base SANS savoir si ça correspond au sabot réellement en cours (les
+  // jeux en direct n'ont pas encore été reçus à cet instant). On mémorise
+  // donc le plus grand numéro restauré, pour le comparer au PREMIER lot de
+  // jeux réellement reçu de l'API (voir registerGames ci-dessous) : si ce
+  // lot montre que la table a en fait rebouclé depuis (comme isNewShoe()
+  // le détecterait en fonctionnement normal), on purge — mémoire ET base —
+  // au lieu de garder des prédictions d'un sabot qui n'existe plus.
+  const maxRestoredTarget = state.predictions.reduce((m, p) => Math.max(m, Number(p.target) || 0), 0);
+  state.pendingRestoreCheck = maxRestoredTarget > 0 ? maxRestoredTarget : null;
   return state.predictions.length;
 }
 

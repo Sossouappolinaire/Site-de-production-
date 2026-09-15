@@ -25,6 +25,7 @@ const paiement = require('./paiement');
 const mirrorCounter = require('./mirror-counter');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
+const predictionControl = require('./prediction-control');
 const {
   state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
@@ -177,6 +178,14 @@ const HELP =
   '/canaux — canaux où je suis admin\n' +
   '/activer <id> — activer les prédictions\n' +
   '/desactiver <id> — arrêter\n\n' +
+  '*Interrupteur des prédictions* (commandes à taper DIRECTEMENT dans le ' +
+  'canal — réservées de fait aux administrateurs de ce canal, Telegram ' +
+  'n\'autorise personne d\'autre à y écrire)\n' +
+  '/stop [raison] — stoppe l\'envoi de TOUTES les nouvelles prédictions\n' +
+  '/start — relance l\'envoi\n' +
+  '/planifier <HH:MM arrêt> <HH:MM reprise> — arrêt/reprise quotidien automatique\n' +
+  '/planifier off — désactive la planification\n' +
+  '/statut — état actuel (arrêté/actif, planification)\n\n' +
   '*Prédiction*\n' +
   '/setb <n> — compteur B (apparitions consécutives max)\n' +
   '/setmaxr <n> — nombre de rattrapages vérifiés\n' +
@@ -223,6 +232,61 @@ const HELP =
   '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA)\n' +
   '/importer — puis envoie un fichier .xlsx (ou envoie-le directement, sans /importer) pour restaurer la configuration';
 
+// ---------------------------------------------------------------------------
+// Commandes « arrêter / démarrer / planifier les prédictions » (demande
+// admin) — utilisables aussi bien en message privé par l'administrateur
+// général du bot QUE directement dans un canal Telegram par l'administrateur
+// de CE canal (voir le handler channel_post dans wire() plus bas ; Telegram
+// interdit déjà nativement à un non-administrateur de poster dans un canal,
+// donc la seule présence d'un channel_post avec l'une de ces commandes est
+// déjà la preuve qu'elle vient d'un administrateur du canal).
+// ---------------------------------------------------------------------------
+function parsePredictionControlCommand(text) {
+  const t = String(text || '').trim();
+  let m;
+  if ((m = t.match(/^\/stop(?:@\w+)?(?:\s+([\s\S]+))?\s*$/i))) {
+    return { action: 'stop', reason: m[1] ? m[1].trim() : null };
+  }
+  if (/^\/start(?:@\w+)?\s*$/i.test(t)) {
+    return { action: 'start' };
+  }
+  if ((m = t.match(/^\/planifier(?:@\w+)?(?:\s+(off)|\s+(\S+)\s+(\S+))?\s*$/i))) {
+    if (m[1]) return { action: 'schedule-off' };
+    if (m[2] && m[3]) return { action: 'schedule', stopAt: m[2], startAt: m[3] };
+    return { action: 'schedule-status' };
+  }
+  if (/^\/statut(?:@\w+)?\s*$/i.test(t)) {
+    return { action: 'status' };
+  }
+  return null;
+}
+
+function runPredictionControlCommand(cmd, by) {
+  try {
+    switch (cmd.action) {
+      case 'stop':
+        predictionControl.pause(cmd.reason, by);
+        return `⏸️ Prédictions arrêtées${cmd.reason ? ` (${cmd.reason})` : ''}.\nEnvoie /start pour les relancer.`;
+      case 'start':
+        predictionControl.resume(by);
+        return '▶️ Prédictions relancées.';
+      case 'schedule':
+        predictionControl.setSchedule(cmd.stopAt, cmd.startAt);
+        return `📅 Planification enregistrée : arrêt automatique à ${cmd.stopAt}, reprise automatique à ${cmd.startAt} (tous les jours).`;
+      case 'schedule-off':
+        predictionControl.clearSchedule();
+        return '📅 Planification automatique désactivée.';
+      case 'schedule-status':
+      case 'status':
+        return predictionControl.statusText();
+      default:
+        return null;
+    }
+  } catch (e) {
+    return `⚠️ ${e.message}`;
+  }
+}
+
 function settingsText() {
   return (
     `⚙️ *Réglages*\n` +
@@ -248,7 +312,14 @@ function wire(b) {
     const status = u.new_chat_member && u.new_chat_member.status;
     if (['administrator', 'member', 'creator'].includes(status)) rememberChannel(u.chat);
   });
-  b.on('channel_post', (m) => rememberChannel(m.chat));
+  b.on('channel_post', (m) => {
+    rememberChannel(m.chat);
+    if (!m.text) return;
+    const cmd = parsePredictionControlCommand(m.text);
+    if (!cmd) return;
+    const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`);
+    if (reply) b.sendMessage(m.chat.id, reply).catch(() => {});
+  });
 
   // ---------------------------------------------------------------------
   // La boutique de stratégies (shop.js) vit désormais sur son PROPRE bot
@@ -1970,6 +2041,19 @@ async function tick() {
       bilanPending.add(p.strategy);           // bilan dès que le jeu reprend
     }
 
+    // planification quotidienne (arrêt/reprise auto) : voir prediction-control.js
+    predictionControl.tickSchedule();
+
+    // INTERRUPTEUR GLOBAL « arrêter les prédictions » (demande admin,
+    // commandable par l'administrateur du canal — voir prediction-control.js
+    // et le handler channel_post plus bas). Tant qu'il est actif, on saute
+    // ENTIÈREMENT la génération et l'envoi de nouvelles prédictions (toutes
+    // stratégies + tous les panneaux ci-dessous) — mais on continue de lire
+    // les jeux en direct et de vérifier/éditer les prédictions déjà envoyées
+    // AVANT l'arrêt (verify()/updateResult() ci-dessus, non concernés par ce
+    // garde-fou), pour qu'aucun message ne reste bloqué « en attente ».
+    if (predictionControl.isPaused()) return;
+
     // « ombre » : une prédiction est créée (et envoyée, ou pas) au moment où
     // evaluate() la détecte — mais le filtre « double perte » peut s'ouvrir
     // PLUS TARD, après coup, suite à une perte confirmée ci-dessus (verify()
@@ -2243,6 +2327,7 @@ async function applyDbConfigs() {
   await suitStreak.restoreFromDb();
   await cardsCount.restoreFromDb();
   await vip.restoreFromDb();
+  await predictionControl.restoreFromDb();
   // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
   // depuis la base les prédictions encore « en attente » + les dernières
   // résolues, pour que gagné/perdu/total ne repartent pas à zéro à chaque
@@ -2304,6 +2389,7 @@ async function startLoop() {
   vip.setSender(senderFor);
   formationRelay.restore();
   formationRelay.setSender(senderFor);
+  predictionControl.restore();
   // Compteur « Taux Miroir » : édite le même message à chaque jeu terminé
   // (voir setOnFinished ci-dessous) plutôt que d'en renvoyer un nouveau —
   // retombe sur un nouvel envoi si l'édition échoue (message trop
