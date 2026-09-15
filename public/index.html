@@ -1674,6 +1674,68 @@ Faites-en bon usage !
         ${s.example ? `<p class="small" style="margin:6px 0 0">${esc(s.example)}</p>` : ''}
         ${preds.length ? `<p class="small muted" style="margin:8px 0 4px">Numéros et costumes prédits par la stratégie :</p><div style="display:flex;flex-wrap:wrap;gap:6px">${preds.map(p => `<span class="tag mono" title="${esc(p.status || '')}">#N${esc(String(p.target))}${esc(p.suit || '')}</span>`).join('')}</div>` : ''}</div>`;
     }
+    // Catégories de configuration (1/2/3) — chacune n'affiche que son bloc de
+    // réglages, avec son rattrapage, son canal et son format propres.
+    const AFTER_LOSS_CATEGORIES = [
+      { id: 1, name: 'Catégorie 1 — Comptage dizaine', about: 'Série de N prédits du même costume → 1ʳᵉ prédiction à +n, puis +ni une par une (Nk au total).' },
+      { id: 2, name: 'Catégorie 2 — Rattrapage / perte', about: 'Déclencheurs rattrapage 1/2/3 ou perdue (avec le N à attendre), et republication d\'un costume après une perte.' },
+      { id: 3, name: 'Catégorie 3 — Série de même costume', about: 'Série de N prédits du même costume → Nj nouvelles prédictions espacées de +n.' },
+    ];
+    function afterLossCategoryBlocks(prefix, cat, t) {
+      const fc = snapshot.formatCount;
+      const o = t || {};
+      if (cat === 1) return afterLossDecadeRow(prefix, o.decade || null, fc);
+      if (cat === 2) return afterLossTriggerRows(prefix, o.triggers || { perdue: { enabled: true, n: 0 } }) + afterLossRepeatRow(prefix, o.repeat || { enabled: false, lead: 5 });
+      if (cat === 3) return afterLossStreakRow(prefix, o.streak || null, fc);
+      return afterLossTriggerRows(prefix, o.triggers || {}) + afterLossRepeatRow(prefix, o.repeat || null)
+        + afterLossStreakRow(prefix, o.streak || null, fc) + afterLossDecadeRow(prefix, o.decade || null, fc);
+    }
+    function readAfterLossCategoryBlocks(prefix, cat) {
+      const out = {};
+      if (cat === 1 || !cat) out.decade = readAfterLossDecade(prefix);
+      if (cat === 2 || !cat) { out.triggers = readAfterLossTriggers(prefix); out.repeat = readAfterLossRepeat(prefix); }
+      if (cat === 3 || !cat) out.streak = readAfterLossStreak(prefix);
+      return out;
+    }
+    // 10 dernières prédictions de la stratégie suivie + 10 dernières vérifiées
+    // de cette configuration (la base n'en garde jamais plus de 10 : la plus
+    // ancienne est supprimée dès qu'une nouvelle arrive).
+    function afterLossPredictionLists(t) {
+      const src = t.sourcePredictions || [];
+      const ver = t.verified || [];
+      const chip = (x) => `<span class="tag mono ${x.status === 'gagné' ? 'good' : x.status === 'perdu' ? 'bad' : 'warn'}" title="${esc(x.status || '')}">#N${esc(String(x.target))} ${esc(x.suit || '')}</span>`;
+      return `<div class="notice" style="margin:10px 0"><b>10 dernières prédictions de la stratégie suivie</b>
+        ${src.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${src.map(chip).join('')}</div>` : '<p class="small muted" style="margin:6px 0 0">Aucune prédiction reçue pour le moment.</p>'}
+        <p class="small muted" style="margin:10px 0 4px"><b>10 dernières prédictions vérifiées de cette configuration</b> — au-delà de 10, la plus ancienne est supprimée.</p>
+        ${ver.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px">${ver.map(chip).join('')}</div>` : '<p class="small muted" style="margin:0">Aucune prédiction vérifiée pour le moment.</p>'}
+        ${afterLossRelayTrail(t)}</div>`;
+    }
+    // AJOUT (demande admin) : pour CHAQUE catégorie, on montre les anciennes
+    // prédictions de la stratégie suivie qui ont été comptées (1/3, 2/3, 3/3…)
+    // puis la prédiction réellement ENVOYÉE à la fin du décompte.
+    function afterLossRelayTrail(t) {
+      const relays = t.relays || [];
+      const chip = (x) => `<span class="tag mono ${x.status === 'gagné' ? 'good' : x.status === 'perdu' ? 'bad' : 'warn'}" title="${esc(x.status || '')}">#N${esc(String(x.target))} ${esc(x.suit || '')}</span>`;
+      const armed = (t.armedTrail || []);
+      const counter = (t.counters || []).find(c => c.key === 'trigger' || c.key === 'streak');
+      const progress = counter ? counter.value : '';
+      const rows = relays.map((r) => {
+        const trail = (r.trail || []);
+        const steps = trail.length
+          ? trail.map((x, i) => `<span class="tag mono" title="prédiction comptée ${i + 1}/${trail.length}">${i + 1}/${trail.length} · #N${esc(String(x.target))} ${esc(x.suit || '')}</span>`).join('')
+          : '<span class="small muted">anciennes prédictions non enregistrées pour ce relais</span>';
+        return `<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)">
+          <p class="small muted" style="margin:0 0 6px">${esc(r.note || r.name || '')}${r.sentAt ? ' — ' + esc(new Date(r.sentAt).toLocaleString('fr-FR')) : ''}</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">${steps}
+            <span class="small muted">➜ envoyée :</span>
+            <span class="tag mono good">#N${esc(String(r.target))} ${esc(r.suit || '')}</span></div></div>`;
+      }).join('');
+      return `<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12)">
+        <b>Anciennes prédictions comptées ➜ prédiction envoyée</b>
+        <p class="small muted" style="margin:4px 0 0">Les prédictions de la stratégie suivie qui ont fait avancer le compteur${progress ? ' (actuellement ' + esc(progress) + ')' : ''}, puis la prédiction publiée à la fin du décompte.</p>
+        ${armed.length ? `<p class="small muted" style="margin:8px 0 4px">Décompte en cours :</p><div style="display:flex;flex-wrap:wrap;gap:6px">${armed.map(chip).join('')}</div>` : ''}
+        ${rows || '<p class="small muted" style="margin:8px 0 0">Aucune prédiction envoyée pour le moment.</p>'}</div>`;
+    }
     function afterLossPage() {
       setNav('after-loss');
       const p = snapshot.afterLoss || {};
@@ -1705,36 +1767,37 @@ Faites-en bon usage !
             ${afterLossNameRow('trk-' + t.id, t.name, t.name)}
             ${afterLossCounters(t)}
             <div id="opt-result-${esc(t.id)}"></div>
-            ${afterLossTriggerRows('trk-' + t.id, t.triggers)}
-            ${afterLossRepeatRow('trk-' + t.id, t.repeat)}
-            ${afterLossStreakRow('trk-' + t.id, t.streak, snapshot.formatCount)}
-            ${afterLossDecadeRow('trk-' + t.id, t.decade, snapshot.formatCount)}
+            ${afterLossPredictionLists(t)}
+            ${t.category ? `<p class="small muted" style="margin:10px 0 0">${esc((AFTER_LOSS_CATEGORIES.find(c => c.id === t.category) || {}).name || '')}</p>` : ''}
+            ${afterLossCategoryBlocks('trk-' + t.id, t.category || 0, t)}
             ${afterLossChannelFormatRow('trk-' + t.id, t)}
             ${afterLossSummary(t)}
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Stratégie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
     }
-    function addAfterLossTrackerModal() {
+    let afterLossNewCategory = 1;
+    function addAfterLossTrackerModal(category) {
+      afterLossNewCategory = [1, 2, 3].includes(Number(category)) ? Number(category) : afterLossNewCategory;
+      const cat = afterLossNewCategory;
+      const info = AFTER_LOSS_CATEGORIES.find(c => c.id === cat) || AFTER_LOSS_CATEGORIES[0];
       const opts = (snapshot.afterLoss?.options || []).map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('');
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot ou la stratégie IA, puis coche au moins un type de résultat déclencheur et le N à attendre pour chacun.</p></div></div>
-        <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
-        ${afterLossNameRow('new', '', 'ex. Rattrapage ♦️ +4')}
-        ${afterLossTriggerRows('new', { perdue: { enabled: true, n: 0 } })}
-        ${afterLossRepeatRow('new', { enabled: false, lead: 5 })}
-        ${afterLossStreakRow('new', null, snapshot.formatCount)}
-        ${afterLossDecadeRow('new', null, snapshot.formatCount)}
+      const catOpts = AFTER_LOSS_CATEGORIES.map(c => `<option value="${c.id}" ${c.id === cat ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">1) Choisis la catégorie, 2) règle-la (rattrapage, canal, format), 3) choisis la stratégie à suivre, 4) donne-lui un nom avant d'enregistrer.</p></div></div>
+        <div class="field"><label>Catégorie de configuration</label><select id="newTrackerCategory" onchange="addAfterLossTrackerModal(this.value)">${catOpts}</select></div>
+        <p class="small muted" style="margin:0 0 6px">${esc(info.about)}</p>
+        ${afterLossCategoryBlocks('new', cat, null)}
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
+        <div class="field" style="margin-top:14px"><label>Stratégie à suivre</label><select id="newTrackerKey">${opts}</select></div>
+        ${afterLossNameRow('new', '', 'ex. Rattrapage ♦️ +4')}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function addAfterLossTracker(force) {
       const key = val('newTrackerKey');
-      const triggers = readAfterLossTriggers('new');
-      const repeat = readAfterLossRepeat('new');
-      const streak = readAfterLossStreak('new');
-      const decade = readAfterLossDecade('new');
+      const category = afterLossNewCategory;
+      const blocks = readAfterLossCategoryBlocks('new', category);
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
-      const payload = { key, name: val('new-name'), triggers, repeat, streak, decade, channels, siteChannelId, format, force: !!force };
+      const payload = { key, category, name: val('new-name'), ...blocks, channels, siteChannelId, format, force: !!force };
       try { await api('/api/after-loss/trackers', 'POST', payload); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
       catch (e) {
         // CORRECTIF « doublons de configuration » : au lieu d'un simple toast
@@ -1762,12 +1825,11 @@ Faites-en bon usage !
         </div>`);
     }
     async function updateAfterLossTriggers(id) {
-      const triggers = readAfterLossTriggers('trk-' + id);
-      const repeat = readAfterLossRepeat('trk-' + id);
-      const streak = readAfterLossStreak('trk-' + id);
-      const decade = readAfterLossDecade('trk-' + id);
+      const trk = (snapshot.afterLoss?.trackers || []).find(x => x.id === id) || {};
+      const cat = trk.category || 0;
+      const blocks = readAfterLossCategoryBlocks('trk-' + id, cat);
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { name: val('trk-' + id + '-name'), triggers, repeat, streak, decade, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { name: val('trk-' + id + '-name'), category: cat, ...blocks, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function optimizeAfterLossTracker(id) {
