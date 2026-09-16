@@ -48,6 +48,13 @@ const panel = {
   trackers: [],
   pendingMessages: [],
   history: [],
+  // GARDE-FOU ANTI-DOUBLON PERSISTANT (demande admin) : contrairement à
+  // history/pendingMessages (vidés à chaque démarrage — voir applySaved),
+  // cette liste d'empreintes « déjà envoyées » SURVIT aux redémarrages.
+  // Elle bloque un renvoi même si le crash/redémarrage survient juste après
+  // l'envoi d'une rupture, avant que le reste de l'état ait pu se
+  // recaler correctement.
+  sentFingerprints: [],
   sentCount: 0,
   lastSentAt: null,
   lastScanAt: null,
@@ -218,6 +225,8 @@ function persist() {
     config: config(), trackers: panel.trackers, history: panel.history,
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
+    // celle-ci SURVIT au nettoyage de restore() — voir applySaved().
+    sentFingerprints: panel.sentFingerprints,
   };
   try { store.patch({ suitBreak: saved }); } catch (_) {}
   if (db.ready) db.setSetting('suit_break_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
@@ -295,6 +304,10 @@ function applySaved(saved) {
   panel.sentCount = 0;
   panel.lastSentAt = null;
   panel.lastScanAt = null;
+  // ... SAUF les empreintes anti-doublon : celles-ci DOIVENT survivre au
+  // redémarrage, sinon la protection ne sert à rien pile quand elle est le
+  // plus utile (juste après un crash/redémarrage).
+  panel.sentFingerprints = Array.isArray(saved.sentFingerprints) ? saved.sentFingerprints.slice(-500) : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -435,8 +448,28 @@ async function processTracker(tracker) {
   }
 }
 
+// GARDE-FOU ANTI-DOUBLON PERSISTANT (demande admin) : identifie une rupture
+// déjà envoyée par SON EMPREINTE (tracker + jeu + costume), indépendamment
+// de pendingMessages (qui, lui, est vidé à chaque démarrage). Bloque tout
+// renvoi de la MÊME rupture, même après un crash/redémarrage en boucle.
+function fingerprintOf(tracker, target, suit) {
+  return `${tracker.id}#${target}#${suit}`;
+}
+function alreadySentFingerprint(tracker, target, suit) {
+  return panel.sentFingerprints.includes(fingerprintOf(tracker, target, suit));
+}
+function markSentFingerprint(tracker, target, suit) {
+  panel.sentFingerprints.push(fingerprintOf(tracker, target, suit));
+  if (panel.sentFingerprints.length > 500) panel.sentFingerprints = panel.sentFingerprints.slice(-500);
+}
+
 async function fire(tracker, pred, suit) {
-  await send(tracker, { target: pred.target, suit, sourceTarget: pred.target });
+  if (alreadySentFingerprint(tracker, pred.target, suit)) {
+    panel.lastError = `Rupture ${suit} sur #${pred.target} pour « ${tracker.name} » ignorée : déjà envoyée précédemment (protection anti-doublon).`;
+    return;
+  }
+  const ok = await send(tracker, { target: pred.target, suit, sourceTarget: pred.target });
+  if (ok) markSentFingerprint(tracker, pred.target, suit);
 }
 
 function messageText(tracker, syn) {
