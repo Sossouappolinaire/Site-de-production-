@@ -28,6 +28,7 @@ const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
+const delivery = require('./prediction-delivery');
 const { state, hasSuit, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
 const formationRelay = require('./formation-relay');
@@ -457,11 +458,23 @@ async function send(tracker, syn) {
   const out = messageText(tracker, syn);
   const sentMessages = [];
   const errors = [];
+  const suit = syn.suit || syn.card || '-';
   for (const id of targetChannels) {
+    const claimed = await delivery.claim({
+      target: syn.target,
+      suit,
+      channel: id,
+      source: `combined:${tracker.id}`,
+    });
+    if (!claimed) continue;
     try {
       const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
       sentMessages.push({ chatId: id, messageId: m.message_id });
-    } catch (e) { errors.push(`${id} : ${e.message}`); }
+      await delivery.markSent({ target: syn.target, suit, channel: id });
+    } catch (e) {
+      await delivery.release({ target: syn.target, suit, channel: id });
+      errors.push(`${id} : ${e.message}`);
+    }
   }
   if (!sentMessages.length) { panel.lastError = errors[0] || 'Envoi impossible'; return false; }
   panel.sentCount = (panel.sentCount || 0) + 1;

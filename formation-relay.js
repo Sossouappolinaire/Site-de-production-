@@ -26,6 +26,7 @@ const predit = require('./predit');
 const formation = require('./formation');
 const advisor = require('./strategy-advisor');
 const fmt = require('./formats');
+const delivery = require('./prediction-delivery');
 
 const panel = {
   enabled: true,
@@ -606,7 +607,7 @@ function bingoText(key, pending) {
   ].join('\n');
 }
 
-async function send(key, entry, message) {
+async function send(key, entry, message, predictionKey = null) {
   const payload = (message && typeof message === 'object')
     ? message
     : { text: String(message || ''), parse_mode: 'HTML' };
@@ -618,11 +619,22 @@ async function send(key, entry, message) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   let ok = false;
+  const target = predictionKey && predictionKey.target;
+  const suit = predictionKey && predictionKey.suit;
+  const isPrediction = Number(target) > 0 && String(suit || '');
   for (const id of channels) {
+    const claimed = isPrediction
+      ? await delivery.claim({ target, suit, channel: id, source: `formation:${key}` })
+      : true;
+    if (!claimed) continue;
     try {
       await bot.sendMessage(id, payload.text, payload.parse_mode ? { parse_mode: payload.parse_mode } : {});
+      if (isPrediction) await delivery.markSent({ target, suit, channel: id });
       ok = true;
-    } catch (e) { panel.lastError = `${id} : ${e.message}`; }
+    } catch (e) {
+      if (isPrediction) await delivery.release({ target, suit, channel: id });
+      panel.lastError = `${id} : ${e.message}`;
+    }
   }
   if (ok) {
     panel.sentCount += 1;
@@ -727,7 +739,7 @@ async function processStrategy(key) {
       // prédiction confirmée par le bouton Formation utilise exactement ce
       // rattrapage, quel que soit celui de la stratégie source.
       pred.maxR = effectiveMaxR(entry);
-      const sent = await send(key, entry, confirmText(key, pred, form));
+      const sent = await send(key, entry, confirmText(key, pred, form), { target, suit: pred.suit || pred.card || '' });
       if (sent) {
         entry.pending = { target, suit: pred.suit || pred.card || '', formationLength: form.length };
         panel.history.unshift({

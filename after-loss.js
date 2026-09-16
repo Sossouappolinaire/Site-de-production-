@@ -39,6 +39,7 @@ const { state, setStrategyConfig, hasSuit, hasSuitBanker, parityOf, addSiteChann
 const lossNotice = require('./loss-notice');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
+const delivery = require('./prediction-delivery');
 
 const TRIGGER_KEYS = ['r1', 'r2', 'r3', 'perdue'];
 const TRIGGER_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage 3', perdue: 'Perdue' };
@@ -78,6 +79,9 @@ const panel = {
   // toujours plafonnée à 10 : dès qu'une 11ᵉ arrive, la plus ancienne est
   // supprimée (en mémoire ET en base, voir persist/applySaved).
   verified: {},
+  // ANTI-DOUBLON (voir claimSend plus bas) : repli mémoire du registre
+  // persistant des couples « numéro de jeu + costume » déjà envoyés.
+  sentKeys: [],
   sentCount: 0,
   lastSentAt: null,
   lastScanAt: null,
@@ -540,6 +544,108 @@ function isAlreadySentBySource(tracker, target, suit) {
 }
 
 // ---------------------------------------------------------------------------
+// ANTI-DOUBLON GLOBAL « même numéro + même costume » (demande admin).
+//
+// POURQUOI LES CATÉGORIES 1 (comptage dizaine) ET 3 (série de même costume)
+// ENVOYAIENT DES DOUBLES :
+//   • isDuplicateRelay() ne comparait le relais qu'aux entrées encore
+//     présentes dans panel.pendingMessages — or sweepResolved() efface les
+//     prédictions déjà vérifiées et persist() n'enregistre QUE celles
+//     « en attente ». Après une vérification (ou un simple redémarrage), la
+//     trace disparaissait et la même cible pouvait repartir.
+//   • pour une AUTRE configuration, le blocage exigeait en plus un canal
+//     commun : deux configurations pouvaient donc publier exactement la même
+//     prédiction.
+//   • catégories 1 et 3 publient plusieurs cibles calculées (end + n*i) :
+//     deux séries/sessions successives, ou une session reprise après
+//     redémarrage (streakSession / decadeSession), retombent facilement sur
+//     un couple numéro+costume déjà envoyé.
+//
+// CORRECTIF : un registre PERSISTANT, lu et écrit DIRECTEMENT EN BASE
+// (table after_loss_sent, clé unique target+suit, voir db.js), consulté avant
+// CHAQUE envoi de ce panneau, quelle que soit la catégorie, la configuration
+// ou le canal. Si le même numéro avec le même costume a déjà été envoyé →
+// on n'envoie plus. Sinon → on réserve la clé, puis on envoie (et on libère
+// la réservation si l'envoi échoue). Un repli mémoire (panel.sentKeys,
+// sauvegardé avec le panneau) assure le même contrôle quand la base n'est pas
+// connectée.
+// ---------------------------------------------------------------------------
+function sendKeyOf(target, suit) {
+  const s = strategies.normSuit(suit) || suit || '';
+  return `${Number(target) || 0}|${String(s)}`;
+}
+
+function rememberSentKey(target, suit, tracker) {
+  const key = sendKeyOf(target, suit);
+  if (!Array.isArray(panel.sentKeys)) panel.sentKeys = [];
+  if (panel.sentKeys.some((e) => e.key === key)) return;
+  panel.sentKeys.push({
+    key,
+    target: Number(target) || 0,
+    suit: strategies.normSuit(suit) || suit || null,
+    trackerId: tracker ? tracker.id : null,
+    at: Date.now(),
+  });
+  if (panel.sentKeys.length > 500) panel.sentKeys = panel.sentKeys.slice(-500);
+}
+
+function forgetSentKey(target, suit) {
+  const key = sendKeyOf(target, suit);
+  panel.sentKeys = (panel.sentKeys || []).filter((e) => e.key !== key);
+}
+
+function isKnownSentKey(target, suit) {
+  const key = sendKeyOf(target, suit);
+  if ((panel.sentKeys || []).some((e) => e.key === key)) return true;
+  // sécurité supplémentaire : relais encore suivis ou déjà journalisés
+  if (panel.pendingMessages.some((e) => sendKeyOf(e.target, e.suit) === key)) return true;
+  if (panel.history.some((h) => sendKeyOf(h.target, h.suit) === key)) return true;
+  return false;
+}
+
+// Réserve le couple numéro+costume avant l'envoi.
+// → { ok: true } : rien n'a encore été envoyé pour ce couple, on peut envoyer.
+// → { ok: false, reason } : doublon, on n'envoie pas.
+async function claimSend(tracker, target, suit) {
+  const normSuit = strategies.normSuit(suit) || suit || '';
+  if (isKnownSentKey(target, normSuit)) {
+    return { ok: false, reason: `jeu #N${target} (${normSuit}) déjà envoyé — doublon bloqué` };
+  }
+  if (db.ready) {
+    try {
+      const already = await db.afterLossSendExists(target, normSuit);
+      if (already) {
+        rememberSentKey(target, normSuit, tracker);
+        return { ok: false, reason: `jeu #N${target} (${normSuit}) déjà envoyé (vérifié en base) — doublon bloqué` };
+      }
+      const reserved = await db.reserveAfterLossSend({
+        target, suit: normSuit,
+        trackerId: tracker ? tracker.id : null,
+        trackerName: tracker ? tracker.name : null,
+        category: tracker ? (tracker.category || 0) : 0,
+      });
+      if (!reserved) {
+        rememberSentKey(target, normSuit, tracker);
+        return { ok: false, reason: `jeu #N${target} (${normSuit}) déjà envoyé (vérifié en base) — doublon bloqué` };
+      }
+    } catch (e) {
+      panel.lastError = e.message;
+    }
+  }
+  rememberSentKey(target, normSuit, tracker);
+  return { ok: true };
+}
+
+// L'envoi a échoué : la réservation est libérée pour pouvoir réessayer.
+function releaseSend(target, suit) {
+  const normSuit = strategies.normSuit(suit) || suit || '';
+  forgetSentKey(target, normSuit);
+  if (db.ready) { try { db.releaseAfterLossSend(target, normSuit); } catch (_) {} }
+}
+
+
+
+// ---------------------------------------------------------------------------
 // Persistance
 // ---------------------------------------------------------------------------
 function persist() {
@@ -552,6 +658,9 @@ function persist() {
     pendingMessages: panel.pendingMessages.filter((e) => e.status === 'en attente'),
     tally: panel.tally,
     verified: panel.verified,
+    // registre anti-doublon (numéro + costume déjà envoyés) : conservé pour
+    // que le contrôle survive à un redémarrage même sans base connectée.
+    sentKeys: (panel.sentKeys || []).slice(-500),
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
@@ -654,6 +763,18 @@ function applySaved(saved) {
         at: (x && x.at) || Date.now(),
       }));
     }
+  }
+  if (Array.isArray(saved.sentKeys)) {
+    panel.sentKeys = saved.sentKeys
+      .filter((e) => e && e.key)
+      .slice(-500)
+      .map((e) => ({
+        key: String(e.key),
+        target: Number(e.target) || 0,
+        suit: e.suit || null,
+        trackerId: e.trackerId || null,
+        at: e.at || Date.now(),
+      }));
   }
   // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
   // avant, les confirmations encore « en attente » au moment du
@@ -1077,6 +1198,11 @@ function editPending(entry, statusFr) {
 // (voir setOnShoeReset dans predictor.js, désormais multi-écouteurs) pour
 // remettre tout ça à plat à chaque fois.
 setOnShoeReset(() => {
+  // nouveau sabot : les numéros de jeu repartent de 1, le registre
+  // anti-doublon (numéro + costume) est donc remis à zéro, en mémoire et en
+  // base, sinon plus aucune prédiction du nouveau sabot ne pourrait partir.
+  panel.sentKeys = [];
+  if (db.ready) { try { db.clearAfterLossSent(); } catch (_) {} }
   for (const t of panel.trackers) {
     t.lastSeenTarget = 0;
     t.lastRepeatSource = 0;
@@ -1234,6 +1360,12 @@ async function forward(tracker, pred, meta = {}) {
     panel.lastError = `Relais ignoré pour « ${tracker.name} » : le jeu #N${pred.target} (${pred.suit || pred.card || ''}) a déjà été envoyé dans ce canal par la stratégie elle-même (doublon évité).`;
     return false;
   }
+  // ANTI-DOUBLON numéro + costume, lu directement en base (voir claimSend).
+  const claim = await claimSend(tracker, pred.target, pred.suit || pred.card);
+  if (!claim.ok) {
+    panel.lastError = `Relais ignoré pour « ${tracker.name} » : ${claim.reason}.`;
+    return false;
+  }
   const targetChannels = effectiveChannels(tracker);
   const siteChannelId = effectiveSiteChannelId(tracker);
   if (!targetChannels.length && !siteChannelId) {
@@ -1241,6 +1373,7 @@ async function forward(tracker, pred, meta = {}) {
     return false;
   }
   const out = relayText(tracker, pred);
+  const deliverySuit = pred.suit || pred.card || '-';
   let ok = false;
   const errors = [];
   const sentMessages = [];
@@ -1251,20 +1384,45 @@ async function forward(tracker, pred, meta = {}) {
       errors.push('Aucun token Telegram configuré');
     } else {
       for (const id of targetChannels) {
+        const claimed = await delivery.claim({
+          target: pred.target,
+          suit: deliverySuit,
+          channel: id,
+          source: `after-loss:${tracker.id}`,
+        });
+        if (!claimed) continue;
         try {
           const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
           sentMessages.push({ chatId: id, messageId: m.message_id });
+          await delivery.markSent({ target: pred.target, suit: deliverySuit, channel: id });
           ok = true;
-        } catch (e) { errors.push(`${id} : ${e.message}`); }
+        } catch (e) {
+          await delivery.release({ target: pred.target, suit: deliverySuit, channel: id });
+          errors.push(`${id} : ${e.message}`);
+        }
       }
     }
   }
   // canal DU SITE — facultatif, publié en parallèle du/des canal(aux)
   // Telegram ci-dessus ; l'un n'empêche jamais l'autre.
   if (siteChannelId) {
-    const posted = postToSiteChannel(tracker, out.text);
-    if (posted) ok = true;
-    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
+    const siteChannel = `site:${siteChannelId}`;
+    const claimed = await delivery.claim({
+      target: pred.target,
+      suit: deliverySuit,
+      channel: siteChannel,
+      source: `after-loss:${tracker.id}`,
+    });
+    if (claimed) {
+      const posted = postToSiteChannel(tracker, out.text);
+      if (posted) {
+        await delivery.markSent({ target: pred.target, suit: deliverySuit, channel: siteChannel });
+        ok = true;
+      } else {
+        await delivery.release({ target: pred.target, suit: deliverySuit, channel: siteChannel });
+        errors.push(`Canal du site introuvable (id ${siteChannelId})`);
+      }
+    }
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;
@@ -1291,8 +1449,11 @@ async function forward(tracker, pred, meta = {}) {
     // de messageId à éditer : seuls les envois Telegram, s'il y en a, sont
     // mémorisés ici.)
     if (sentMessages.length) pushPending(tracker, pred, sentMessages);
-  } else if (errors.length) {
-    panel.lastError = errors[0];
+  } else {
+    // rien n'est parti : on libère la réservation anti-doublon pour pouvoir
+    // réessayer au prochain tour.
+    releaseSend(pred.target, pred.suit || pred.card);
+    if (errors.length) panel.lastError = errors[0];
   }
   return ok;
 }
@@ -1410,13 +1571,24 @@ async function forwardSynth(tracker, synth, opts = {}) {
     panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : jeu #N${synth.target} déjà dépassé par le live (#N${currentLiveNumber()}) — prédiction non lancée pour éviter un envoi ancien/en double.`;
     return false;
   }
+  // DOUBLON : on renvoie 'doublon' (valeur VRAIE) et non false — la cible est
+  // considérée comme traitée, pour que la session en cours (série catégorie 3,
+  // comptage dizaine catégorie 1) PASSE à la cible suivante au lieu de
+  // retenter indéfiniment la même prédiction à chaque tour.
   if (isDuplicateRelay(tracker, synth.target, synth.suit)) {
     panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : une prédiction pour le jeu #N${synth.target} a déjà été envoyée (doublon évité).`;
-    return false;
+    return 'doublon';
   }
   if (isAlreadySentBySource(tracker, synth.target, synth.suit)) {
     panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : le jeu #N${synth.target} (${synth.suit || ''}) a déjà été envoyé dans ce canal par la stratégie elle-même (doublon évité).`;
-    return false;
+    return 'doublon';
+  }
+  // ANTI-DOUBLON numéro + costume, lu directement en base (voir claimSend) :
+  // c'est ce contrôle qui bloque les envois doubles des catégories 1 et 3.
+  const claim = await claimSend(tracker, synth.target, synth.suit);
+  if (!claim.ok) {
+    panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : ${claim.reason}.`;
+    return 'doublon';
   }
   const targetChannels = effectiveChannels(tracker);
   const siteChannelId = effectiveSiteChannelId(tracker);
@@ -1436,24 +1608,50 @@ async function forwardSynth(tracker, synth, opts = {}) {
   let ok = false;
   const errors = [];
   const sentMessages = [];
+  const deliverySuit = synth.suit || synth.card || '-';
   if (targetChannels.length) {
     const bot = typeof sender === 'function' ? sender() : null;
     if (!bot) {
       errors.push('Aucun token Telegram configuré');
     } else {
       for (const id of targetChannels) {
+        const claimed = await delivery.claim({
+          target: synth.target,
+          suit: deliverySuit,
+          channel: id,
+          source: `after-loss:${tracker.id}`,
+        });
+        if (!claimed) continue;
         try {
           const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
           sentMessages.push({ chatId: id, messageId: m.message_id });
+          await delivery.markSent({ target: synth.target, suit: deliverySuit, channel: id });
           ok = true;
-        } catch (e) { errors.push(`${id} : ${e.message}`); }
+        } catch (e) {
+          await delivery.release({ target: synth.target, suit: deliverySuit, channel: id });
+          errors.push(`${id} : ${e.message}`);
+        }
       }
     }
   }
   if (siteChannelId) {
-    const posted = postToSiteChannel(tracker, out.text);
-    if (posted) ok = true;
-    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
+    const siteChannel = `site:${siteChannelId}`;
+    const claimed = await delivery.claim({
+      target: synth.target,
+      suit: deliverySuit,
+      channel: siteChannel,
+      source: `after-loss:${tracker.id}`,
+    });
+    if (claimed) {
+      const posted = postToSiteChannel(tracker, out.text);
+      if (posted) {
+        await delivery.markSent({ target: synth.target, suit: deliverySuit, channel: siteChannel });
+        ok = true;
+      } else {
+        await delivery.release({ target: synth.target, suit: deliverySuit, channel: siteChannel });
+        errors.push(`Canal du site introuvable (id ${siteChannelId})`);
+      }
+    }
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;
@@ -1474,8 +1672,10 @@ async function forwardSynth(tracker, synth, opts = {}) {
     panel.history = panel.history.slice(0, 100);
     // CORRECTIF : idem forward() — ce relais est désormais suivi et vérifié.
     if (sentMessages.length) pushPending(tracker, synth, sentMessages);
-  } else if (errors.length) {
-    panel.lastError = errors[0];
+  } else {
+    // envoi raté : la réservation anti-doublon est libérée pour réessayer.
+    releaseSend(synth.target, synth.suit);
+    if (errors.length) panel.lastError = errors[0];
   }
   return ok;
 }

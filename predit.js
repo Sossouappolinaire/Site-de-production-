@@ -35,6 +35,7 @@ const db = require('./db');
 const fmt = require('./formats');
 const { state } = require('./predictor');
 const lossNotice = require('./loss-notice');
+const delivery = require('./prediction-delivery');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
 
@@ -714,16 +715,26 @@ async function send(pred) {
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   if (!panel.channels.length) { panel.lastError = 'Aucun canal configuré pour le panneau Prédit'; return false; }
   const out = predictionText(pred);
+  const suit = pred.suit || pred.card || pred.cardsLabel || '-';
   let ok = false;
   for (const id of panel.channels) {
+    const claimed = await delivery.claim({
+      target: pred.target,
+      suit,
+      channel: id,
+      source: 'predit',
+    });
+    if (!claimed) continue;
     try {
       const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
       pred.messages.push({ chatId: id, messageId: m.message_id });
+      await delivery.markSent({ target: pred.target, suit, channel: id });
       panel.sentCount += 1;
       panel.lastSentAt = Date.now();
       panel.lastError = null;
       ok = true;
     } catch (e) {
+      await delivery.release({ target: pred.target, suit, channel: id });
       panel.lastError = `${id} : ${e.message}`;
     }
   }
