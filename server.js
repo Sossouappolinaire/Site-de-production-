@@ -1,4 +1,22 @@
 // server.js — tableau de bord web (Render) + API JSON. Protégé par identifiant/mot de passe.
+
+// CORRECTIF « redémarrages en boucle sans explication » (demande admin) :
+// sans ces gestionnaires, la moindre erreur non interceptée QUELQUE PART
+// dans le code (promesse oubliée sans .catch, appel Telegram en échec, etc.)
+// tuait instantanément tout le process Node — Render le relançait aussitôt,
+// sans qu'aucune trace de la vraie cause n'apparaisse dans les logs. C'est
+// ce qui produisait les doublons de prédictions (rupture, après une perte...)
+// à chaque redémarrage. On loggue désormais l'erreur complète AVANT de
+// quitter, pour pouvoir enfin identifier et corriger la cause exacte.
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH] unhandledRejection —', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH] uncaughtException —', err && err.stack ? err.stack : err);
+  // on laisse le process continuer plutôt que de le tuer : mieux vaut un
+  // module en erreur ponctuelle qu'un redémarrage complet qui rejoue tout.
+});
+
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
