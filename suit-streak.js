@@ -268,29 +268,24 @@ function applySaved(saved) {
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: t.format ? fmt.clampFormat(t.format) : null,
       maxR: sanitizeTrackerMaxR(t.maxR),
-      streakSuit: t.streakSuit || null,
-      streakCount: Number.isFinite(Number(t.streakCount)) ? Number(t.streakCount) : 0,
-      streakHasLoss: !!t.streakHasLoss,
-      waitingSuit: t.waitingSuit || null,
-      lastSeenTarget: Number.isFinite(Number(t.lastSeenTarget)) ? Number(t.lastSeenTarget) : 0,
+      // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
+      // la série en cours n'est plus rejouée telle quelle depuis data.json —
+      // on repart toujours de zéro, recalé sur la dernière prédiction déjà
+      // connue (jamais rejouée). Même principe que suit-break.js.
+      streakSuit: null,
+      streakCount: 0,
+      streakHasLoss: false,
+      waitingSuit: null,
+      lastSeenTarget: currentMaxTarget(t.key),
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
       lastSentAt: t.lastSentAt || null,
       createdAt: t.createdAt || Date.now(),
     }));
   }
-  if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
-  if (Array.isArray(saved.pendingMessages)) {
-    const keep = [];
-    let resolvedCount = 0;
-    for (let i = saved.pendingMessages.length - 1; i >= 0; i--) {
-      const e = saved.pendingMessages[i];
-      if (e.status === 'en attente' || resolvedCount < 200) {
-        keep.unshift(e);
-        if (e.status !== 'en attente') resolvedCount += 1;
-      }
-    }
-    panel.pendingMessages = keep;
-  }
+  // l'historique et les messages en attente ne sont jamais rejoués au
+  // démarrage — ils ne doivent refléter que ce qui se passe APRÈS.
+  panel.history = [];
+  panel.pendingMessages = [];
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;

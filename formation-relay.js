@@ -190,14 +190,26 @@ function restore() {
     if (saved.strategies && typeof saved.strategies === 'object') {
       for (const [key, s] of Object.entries(saved.strategies)) {
         const e = entryFor(key);
+        // CORRECTIF « anciennes prédictions du relais renvoyées au
+        // redémarrage » (demande admin) : avant, counting/needed/seen/
+        // armed/pending/lastSeenTarget étaient restaurés TELS QUELS depuis
+        // data.json. Comme les prédictions des stratégies sont, elles,
+        // reconstruites à chaque démarrage/nouveau sabot, ce curseur figé
+        // faisait rejouer (ou laissait bloqué sur une confirmation morte)
+        // tout l'écart accumulé entre le dernier persist() et l'état
+        // courant — visible en boucle si le process redémarre souvent.
+        // Désormais, SEULS les réglages sont restaurés ; le suivi actif
+        // repart toujours de zéro, recalé sur la dernière prédiction déjà
+        // connue de la source (jamais rejouée), exactement comme
+        // suit-break.js.
         e.enabled = !!s.enabled;
         e.channels = parseChannels(s.channels);
-        e.counting = !!s.counting;
-        e.needed = Number(s.needed) || 0;
-        e.seen = Number(s.seen) || 0;
-        e.armed = !!s.armed;
-        e.pending = s.pending || null;
-        e.lastSeenTarget = Number(s.lastSeenTarget) || 0;
+        e.counting = false;
+        e.needed = 0;
+        e.seen = 0;
+        e.armed = false;
+        e.pending = null;
+        e.lastSeenTarget = currentMaxTarget(key);
         e.sentCount = Number(s.sentCount) || 0;
         e.lastSentAt = s.lastSentAt || null;
         e.codeName = s.codeName || '';
@@ -208,13 +220,19 @@ function restore() {
         e.autoSend = !!s.autoSend;
         e.manualSentCount = Number(s.manualSentCount) || 0;
         e.lastManualAt = s.lastManualAt || null;
-        e.lastNoticeTarget = Number(s.lastNoticeTarget) || 0;
+        // idem : ne pas rejouer d'anciennes invitations « formation non
+        // activée » — on se recale sur la dernière prédiction connue.
+        e.lastNoticeTarget = currentMaxTarget(key);
       }
     }
-    if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
+    // L'historique affiché repart vide à chaque démarrage — même principe
+    // que suit-break.js : il ne doit refléter que ce qui se passe APRÈS ce
+    // redémarrage, jamais un lot rejoué depuis la persistance.
+    panel.history = [];
     panel.sentCount = Number(saved.sentCount) || 0;
     panel.lastSentAt = saved.lastSentAt || null;
   } catch (_) { /* premier démarrage */ }
+  persist();
   return status();
 }
 

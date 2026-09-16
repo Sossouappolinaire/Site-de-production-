@@ -161,6 +161,13 @@ function currentMaxTarget(key) {
   return list.length ? list[list.length - 1].target : 0;
 }
 
+// une confirmation de CE tracker est-elle déjà en attente de résultat ?
+// (voir garde-fou dans processTracker() : on ne publie jamais deux
+// prédictions superposées pour la même source suivie)
+function alreadyPendingForTracker(tracker) {
+  return panel.pendingMessages.some((e) => e.trackerId === tracker.id && e.status === 'en attente');
+}
+
 // ---------------------------------------------------------------------------
 // Réglages d'une source suivie
 // ---------------------------------------------------------------------------
@@ -400,11 +407,22 @@ async function processTracker(tracker) {
       // rupture par rapport à la série précédente : si elle avait atteint N,
       // c'est LA rupture qui déclenche — sur ce même numéro, avec le
       // costume ORIGINAL de la série (pas le nouveau costume observé ici).
+      // GARDE-FOU (demande admin) : ne publier dans le canal QUE les
+      // ruptures qui doivent réellement y aller. Si une confirmation
+      // précédente de ce même tracker est encore « en attente » de
+      // résultat, on ne déclenche pas une deuxième prédiction par-dessus —
+      // sinon plusieurs prédictions se retrouvent envoyées en même temps
+      // pour la même source, alors qu'une seule est censée être suivie à
+      // la fois.
       if (tracker.streakSuit && tracker.streakCount >= tracker.n) {
-        note = `RUPTURE → prédiction ${tracker.streakSuit} sur #${pred.target}`;
-        tracker.fireCount = (tracker.fireCount || 0) + 1;
-        tracker.lastFireAt = Date.now();
-        await fire(tracker, pred, tracker.streakSuit);
+        if (alreadyPendingForTracker(tracker)) {
+          note = `RUPTURE ${tracker.streakSuit} sur #${pred.target} — ignorée : une confirmation de « ${tracker.name} » est déjà en attente de résultat dans le canal`;
+        } else {
+          note = `RUPTURE → prédiction ${tracker.streakSuit} sur #${pred.target}`;
+          tracker.fireCount = (tracker.fireCount || 0) + 1;
+          tracker.lastFireAt = Date.now();
+          await fire(tracker, pred, tracker.streakSuit);
+        }
       } else {
         note = `nouvelle série ${suit} ×1`;
       }

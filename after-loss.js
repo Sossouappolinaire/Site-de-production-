@@ -562,30 +562,36 @@ function applySaved(saved) {
       repeat: sanitizeRepeat(t.repeat),
       streak: sanitizeStreak(t.streak),
       decade: sanitizeDecade(t.decade),
-      lastDecadeEnd: Number.isFinite(Number(t.lastDecadeEnd)) ? Number(t.lastDecadeEnd) : 0,
-      decadeSession: sanitizeDecadeSession(t.decadeSession),
-      lastStreakEnd: Number.isFinite(Number(t.lastStreakEnd)) ? Number(t.lastStreakEnd) : 0,
-      // compteurs persistés (reprise après redémarrage)
-      streakProgress: sanitizeStreakProgress(t.streakProgress),
-      streakSession: sanitizeStreakSession(t.streakSession),
+      // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
+      // tout le suivi actif (décade en cours, série en cours, armement,
+      // comptage) n'est plus rejoué tel quel depuis data.json — on repart
+      // toujours de zéro, recalé sur la dernière prédiction déjà connue de
+      // la source (jamais rejouée). Même principe que suit-break.js.
+      lastDecadeEnd: 0,
+      decadeSession: null,
+      lastStreakEnd: 0,
+      streakProgress: null,
+      streakSession: null,
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: sanitizeTrackerFormat(t.format),
-      lastRepeatSource: Number.isFinite(Number(t.lastRepeatSource)) ? Number(t.lastRepeatSource) : 0,
-      counting: !!t.counting,
-      armedTrigger: t.armedTrigger || null,
-      armedNeeded: Number.isFinite(Number(t.armedNeeded)) ? Number(t.armedNeeded) : 0,
-      armedSeen: Number.isFinite(Number(t.armedSeen)) ? Number(t.armedSeen) : 0,
-      armedTrail: sanitizeTrail(t.armedTrail),
-      armed: !!t.armed,
-      armedAt: t.armedAt || null,
-      lastSeenTarget: Number.isFinite(Number(t.lastSeenTarget)) ? Number(t.lastSeenTarget) : 0,
+      lastRepeatSource: 0,
+      counting: false,
+      armedTrigger: null,
+      armedNeeded: 0,
+      armedSeen: 0,
+      armedTrail: [],
+      armed: false,
+      armedAt: null,
+      lastSeenTarget: currentMaxTarget(t.key),
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
       lastSentAt: t.lastSentAt || null,
       createdAt: t.createdAt || Date.now(),
     }));
   }
-  if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
+  // l'historique et les messages en attente ne sont jamais rejoués au
+  // démarrage — ils ne doivent refléter que ce qui se passe APRÈS.
+  panel.history = [];
   if (saved.tally && typeof saved.tally === 'object') {
     panel.tally = {};
     for (const [k, v] of Object.entries(saved.tally)) {
@@ -612,11 +618,13 @@ function applySaved(saved) {
       }));
     }
   }
-  if (Array.isArray(saved.pendingMessages)) {
-    // Au redémarrage on ne recharge QUE les prédictions encore en attente :
-    // celles déjà vérifiées ont été comptées au bilan puis effacées.
-    panel.pendingMessages = saved.pendingMessages.filter((e) => e && e.status === 'en attente');
-  }
+  // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
+  // avant, les confirmations encore « en attente » au moment du
+  // redémarrage étaient conservées pour continuer d'être suivies. Comme les
+  // prédictions sources sont, elles, reconstruites à chaque démarrage/
+  // nouveau sabot, ce suivi pouvait retomber sur une cible obsolète. On
+  // repart désormais à vide, comme les autres panneaux.
+  panel.pendingMessages = [];
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;

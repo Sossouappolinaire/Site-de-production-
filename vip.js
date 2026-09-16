@@ -184,34 +184,29 @@ function applySaved(saved) {
     const clean = {};
     for (const [key, t] of Object.entries(saved.trackers)) {
       if (!t || typeof t !== 'object') continue;
+      // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
+      // le suivi actif n'est plus rejoué tel quel depuis data.json — on
+      // repart toujours de zéro, recalé sur la dernière prédiction déjà
+      // connue de la source (jamais rejouée). Même principe que
+      // suit-break.js.
+      const list = sourcePredictions(key);
       clean[key] = {
-        lastSeenTarget: Number.isFinite(Number(t.lastSeenTarget)) ? Number(t.lastSeenTarget) : 0,
-        lossStreak: Number.isFinite(Number(t.lossStreak)) ? Number(t.lossStreak) : 0,
-        suitStreak: Number.isFinite(Number(t.suitStreak)) ? Number(t.suitStreak) : 0,
-        lastSuit: t.lastSuit || null,
-        remaining: Number.isFinite(Number(t.remaining)) ? Number(t.remaining) : 0,
-        armedKind: t.armedKind || null,
+        lastSeenTarget: list.length ? list[list.length - 1].target : 0,
+        lossStreak: 0,
+        suitStreak: 0,
+        lastSuit: null,
+        remaining: 0,
+        armedKind: null,
         sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
         lastSentAt: t.lastSentAt || null,
       };
     }
     panel.trackers = clean;
   }
-  if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
-  if (Array.isArray(saved.pendingMessages)) {
-    // CORRECTIF « prédictions non vérifiées » (même règle qu'ailleurs) :
-    // seules les entrées déjà résolues sont plafonnées à 200.
-    const keep = [];
-    let resolvedCount = 0;
-    for (let i = saved.pendingMessages.length - 1; i >= 0; i--) {
-      const e = saved.pendingMessages[i];
-      if (e.status === 'en attente' || resolvedCount < 200) {
-        keep.unshift(e);
-        if (e.status !== 'en attente') resolvedCount += 1;
-      }
-    }
-    panel.pendingMessages = keep;
-  }
+  // l'historique et les messages en attente ne sont jamais rejoués au
+  // démarrage — ils ne doivent refléter que ce qui se passe APRÈS.
+  panel.history = [];
+  panel.pendingMessages = [];
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;

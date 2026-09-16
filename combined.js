@@ -240,29 +240,25 @@ function applySaved(saved) {
       rules: sanitizeRules(t.rules),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       format: t.format ? fmt.clampFormat(t.format) : null,
-      streakKind: t.streakKind || null,
-      armed: !!t.armed,
-      armedKind: t.armedKind || null,
-      streakCount: Number.isFinite(Number(t.streakCount)) ? Number(t.streakCount) : 0,
-      lastSeenTarget: Number.isFinite(Number(t.lastSeenTarget)) ? Number(t.lastSeenTarget) : 0,
+      // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
+      // armed/streakKind/streakCount/lastSeenTarget ne sont plus rejoués
+      // tels quels depuis data.json — on repart toujours de zéro, recalé
+      // sur la dernière prédiction déjà connue (jamais rejouée). Même
+      // principe que suit-break.js et formation-relay.js.
+      streakKind: null,
+      armed: false,
+      armedKind: null,
+      streakCount: 0,
+      lastSeenTarget: currentMaxTarget(t.key),
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
       lastSentAt: t.lastSentAt || null,
       createdAt: t.createdAt || Date.now(),
     }));
   }
-  if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
-  if (Array.isArray(saved.pendingMessages)) {
-    const keep = [];
-    let resolvedCount = 0;
-    for (let i = saved.pendingMessages.length - 1; i >= 0; i--) {
-      const e = saved.pendingMessages[i];
-      if (e.status === 'en attente' || resolvedCount < 200) {
-        keep.unshift(e);
-        if (e.status !== 'en attente') resolvedCount += 1;
-      }
-    }
-    panel.pendingMessages = keep;
-  }
+  // l'historique affiché et les messages en attente ne sont jamais rejoués
+  // au démarrage — ils ne doivent refléter que ce qui se passe APRÈS.
+  panel.history = [];
+  panel.pendingMessages = [];
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
