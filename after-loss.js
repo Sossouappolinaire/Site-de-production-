@@ -503,6 +503,43 @@ function isDuplicateRelay(tracker, target, suit) {
 }
 
 // ---------------------------------------------------------------------------
+// ANTI-DOUBLON « déjà envoyée par la stratégie suivie elle-même » (demande
+// admin) : s'applique à TOUTES les prédictions relais de ce panneau — le
+// relais déclenché par perte (forward()) ET les relais synthétiques
+// (répétition après perte, série de même costume, comptage dizaine —
+// forwardSynth(), voir plus bas). isDuplicateRelay() ci-dessus ne compare un
+// relais qu'aux AUTRES relais déjà envoyés par ce panneau
+// (panel.pendingMessages) — elle ne voit pas les envois de la stratégie
+// SOURCE elle-même (state.predictions / predit.panel.predictions), qui
+// partent indépendamment via bot.js/broadcast() AVANT que ce panneau ne
+// traite la prédiction (voir bot.js : evaluate()+broadcast() puis
+// afterLoss.tick()). Si la stratégie suivie a déjà publié — dans un canal
+// Telegram qui recoupe le(s) canal(aux) cible(s) de CE relais — une
+// prédiction pour le même jeu cible (même numéro) avec le même
+// costume/carte, republier ici afficherait deux fois la même annonce dans
+// le même canal : on bloque donc le relais dans ce cas, que la coïncidence
+// numéro+costume vienne du relais après-perte lui-même ou d'un décalage
+// (répétition/série/dizaine) qui retombe par hasard sur une cible déjà
+// prédite et envoyée nativement par la stratégie.
+// ---------------------------------------------------------------------------
+function findSourceSentMessages(tracker, target, suit) {
+  for (const p of trackerPredictions(tracker.key)) {
+    if (Number(p.target) !== Number(target)) continue;
+    if (String(p.suit || p.card) !== String(suit)) continue;
+    if (Array.isArray(p.messages) && p.messages.length) return p.messages;
+  }
+  return null;
+}
+
+function isAlreadySentBySource(tracker, target, suit) {
+  const msgs = findSourceSentMessages(tracker, target, suit);
+  if (!msgs) return false;
+  const targetChannels = effectiveChannels(tracker);
+  if (!targetChannels.length) return false;
+  return msgs.some((m) => targetChannels.includes(m.chatId));
+}
+
+// ---------------------------------------------------------------------------
 // Persistance
 // ---------------------------------------------------------------------------
 function persist() {
@@ -716,6 +753,12 @@ function addTracker(key, triggers, repeat, extra = {}) {
   const cleanStreak = parts.streak;
   const customName = sanitizeName(extra.name);
   const cleanDecade = parts.decade;
+  // « Série de même costume » et « Comptage dizaine » ne doivent jamais
+  // tourner en même temps pour une même stratégie suivie (demande admin) :
+  // cocher les deux à la fois est refusé, il faut décocher l'une des deux.
+  if (cleanStreak.enabled && cleanDecade.enabled) {
+    throw new Error("« Série de même costume » et « Comptage dizaine » ne peuvent pas être actives en même temps pour une même stratégie suivie — décoche l'une des deux.");
+  }
   if (!cleanRepeat.enabled && !cleanStreak.enabled && !cleanDecade.enabled && !TRIGGER_KEYS.some((k) => clean[k].enabled)) {
     throw new Error("Coche au moins un type de résultat déclencheur (rattrapage 1/2/3 ou perdue), ou active « même costume après perte », « série de même costume » ou « comptage dizaine ».");
   }
@@ -792,6 +835,18 @@ function addTracker(key, triggers, repeat, extra = {}) {
 function updateTracker(id, patch = {}) {
   const tracker = panel.trackers.find((t) => t.id === id);
   if (!tracker) return null;
+  // « Série de même costume » et « Comptage dizaine » ne doivent jamais
+  // tourner en même temps pour une même stratégie suivie (demande admin) :
+  // cocher les deux à la fois est refusé — il faut décocher l'une des deux
+  // avant de pouvoir cocher l'autre. Vérifié AVANT toute modification du
+  // tracker pour ne rien changer en cas de refus.
+  {
+    const nextStreak = patch.streak !== undefined ? sanitizeStreak(patch.streak).enabled : !!(tracker.streak && tracker.streak.enabled);
+    const nextDecade = patch.decade !== undefined ? sanitizeDecade(patch.decade).enabled : !!(tracker.decade && tracker.decade.enabled);
+    if (nextStreak && nextDecade) {
+      throw new Error("« Série de même costume » et « Comptage dizaine » ne peuvent pas être actives en même temps pour une même stratégie suivie — décoche d'abord l'une des deux.");
+    }
+  }
   if (patch.category !== undefined) tracker.category = sanitizeCategory(patch.category);
   if (patch.triggers !== undefined) {
     const clean = sanitizeTriggers(patch.triggers);
@@ -1175,6 +1230,10 @@ async function forward(tracker, pred, meta = {}) {
     panel.lastError = `Relais ignoré pour « ${tracker.name} » : une prédiction pour le jeu #N${pred.target} a déjà été envoyée (doublon évité).`;
     return false;
   }
+  if (isAlreadySentBySource(tracker, pred.target, pred.suit || pred.card)) {
+    panel.lastError = `Relais ignoré pour « ${tracker.name} » : le jeu #N${pred.target} (${pred.suit || pred.card || ''}) a déjà été envoyé dans ce canal par la stratégie elle-même (doublon évité).`;
+    return false;
+  }
   const targetChannels = effectiveChannels(tracker);
   const siteChannelId = effectiveSiteChannelId(tracker);
   if (!targetChannels.length && !siteChannelId) {
@@ -1353,6 +1412,10 @@ async function forwardSynth(tracker, synth, opts = {}) {
   }
   if (isDuplicateRelay(tracker, synth.target, synth.suit)) {
     panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : une prédiction pour le jeu #N${synth.target} a déjà été envoyée (doublon évité).`;
+    return false;
+  }
+  if (isAlreadySentBySource(tracker, synth.target, synth.suit)) {
+    panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : le jeu #N${synth.target} (${synth.suit || ''}) a déjà été envoyé dans ce canal par la stratégie elle-même (doublon évité).`;
     return false;
   }
   const targetChannels = effectiveChannels(tracker);
