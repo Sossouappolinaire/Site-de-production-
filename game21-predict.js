@@ -20,7 +20,6 @@ const store = require('./store');
 const fmt = require('./formats');
 const game21 = require('./game21');
 const g21Strategies = require('./game21-strategies');
-const delivery = require('./prediction-delivery');
 
 const VARIANTS = ['classique', 'simple'];
 const VALUE_RANKS = ['A', 'K', 'Q', 'J'];
@@ -251,27 +250,16 @@ async function send(pred) {
     return false;
   }
   const out = predictionText(pred);
-  const target = (Number(pred.fromRoundNumber) || 0) + 1;
-  const suit = `21:${pred.variant || 'classique'}:${pred.kind}:${pred.card || 'valeur'}`;
   let ok = false;
   for (const id of channels) {
-    const claimed = await delivery.claim({
-      target,
-      suit,
-      channel: id,
-      source: `game21:${pred.variant || 'classique'}`,
-    });
-    if (!claimed) continue;
     try {
       const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
       pred.messages.push({ chatId: id, messageId: m.message_id });
-      await delivery.markSent({ target, suit, channel: id });
       panel.sentCount += 1;
       panel.lastSentAt = Date.now();
       panel.lastError = null;
       ok = true;
     } catch (e) {
-      await delivery.release({ target, suit, channel: id });
       panel.lastError = `${id} : ${e.message}`;
     }
   }

@@ -22,6 +22,8 @@ const express = require('express');
 const session = require('express-session');
 const { Pool } = require('pg');
 const pgSessionStore = require('connect-pg-simple')(session);
+const hybridStore = require('./session-store');
+const { databaseUrl } = require('./database-url');
 const config = require('./config');
 const api = require('./api');
 const db = require('./db');
@@ -77,20 +79,23 @@ app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 // seule au démarrage) — sans ça (store par défaut = mémoire du process),
 // tout le monde est déconnecté à chaque redémarrage/redéploiement Render.
 // ---------------------------------------------------------------------------
+const SESSION_DB_URL = databaseUrl() || config.DATABASE_URL;
 const sessionPool = new Pool({
-  connectionString: config.DATABASE_URL,
-  ssl: /localhost|127\.0\.0\.1/.test(config.DATABASE_URL) ? false : { rejectUnauthorized: false },
+  connectionString: SESSION_DB_URL,
+  ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
   max: 4,
 });
 sessionPool.on('error', (e) => console.error('Pool de sessions (pg) :', e.message));
 
 app.use(session({
-  store: new pgSessionStore({
+  // base de données quand elle répond, mémoire du process en repli : ainsi la
+  // connexion de secours de l'administrateur marche même base éteinte.
+  store: hybridStore(new pgSessionStore({
     pool: sessionPool,
     tableName: 'user_sessions',
     createTableIfMissing: true,
     pruneSessionInterval: 60 * 60, // purge des sessions expirées toutes les heures
-  }),
+  })),
   name: 'baccara.sid',
   secret: process.env.SESSION_SECRET || 'baccara-bot-changeme-secret',
   resave: false,

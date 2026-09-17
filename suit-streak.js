@@ -40,7 +40,6 @@ const fmt = require('./formats');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
 const formationRelay = require('./formation-relay');
-const delivery = require('./prediction-delivery');
 
 const panel = {
   enabled: true,
@@ -432,7 +431,6 @@ async function send(tracker, syn) {
     return false;
   }
   const out = messageText(tracker, syn);
-  const suit = syn.suit || syn.card || '-';
   const sentMessages = [];
   const errors = [];
   let ok = false;
@@ -442,43 +440,18 @@ async function send(tracker, syn) {
       errors.push('Aucun token Telegram configuré');
     } else {
       for (const id of targetChannels) {
-        const claimed = await delivery.claim({
-          target: syn.target,
-          suit,
-          channel: id,
-          source: `suit-streak:${tracker.id}`,
-        });
-        if (!claimed) continue;
         try {
           const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
           sentMessages.push({ chatId: id, messageId: m.message_id });
-          await delivery.markSent({ target: syn.target, suit, channel: id });
           ok = true;
-        } catch (e) {
-          await delivery.release({ target: syn.target, suit, channel: id });
-          errors.push(`${id} : ${e.message}`);
-        }
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
       }
     }
   }
   if (siteChannelId) {
-    const siteChannel = `site:${siteChannelId}`;
-    const claimed = await delivery.claim({
-      target: syn.target,
-      suit,
-      channel: siteChannel,
-      source: `suit-streak:${tracker.id}`,
-    });
-    if (claimed) {
-      const posted = postToSiteChannel(tracker, out.text);
-      if (posted) {
-        await delivery.markSent({ target: syn.target, suit, channel: siteChannel });
-        ok = true;
-      } else {
-        await delivery.release({ target: syn.target, suit, channel: siteChannel });
-        errors.push(`Canal du site introuvable (id ${siteChannelId})`);
-      }
-    }
+    const posted = postToSiteChannel(tracker, out.text);
+    if (posted) ok = true;
+    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
   }
   if (!ok) {
     if (errors.length) panel.lastError = errors[0];

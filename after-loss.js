@@ -39,7 +39,6 @@ const { state, setStrategyConfig, hasSuit, hasSuitBanker, parityOf, addSiteChann
 const lossNotice = require('./loss-notice');
 const predit = require('./predit');
 const ai = require('./ai-analyzer');
-const delivery = require('./prediction-delivery');
 
 const TRIGGER_KEYS = ['r1', 'r2', 'r3', 'perdue'];
 const TRIGGER_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage 3', perdue: 'Perdue' };
@@ -1373,7 +1372,6 @@ async function forward(tracker, pred, meta = {}) {
     return false;
   }
   const out = relayText(tracker, pred);
-  const deliverySuit = pred.suit || pred.card || '-';
   let ok = false;
   const errors = [];
   const sentMessages = [];
@@ -1384,45 +1382,20 @@ async function forward(tracker, pred, meta = {}) {
       errors.push('Aucun token Telegram configuré');
     } else {
       for (const id of targetChannels) {
-        const claimed = await delivery.claim({
-          target: pred.target,
-          suit: deliverySuit,
-          channel: id,
-          source: `after-loss:${tracker.id}`,
-        });
-        if (!claimed) continue;
         try {
           const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
           sentMessages.push({ chatId: id, messageId: m.message_id });
-          await delivery.markSent({ target: pred.target, suit: deliverySuit, channel: id });
           ok = true;
-        } catch (e) {
-          await delivery.release({ target: pred.target, suit: deliverySuit, channel: id });
-          errors.push(`${id} : ${e.message}`);
-        }
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
       }
     }
   }
   // canal DU SITE — facultatif, publié en parallèle du/des canal(aux)
   // Telegram ci-dessus ; l'un n'empêche jamais l'autre.
   if (siteChannelId) {
-    const siteChannel = `site:${siteChannelId}`;
-    const claimed = await delivery.claim({
-      target: pred.target,
-      suit: deliverySuit,
-      channel: siteChannel,
-      source: `after-loss:${tracker.id}`,
-    });
-    if (claimed) {
-      const posted = postToSiteChannel(tracker, out.text);
-      if (posted) {
-        await delivery.markSent({ target: pred.target, suit: deliverySuit, channel: siteChannel });
-        ok = true;
-      } else {
-        await delivery.release({ target: pred.target, suit: deliverySuit, channel: siteChannel });
-        errors.push(`Canal du site introuvable (id ${siteChannelId})`);
-      }
-    }
+    const posted = postToSiteChannel(tracker, out.text);
+    if (posted) ok = true;
+    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;
@@ -1608,50 +1581,24 @@ async function forwardSynth(tracker, synth, opts = {}) {
   let ok = false;
   const errors = [];
   const sentMessages = [];
-  const deliverySuit = synth.suit || synth.card || '-';
   if (targetChannels.length) {
     const bot = typeof sender === 'function' ? sender() : null;
     if (!bot) {
       errors.push('Aucun token Telegram configuré');
     } else {
       for (const id of targetChannels) {
-        const claimed = await delivery.claim({
-          target: synth.target,
-          suit: deliverySuit,
-          channel: id,
-          source: `after-loss:${tracker.id}`,
-        });
-        if (!claimed) continue;
         try {
           const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
           sentMessages.push({ chatId: id, messageId: m.message_id });
-          await delivery.markSent({ target: synth.target, suit: deliverySuit, channel: id });
           ok = true;
-        } catch (e) {
-          await delivery.release({ target: synth.target, suit: deliverySuit, channel: id });
-          errors.push(`${id} : ${e.message}`);
-        }
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
       }
     }
   }
   if (siteChannelId) {
-    const siteChannel = `site:${siteChannelId}`;
-    const claimed = await delivery.claim({
-      target: synth.target,
-      suit: deliverySuit,
-      channel: siteChannel,
-      source: `after-loss:${tracker.id}`,
-    });
-    if (claimed) {
-      const posted = postToSiteChannel(tracker, out.text);
-      if (posted) {
-        await delivery.markSent({ target: synth.target, suit: deliverySuit, channel: siteChannel });
-        ok = true;
-      } else {
-        await delivery.release({ target: synth.target, suit: deliverySuit, channel: siteChannel });
-        errors.push(`Canal du site introuvable (id ${siteChannelId})`);
-      }
-    }
+    const posted = postToSiteChannel(tracker, out.text);
+    if (posted) ok = true;
+    else errors.push(`Canal du site introuvable (id ${siteChannelId})`);
   }
   if (ok) {
     panel.sentCount = (panel.sentCount || 0) + 1;

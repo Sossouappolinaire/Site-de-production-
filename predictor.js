@@ -12,7 +12,6 @@ const config = require('./config');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const db = require('./db');
-const delivery = require('./prediction-delivery');
 
 const BADGES = ['0⃣', '1⃣', '2⃣', '3⃣', '4⃣', '5⃣', '6⃣', '7⃣', '8⃣', '9⃣'];
 const SUITS = strategies.SUITS;
@@ -1024,7 +1023,6 @@ function resetShoe(reason = 'nouveau sabot') {
   // sabot ne peut réapparaître dans une liste ou un compteur.
   state.predictions = [];
   if (db.ready) db.clearPredictions().catch((error) => { state.lastError = error.message; });
-  delivery.reset();
   state.shoeResetAt = Date.now();
   state.shoeResetReason = reason;
   // compteur de sabots : le bot s'en sert pour publier le bilan complet

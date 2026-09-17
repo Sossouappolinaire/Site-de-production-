@@ -5,12 +5,16 @@ let Pool = null;
 try { Pool = require('pg').Pool; } catch (_) { /* pg installé au déploiement */ }
 const config = require('./config');
 const store = require('./store');
+const { databaseUrl } = require('./database-url');
 
 let pool = null;
 let ready = false;
 let lastError = null;
-let predictionsClearBarrier = Promise.resolve();
-let url = store.read().databaseUrl || config.DATABASE_URL || '';
+// Priorité : DATABASE_URL (Render) > base « kile » par défaut (database-url.js)
+// > dernier lien enregistré via /setdb ou le panel web. La base par défaut
+// passe devant l'ancien lien resté dans data.json, pour que le changement de
+// base soit effectif même sur un service déjà déployé.
+let url = databaseUrl() || store.read().databaseUrl || config.DATABASE_URL || '';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -101,17 +105,6 @@ ALTER TABLE predictions ADD COLUMN IF NOT EXISTS label    TEXT;
 -- mémoire (state.predictions ne garde que les 300 dernières).
 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS reason TEXT;
 ALTER TABLE predictions DROP CONSTRAINT IF EXISTS predictions_target_suit_hand_key;
--- Migration anti-doublon : une ancienne version autorisait plusieurs lignes
--- pour le même couple stratégie + cible + costume (notamment avec des mains
--- différentes). On conserve la ligne la plus récente avant de poser l'index
--- global, sinon toute la connexion PostgreSQL échoue sur une base existante.
-UPDATE predictions SET strategy = 'costume' WHERE strategy IS NULL;
-DELETE FROM predictions older
- USING predictions newer
- WHERE older.id < newer.id
-   AND older.strategy = newer.strategy
-   AND older.target = newer.target
-   AND older.suit = newer.suit;
 CREATE UNIQUE INDEX IF NOT EXISTS predictions_uniq_idx ON predictions (strategy, target, suit);
 
 -- stratégies proposées par l'IA (taux >= 75% au moment de la création) :
@@ -158,7 +151,10 @@ CREATE INDEX IF NOT EXISTS ai_analyses_generated_idx ON ai_analyses (generated_a
 
 -- comptes du tableau de bord web : le compte admin fixe (identifier=nom
 -- d'utilisateur) et les comptes créés par email @gmail.com (identifier=email).
-CREATE TABLE IF NOT EXISTS users (
+-- Table dédiée « baccara_users » : la base peut être partagée avec un autre
+-- service qui possède déjà sa propre table « users » (colonnes différentes).
+-- On ne touche jamais à cette table voisine.
+CREATE TABLE IF NOT EXISTS baccara_users (
   id            BIGSERIAL PRIMARY KEY,
   identifier    TEXT UNIQUE NOT NULL,
   email         TEXT,
@@ -184,13 +180,13 @@ CREATE TABLE IF NOT EXISTS email_codes (
 -- L'admin accorde alors un temps d'accès (access_expires_at) ; une fois ce
 -- délai dépassé, le compte est considéré bloqué (blocked=true) et redirigé
 -- vers Telegram depuis la page de connexion.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS approved          BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked           BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at       TIMESTAMPTZ;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS approved          BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS blocked           BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS approved_at       TIMESTAMPTZ;
 -- le compte admin fixe n'a jamais besoin de validation (au cas où la colonne
 -- vient d'être ajoutée sur une base déjà en place, avec l'admin déjà semé).
-UPDATE users SET approved = true, blocked = false WHERE role = 'admin' AND approved = false;
+UPDATE baccara_users SET approved = true, blocked = false WHERE role = 'admin' AND approved = false;
 
 -- ANTI-DOUBLON « prédiction après une perte » (toutes catégories, 1/2/3) :
 -- registre PERSISTANT de chaque prédiction relayée par le panneau
@@ -209,22 +205,6 @@ CREATE TABLE IF NOT EXISTS after_loss_sent (
   sent_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS after_loss_sent_key_idx ON after_loss_sent (target, suit);
-
--- registre global des prédictions publiées : tous les panneaux utilisent la
--- même clé (jeu + costume + canal), afin qu'une prédiction relayée par un
--- autre panneau ne soit pas publiée une seconde fois dans le même canal.
-CREATE TABLE IF NOT EXISTS prediction_deliveries (
-  id           BIGSERIAL PRIMARY KEY,
-  target       BIGINT NOT NULL,
-  suit         TEXT   NOT NULL,
-  channel      TEXT   NOT NULL,
-  source       TEXT,
-  status       TEXT   NOT NULL DEFAULT 'reserved',
-  reserved_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  sent_at      TIMESTAMPTZ
-);
-CREATE UNIQUE INDEX IF NOT EXISTS prediction_deliveries_key_idx
-  ON prediction_deliveries (target, suit, channel);
 `;
 
 function status() {
@@ -333,7 +313,6 @@ function normalizeDate(s) {
 
 // ---- prédictions -----------------------------------------------------------
 async function savePrediction(p, bValue) {
-  await predictionsClearBarrier;
   return q(
     `INSERT INTO predictions (target, suit, hand, b_value, b_counter, max_r, status, strategy, label, reason)
      VALUES ($1,$2,$3,$4,$5,$6,'attente',$7,$8,$9)
@@ -472,11 +451,9 @@ async function strategyPredictions(key, limit = 20) {
 
 // suppression administrateur des prédictions d'une stratégie
 async function clearPredictions(key) {
-  const run = key
+  return key
     ? q(`DELETE FROM predictions WHERE strategy = $1`, [key])
     : q(`DELETE FROM predictions`);
-  if (!key) predictionsClearBarrier = Promise.resolve(run).catch(() => {});
-  return run;
 }
 
 // CORRECTIF « bilans remis à zéro après redémarrage » : state.predictions
@@ -710,51 +687,6 @@ async function listAfterLossSent(limit = 100) {
   return r ? r.rows : [];
 }
 
-// ---- registre global d'envoi des prédictions -------------------------------
-// Une réservation expirée est récupérable : un crash entre la réservation et
-// sendMessage() ne doit ni produire un doublon, ni bloquer définitivement la
-// prédiction.
-async function reservePredictionDelivery(entry = {}) {
-  const target = Number(entry.target) || 0;
-  const suit = String(entry.suit || '');
-  const channel = String(entry.channel || '');
-  if (!target || !suit || !channel) return false;
-  const r = await q(
-    `INSERT INTO prediction_deliveries
-       (target, suit, channel, source, status, reserved_at)
-     VALUES ($1,$2,$3,$4,'reserved',now())
-     ON CONFLICT (target, suit, channel) DO UPDATE SET
-       source=EXCLUDED.source, status='reserved', reserved_at=now(), sent_at=NULL
-       WHERE prediction_deliveries.status = 'failed'
-          OR prediction_deliveries.reserved_at < now() - interval '2 minutes'
-     RETURNING id`,
-    [target, suit, channel, entry.source || null],
-  );
-  if (!r) return null;
-  return !!r.rowCount;
-}
-
-async function completePredictionDelivery(entry = {}) {
-  return q(
-    `UPDATE prediction_deliveries
-        SET status='sent', sent_at=now()
-      WHERE target=$1 AND suit=$2 AND channel=$3`,
-    [Number(entry.target) || 0, String(entry.suit || ''), String(entry.channel || '')],
-  );
-}
-
-async function releasePredictionDelivery(entry = {}) {
-  return q(
-    `DELETE FROM prediction_deliveries
-      WHERE target=$1 AND suit=$2 AND channel=$3`,
-    [Number(entry.target) || 0, String(entry.suit || ''), String(entry.channel || '')],
-  );
-}
-
-async function clearPredictionDeliveries() {
-  return q(`DELETE FROM prediction_deliveries`);
-}
-
 
 
 // ---- interrupteur global « arrêter/démarrer/planifier les prédictions » ----
@@ -931,8 +863,6 @@ module.exports = {
   restorePredictions,
   saveGate, loadGates,
   saveAnnouncement, deleteAnnouncement, loadAnnouncements,
-  reservePredictionDelivery, completePredictionDelivery,
-  releasePredictionDelivery, clearPredictionDeliveries,
   saveAiStrategy, loadAiStrategies, deleteAiStrategy, pruneAiStrategies,
   saveAiAnalysis, loadAiAnalyses,
   lastGames, gameByNumber, gamesInRange, predictionsByDate, predictionSummary,

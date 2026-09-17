@@ -37,14 +37,14 @@ async function ensureAdminSeed() {
   try {
     const hash = await bcrypt.hash(ADMIN_PASSWORD_DEFAULT, 10);
     await db.exec(
-      `INSERT INTO users (identifier, email, password_hash, role, verified, approved)
+      `INSERT INTO baccara_users (identifier, email, password_hash, role, verified, approved)
        VALUES ($1, NULL, $2, 'admin', true, true)
        ON CONFLICT (identifier) DO NOTHING`,
       [ADMIN_IDENTIFIER, hash]
     );
     // La confirmation par email a été supprimée : tous les comptes existants
     // deviennent « confirmés » et n'attendent plus que l'accord de l'admin.
-    await db.exec(`UPDATE users SET verified = true WHERE verified = false`);
+    await db.exec(`UPDATE baccara_users SET verified = true WHERE verified = false`);
   } catch (e) { console.error('Seed admin impossible :', e.message); }
 }
 
@@ -52,7 +52,7 @@ async function findUser(identifierOrEmail) {
   const v = normalize(identifierOrEmail);
   if (!v) return null;
   const rows = await db.rows(
-    `SELECT * FROM users WHERE lower(identifier) = $1 OR lower(email) = $1 LIMIT 1`,
+    `SELECT * FROM baccara_users WHERE lower(identifier) = $1 OR lower(email) = $1 LIMIT 1`,
     [v]
   );
   return rows[0] || null;
@@ -62,10 +62,19 @@ async function findUser(identifierOrEmail) {
 // Connexion
 // ---------------------------------------------------------------------------
 async function login(identifierRaw, password) {
-  if (!db.ready) return { ok: false, error: 'Base de données non connectée.' };
   const identifier = normalize(identifierRaw);
   const pwd = String(password || '');
   if (!identifier || !pwd) return { ok: false, error: 'Identifiant et mot de passe requis.' };
+
+  // SECOURS ADMIN : le compte administrateur fixe (« sossoukouam » /
+  // « arrow2026 ») est accepté même si la base de données n'est pas connectée,
+  // pour ne jamais rester enfermé dehors pendant une panne/veille de la base.
+  if (identifier === ADMIN_IDENTIFIER && pwd === ADMIN_PASSWORD_DEFAULT) {
+    if (!db.ready) {
+      return { ok: true, userId: -1, identifier: ADMIN_IDENTIFIER, role: 'admin', offline: true };
+    }
+  }
+  if (!db.ready) return { ok: false, error: 'Base de données non connectée.' };
   const user = await findUser(identifier);
   if (!user) return { ok: false, error: 'Identifiants incorrects.', unknown: true };
   const match = await bcrypt.compare(pwd, user.password_hash);
@@ -97,7 +106,7 @@ async function checkUserAccess(user) {
   const expired = expiresAt !== null && expiresAt < Date.now();
   if (expired || user.blocked) {
     if (expired && !user.blocked) {
-      await db.exec(`UPDATE users SET blocked = true WHERE id = $1`, [user.id]);
+      await db.exec(`UPDATE baccara_users SET blocked = true WHERE id = $1`, [user.id]);
     }
     return {
       ok: false,
@@ -112,7 +121,8 @@ async function checkUserAccess(user) {
 // contrôle léger utilisé sur chaque requête protégée (via l'id de session)
 async function checkAccess(userId) {
   if (!db.ready) return { ok: true };
-  const rows = await db.rows(`SELECT * FROM users WHERE id = $1`, [Number(userId)]);
+  if (Number(userId) === -1) return { ok: true }; // session admin de secours (hors base)
+  const rows = await db.rows(`SELECT * FROM baccara_users WHERE id = $1`, [Number(userId)]);
   const user = rows[0];
   if (!user) return { ok: false, error: 'Session invalide.' };
   if (user.role === 'admin') return { ok: true };
@@ -137,10 +147,10 @@ async function signup(emailRaw, password, confirmPassword) {
 
   const hash = await bcrypt.hash(String(password), 10);
   if (existing) {
-    await db.exec(`UPDATE users SET password_hash = $2, verified = true WHERE id = $1`, [existing.id, hash]);
+    await db.exec(`UPDATE baccara_users SET password_hash = $2, verified = true WHERE id = $1`, [existing.id, hash]);
   } else {
     await db.exec(
-      `INSERT INTO users (identifier, email, password_hash, role, verified, approved)
+      `INSERT INTO baccara_users (identifier, email, password_hash, role, verified, approved)
        VALUES ($1, $1, $2, 'user', true, false)`,
       [email, hash]
     );
@@ -181,7 +191,7 @@ async function listUsers() {
   if (!db.ready) return [];
   const rows = await db.rows(
     `SELECT id, identifier, email, verified, approved, access_expires_at, blocked, created_at, approved_at
-       FROM users WHERE role != 'admin' ORDER BY created_at DESC`
+       FROM baccara_users WHERE role != 'admin' ORDER BY created_at DESC`
   );
   return rows.map(userView);
 }
@@ -192,12 +202,12 @@ async function approveUser(userIdRaw, minutesRaw) {
   const minutes = Number(minutesRaw);
   if (!id) return { ok: false, error: 'Utilisateur invalide.' };
   if (!minutes || minutes <= 0) return { ok: false, error: "Durée invalide — indiquez un temps en minutes ou en heures." };
-  const rows = await db.rows(`SELECT * FROM users WHERE id = $1 AND role != 'admin'`, [id]);
+  const rows = await db.rows(`SELECT * FROM baccara_users WHERE id = $1 AND role != 'admin'`, [id]);
   const user = rows[0];
   if (!user) return { ok: false, error: 'Utilisateur introuvable.' };
   const expiresAt = new Date(Date.now() + minutes * 60000).toISOString();
   await db.exec(
-    `UPDATE users SET approved = true, blocked = false, access_expires_at = $2, approved_at = now() WHERE id = $1`,
+    `UPDATE baccara_users SET approved = true, blocked = false, access_expires_at = $2, approved_at = now() WHERE id = $1`,
     [id, expiresAt]
   );
   return { ok: true, user: userView({ ...user, approved: true, blocked: false, access_expires_at: expiresAt }) };
@@ -207,10 +217,10 @@ async function blockUser(userIdRaw) {
   if (!db.ready) return { ok: false, error: 'Base de données non connectée.' };
   const id = Number(userIdRaw);
   if (!id) return { ok: false, error: 'Utilisateur invalide.' };
-  const rows = await db.rows(`SELECT * FROM users WHERE id = $1 AND role != 'admin'`, [id]);
+  const rows = await db.rows(`SELECT * FROM baccara_users WHERE id = $1 AND role != 'admin'`, [id]);
   const user = rows[0];
   if (!user) return { ok: false, error: 'Utilisateur introuvable.' };
-  await db.exec(`UPDATE users SET blocked = true WHERE id = $1`, [id]);
+  await db.exec(`UPDATE baccara_users SET blocked = true WHERE id = $1`, [id]);
   return { ok: true, user: userView({ ...user, blocked: true }) };
 }
 
@@ -218,9 +228,9 @@ async function rejectUser(userIdRaw) {
   if (!db.ready) return { ok: false, error: 'Base de données non connectée.' };
   const id = Number(userIdRaw);
   if (!id) return { ok: false, error: 'Utilisateur invalide.' };
-  const rows = await db.rows(`SELECT * FROM users WHERE id = $1 AND role != 'admin'`, [id]);
+  const rows = await db.rows(`SELECT * FROM baccara_users WHERE id = $1 AND role != 'admin'`, [id]);
   if (!rows[0]) return { ok: false, error: 'Utilisateur introuvable.' };
-  await db.exec(`DELETE FROM users WHERE id = $1`, [id]);
+  await db.exec(`DELETE FROM baccara_users WHERE id = $1`, [id]);
   return { ok: true };
 }
 
@@ -283,7 +293,7 @@ async function debugInfo() {
   let adminExists = false;
   let adminVerified = null;
   try {
-    const countRows = await db.rows(`SELECT count(*)::int AS n FROM users`);
+    const countRows = await db.rows(`SELECT count(*)::int AS n FROM baccara_users`);
     userCount = countRows[0] ? countRows[0].n : null;
     const admin = await findUser(ADMIN_IDENTIFIER);
     adminExists = !!admin;

@@ -21,7 +21,6 @@ const strategies = require('./strategies');
 const store = require('./store');
 const db = require('./db');
 const fmt = require('./formats');
-const delivery = require('./prediction-delivery');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
 
@@ -279,46 +278,18 @@ async function relay(key, pred, reasonKind) {
     if (!bot) errors.push('Aucun token Telegram configuré');
     else {
       for (const id of targetChannels) {
-        const suit = pred.suit || pred.card || '-';
-        const claimed = await delivery.claim({
-          target: pred.target,
-          suit,
-          channel: id,
-          source: `vip:${key}`,
-        });
-        if (!claimed) continue;
         try {
           const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
           sentMessages.push({ chatId: id, messageId: m.message_id });
-          await delivery.markSent({ target: pred.target, suit, channel: id });
-        } catch (e) {
-          await delivery.release({ target: pred.target, suit, channel: id });
-          errors.push(`${id} : ${e.message}`);
-        }
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
       }
     }
   }
   let sitePosted = false;
   let siteMsg = null;
   if (targetSite) {
-    const suit = pred.suit || pred.card || '-';
-    const siteChannel = `site:${targetSite}`;
-    const claimed = await delivery.claim({
-      target: pred.target,
-      suit,
-      channel: siteChannel,
-      source: `vip:${key}`,
-    });
-    if (claimed) {
-      siteMsg = addSiteChannelMessage(targetSite, { sender: `VIP — ${name}`, text: out.text });
-      if (siteMsg) {
-        await delivery.markSent({ target: pred.target, suit, channel: siteChannel });
-        sitePosted = true;
-      } else {
-        await delivery.release({ target: pred.target, suit, channel: siteChannel });
-        errors.push(`Canal du site introuvable (id ${targetSite})`);
-      }
-    }
+    siteMsg = addSiteChannelMessage(targetSite, { sender: `VIP — ${name}`, text: out.text });
+    if (siteMsg) sitePosted = true; else errors.push(`Canal du site introuvable (id ${targetSite})`);
   }
   if (!sentMessages.length && !sitePosted) {
     panel.lastError = errors[0] || 'Envoi impossible';

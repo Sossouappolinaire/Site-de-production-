@@ -36,7 +36,6 @@
 const store = require('./store');
 const db = require('./db');
 const { state, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
-const delivery = require('./prediction-delivery');
 
 const CATEGORIES = ['3/2', '3/3', '2/2'];
 const DEFAULT_BLOCK = 30;
@@ -445,46 +444,18 @@ async function sendEntry(entry) {
     if (!bot) errors.push('Aucun token Telegram configuré');
     else {
       for (const id of targetChannels) {
-        const suit = `comptage:${entry.signal || '2/2'}`;
-        const claimed = await delivery.claim({
-          target: entry.target,
-          suit,
-          channel: id,
-          source: `cards-count:${entry.signal || '2/2'}`,
-        });
-        if (!claimed) continue;
         try {
           const m = await bot.sendMessage(id, text);
           entry.messages.push({ chatId: id, messageId: m.message_id });
-          await delivery.markSent({ target: entry.target, suit, channel: id });
           ok = true;
-        } catch (e) {
-          await delivery.release({ target: entry.target, suit, channel: id });
-          errors.push(`${id} : ${e.message}`);
-        }
+        } catch (e) { errors.push(`${id} : ${e.message}`); }
       }
     }
   }
   if (targetSite) {
-    const suit = `comptage:${entry.signal || '2/2'}`;
-    const siteChannel = `site:${targetSite}`;
-    const claimed = await delivery.claim({
-      target: entry.target,
-      suit,
-      channel: siteChannel,
-      source: `cards-count:${entry.signal || '2/2'}`,
-    });
-    if (claimed) {
-      const posted = addSiteChannelMessage(targetSite, { sender: `Comptage ${cat}`, text });
-      if (posted) {
-        await delivery.markSent({ target: entry.target, suit, channel: siteChannel });
-        ok = true;
-        siteEntries.set(entry.id, posted);
-      } else {
-        await delivery.release({ target: entry.target, suit, channel: siteChannel });
-        errors.push(`Canal du site introuvable (id ${targetSite})`);
-      }
-    }
+    const posted = addSiteChannelMessage(targetSite, { sender: `Comptage ${cat}`, text });
+    if (posted) { ok = true; siteEntries.set(entry.id, posted); }
+    else errors.push(`Canal du site introuvable (id ${targetSite})`);
   }
   if (!ok) {
     panel.lastError = errors[0] || 'Envoi impossible';

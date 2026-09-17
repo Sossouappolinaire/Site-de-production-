@@ -27,7 +27,6 @@ const mirrorCounter = require('./mirror-counter');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
 const predictionControl = require('./prediction-control');
-const delivery = require('./prediction-delivery');
 const {
   state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
@@ -1972,10 +1971,7 @@ async function announceMainBot() {
 // Envoi + vérification des prédictions
 // ---------------------------------------------------------------------------
 async function broadcast(pred) {
-  // L'enregistrement doit être terminé avant les panneaux secondaires
-  // (après-perte, Formation, VIP...) : sinon ils peuvent publier la même
-  // cible pendant que cette insertion est encore en vol.
-  if (db.ready) await db.savePrediction(pred, state.B);
+  if (db.ready) db.savePrediction(pred, state.B);
   const sender = senderFor();
   if (!sender) {
     state.sendErrors[pred.strategy] = 'Aucun token Telegram configuré';
@@ -2037,22 +2033,12 @@ function ordinalFr(n) {
 async function sendPrediction(pred, sender, ids) {
   state.sendErrors[pred.strategy] = null;
   const { text, parse_mode } = predictionText(pred);
-  const suit = pred.suit || pred.card || pred.cardsLabel || pred.label || '-';
   for (const id of [...new Set(ids)]) {
-    const claimed = await delivery.claim({
-      target: pred.target,
-      suit,
-      channel: id,
-      source: `strategy:${pred.strategy}`,
-    });
-    if (!claimed) continue;
     try {
       const m = await sender.sendMessage(id, text, parse_mode ? { parse_mode } : {});
       pred.messages.push({ chatId: id, messageId: m.message_id });
-      await delivery.markSent({ target: pred.target, suit, channel: id });
       countSent(pred.strategy);
     } catch (e) {
-      await delivery.release({ target: pred.target, suit, channel: id });
       state.sendErrors[pred.strategy] = `${id} : ${e.message}`;
     }
   }
