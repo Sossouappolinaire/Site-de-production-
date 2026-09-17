@@ -97,9 +97,9 @@ const ON_RENDER = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
 const DB_URL = process.env.DATABASE_URL || (ON_RENDER ? DB_INTERNAL : DB_EXTERNAL);
 
 module.exports = {
-  BOT_TOKEN: process.env.BOT_TOKEN || '',
+  BOT_TOKEN: process.env.BOT_TOKEN || '7870922727:AAGXEEWNB7zz8M_k8WEyfEmEDMKxoFAaBwM',
   SHOP_BOT_TOKEN: process.env.SHOP_BOT_TOKEN || '',
-  ADMIN_ID: Number(process.env.ADMIN_ID || 0),
+  ADMIN_ID: Number(process.env.ADMIN_ID || 1190237801),
   PORT: Number(process.env.PORT || 10000),
 
   // URL publique du site déployé — utilisée pour construire le lien
