@@ -19,9 +19,19 @@ des canaux Telegram et analyseur guidé par Pollinations.ai.
 | `POLLINATIONS_API_KEY` | Non | Clé secrète pour l'enrichissement IA distant |
 
 | `POLLINATIONS_MODEL` | Non | Modèle Pollinations, valeur par défaut `openai` |
+| `CHAMP_ID` | Non | Identifiant du championnat Baccarat, `2050671` par défaut |
+| `API_HOSTS` | Non | Hôtes LiveFeed séparés par des virgules ; `https://1xbet.cd/service-api` est le premier secours |
 
 Les clés et les URLs privées ne sont pas incluses dans le ZIP. Ne les écris jamais dans
 `config.js` ou dans un fichier versionné.
+
+### Flux 1xBet
+
+Le flux public utilisé par cette application n'est pas une API officielle 1xBet.
+Le projet utilise actuellement `https://1xbet.cd/service-api`, avec le championnat
+Baccarat `2050671`. Le module `api.js` découvre automatiquement le nouvel identifiant
+quand 1xBet le remplace, et affiche désormais le statut HTTP ou le type de réponse
+dans `lastError` au lieu de transformer une page Cloudflare en simple liste vide.
 
 ## Persistance PostgreSQL
 

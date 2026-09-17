@@ -43,11 +43,16 @@ module.exports = {
     .map((s) => (/^-?\d+$/.test(s) ? Number(s) : s)),
 
   // ---- flux des jeux 1xbet Baccara --------------------------------------
-  CHAMP_ID: process.env.CHAMP_ID || '2196545',
+  // 1xBet a changé de domaine et l'ancien championnat 2196545 ne renvoie
+  // plus de jeux. 2050671 est le championnat « Baccara » actuellement
+  // publié par LiveFeed/GetChampsZip sur 1xbet.cd (septembre 2026).
+  // La découverte automatique dans api.js reste active si l'identifiant
+  // change à nouveau.
+  CHAMP_ID: process.env.CHAMP_ID || '2050671',
   API_HOSTS: (process.env.API_HOSTS || [
+    'https://1xbet.cd/service-api',
     'https://1xbet.com/service-api/LiveFeed',
     'https://ind.1xbet.com/service-api/LiveFeed',
-    'https://1xlite-506925.top/service-api/LiveFeed',
   ].join(','))
     .split(',')
     .map((h) => h.trim().replace(/\/+$/, ''))

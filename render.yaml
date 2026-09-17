@@ -31,3 +31,7 @@ services:
         value: openai/gpt-oss-120b
       - key: PUBLIC_URL
         sync: false
+      - key: CHAMP_ID
+        value: 2050671
+      - key: API_HOSTS
+        value: https://1xbet.cd/service-api

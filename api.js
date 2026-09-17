@@ -151,23 +151,75 @@ function parseChamp(data) {
   return out.sort((a, b) => b.number - a.number);
 }
 
+// Ne pas confondre une page de blocage Cloudflare (HTML, 403) avec une
+// réponse LiveFeed vide. L'ancien code avalait aussi le corps et le statut,
+// ce qui rendait le diagnostic impossible dans le tableau de bord.
 async function get(url) {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 6000);
+  const t = setTimeout(() => ctl.abort(), 9000);
   try {
     const res = await fetch(url, { headers: HEADERS, signal: ctl.signal });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
+    const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+    const text = await res.text();
+    if (!res.ok) {
+      return {
+        data: null,
+        error: `HTTP ${res.status}${contentType ? ` (${contentType.split(';')[0]})` : ''}`,
+      };
+    }
+    if (!/json|javascript|text\/plain/.test(contentType)) {
+      return { data: null, error: `réponse non JSON (${contentType || 'type inconnu'})` };
+    }
+    let data;
+    try { data = JSON.parse(text); }
+    catch { return { data: null, error: 'JSON invalide' }; }
+    if (!data || typeof data !== 'object') return { data: null, error: 'réponse JSON vide' };
+    if (data.Success === false) {
+      return { data: null, error: `API: ${data.Error || `code ${data.ErrorCode || 'inconnu'}`}` };
+    }
+    return { data, error: null };
+  } catch (e) {
+    return { data: null, error: e && e.name === 'AbortError' ? 'timeout' : (e.message || 'erreur réseau') };
   } finally {
     clearTimeout(t);
   }
 }
 
-function endpoints() {
-  const qs = `champ=${config.CHAMP_ID}&lng=en&country=96&groupChamps=true`;
-  return config.API_HOSTS.map((h) => `${h}/LiveFeed/GetChampZip?${qs}`);
+function champIds() {
+  return [...new Set(String(config.CHAMP_ID || '')
+    .split(/[\s,;]+/)
+    .map((id) => id.trim())
+    .filter((id) => /^\d+$/.test(id)))];
+}
+
+function endpoints(ids = champIds()) {
+  return config.API_HOSTS.flatMap((h) => ids.map((id) => {
+    const qs = `champ=${encodeURIComponent(id)}&lng=en&country=96&groupChamps=true`;
+    return `${h}/LiveFeed/GetChampZip?${qs}`;
+  }));
+}
+
+function discoveryEndpoints() {
+  return config.API_HOSTS.map((h) => `${h}/LiveFeed/GetChampsZip?lng=en&country=96`);
+}
+
+// Le numéro de championnat n'est pas stable entre les domaines 1xBet. On
+// retrouve le championnat par son sport (SI=236) et son libellé au lieu de
+// laisser le moteur redémarrer « correctement » avec une liste vide.
+function baccaratChampIds(data) {
+  const rows = data && data.Value;
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((row) => {
+      const text = [row.SN, row.SR, row.L, row.LR].filter(Boolean).join(' ').toLowerCase();
+      return Number(row.SI) === 236 || /bacc?ara?t/.test(text);
+    })
+    .map((row) => String(row.LI || '').trim())
+    .filter((id) => /^\d+$/.test(id));
+}
+
+function usable(data) {
+  return !!(data && data.Value && Array.isArray(data.Value.G));
 }
 
 // CORRECTIF « le jeu en live saute » : un seul miroir 1xbet renvoie parfois une
@@ -195,20 +247,45 @@ function merge(lists) {
 }
 
 async function fetchGames() {
+  const diagnostics = [];
   const direct = await Promise.all(
     endpoints().map(async (url) => {
-      const data = await get(url);
-      return data ? parseChamp(data) : [];
+      const result = await get(url);
+      if (result.error) diagnostics.push(`${new URL(url).hostname}: ${result.error}`);
+      return usable(result.data) ? parseChamp(result.data) : [];
     }),
   );
   const merged = merge(direct);
   if (merged.length) return merged;
 
+  // Repli important : si le championnat configuré est obsolète, la liste
+  // globale donne le nouvel identifiant sans intervention manuelle.
+  const discovered = await Promise.all(
+    discoveryEndpoints().map(async (url) => {
+      const result = await get(url);
+      if (result.error) diagnostics.push(`${new URL(url).hostname}: découverte ${result.error}`);
+      return baccaratChampIds(result.data);
+    }),
+  );
+  const ids = [...new Set(discovered.flat())].filter((id) => !champIds().includes(id));
+  if (ids.length) {
+    const discoveredGames = await Promise.all(
+      endpoints(ids).map(async (url) => {
+        const result = await get(url);
+        if (result.error) diagnostics.push(`${new URL(url).hostname}: ${result.error}`);
+        return usable(result.data) ? parseChamp(result.data) : [];
+      }),
+    );
+    const discoveredMerged = merge(discoveredGames);
+    if (discoveredMerged.length) return discoveredMerged;
+  }
+
   const viaProxy = [];
-  for (const url of endpoints().slice(0, 2)) {
+  for (const url of endpoints([...new Set([...champIds(), ...ids])]).slice(0, 4)) {
     for (const p of config.PROXIES) {
-      const data = await get(p(url));
-      const parsed = data ? parseChamp(data) : [];
+      const result = await get(p(url));
+      if (result.error) diagnostics.push(`proxy: ${result.error}`);
+      const parsed = usable(result.data) ? parseChamp(result.data) : [];
       if (parsed.length) viaProxy.push(parsed);
     }
     if (viaProxy.length) break;
@@ -216,7 +293,8 @@ async function fetchGames() {
   const mp = merge(viaProxy);
   if (mp.length) return mp;
 
-  throw new Error('API 1xbet Baccara injoignable');
+  const detail = diagnostics.length ? ` — ${[...new Set(diagnostics)].slice(0, 4).join(' | ')}` : '';
+  throw new Error(`API 1xbet Baccara injoignable${detail}`);
 }
 
 module.exports = { fetchGames, parseChamp, endpoints, SUIT_MAP, RANK_MAP, cardLabel, handValue };
