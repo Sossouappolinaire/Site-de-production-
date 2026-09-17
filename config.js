@@ -88,7 +88,7 @@ const ADMIN_EMAIL = 'sossoukouam@gmail.com';
 // URL externe : utilisable depuis n'importe où (SSL obligatoire).
 // ---------------------------------------------------------------------------
 const DB_INTERNAL =
-  'postgresql://base_de_donnees_hgxo_user:Y121g3HpUQE9YpORWPeudA1MrHPLjeXO@dpg-d9qtu967bikc73ejg52g-a/base_de_donnees_hgxo';
+  'postgresql://kile_user:tpmejh5WKH8fYEeC3NQucNWZp9XhLl0g@dpg-dalgdimk1f9s7385no2g-a/kile';
 const DB_EXTERNAL =
   'postgresql://base_de_donnees_hgxo_user:Y121g3HpUQE9YpORWPeudA1MrHPLjeXO@dpg-d9qtu967bikc73ejg52g-a.oregon-postgres.render.com/base_de_donnees_hgxo';
 
