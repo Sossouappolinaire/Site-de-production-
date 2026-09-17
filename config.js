@@ -26,6 +26,21 @@ module.exports = {
   BOT_TOKEN: process.env.BOT_TOKEN || '',
   SHOP_BOT_TOKEN: process.env.SHOP_BOT_TOKEN || '',
   ADMIN_ID: process.env.ADMIN_ID || '',
+  // CORRECTIF « le site doit marcher même sans base de données » (demande
+  // admin) : le token et l'admin survivent déjà à un redémarrage via ces
+  // variables d'environnement Render (persistantes, contrairement au disque
+  // local data.json ET à la base Postgres gratuite qui expire). Il manquait
+  // l'équivalent pour les CANAUX ACTIFS (là où les stratégies de base
+  // publient par défaut, voir strategyChannels() dans predictor.js) : sans
+  // eux, même avec un token valide, il n'y a nulle part où envoyer. Réglage
+  // facultatif : ACTIVE_CHANNELS=-1001234567890,-1009876543210 sur Render —
+  // sert de solution de secours SEULEMENT si aucun canal n'est déjà connu
+  // localement/en base (voir bot.js, juste après le chargement de `saved`).
+  ACTIVE_CHANNELS: String(process.env.ACTIVE_CHANNELS || '')
+    .split(/[\s,;]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => (/^-?\d+$/.test(s) ? Number(s) : s)),
 
   // ---- flux des jeux 1xbet Baccara --------------------------------------
   CHAMP_ID: process.env.CHAMP_ID || '2196545',

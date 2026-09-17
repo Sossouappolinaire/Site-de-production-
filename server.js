@@ -56,6 +56,7 @@ const lossNotice = require('./loss-notice');
 const game21 = require('./game21');
 const game21Strategies = require('./game21-strategies');
 const game21Predict = require('./game21-predict');
+const predictionControl = require('./prediction-control');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
@@ -2211,7 +2212,16 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   const out = [];
   for (const def of strategies.LIST) {
     const cfg = state.strategies[def.key] || {};
-    const entry = { key: def.key, name: def.name, enabled: !!cfg.enabled, silent: !!cfg.silent, published: [], shadow: [], sendError: state.sendErrors[def.key] || null, sentCount: cfg.sentCount || 0, lastSentAt: cfg.lastSentAt || null };
+    const hasOwnPublished = (Array.isArray(cfg.publishedChannels) && cfg.publishedChannels.length) || (Array.isArray(cfg.channels) && cfg.channels.length);
+    const entry = {
+      key: def.key, name: def.name, enabled: !!cfg.enabled, silent: !!cfg.silent, published: [], shadow: [],
+      sendError: state.sendErrors[def.key] || null, sentCount: cfg.sentCount || 0, lastSentAt: cfg.lastSentAt || null,
+      // CORRECTIF « prédictions redirigées vers un autre canal » (demande admin) :
+      // une stratégie SANS canal public propre retombe silencieusement sur TOUS
+      // les canaux actifs globaux (voir strategyChannels() dans predictor.js) —
+      // on l'expose ici explicitement pour que ce ne soit plus une surprise.
+      publishedUsesGlobalFallback: !hasOwnPublished,
+    };
     for (const mode of ['published', 'shadow']) {
       const ids = strategyChannels(def.key, mode);
       for (const id of ids) {
@@ -2224,7 +2234,128 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     entry.ready = !!bot.tokenSet && (entry.published.some((c) => c.ok) || entry.shadow.some((c) => c.ok));
     out.push(entry);
   }
-  res.json({ bot, strategies: out });
+
+  // --- panneaux (après-perte, combinée, série/rupture de costume, comptage
+  // 2/2, VIP, formation, Prédit IA, jeu 21) : chacun a un canal par défaut, et
+  // pour ceux qui ont des « configurations suivies » (trackers), chaque
+  // configuration peut avoir SON PROPRE canal ou retomber sur celui du
+  // panneau — on expose les deux pour que ce soit visible d'un coup d'œil.
+  async function resolveIds(ids) {
+    const out2 = [];
+    for (const id of ids) {
+      const check = bot.tokenSet ? await resolveChat(id) : { ok: false, error: 'Aucun token Telegram configuré' };
+      out2.push(check.ok
+        ? { id, title: check.chat.title, type: check.chat.type, canPost: check.chat.canPost, ok: check.chat.canPost !== false }
+        : { id, ok: false, error: check.error });
+    }
+    return out2;
+  }
+
+  async function trackerPanel(id, label, mod, editBase) {
+    const st = mod.status();
+    const defaultChannels = Array.isArray(st.channels) ? st.channels : [];
+    const trackers = Array.isArray(st.trackers) ? st.trackers : [];
+    return {
+      id, label, editBase,
+      defaultChannels: await resolveIds(defaultChannels),
+      items: await Promise.all(trackers.map(async (t) => {
+        const own = Array.isArray(t.channels) && t.channels.length;
+        return {
+          id: t.id, name: t.name || t.key || t.id,
+          usesDefault: !own,
+          channels: await resolveIds(own ? t.channels : defaultChannels),
+        };
+      })),
+    };
+  }
+
+  async function singlePanel(id, label, mod, editBase) {
+    const st = mod.status();
+    return { id, label, editBase, channels: await resolveIds(Array.isArray(st.channels) ? st.channels : []) };
+  }
+
+  const panels = [];
+  panels.push(await trackerPanel('after-loss', 'Prédiction après perte', afterLoss, 'after-loss'));
+  panels.push(await trackerPanel('combined', 'Prédiction combinée', combined, 'combined'));
+  panels.push(await trackerPanel('suit-streak', 'Série de même costume', suitStreak, 'suit-streak'));
+  panels.push(await trackerPanel('suit-break', 'Rupture de costume', suitBreak, 'suit-break'));
+  panels.push(await singlePanel('cards-count', 'Comptage 2/2', cardsCount, 'cards-count'));
+  panels.push(await singlePanel('vip', 'VIP', vip, 'vip'));
+  panels.push(await singlePanel('predit', 'Prédit IA', predit, 'predit'));
+  // Jeu 21 a DEUX canaux distincts (exacte / valeur), pas un seul comme les
+  // autres panneaux à canal unique — traité à part pour rester fidèle.
+  {
+    const g21 = game21Predict.status().config || {};
+    panels.push({
+      id: 'game21', label: 'Jeu 21', editBase: 'game21/predict',
+      items: [
+        { id: 'exacte', name: 'Format exact', usesDefault: false, channels: await resolveIds(Array.isArray(g21.exactChannels) ? g21.exactChannels : []) },
+        { id: 'valeur', name: 'Format valeur', usesDefault: false, channels: await resolveIds(Array.isArray(g21.valueChannels) ? g21.valueChannels : []) },
+      ],
+    });
+  }
+
+  // Formation (relais) : un canal par défaut + un canal éventuel par stratégie suivie
+  const frStatus = formationRelay.status();
+  const frDefault = Array.isArray(frStatus.channels) ? frStatus.channels : [];
+  panels.push({
+    id: 'formation', label: 'Formation (relais)', editBase: 'formation/relay',
+    defaultChannels: await resolveIds(frDefault),
+    items: await Promise.all((frStatus.strategies || []).map(async (s) => {
+      const own = Array.isArray(s.channels) && s.channels.length;
+      return { id: s.key, name: s.name || s.key, usesDefault: !own, channels: await resolveIds(own ? s.channels : frDefault) };
+    })),
+  });
+
+  res.json({ bot, control: predictionControl.status(), strategies: out, panels });
+});
+
+// --- interrupteur global « arrêter / démarrer / planifier » (même logique
+// que les commandes /stop /start /planifier dans un canal, accessible aussi
+// depuis le tableau de bord web) -------------------------------------------
+app.post('/api/prediction-control', (req, res) => {
+  try {
+    const action = (req.body && req.body.action) || '';
+    if (action === 'pause') return res.json({ ok: true, control: predictionControl.pause(req.body.reason, 'Tableau de bord') });
+    if (action === 'resume') return res.json({ ok: true, control: predictionControl.resume('Tableau de bord') });
+    if (action === 'schedule') return res.json({ ok: true, control: predictionControl.setSchedule(req.body.stopAt, req.body.startAt) });
+    if (action === 'clear-schedule') return res.json({ ok: true, control: predictionControl.clearSchedule() });
+    return res.status(400).json({ error: 'Action inconnue (attendu : pause, resume, schedule, clear-schedule).' });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// édition rapide du canal d'une configuration suivie (tracker) DEPUIS la page
+// « Envois » — mêmes règles que les routes /api/<panel>/trackers/:id déjà
+// existantes (série/rupture de costume, après-perte, combinée) ou l'entrée
+// « formation » par stratégie ; centralisé ici pour que le bouton « Canaux »
+// n'ait qu'un seul endpoint à appeler quel que soit le panneau d'origine.
+const TRACKER_PANELS = { 'after-loss': afterLoss, combined, 'suit-streak': suitStreak, 'suit-break': suitBreak };
+app.put('/api/diagnostics/panels/:panel/trackers/:id/channel', async (req, res) => {
+  const mod = TRACKER_PANELS[req.params.panel];
+  if (!mod) return res.status(404).json({ error: 'Panneau inconnu' });
+  try {
+    const idsList = mod.parseChannels(req.body && req.body.channelId);
+    const t = mod.updateTracker(req.params.id, { channels: idsList });
+    if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, tracker: t });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/diagnostics/panels/game21/trackers/:id/channel', async (req, res) => {
+  try {
+    const kind = req.params.id === 'valeur' ? 'valeur' : 'exacte';
+    const ids = game21Predict.parseChannels(req.body && req.body.channelId);
+    if (ids.length) {
+      const check = await resolveChat(ids[0]);
+      if (!check.ok) return res.status(400).json({ error: check.error });
+    }
+    game21Predict.configure(kind === 'valeur' ? { valueChannels: ids } : { exactChannels: ids });
+    res.json({ ok: true, status: game21Predict.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => {
+  try {
+    res.json(formationRelay.setStrategy(req.params.id, { channels: req.body && req.body.channelId ? [String(req.body.channelId).trim()] : [] }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ---------------------------------------------------------------------------

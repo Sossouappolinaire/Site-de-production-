@@ -48,6 +48,15 @@ state.shopBotToken = saved.shopBotToken || config.SHOP_BOT_TOKEN || '';
 state.adminId = saved.adminId || config.ADMIN_ID;
 if (Array.isArray(saved.channels)) state.channels = saved.channels;
 if (Array.isArray(saved.activeChannels)) state.activeChannels = saved.activeChannels;
+// CORRECTIF « le site doit marcher même sans base de données » (demande
+// admin) : si ni le disque local (vidé à chaque redémarrage Render Free) ni
+// la base (non connectée / expirée) n'ont de canaux actifs enregistrés, on
+// se rabat sur ACTIVE_CHANNELS (variable d'environnement Render, durable —
+// voir config.js) plutôt que de démarrer avec une liste vide où aucune
+// stratégie de base n'aurait où envoyer.
+if (!state.activeChannels.length && config.ACTIVE_CHANNELS.length) {
+  state.activeChannels = config.ACTIVE_CHANNELS.slice();
+}
 if (Array.isArray(saved.siteChannels)) state.siteChannels = saved.siteChannels;
 if (saved.B) state.B = saved.B;
 if (saved.maxR != null) state.maxR = saved.maxR;
@@ -267,10 +276,15 @@ function runPredictionControlCommand(cmd, by) {
     switch (cmd.action) {
       case 'stop':
         predictionControl.pause(cmd.reason, by);
-        return `⏸️ Prédictions arrêtées${cmd.reason ? ` (${cmd.reason})` : ''}.\nEnvoie /start pour les relancer.`;
+        // précision demande admin : /stop est un interrupteur GLOBAL (toutes
+        // les stratégies, tous les panneaux, TOUS les canaux) — pas seulement
+        // ce canal-ci. On le dit explicitement pour éviter toute confusion
+        // avec un canal qui continuerait de recevoir des prédictions d'une
+        // AUTRE stratégie/configuration (voir la page « Envois » du site).
+        return `⏸️ Prédictions arrêtées PARTOUT${cmd.reason ? ` (${cmd.reason})` : ''} — toutes les stratégies, tous les panneaux, sur tous les canaux (pas seulement celui-ci).\nEnvoie /start (dans ce canal ou un autre) pour les relancer partout.`;
       case 'start':
         predictionControl.resume(by);
-        return '▶️ Prédictions relancées.';
+        return '▶️ Prédictions relancées PARTOUT — toutes les stratégies, tous les panneaux, sur tous les canaux.';
       case 'schedule':
         predictionControl.setSchedule(cmd.stopAt, cmd.startAt);
         return `📅 Planification enregistrée : arrêt automatique à ${cmd.stopAt}, reprise automatique à ${cmd.startAt} (tous les jours).`;
