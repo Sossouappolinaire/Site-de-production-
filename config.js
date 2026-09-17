@@ -90,7 +90,8 @@ const ADMIN_EMAIL = 'sossoukouam@gmail.com';
 const DB_INTERNAL =
   'postgresql://kile_user:tpmejh5WKH8fYEeC3NQucNWZp9XhLl0g@dpg-dalgdimk1f9s7385no2g-a/kile';
 const DB_EXTERNAL =
-  'postgresql://base_de_donnees_hgxo_user:Y121g3HpUQE9YpORWPeudA1MrHPLjeXO@dpg-d9qtu967bikc73ejg52g-a.oregon-postgres.render.com/base_de_donnees_hgxo';
+  'postgresql://kile_user:tpmejh5WKH8fYEeC3NQucNWZp9XhLl0g@dpg-dalgdimk1f9s7385no2g-a.oregon-postgres.render.com/kile
+';
 
 // Sur Render on prend l'URL interne, ailleurs (PC local) l'URL externe.
 const ON_RENDER = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
