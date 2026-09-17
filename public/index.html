@@ -2485,18 +2485,85 @@ Faites-en bon usage !
       try { const r = await api('/api/suit-streak/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
       catch (e) { toast(e.message, 'error'); }
     }
+      function diagChannelRow(c) { return `<span class="tag ${c.ok ? 'good' : 'bad'}">${esc(c.title || c.id)}${c.ok ? '' : ' — ' + esc(c.error || 'droit de publier manquant')}</span>`; }
+      function diagControlBlock(c) {
+        const schedText = c.schedule ? `Arrêt auto ${esc(c.schedule.stopAt)} · reprise auto ${esc(c.schedule.startAt)}` : 'Aucune planification';
+        return `<div class="panel" style="margin-bottom:16px">
+          <div class="split"><b>Interrupteur global des prédictions</b><span class="tag ${c.paused ? 'bad' : 'good'}">${c.paused ? '⏸️ Arrêtées' : '▶️ Actives'}</span></div>
+          <p class="small muted">${c.paused
+            ? `Arrêtées depuis ${formatDate(c.pausedAt)}${c.pausedBy ? ' (par ' + esc(c.pausedBy) + ')' : ''}${c.pauseReason ? ' — ' + esc(c.pauseReason) : ''}. Ceci arrête TOUTES les stratégies et TOUS les panneaux, sur TOUS les canaux — pas seulement celui où la commande a été tapée.`
+            : `Actives${c.resumedAt ? ' — reprises le ' + formatDate(c.resumedAt) + (c.resumedBy ? ' (par ' + esc(c.resumedBy) + ')' : '') : ''}.`}</p>
+          <p class="small">${schedText}</p>
+          <div class="toolbar">
+            ${c.paused
+              ? `<button class="button small" onclick="predictionControlAction('resume')">▶️ Démarrer</button>`
+              : `<button class="button small ghost" onclick="predictionControlAction('pause')">⏸️ Arrêter</button>`}
+            <button class="button small ghost" onclick="predictionControlSchedule()">📅 Planifier</button>
+            ${c.schedule ? `<button class="button small ghost" onclick="predictionControlAction('clear-schedule')">Annuler la planification</button>` : ''}
+          </div>
+        </div>`;
+      }
+      function diagPanelBlock(p) {
+        const items = Array.isArray(p.items) ? p.items : null;
+        const single = !items;
+        const singleChannels = single ? (Array.isArray(p.channels) ? p.channels : []) : null;
+        const hasDefault = Array.isArray(p.defaultChannels);
+        const defRow = hasDefault && p.defaultChannels.length ? p.defaultChannels.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>';
+        const singleRow = singleChannels && singleChannels.length ? singleChannels.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>';
+        return `<div class="panel" style="margin-bottom:12px">
+          <div class="split"><b>${esc(p.label)}</b>${single ? `<button class="button small ghost" onclick="diagEditPanelDefault('${p.editBase}')">✏️ Canal</button>` : ''}</div>
+          ${single ? `<p class="small">Canal : ${singleRow}</p>` : (hasDefault ? `<p class="small">Canal par défaut du panneau : ${defRow} <button class="button small ghost" onclick="diagEditPanelDefault('${p.editBase}')">✏️</button></p>` : '')}
+          ${items ? (items.length ? items.map((t) => `<div class="split" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+              <span class="small">${esc(t.name)}${t.usesDefault ? ' <span class="tag warn">canal par défaut</span>' : ''}</span>
+              <span>${(t.channels && t.channels.length ? t.channels.map(diagChannelRow).join(' ') : '<span class="muted small">—</span>')}
+                <button class="button small ghost" onclick="diagEditTrackerChannel('${p.id}','${t.id}')">✏️</button></span>
+            </div>`).join('') : '<p class="small muted">Aucune configuration suivie.</p>') : ''}
+        </div>`;
+      }
+      window.predictionControlAction = async function(action) {
+        try { const r = await api('/api/prediction-control', 'POST', { action }); toast(action === 'pause' ? 'Prédictions arrêtées (partout).' : action === 'resume' ? 'Prédictions relancées (partout).' : 'Mis à jour.', ''); await diagnosticsPage(); }
+        catch (e) { toast(e.message, 'error'); }
+      };
+      window.predictionControlSchedule = async function() {
+        const stopAt = prompt('Heure d\'arrêt automatique quotidien (HH:MM) :', '');
+        if (stopAt == null) return;
+        const startAt = prompt('Heure de reprise automatique quotidienne (HH:MM) :', '');
+        if (startAt == null) return;
+        try { await api('/api/prediction-control', 'POST', { action: 'schedule', stopAt, startAt }); toast('Planification enregistrée.', ''); await diagnosticsPage(); }
+        catch (e) { toast(e.message, 'error'); }
+      };
+      window.diagEditPanelDefault = async function(editBase) {
+        const channelId = prompt('ID ou @lien du canal (laisser vide pour retirer) :', '');
+        if (channelId == null) return;
+        try {
+          if (channelId.trim()) await api(`/api/${editBase}/channel`, 'POST', { channelId: channelId.trim() });
+          else await api(`/api/${editBase}/channel`, 'DELETE');
+          toast('Canal mis à jour.', ''); await diagnosticsPage();
+        } catch (e) { toast(e.message, 'error'); }
+      };
+      window.diagEditTrackerChannel = async function(panelId, trackerId) {
+        const channelId = prompt('ID ou @lien du canal pour cette configuration (laisser vide pour revenir au canal par défaut du panneau) :', '');
+        if (channelId == null) return;
+        try {
+          await api(`/api/diagnostics/panels/${panelId}/trackers/${trackerId}/channel`, 'PUT', { channelId: channelId.trim() });
+          toast('Canal mis à jour.', ''); await diagnosticsPage();
+        } catch (e) { toast(e.message, 'error'); }
+      };
     async function diagnosticsPage() {
       setNav('settings'); $('#app').innerHTML = '<div class="loading">Vérification des canaux…</div>';
       try {
         const r = await api('/api/diagnostics/channels');
-        const row = (c) => `<span class="tag ${c.ok ? 'good' : 'bad'}">${esc(c.title || c.id)}${c.ok ? '' : ' — ' + esc(c.error || 'droit de publier manquant')}</span>`;
-        $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vérification</span><h2 style="margin-top:7px">Envoi des prédictions</h2><p class="small">Contrôle du token, des canaux publics et silencieux de chaque stratégie.</p></div></div>
+        $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vérification</span><h2 style="margin-top:7px">Envoi des prédictions</h2><p class="small">Contrôle du token, des canaux, et de chaque stratégie / configuration suivie — où elle envoie, et si les prédictions sont arrêtées ou planifiées.</p></div></div>
         <div class="notice ${r.bot.tokenSet ? '' : 'warn'}">${r.bot.tokenSet ? 'Token Telegram enregistré' + (r.bot.username ? ' (@' + esc(r.bot.username) + ')' : '') : 'Aucun token Telegram : aucune prédiction ne peut partir.'}</div>
+        ${diagControlBlock(r.control)}
+        <h3 class="small eyebrow" style="margin:18px 0 8px">Stratégies de base</h3>
         ${r.strategies.map(s => `<div class="panel" style="margin-bottom:12px"><div class="split"><b>${esc(s.name)}</b><span class="tag ${s.ready ? 'good' : 'warn'}">${s.ready ? 'Envoi opérationnel' : 'À configurer'}</span></div>
-          <p class="small">Public : ${s.published.length ? s.published.map(row).join(' ') : '<span class="muted">aucun canal</span>'}</p>
-          <p class="small">Silencieux : ${s.shadow.length ? s.shadow.map(row).join(' ') : '<span class="muted">aucun canal</span>'}</p>
+          <p class="small">Public : ${s.published.length ? s.published.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>'}${s.publishedUsesGlobalFallback ? ' <span class="tag warn">canal propre non défini — utilise les canaux actifs globaux</span>' : ''} <button class="button small ghost" onclick="diagEditPanelDefault('strategies/${s.key}')">✏️</button></p>
+          <p class="small">Silencieux : ${s.shadow.length ? s.shadow.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>'}</p>
           <p class="small muted">Messages envoyés : ${s.sentCount} · dernier ${formatDate(s.lastSentAt)}${s.sendError ? ' · ⚠️ ' + esc(s.sendError) : ''}</p>
-          <div class="toolbar"><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester public</button><button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester silencieux</button></div></div>`).join('')}`;
+          <div class="toolbar"><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester public</button><button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester silencieux</button></div></div>`).join('')}
+        <h3 class="small eyebrow" style="margin:18px 0 8px">Panneaux (après-perte, combinée, série/rupture de costume, etc.)</h3>
+        ${r.panels.map(diagPanelBlock).join('')}`;
       } catch(e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
     function ordinalFr(n) { return n === 1 ? '1ʳᵉ' : `${n}ᵉ`; }
