@@ -2510,9 +2510,19 @@ Faites-en bon usage !
         const hasDefault = Array.isArray(p.defaultChannels);
         const defRow = hasDefault && p.defaultChannels.length ? p.defaultChannels.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>';
         const singleRow = singleChannels && singleChannels.length ? singleChannels.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>';
+        const categories = p.categories && typeof p.categories === 'object' ? Object.entries(p.categories) : [];
+        const categoryRows = categories.length ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+          <p class="small muted" style="margin:0 0 5px"><b>Canaux par catégorie</b> — une catégorie sans canal propre utilise le canal par défaut ci-dessus.</p>
+          ${categories.map(([category, item]) => `<div class="split" style="margin-top:5px">
+            <span class="small">${esc(category)}${item.usesDefault ? ' <span class="tag warn">canal par défaut</span>' : ''}</span>
+            <span>${item.channels && item.channels.length ? item.channels.map(diagChannelRow).join(' ') : '<span class="muted small">—</span>'}
+              <button class="button small ghost" onclick="diagEditCategoryChannel('${p.id}','${category}')">✏️</button></span>
+          </div>`).join('')}
+        </div>` : '';
         return `<div class="panel" style="margin-bottom:12px">
-          <div class="split"><b>${esc(p.label)}</b>${single ? `<button class="button small ghost" onclick="diagEditPanelDefault('${p.editBase}')">✏️ Canal</button>` : ''}</div>
+          <div class="split"><b>${esc(p.label)}</b><span class="tag ${p.enabled === false ? 'bad' : 'good'}">${p.enabled === false ? 'Désactivé' : 'Actif'}</span>${single ? `<button class="button small ghost" onclick="diagEditPanelDefault('${p.editBase}')">✏️ Canal</button>` : ''}</div>
           ${single ? `<p class="small">Canal : ${singleRow}</p>` : (hasDefault ? `<p class="small">Canal par défaut du panneau : ${defRow} <button class="button small ghost" onclick="diagEditPanelDefault('${p.editBase}')">✏️</button></p>` : '')}
+          ${categoryRows}
           ${items ? (items.length ? items.map((t) => `<div class="split" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
               <span class="small">${esc(t.name)}${t.usesDefault ? ' <span class="tag warn">canal par défaut</span>' : ''}</span>
               <span>${(t.channels && t.channels.length ? t.channels.map(diagChannelRow).join(' ') : '<span class="muted small">—</span>')}
@@ -2549,6 +2559,14 @@ Faites-en bon usage !
           toast('Canal mis à jour.', ''); await diagnosticsPage();
         } catch (e) { toast(e.message, 'error'); }
       };
+      window.diagEditCategoryChannel = async function(panelId, category) {
+        const channelId = prompt(`Canal pour la catégorie ${category} (laisser vide pour revenir au canal par défaut) :`, '');
+        if (channelId == null) return;
+        try {
+          await api(`/api/diagnostics/panels/${panelId}/categories/${encodeURIComponent(category)}/channel`, 'PUT', { channelId: channelId.trim() });
+          toast('Canal de la catégorie mis à jour.', ''); await diagnosticsPage();
+        } catch (e) { toast(e.message, 'error'); }
+      };
     async function diagnosticsPage() {
       setNav('settings'); $('#app').innerHTML = '<div class="loading">Vérification des canaux…</div>';
       try {
@@ -2556,14 +2574,18 @@ Faites-en bon usage !
         $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vérification</span><h2 style="margin-top:7px">Envoi des prédictions</h2><p class="small">Contrôle du token, des canaux, et de chaque stratégie / configuration suivie — où elle envoie, et si les prédictions sont arrêtées ou planifiées.</p></div></div>
         <div class="notice ${r.bot.tokenSet ? '' : 'warn'}">${r.bot.tokenSet ? 'Token Telegram enregistré' + (r.bot.username ? ' (@' + esc(r.bot.username) + ')' : '') : 'Aucun token Telegram : aucune prédiction ne peut partir.'}</div>
         ${diagControlBlock(r.control)}
+        <div class="panel" style="margin-bottom:16px"><div class="split"><b>Tous les canaux effectivement utilisés</b><span class="tag">${(r.allChannels || []).length} identifiant(s)</span></div>
+          <p class="small muted">Cette liste inclut les canaux publics, silencieux, les panneaux secondaires, chaque configuration suivie et les canaux actifs utilisés comme fallback. Un même canal n'apparaît qu'une fois, avec toutes ses sources.</p>
+          ${(r.allChannels || []).length ? r.allChannels.map(c => `<div class="split" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span>${diagChannelRow(c)}</span><span class="small muted">${c.sources.map(esc).join(' · ')}</span></div>`).join('') : '<p class="small muted">Aucun identifiant de canal configuré.</p>'}
+        </div>
         <h3 class="small eyebrow" style="margin:18px 0 8px">Stratégies de base</h3>
-        ${r.strategies.map(s => `<div class="panel" style="margin-bottom:12px"><div class="split"><b>${esc(s.name)}</b><span class="tag ${s.ready ? 'good' : 'warn'}">${s.ready ? 'Envoi opérationnel' : 'À configurer'}</span></div>
-          <p class="small">Public : ${s.published.length ? s.published.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>'}${s.publishedUsesGlobalFallback ? ' <span class="tag warn">canal propre non défini — utilise les canaux actifs globaux</span>' : ''} <button class="button small ghost" onclick="diagEditPanelDefault('strategies/${s.key}')">✏️</button></p>
+        ${r.strategies.map(s => `<div class="panel" style="margin-bottom:12px"><div class="split"><span><b>${esc(s.name)}</b> <span class="mono small">${esc(s.key)}</span></span><span class="tag ${s.enabled ? 'good' : 'warn'}">${s.enabled ? 'Active' : 'Désactivée'} · ${s.ready ? 'envoi opérationnel' : 'à configurer'}</span></div>
+           <p class="small">Public : ${s.published.length ? s.published.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>'}${s.publishedUsesGlobalFallback ? ' <span class="tag warn">configuration ancienne sans canal propre</span>' : ''} <button class="button small ghost" onclick="diagEditPanelDefault('strategies/${s.key}')">✏️</button></p>
           <p class="small">Silencieux : ${s.shadow.length ? s.shadow.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>'}</p>
-          <p class="small muted">Messages envoyés : ${s.sentCount} · dernier ${formatDate(s.lastSentAt)}${s.sendError ? ' · ⚠️ ' + esc(s.sendError) : ''}</p>
+           <p class="small muted">Messages envoyés : ${s.sentCount} · dernier ${formatDate(s.lastSentAt)}${s.sendError ? ' · ⚠️ ' + esc(s.sendError) : ''}</p>
           <div class="toolbar"><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester public</button><button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester silencieux</button></div></div>`).join('')}
         <h3 class="small eyebrow" style="margin:18px 0 8px">Panneaux (après-perte, combinée, série/rupture de costume, etc.)</h3>
-        ${r.panels.map(diagPanelBlock).join('')}`;
+        ${r.panels.map(p => `${diagPanelBlock(p)}<p class="small muted" style="margin:-7px 0 12px 4px">${p.sentCount != null ? `Messages envoyés : ${p.sentCount} · dernier ${formatDate(p.lastSentAt)}` : ''}${p.lastError ? ' · ⚠️ ' + esc(p.lastError) : ''}</p>`).join('')}`;
       } catch(e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
     function ordinalFr(n) { return n === 1 ? '1ʳᵉ' : `${n}ᵉ`; }
