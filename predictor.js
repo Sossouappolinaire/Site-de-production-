@@ -221,10 +221,15 @@ function resetStrategy(key) {
 
 function strategyChannels(key, mode = 'published') {
   const c = state.strategies[key];
-  if (!c) return mode === 'published' ? state.activeChannels : [];
+  // Une stratégie existante doit rester isolée de `activeChannels`. Sinon,
+  // retirer/arrêter son canal pouvait donner l'impression que ses messages
+  // étaient « redirigés » vers le canal principal ou vers un autre panneau.
+  // `initStrategies()` migre déjà l'ancien champ `channels` vers
+  // `publishedChannels`; il n'y a donc plus besoin d'un fallback implicite.
+  if (!c) return [];
   const configured = Array.isArray(c.publishedChannels)
     ? c.publishedChannels
-    : Array.isArray(c.channels) && c.channels.length ? c.channels : state.activeChannels;
+    : Array.isArray(c.channels) ? c.channels : [];
   // Un canal ne reçoit jamais les deux catégories pour une même stratégie.
   // En cas de doublon, le canal PUBLIC est prioritaire : auparavant la liste
   // publique était vidée et PLUS AUCUNE prédiction publique ne partait.

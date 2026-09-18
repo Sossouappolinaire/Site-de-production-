@@ -2213,14 +2213,15 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   for (const def of strategies.LIST) {
     const cfg = state.strategies[def.key] || {};
     const hasOwnPublished = (Array.isArray(cfg.publishedChannels) && cfg.publishedChannels.length) || (Array.isArray(cfg.channels) && cfg.channels.length);
+    const publishedUsesFallback = !Array.isArray(cfg.publishedChannels) && !Array.isArray(cfg.channels);
     const entry = {
       key: def.key, name: def.name, enabled: !!cfg.enabled, silent: !!cfg.silent, published: [], shadow: [],
       sendError: state.sendErrors[def.key] || null, sentCount: cfg.sentCount || 0, lastSentAt: cfg.lastSentAt || null,
       // CORRECTIF « prédictions redirigées vers un autre canal » (demande admin) :
-      // une stratégie SANS canal public propre retombe silencieusement sur TOUS
-      // les canaux actifs globaux (voir strategyChannels() dans predictor.js) —
-      // on l'expose ici explicitement pour que ce ne soit plus une surprise.
-      publishedUsesGlobalFallback: !hasOwnPublished,
+      // Une stratégie configurée n'est jamais redirigée vers un autre canal :
+      // on expose séparément les canaux actifs globaux pour repérer uniquement
+      // les anciennes configurations incomplètes.
+      publishedUsesGlobalFallback: publishedUsesFallback,
     };
     for (const mode of ['published', 'shadow']) {
       const ids = strategyChannels(def.key, mode);
@@ -2271,7 +2272,15 @@ app.get('/api/diagnostics/channels', async (req, res) => {
 
   async function singlePanel(id, label, mod, editBase) {
     const st = mod.status();
-    return { id, label, editBase, channels: await resolveIds(Array.isArray(st.channels) ? st.channels : []) };
+    const panel = st.config || st;
+    return {
+      id, label, editBase,
+      enabled: panel.enabled !== false,
+      sentCount: panel.sentCount || 0,
+      lastSentAt: panel.lastSentAt || null,
+      lastError: panel.lastError || null,
+      channels: await resolveIds(Array.isArray(st.channels) ? st.channels : []),
+    };
   }
 
   const panels = [];
@@ -2279,7 +2288,28 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   panels.push(await trackerPanel('combined', 'Prédiction combinée', combined, 'combined'));
   panels.push(await trackerPanel('suit-streak', 'Série de même costume', suitStreak, 'suit-streak'));
   panels.push(await trackerPanel('suit-break', 'Rupture de costume', suitBreak, 'suit-break'));
-  panels.push(await singlePanel('cards-count', 'Comptage 2/2', cardsCount, 'cards-count'));
+  {
+    const st = cardsCount.status();
+    const cfg = st.config || st;
+    const categoryChannels = cfg.categoryChannels && typeof cfg.categoryChannels === 'object'
+      ? cfg.categoryChannels : {};
+    const categories = {};
+    for (const category of ['3/2', '3/3', '2/2']) {
+      const own = Array.isArray(categoryChannels[category]) && categoryChannels[category].length;
+      const effective = own ? categoryChannels[category] : (Array.isArray(cfg.channels) ? cfg.channels : []);
+      categories[category] = {
+        usesDefault: !own,
+        channels: await resolveIds(effective),
+      };
+    }
+    panels.push({
+      id: 'cards-count', label: 'Comptage 3/2 · 3/3 · 2/2', editBase: 'cards-count',
+      enabled: cfg.enabled !== false, sentCount: st.sentCount || 0,
+      lastSentAt: st.lastSentAt || null, lastError: st.lastError || null,
+      channels: await resolveIds(Array.isArray(cfg.channels) ? cfg.channels : []),
+      categories,
+    });
+  }
   panels.push(await singlePanel('vip', 'VIP', vip, 'vip'));
   panels.push(await singlePanel('predit', 'Prédit IA', predit, 'predit'));
   // Jeu 21 a DEUX canaux distincts (exacte / valeur), pas un seul comme les
@@ -2307,7 +2337,38 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     })),
   });
 
-  res.json({ bot, control: predictionControl.status(), strategies: out, panels });
+  // Vue consolidée : un même canal peut être utilisé par plusieurs stratégies
+  // ou panneaux. On garde les sources pour expliquer immédiatement pourquoi
+  // un message peut encore arriver dans un canal donné.
+  const channelSources = new Map();
+  const addSource = (c, source) => {
+    if (!c || c.id == null) return;
+    const key = String(c.id);
+    if (!channelSources.has(key)) channelSources.set(key, { id: c.id, title: c.title || key, ok: c.ok, sources: [] });
+    const row = channelSources.get(key);
+    if (c.title) row.title = c.title;
+    row.ok = row.ok !== false && c.ok !== false;
+    if (!row.sources.includes(source)) row.sources.push(source);
+  };
+  for (const s of out) {
+    s.published.forEach((c) => addSource(c, `${s.name} · public`));
+    s.shadow.forEach((c) => addSource(c, `${s.name} · silencieux`));
+  }
+  for (const p of panels) {
+    (p.channels || []).forEach((c) => addSource(c, p.label));
+    (p.defaultChannels || []).forEach((c) => addSource(c, `${p.label} · défaut`));
+    (p.items || []).forEach((item) => (item.channels || []).forEach((c) => addSource(c, `${p.label} · ${item.name}`)));
+    Object.entries(p.categories || {}).forEach(([category, item]) =>
+      (item.channels || []).forEach((c) => addSource(c, `${p.label} · ${category}${item.usesDefault ? ' · défaut' : ''}`)));
+  }
+  const globalChannels = await resolveIds(Array.isArray(state.activeChannels) ? state.activeChannels : []);
+  globalChannels.forEach((c) => addSource(c, 'Canaux actifs globaux / référence'));
+  res.json({
+    bot, control: predictionControl.status(),
+    globalChannels,
+    allChannels: [...channelSources.values()],
+    strategies: out, panels,
+  });
 });
 
 // --- interrupteur global « arrêter / démarrer / planifier » (même logique
@@ -2350,6 +2411,17 @@ app.put('/api/diagnostics/panels/game21/trackers/:id/channel', async (req, res) 
     }
     game21Predict.configure(kind === 'valeur' ? { valueChannels: ids } : { exactChannels: ids });
     res.json({ ok: true, status: game21Predict.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/diagnostics/panels/cards-count/categories/:category/channel', (req, res) => {
+  const category = String(req.params.category);
+  if (!['3/2', '3/3', '2/2'].includes(category)) return res.status(404).json({ error: 'Catégorie inconnue' });
+  try {
+    const current = cardsCount.status().config || cardsCount.status();
+    const categoryChannels = { ...(current.categoryChannels || {}) };
+    categoryChannels[category] = cardsCount.parseChannels(req.body && req.body.channelId);
+    cardsCount.configure({ categoryChannels });
+    res.json({ ok: true, status: cardsCount.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => {

@@ -1781,6 +1781,9 @@ let lastShoeSeq = 0;
 let ticking = false;
 
 async function sendBilan(key, snapshot) {
+  // Un bilan est un nouvel envoi. Il ne doit pas contourner l'interrupteur
+  // global si /stop arrive entre la détection de fin de sabot et son envoi.
+  if (predictionControl.isPaused()) return;
   const cfg = state.strategies[key] || {};
   if (cfg.bilan === false) return;
   const sender = senderFor();
@@ -1831,6 +1834,10 @@ async function flushBilans(reason = 'nouveau jour') {
     try { await sendBilan(key, snapshot); done.push(key); }
     catch (e) { console.error('Bilan non envoyé', key, e.message); }
   }
+  // `predit.sendBilans()` est un autre chemin d'envoi Telegram. Si /stop a
+  // été reçu pendant le bilan d'une stratégie, il ne doit pas continuer à
+  // publier dans le panneau IA ni nettoyer prématurément la file du bilan.
+  if (predictionControl.isPaused()) return { strategies: done, ai: { ok: false, error: 'Prédictions arrêtées' } };
   let ai = { ok: false, error: 'panneau Prédit indisponible' };
   try { ai = await predit.sendBilans(); }
   catch (e) { ai = { ok: false, error: e.message }; }
@@ -1985,6 +1992,14 @@ async function announceMainBot() {
 // Envoi + vérification des prédictions
 // ---------------------------------------------------------------------------
 async function broadcast(pred) {
+  // Le garde-fou de tick() protège le chemin normal, mais un tick peut déjà
+  // être en cours quand le message /stop arrive. Refaire le test ici empêche
+  // la file « ombre » ou une prédiction déjà calculée de partir après l'arrêt.
+  if (predictionControl.isPaused()) {
+    pred.silent = true;
+    pred.gate = '⏸️ Arrêt global — envoi ignoré';
+    return;
+  }
   if (db.ready) db.savePrediction(pred, state.B);
   const sender = senderFor();
   if (!sender) {
@@ -2048,6 +2063,11 @@ async function sendPrediction(pred, sender, ids) {
   state.sendErrors[pred.strategy] = null;
   const { text, parse_mode } = predictionText(pred);
   for (const id of [...new Set(ids)]) {
+    if (predictionControl.isPaused()) {
+      pred.silent = true;
+      pred.gate = '⏸️ Arrêt global — envoi interrompu';
+      break;
+    }
     try {
       const m = await sender.sendMessage(id, text, parse_mode ? { parse_mode } : {});
       pred.messages.push({ chatId: id, messageId: m.message_id });
@@ -2077,7 +2097,7 @@ async function updateResult(pred) {
   // strategies.js/defaultsFor), désactivée par défaut — les deux réglages
   // (général + celui-ci) doivent être activés à la fois.
   const stratCfg = state.strategies[pred.strategy];
-  if (pred.status === 'perdu' && pred.messages.length && stratCfg && stratCfg.lossNoticeEnabled && lossNotice.getSettings().enabled) {
+  if (!predictionControl.isPaused() && pred.status === 'perdu' && pred.messages.length && stratCfg && stratCfg.lossNoticeEnabled && lossNotice.getSettings().enabled) {
     const noticeText = lossNotice.buildText();
     for (const m of pred.messages) {
       try { await sender.sendMessage(m.chatId, noticeText); } catch (_) {}
@@ -2125,7 +2145,7 @@ async function tick() {
     // — voir pendingBilan plus haut. Comme tick() ne se chevauche jamais
     // (garde `ticking`), aucune prédiction (nouvelle ou « ombre ») ne peut
     // être diffusée tant que l'envoi du bilan n'est pas terminé.
-    if (pendingBilan) {
+    if (pendingBilan && !predictionControl.isPaused()) {
       const { seq, previousMax } = pendingBilan;
       pendingBilan = null;
       if (seq !== lastBilanShoeSeq) {
@@ -2175,7 +2195,7 @@ async function tick() {
     // Chaque envoi dépile la tête de file (fulfillAnnouncement), donc canSend()
     // reflète ensuite l'état de la position suivante, toujours dans l'ordre.
     let guard = 0;
-    while (canSend('ombre') && guard++ < 20) {
+    while (!predictionControl.isPaused() && canSend('ombre') && guard++ < 20) {
       // CORRECTIF : exclure les prédictions « annulé » (tuées par un reset de
       // sabot en cours de décompte, voir resetShoe()). Sans ce filtre, dès que
       // la position N était enfin prête, le bot pouvait ressusciter une vieille
@@ -2219,33 +2239,42 @@ async function tick() {
     // isolées) et la garde anti-doublon (lastBilanShoeSeq).
 
     const preds = evaluate();
-    for (const pred of preds) await broadcast(pred);
+    for (const pred of preds) {
+      if (predictionControl.isPaused()) break;
+      await broadcast(pred);
+    }
 
     // panneau « Prédit » : prédictions certifiées à 100% (IA)
+    if (predictionControl.isPaused()) return;
     await predit.tick();
 
     // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
     // cartes exactes et cartes de valeur sur leurs canaux respectifs.
+    if (predictionControl.isPaused()) return;
     await game21Predict.tick();
 
     // panneau « Prédiction après perte » : relais de la prochaine prédiction
     // d'une stratégie suivie (existante ou IA) après N pertes consécutives.
+    if (predictionControl.isPaused()) return;
     await afterLoss.tick();
 
     // panneau « Formation » : pour chaque stratégie cochée, lecture de la
     // formation après une perte, puis publication de la prédiction confirmée
     // (et du « Bingo » si elle est gagnée) dans le canal configuré.
+    if (predictionControl.isPaused()) return;
     await formationRelay.tick();
 
     // panneau « Prédiction combinée pour costume joueur » : sources multiples
     // (stratégies + formations), déclencheur consécutif par niveau de
     // rattrapage, prédiction synthétisée même costume/inverse +w.
+    if (predictionControl.isPaused()) return;
     await combined.tick();
 
     // panneau « Série de costume » : sélection d'UNE source (stratégie, IA
     // ou formation), série de N prédictions consécutives de MÊME costume —
     // déclenchement immédiat si aucune perte dans la série, sinon attente du
     // retour de ce costume avant de déclencher (voir suit-streak.js).
+    if (predictionControl.isPaused()) return;
     await suitStreak.tick();
 
     // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
@@ -2253,17 +2282,20 @@ async function tick() {
     // puis attente de la RUPTURE (prochain costume différent) — la rupture
     // déclenche sur son propre numéro, en prédisant le costume original
     // (voir suit-break.js).
+    if (predictionControl.isPaused()) return;
     await suitBreak.tick();
 
     // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
     // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur début+34
     // déclenchées quand le jeu en live arrive à −3/−2 de la cible (voir cards-count.js).
+    if (predictionControl.isPaused()) return;
     await cardsCount.tick();
 
     // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
     // relais des 2 prochaines prédictions d'une stratégie cochée après 3
     // pertes consécutives, ou après 3 prédictions consécutives du même
     // costume, dans le canal VIP configuré (voir vip.js).
+    if (predictionControl.isPaused()) return;
     await vip.tick();
   } catch (e) {
     state.lastError = e.message;

@@ -121,8 +121,19 @@ L'analyseur tourne automatiquement : analyse locale toutes les 15 s, enrichissem
 Pollinations.ai toutes les 3 min. Chaque constat apparaît dans « Résultats », chaque
 stratégie trouvée est enregistrée (désactivée) dans « Stratégies IA créées ».
 
-La page « Envois » vérifie, pour chaque stratégie, le token du bot, les canaux
-public et silencieux, le droit de publier et la dernière erreur d'envoi.
+La page « Envois » vérifie, pour chaque stratégie et chaque panneau secondaire,
+le token du bot, les canaux réellement utilisés, le droit de publier et la
+dernière erreur d'envoi. Elle détaille aussi les configurations suivies
+(après-perte, combinée, séries/ruptures), les deux sorties du jeu 21 et les
+catégories 3/2, 3/3 et 2/2 du comptage. La liste consolidée indique toutes les
+sources d'un même canal et les fallbacks globaux éventuels.
+
+`/stop` est un arrêt global : il bloque les nouveaux envois de toutes les
+stratégies et de tous les panneaux, y compris les bilans et la file « ombre ».
+Les prédictions déjà publiées restent vérifiées et leurs messages peuvent être
+mis à jour avec leur résultat. Une stratégie configurée ne retombe plus
+implicitement sur `activeChannels` : son canal doit apparaître explicitement
+dans la page « Envois ».
 
 ## Version 3.2 — corrections
 
