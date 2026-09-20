@@ -369,7 +369,17 @@ async function processTracker(tracker) {
   const list = trackerPredictions(tracker.key);
   for (const pred of list) {
     if (pred.target <= tracker.lastSeenTarget) continue;
-    if (pred.status === 'en attente') break; // pas encore résolue : on la retraite au prochain tour
+    // CORRECTIF (« prédit même costume » qui prédisait en retard) : on ne
+    // dépend PLUS du résultat (gagné/perdu) pour COMPTER la prédiction dans
+    // la série — même correctif que suit-break.js. Avant, dès qu'une
+    // prédiction de la source n'était pas encore résolue, on arrêtait tout
+    // (« break ») et on la re-regardait au tour suivant : la 3e prédiction
+    // n'était donc déclenchée qu'après vérification de la 2e, au lieu de
+    // partir dès que le MÊME COSTUME était vu deux fois de suite. La série
+    // (streakCount) avance maintenant dès que le costume est PRÉDIT, qu'il
+    // soit déjà vérifié ou non — seul le suivi d'une perte dans la série
+    // (streakHasLoss, pour la reprise waitingSuit) reste basé sur le statut
+    // connu au moment du passage.
     tracker.lastSeenTarget = pred.target;
     const suit = pred.suit;
     if (!suit) continue; // ce panneau ne suit que les prédictions de costume (parité/cartes non gérées)
