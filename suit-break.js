@@ -499,12 +499,15 @@ async function send(tracker, syn) {
     if (!bot) {
       errors.push('Aucun token Telegram configuré');
     } else {
-      for (const id of targetChannels) {
-        try {
-          const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
-          sentMessages.push({ chatId: id, messageId: m.message_id });
-          ok = true;
-        } catch (e) { errors.push(`${id} : ${e.message}`); }
+      // CORRECTIF (envoi en retard) : envoi en PARALLÈLE à tous les canaux.
+      const results = await Promise.all(targetChannels.map((id) =>
+        bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
+          .then((m) => ({ ok: true, id, messageId: m.message_id }))
+          .catch((e) => ({ ok: false, id, error: e.message }))
+      ));
+      for (const r of results) {
+        if (r.ok) { sentMessages.push({ chatId: r.id, messageId: r.messageId }); ok = true; }
+        else errors.push(`${r.id} : ${r.error}`);
       }
     }
   }
@@ -631,7 +634,8 @@ async function tick() {
   if (busy || !panel.enabled) return panel;
   busy = true;
   try {
-    for (const tracker of panel.trackers) await processTracker(tracker);
+    // CORRECTIF (envoi en retard) : trackers traités en PARALLÈLE.
+    await Promise.all(panel.trackers.map((tracker) => processTracker(tracker)));
     await verifyPending();
     panel.lastScanAt = Date.now();
   } catch (e) {

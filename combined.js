@@ -455,14 +455,17 @@ async function send(tracker, syn) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   const out = messageText(tracker, syn);
-  const sentMessages = [];
-  const errors = [];
-  for (const id of targetChannels) {
-    try {
-      const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
-      sentMessages.push({ chatId: id, messageId: m.message_id });
-    } catch (e) { errors.push(`${id} : ${e.message}`); }
-  }
+  // CORRECTIF (envoi en retard) : envoi en PARALLÈLE à tous les canaux au
+  // lieu d'un for...await séquentiel — avec plusieurs canaux, chaque envoi
+  // attendait le précédent avant de partir, retardant d'autant le message
+  // par rapport à la stratégie source qu'il doit copier.
+  const results = await Promise.all(targetChannels.map((id) =>
+    bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
+      .then((m) => ({ ok: true, id, messageId: m.message_id }))
+      .catch((e) => ({ ok: false, id, error: e.message }))
+  ));
+  const sentMessages = results.filter((r) => r.ok).map((r) => ({ chatId: r.id, messageId: r.messageId }));
+  const errors = results.filter((r) => !r.ok).map((r) => `${r.id} : ${r.error}`);
   if (!sentMessages.length) { panel.lastError = errors[0] || 'Envoi impossible'; return false; }
   panel.sentCount = (panel.sentCount || 0) + 1;
   panel.lastSentAt = Date.now();
@@ -559,7 +562,10 @@ async function tick() {
   if (busy || !panel.enabled) return panel;
   busy = true;
   try {
-    for (const tracker of panel.trackers) await processTracker(tracker);
+    // CORRECTIF (envoi en retard) : trackers traités en PARALLÈLE — un
+    // for...await séquentiel forçait chaque tracker à attendre l'envoi
+    // Telegram complet du précédent avant même d'être évalué.
+    await Promise.all(panel.trackers.map((tracker) => processTracker(tracker)));
     await verifyPending();
     panel.lastScanAt = Date.now();
   } catch (e) {

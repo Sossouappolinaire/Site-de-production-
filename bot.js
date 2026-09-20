@@ -2244,59 +2244,59 @@ async function tick() {
       await broadcast(pred);
     }
 
-    // panneau « Prédit » : prédictions certifiées à 100% (IA)
+    // CORRECTIF (envoi en retard) : ces panneaux sont INDÉPENDANTS les uns
+    // des autres (chacun a son propre état/canaux et ne fait que LIRE
+    // state.games / state.predictions en commun). Avant, ils étaient
+    // enchaînés un par un avec await : si un panneau mettait du temps à
+    // envoyer ses messages Telegram (plusieurs canaux, réseau lent), TOUS
+    // les panneaux suivants — dont « combinaison » et « même costume » —
+    // attendaient avant même de commencer leur scan, avec un retard cumulé
+    // à chaque panneau. On les lance maintenant en parallèle avec
+    // Promise.all pour qu'ils partent tous au même tick, sans s'attendre
+    // les uns les autres.
     if (predictionControl.isPaused()) return;
-    await predit.tick();
-
-    // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
-    // cartes exactes et cartes de valeur sur leurs canaux respectifs.
-    if (predictionControl.isPaused()) return;
-    await game21Predict.tick();
-
-    // panneau « Prédiction après perte » : relais de la prochaine prédiction
-    // d'une stratégie suivie (existante ou IA) après N pertes consécutives.
-    if (predictionControl.isPaused()) return;
-    await afterLoss.tick();
-
-    // panneau « Formation » : pour chaque stratégie cochée, lecture de la
-    // formation après une perte, puis publication de la prédiction confirmée
-    // (et du « Bingo » si elle est gagnée) dans le canal configuré.
-    if (predictionControl.isPaused()) return;
-    await formationRelay.tick();
-
-    // panneau « Prédiction combinée pour costume joueur » : sources multiples
-    // (stratégies + formations), déclencheur consécutif par niveau de
-    // rattrapage, prédiction synthétisée même costume/inverse +w.
-    if (predictionControl.isPaused()) return;
-    await combined.tick();
-
-    // panneau « Série de costume » : sélection d'UNE source (stratégie, IA
-    // ou formation), série de N prédictions consécutives de MÊME costume —
-    // déclenchement immédiat si aucune perte dans la série, sinon attente du
-    // retour de ce costume avant de déclencher (voir suit-streak.js).
-    if (predictionControl.isPaused()) return;
-    await suitStreak.tick();
-
-    // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
-    // IA ou formation), série de N prédictions consécutives de MÊME costume
-    // puis attente de la RUPTURE (prochain costume différent) — la rupture
-    // déclenche sur son propre numéro, en prédisant le costume original
-    // (voir suit-break.js).
-    if (predictionControl.isPaused()) return;
-    await suitBreak.tick();
-
-    // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
-    // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur début+34
-    // déclenchées quand le jeu en live arrive à −3/−2 de la cible (voir cards-count.js).
-    if (predictionControl.isPaused()) return;
-    await cardsCount.tick();
-
-    // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
-    // relais des 2 prochaines prédictions d'une stratégie cochée après 3
-    // pertes consécutives, ou après 3 prédictions consécutives du même
-    // costume, dans le canal VIP configuré (voir vip.js).
-    if (predictionControl.isPaused()) return;
-    await vip.tick();
+    await Promise.all([
+      // panneau « Prédit » : prédictions certifiées à 100% (IA)
+      predit.tick(),
+      // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
+      // cartes exactes et cartes de valeur sur leurs canaux respectifs.
+      game21Predict.tick(),
+      // panneau « Prédiction après perte » : relais de la prochaine
+      // prédiction d'une stratégie suivie (existante ou IA) après N pertes
+      // consécutives.
+      afterLoss.tick(),
+      // panneau « Formation » : pour chaque stratégie cochée, lecture de la
+      // formation après une perte, puis publication de la prédiction
+      // confirmée (et du « Bingo » si elle est gagnée) dans le canal
+      // configuré.
+      formationRelay.tick(),
+      // panneau « Prédiction combinée pour costume joueur » : sources
+      // multiples (stratégies + formations), déclencheur consécutif par
+      // niveau de rattrapage, prédiction synthétisée même costume/inverse +w.
+      combined.tick(),
+      // panneau « Série de costume » : sélection d'UNE source (stratégie,
+      // IA ou formation), série de N prédictions consécutives de MÊME
+      // costume — déclenchement immédiat si aucune perte dans la série,
+      // sinon attente du retour de ce costume avant de déclencher (voir
+      // suit-streak.js).
+      suitStreak.tick(),
+      // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
+      // IA ou formation), série de N prédictions consécutives de MÊME
+      // costume puis attente de la RUPTURE (prochain costume différent) —
+      // la rupture déclenche sur son propre numéro, en prédisant le costume
+      // original (voir suit-break.js).
+      suitBreak.tick(),
+      // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
+      // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur
+      // début+34 déclenchées quand le jeu en live arrive à −3/−2 de la
+      // cible (voir cards-count.js).
+      cardsCount.tick(),
+      // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
+      // relais des 2 prochaines prédictions d'une stratégie cochée après 3
+      // pertes consécutives, ou après 3 prédictions consécutives du même
+      // costume, dans le canal VIP configuré (voir vip.js).
+      vip.tick(),
+    ]);
   } catch (e) {
     state.lastError = e.message;
   } finally {
