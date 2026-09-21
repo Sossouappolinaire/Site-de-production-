@@ -131,8 +131,8 @@ function options() {
     { key: 'ia', name: 'Stratégie IA (Prédit)', group: 'Stratégies' },
   ];
   const formations = [
-    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: `Formation — ${s.name}`, group: 'Formations' })),
-    { key: 'formation:ia', name: 'Formation — Prédit IA', group: 'Formations' },
+    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: s.name, group: 'Formations' })),
+    { key: 'formation:ia', name: 'Prédit IA', group: 'Formations' },
   ];
   return [...base, ...formations, ...afterLossOptions(), ...combinedOptions()];
 }

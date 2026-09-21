@@ -45,6 +45,7 @@ const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
+const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
@@ -415,6 +416,7 @@ app.get('/api/state', async (req, res) => {
     suitStreak: suitStreak.status(),
     suitBreak: suitBreak.status(),
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
+    statistics: statistics.status(),
     cardsCount: cardsCount.status(),
     vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
@@ -2223,7 +2225,13 @@ app.post('/api/overlap/scan', async (req, res) => {
 
 app.post('/api/overlap/trackers', async (req, res) => {
   try {
-    const t = overlap.addTracker(req.body && req.body.key, {
+    // accepte soit `keys` (tableau, sélection multiple), soit `key`
+    // (rétrocompatibilité, une seule source) — mêmes réglages appliqués à
+    // chacune, en un seul appel (voir overlap.addTrackers).
+    const keys = Array.isArray(req.body && req.body.keys)
+      ? req.body.keys
+      : (req.body && req.body.key ? [req.body.key] : []);
+    const r = overlap.addTrackers(keys, {
       mode: req.body && req.body.mode,
       offset: req.body && req.body.offset,
       channels: req.body && req.body.channels,
@@ -2232,7 +2240,7 @@ app.post('/api/overlap/trackers', async (req, res) => {
       maxR: req.body && req.body.maxR,
       name: req.body && req.body.name,
     });
-    res.json({ ok: true, tracker: t, overlap: overlap.status() });
+    res.json({ ok: true, created: r.created, errors: r.errors, overlap: overlap.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -2247,6 +2255,44 @@ app.put('/api/overlap/trackers/:id', (req, res) => {
 app.delete('/api/overlap/trackers/:id', (req, res) => {
   overlap.removeTracker(req.params.id);
   res.json(overlap.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Statistiques » (voir statistics.js) — nouveau bouton (demande admin) :
+// PAS un panneau de prédiction — relais brut des costumes/cartes reçus de
+// l'API Baccara (les mêmes données que le bouton « Canaux ») vers un canal
+// Telegram configuré, avec la notation demandée (✅/🔰/⏰/▶️/#T/#X/#R).
+// ---------------------------------------------------------------------------
+app.get('/api/statistics', (req, res) => res.json(statistics.status()));
+
+app.post('/api/statistics/config', (req, res) => {
+  statistics.configure(req.body || {});
+  res.json(statistics.status());
+});
+
+app.post('/api/statistics/channel', async (req, res) => {
+  const idsList = statistics.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  statistics.configure({ channels: idsList });
+  const notice = await statistics.test();
+  res.json({ ok: true, channel: check.chat, notice, statistics: statistics.status() });
+});
+
+app.delete('/api/statistics/channel', (req, res) => {
+  statistics.configure({ channels: [] });
+  res.json(statistics.status());
+});
+
+app.post('/api/statistics/test', async (req, res) => {
+  const r = await statistics.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/statistics/scan', async (req, res) => {
+  await statistics.tick();
+  res.json(statistics.status());
 });
 
 // ---------------------------------------------------------------------------

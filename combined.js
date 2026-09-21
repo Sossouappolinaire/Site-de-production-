@@ -98,15 +98,18 @@ function afterLossOptions() {
   } catch (_) { return []; }
 }
 
-// CORRECTIF (demande admin) : la liste à cocher doit rester simple — chaque
-// source « Formation » affiche juste « Formation — <nom de la stratégie> »,
-// SANS détail de canal. C'est bien la formation de cette stratégie (donc
-// toutes les prédictions qu'elle envoie, quel que soit son canal) qui est
-// suivie une fois sélectionnée — le canal n'a pas à apparaître ici.
+// CORRECTIF (demande admin) : la liste à cocher doit rester simple — les
+// formations sont regroupées ENSEMBLE sous l'en-tête « Formations » du menu
+// déroulant, chaque entrée affichant SEULEMENT le nom de la stratégie (pas
+// de préfixe « Formation — » répété sur chacune, l'en-tête du groupe suffit
+// à l'indiquer), SANS détail de canal. C'est bien la formation de cette
+// stratégie (donc toutes les prédictions qu'elle envoie, quel que soit son
+// canal) qui est suivie une fois sélectionnée — le canal n'a pas à
+// apparaître ici.
 function formationOptions() {
   return [
-    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: `Formation — ${s.name}`, group: 'Formations' })),
-    { key: 'formation:ia', name: 'Formation — Prédit IA', group: 'Formations' },
+    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: s.name, group: 'Formations' })),
+    { key: 'formation:ia', name: 'Prédit IA', group: 'Formations' },
   ];
 }
 

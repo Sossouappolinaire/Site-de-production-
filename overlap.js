@@ -140,8 +140,8 @@ function options() {
     { key: 'ia', name: 'Stratégie IA (Prédit)', group: 'Stratégies' },
   ];
   const formations = [
-    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: `Formation — ${s.name}`, group: 'Formations' })),
-    { key: 'formation:ia', name: 'Formation — Prédit IA', group: 'Formations' },
+    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: s.name, group: 'Formations' })),
+    { key: 'formation:ia', name: 'Prédit IA', group: 'Formations' },
   ];
   return [...base, ...formations, ...afterLossOptions(), ...combinedOptions(), ...suitStreakOptions(), ...suitBreakOptions()];
 }
@@ -301,6 +301,8 @@ function applySaved(saved) {
 // ---------------------------------------------------------------------------
 // Gestion des sources suivies
 // ---------------------------------------------------------------------------
+// Crée UNE source suivie. Voir addTrackers() ci-dessous pour en ajouter
+// plusieurs à la fois (sélection multi-sources, comme combined.js).
 function addTracker(key, extra = {}) {
   const opt = optionByKey(key);
   if (!opt) throw new Error('Source inconnue pour le chevauchement de prédictions.');
@@ -325,6 +327,23 @@ function addTracker(key, extra = {}) {
   panel.trackers.push(tracker);
   persist();
   return tracker;
+}
+
+// Ajoute PLUSIEURS sources à la fois (sélection multi-sources), avec LES
+// MÊMES réglages (mode, décalage, canaux...) pour chacune — un appel,
+// plusieurs trackers créés d'un coup. `keys` est un tableau de clés de
+// sources (voir options()). Même principe que combined.addTrackers().
+function addTrackers(keys, extra = {}) {
+  const list = Array.isArray(keys) ? keys : [keys];
+  if (!list.length) throw new Error('Sélectionne au moins une source.');
+  const created = [];
+  const errors = [];
+  for (const key of list) {
+    try { created.push(addTracker(key, extra)); }
+    catch (e) { errors.push(`${key} : ${e.message}`); }
+  }
+  if (!created.length) throw new Error(errors[0] || 'Aucune source ajoutée.');
+  return { created, errors };
 }
 
 function updateTracker(id, patch = {}) {
@@ -633,6 +652,6 @@ function statusView() {
 
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
-  options, addTracker, updateTracker, removeTracker,
+  options, addTracker, addTrackers, updateTracker, removeTracker,
   restore, restoreFromDb, parseChannels, pendingFor,
 };

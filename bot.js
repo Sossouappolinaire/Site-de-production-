@@ -17,6 +17,7 @@ const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
+const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const formationRelay = require('./formation-relay');
@@ -2292,6 +2293,10 @@ async function tick() {
       // 2ᵉ prédiction quand elle arrive avant que la 1ʳᵉ soit vérifiée —
       // même prédiction / miroir / +n (voir overlap.js).
       overlap.tick(),
+      // panneau « Statistiques » : relais brut (pas de prédiction) des
+      // costumes/cartes reçus de l'API Baccara vers un canal Telegram
+      // configuré, avec la notation demandée (voir statistics.js).
+      statistics.tick(),
       // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
       // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur
       // début+34 déclenchées quand le jeu en live arrive à −3/−2 de la
@@ -2476,6 +2481,7 @@ async function applyDbConfigs() {
   await suitStreak.restoreFromDb();
   await suitBreak.restoreFromDb();
   await overlap.restoreFromDb();
+  await statistics.restoreFromDb();
   await cardsCount.restoreFromDb();
   await vip.restoreFromDb();
   await predictionControl.restoreFromDb();
@@ -2538,6 +2544,8 @@ async function startLoop() {
   suitBreak.setSender(senderFor);
   overlap.restore();
   overlap.setSender(senderFor);
+  statistics.restore();
+  statistics.setSender(senderFor);
   cardsCount.restore();
   cardsCount.setSender(senderFor);
   vip.restore();
