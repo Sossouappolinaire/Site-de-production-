@@ -375,6 +375,7 @@
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
+        <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/vip" data-nav="vip">VIP</a>
         <a href="#/formation" data-nav="formation">Formation</a>
@@ -611,6 +612,7 @@
         ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
@@ -1961,10 +1963,14 @@ Faites-en bon usage !
         <div class="field"><label>Nom de cette stratégie combinée <span class="small">(optionnel — vide = nom de la source ; affiché aussi dans la liste « Stratégies »)</span></label><input id="cnew-name" placeholder="Ex. Combo Dominant + Costume"></div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addCombinedTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
-    function optsHtmlGlobal(opt) {
+    function optsHtmlGlobal(opt, hints) {
       const groups = {};
       for (const o of (opt || [])) { (groups[o.group] = groups[o.group] || []).push(o); }
-      return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
+      const label = (o) => {
+        const h = hints && hints[o.key];
+        return h && h.length ? `${o.name} — canal actuel : ${h.join(', ')}` : o.name;
+      };
+      return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(label(o))}</option>`).join('')}</optgroup>`).join('');
     }
     async function addCombinedTracker() {
       const sel = $('#newCombinedKey');
@@ -2120,6 +2126,137 @@ Faites-en bon usage !
     }
     async function removeSuitStreakTracker(id) {
       try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); suitStreakPage(); toast('Source retirée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // -------------------------------------------------------------------
+    // « Chevauchement de prédictions » (voir overlap.js) — sélection d'UNE
+    // source (stratégie existante, IA « Prédit », Formation, ou un autre
+    // panneau), surveillée prédiction par prédiction. Dès qu'une 2ᵉ
+    // prédiction arrive alors que la 1ʳᵉ n'est pas encore vérifiée, on
+    // déclenche sur cette 2ᵉ (jamais la 1ʳᵉ) : même prédiction, costume
+    // miroir, ou +n jeux.
+    // -------------------------------------------------------------------
+    function overlapSiteChannelOptions(currentId) {
+      const list = snapshot.overlap?.siteChannels || [];
+      const cur = currentId === null || currentId === undefined ? '' : String(currentId);
+      const opts = list.map(c => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+      return `<option value="">— aucun —</option>${opts}`;
+    }
+    function overlapSettingsRow(prefix, t) {
+      const mode = t?.mode || 'meme';
+      const offset = t?.offset ?? 1;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="max-width:280px;margin:0"><label style="font-size:11px">En cas de chevauchement, prédire</label>
+          <select id="${prefix}-mode" onchange="document.getElementById('${prefix}-offset-wrap').style.display = this.value === 'offset' ? '' : 'none'">
+            <option value="meme" ${mode === 'meme' ? 'selected' : ''}>Même prédiction (relais exact)</option>
+            <option value="miroir" ${mode === 'miroir' ? 'selected' : ''}>Costume miroir (❤️↔♦️, ♠️↔♣️)</option>
+            <option value="offset" ${mode === 'offset' ? 'selected' : ''}>Même costume, décalé de +Z jeux</option>
+          </select>
+        </div>
+        <div class="field" id="${prefix}-offset-wrap" style="max-width:110px;margin:0;${mode === 'offset' ? '' : 'display:none'}"><label style="font-size:11px">Décalage +Z</label><input id="${prefix}-offset" type="number" min="1" max="20" value="${esc(String(offset))}"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Dès que la source publie une 2ᵉ prédiction alors que la 1ʳᵉ n'est pas encore vérifiée, on déclenche sur cette 2ᵉ (jamais la 1ʳᵉ), selon le mode choisi ci-dessus.</p>`;
+    }
+    function readOverlapSettings(prefix) {
+      return { mode: val(`${prefix}-mode`), offset: val(`${prefix}-offset`) };
+    }
+    function overlapChannelFormatRow(prefix, tracker) {
+      const t = tracker || {};
+      const channels = (t.channels || []).join(', ');
+      const format = (t.format === null || t.format === undefined) ? '' : t.format;
+      return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram propre (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+        <div class="field" style="flex:1;min-width:160px;margin:0"><label style="font-size:11px">Canal du site propre (optionnel)</label><select id="${prefix}-siteChannel">${overlapSiteChannelOptions(t.siteChannelId)}</select></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format propre (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = format du panneau"></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Rattrapage propre (optionnel)</label><input id="${prefix}-maxR" type="number" min="0" max="9" value="${(t.maxR === null || t.maxR === undefined) ? '' : esc(String(t.maxR))}" placeholder="vide = panneau"></div>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">Laisse ces champs vides/« aucun » pour utiliser les réglages du panneau (en haut de la page).</p>`;
+    }
+    function readOverlapChannelFormat(prefix) {
+      const rawFormat = val(`${prefix}-format`);
+      const rawMaxR = val(`${prefix}-maxR`);
+      const siteChannelId = val(`${prefix}-siteChannel`);
+      return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat, maxR: rawMaxR === '' ? null : rawMaxR };
+    }
+    function overlapPage() {
+      setNav('overlap');
+      const p = snapshot.overlap || {};
+      const trackers = p.trackers || [];
+      const history = p.history || [];
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Chevauchement</span><h2 style="margin-top:7px">Chevauchement de prédictions</h2><p class="small">Choisis une source (stratégie existante, IA « Prédit », Formation, ou un autre panneau). Le panneau surveille les prédictions de cette source une par une : dès que la source publie une 2ᵉ prédiction alors que la 1ʳᵉ n'est pas encore vérifiée, il déclenche sur cette 2ᵉ (jamais la 1ʳᵉ) — même prédiction, costume miroir, ou +Z jeux, selon le mode choisi.</p></div><div class="toolbar"><button class="button primary" onclick="addOverlapTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="overlapPage()">Actualiser</button></div></div>
+        <div class="two-col">
+          <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit les prédictions de chevauchement, sauf source avec son propre canal.</p>
+            <div class="field"><label>ID ou @nom du canal</label><input id="overlapChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveOverlapChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="overlapTest()">Envoyer un test</button><button class="button small danger" onclick="removeOverlapChannel()">Retirer</button></div>
+            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}
+            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine, page « Canaux »)</label><select id="overlapSiteChannel">${overlapSiteChannelOptions(p.siteChannelId)}</select></div>
+            <p class="small muted" style="margin:6px 0 0">Indépendant du canal Telegram ci-dessus : les deux reçoivent en parallèle si les deux sont configurés.</p>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveOverlap()">Enregistrer le canal du site</button></div></div>
+          <div class="panel"><h3>Réglages du panneau</h3>
+            <label class="check"><input id="overlapEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer le chevauchement de prédictions</label>
+            <div class="two-col" style="margin-top:16px">
+              <div class="field"><label>Nombre de rattrapage</label><input id="overlapMaxR" type="number" min="0" max="9" value="${esc(String(p.maxR ?? 1))}"></div>
+              <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="overlapFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
+            </div>
+            <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveOverlap()">Enregistrer</button></div></div>
+        </div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.watching ? 'warn' : 'good'}">${t.watching ? `Surveille le jeu #N${esc(String(t.watching))} (pas encore vérifié)` : 'Veille'}</span></div>
+            <dl><dt>Chevauchements détectés</dt><dd>${esc(String(t.overlapCount || 0))}</dd><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
+            ${overlapSettingsRow('ov-' + t.id, t)}
+            ${overlapChannelFormatRow('ov-' + t.id, t)}
+            <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ov-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateOverlapTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeOverlapTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
+          ${history.length ? `<table><thead><tr><th>Source</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
+    }
+    function addOverlapTrackerModal() {
+      const opts = optsHtmlGlobal(snapshot.overlap?.options || [], snapshot.overlap?.channelHints || {});
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle source suivie</span><h3 style="margin-top:8px">Ajouter une source</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot, la stratégie IA « Prédit », une Formation, ou un autre panneau, puis définis le mode de déclenchement.</p></div></div>
+        <div class="field"><label>Source</label><select id="newOverlapKey">${opts}</select></div>
+        <p class="small muted" style="margin:4px 0 0">Le canal Telegram où la source publie actuellement (ex. « bo ») est affiché entre parenthèses dans la liste, pour la retrouver facilement.</p>
+        ${overlapSettingsRow('ovnew', null)}
+        ${overlapChannelFormatRow('ovnew', { channels: [], format: null, siteChannelId: null })}
+        <div class="field"><label>Nom de cette source <span class="small">(optionnel — vide = nom de la source)</span></label><input id="ovnew-name" placeholder="Ex. Chevauchement Dominant"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addOverlapTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function addOverlapTracker() {
+      const key = val('newOverlapKey');
+      const { mode, offset } = readOverlapSettings('ovnew');
+      const { channels, siteChannelId, format, maxR } = readOverlapChannelFormat('ovnew');
+      const name = val('ovnew-name');
+      try {
+        await api('/api/overlap/trackers', 'POST', { key, mode, offset, channels, siteChannelId, format, maxR, name });
+        closeModal(); await refresh(); overlapPage();
+        toast('Source ajoutée au chevauchement de prédictions.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function updateOverlapTracker(id) {
+      const { mode, offset } = readOverlapSettings('ov-' + id);
+      const { channels, siteChannelId, format, maxR } = readOverlapChannelFormat('ov-' + id);
+      const name = val(`ov-${id}-name`);
+      try { await api(`/api/overlap/trackers/${encodeURIComponent(id)}`, 'PUT', { mode, offset, channels, siteChannelId, format, maxR, name }); await refresh(); overlapPage(); toast('Réglages mis à jour.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeOverlapTracker(id) {
+      try { await api(`/api/overlap/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); overlapPage(); toast('Source retirée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveOverlap() {
+      const rawSite = val('overlapSiteChannel');
+      try { await api('/api/overlap/config', 'POST', { enabled: $('#overlapEnabled')?.checked, maxR: val('overlapMaxR'), format: val('overlapFormat'), channels: ids(val('overlapChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); overlapPage(); toast('Panneau « Chevauchement de prédictions » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveOverlapChannel() {
+      const list = ids(val('overlapChannel'));
+      if (!list.length) return toast('Indique un ID ou @nom de canal.', 'error');
+      try { const r = await api('/api/overlap/channel', 'POST', { channelId: list[0] }); await refresh(); overlapPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeOverlapChannel() { try { await api('/api/overlap/channel', 'DELETE'); await refresh(); overlapPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function overlapTest() {
+      try { const r = await api('/api/overlap/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
       catch (e) { toast(e.message, 'error'); }
     }
 
@@ -3381,6 +3518,7 @@ Faites-en bon usage !
         else if (h === '#/combined') combinedPage();
         else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/suit-break') suitBreakPage();
+        else if (h === '#/overlap') overlapPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
