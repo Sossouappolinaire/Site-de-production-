@@ -376,6 +376,7 @@
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
+        <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/vip" data-nav="vip">VIP</a>
         <a href="#/formation" data-nav="formation">Formation</a>
@@ -613,6 +614,7 @@
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
@@ -2213,23 +2215,25 @@ Faites-en bon usage !
     }
     function addOverlapTrackerModal() {
       const opts = optsHtmlGlobal(snapshot.overlap?.options || [], snapshot.overlap?.channelHints || {});
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle source suivie</span><h3 style="margin-top:8px">Ajouter une source</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot, la stratégie IA « Prédit », une Formation, ou un autre panneau, puis définis le mode de déclenchement.</p></div></div>
-        <div class="field"><label>Source</label><select id="newOverlapKey">${opts}</select></div>
-        <p class="small muted" style="margin:4px 0 0">Le canal Telegram où la source publie actuellement (ex. « bo ») est affiché entre parenthèses dans la liste, pour la retrouver facilement.</p>
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle(s) source(s) suivie(s)</span><h3 style="margin-top:8px">Ajouter une ou plusieurs sources</h3><p class="small" style="margin:0">Sélectionne une ou plusieurs sources (Ctrl/Cmd+clic, ou glisse la sélection, pour en choisir plusieurs) — les MÊMES réglages ci-dessous s'appliqueront à chacune, en une seule fois. Choisis une stratégie existante du bot, la stratégie IA « Prédit », une Formation, ou un autre panneau, puis définis le mode de déclenchement.</p></div></div>
+        <div class="field"><label>Source(s) — sélection multiple possible</label><select id="newOverlapKey" multiple size="8">${opts}</select></div>
+        <p class="small muted" style="margin:4px 0 0">Le canal Telegram où chaque source publie actuellement (ex. « bo ») est affiché entre parenthèses dans la liste, pour la retrouver facilement.</p>
         ${overlapSettingsRow('ovnew', null)}
         ${overlapChannelFormatRow('ovnew', { channels: [], format: null, siteChannelId: null })}
-        <div class="field"><label>Nom de cette source <span class="small">(optionnel — vide = nom de la source)</span></label><input id="ovnew-name" placeholder="Ex. Chevauchement Dominant"></div>
+        <div class="field"><label>Nom de cette source <span class="small">(optionnel — vide = nom de la source ; ignoré si plusieurs sources sont sélectionnées)</span></label><input id="ovnew-name" placeholder="Ex. Chevauchement Dominant"></div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addOverlapTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function addOverlapTracker() {
-      const key = val('newOverlapKey');
+      const sel = $('#newOverlapKey');
+      const keys = sel ? Array.from(sel.selectedOptions).map(o => o.value) : [];
+      if (!keys.length) return toast('Sélectionne au moins une source.', 'error');
       const { mode, offset } = readOverlapSettings('ovnew');
       const { channels, siteChannelId, format, maxR } = readOverlapChannelFormat('ovnew');
       const name = val('ovnew-name');
       try {
-        await api('/api/overlap/trackers', 'POST', { key, mode, offset, channels, siteChannelId, format, maxR, name });
+        const r = await api('/api/overlap/trackers', 'POST', { keys, mode, offset, channels, siteChannelId, format, maxR, name });
         closeModal(); await refresh(); overlapPage();
-        toast('Source ajoutée au chevauchement de prédictions.');
+        toast(`${r.created?.length || keys.length} source(s) ajoutée(s) au chevauchement de prédictions.`);
       } catch (e) { toast(e.message, 'error'); }
     }
     async function updateOverlapTracker(id) {
@@ -2257,6 +2261,47 @@ Faites-en bon usage !
     async function removeOverlapChannel() { try { await api('/api/overlap/channel', 'DELETE'); await refresh(); overlapPage(); } catch (e) { toast(e.message, 'error'); } }
     async function overlapTest() {
       try { const r = await api('/api/overlap/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // -------------------------------------------------------------------
+    // « Statistiques » (voir statistics.js) — PAS un panneau de prédiction :
+    // relais brut des costumes/cartes reçus de l'API Baccara vers un canal
+    // Telegram configuré.
+    // -------------------------------------------------------------------
+    function statisticsPage() {
+      setNav('statistics');
+      const p = snapshot.statistics || {};
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Flux brut</span><h2 style="margin-top:7px">Statistiques</h2><p class="small">Relaie automatiquement, vers le canal Telegram configuré, les costumes et cartes bruts reçus de l'API Baccara (les mêmes données que le bouton « Canaux »), mis en forme en direct. Un jeu qui n'a pas encore commencé n'est jamais envoyé ; dès qu'il démarre, un message est envoyé puis mis à jour au fil des cartes, jusqu'au résultat final.</p></div><div class="toolbar"><button class="button ghost" onclick="statisticsPage()">Actualiser</button></div></div>
+        <div class="two-col">
+          <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram</strong></div><p>Ce canal reçoit un message par jeu, envoyé dès son démarrage puis édité jusqu'au résultat final.</p>
+            <div class="field"><label>ID ou @nom du canal</label><input id="statisticsChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveStatisticsChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="statisticsTest()">Envoyer un test</button><button class="button small danger" onclick="removeStatisticsChannel()">Retirer</button></div>
+            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
+          <div class="panel"><h3>Réglages</h3>
+            <label class="check"><input id="statisticsEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer les statistiques</label>
+            <dl style="margin-top:16px"><dt>Jeux suivis actuellement</dt><dd>${esc(String(p.trackedCount || 0))}</dd><dt>Messages envoyés</dt><dd>${esc(String(p.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(p.lastSentAt)}</dd><dt>Dernier scan</dt><dd>${formatDate(p.lastScanAt)}</dd></dl>
+            <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveStatistics()">Enregistrer</button></div></div>
+        </div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Notation</span><h2 style="margin-top:7px">Rappel du format</h2></div></div>
+          <p class="small">⏰ jeu en cours · ▶️ la main en train de tirer sa 3ᵉ carte · ✅ la main gagnante (une fois terminé) · 🔰 égalité (remplace le « - ») · #T total joueur+banquier · #X match nul · #R les deux mains n'ont eu que 2 cartes · 🔵 joueur gagnant · 🔴 banquier gagnant · 🟣 égalité.</p>
+          <p class="mono small" style="margin-top:8px">#N1153. ✅8(6♠️2♦️) - 0(J♠️Q♣️) #T8 🔵 #R</p>
+          <p class="mono small">#N1159. 7(5♦️2♥️) 🔰 7(5♠️2♦️) #T14 🟣#X #R</p>
+          <p class="mono small">⏰ #N1163. ▶️2(2♥️J♥️) - 5(A♣️4♥️)</p></section>`;
+    }
+    async function saveStatistics() {
+      try { await api('/api/statistics/config', 'POST', { enabled: $('#statisticsEnabled')?.checked }); await refresh(); statisticsPage(); toast('Panneau « Statistiques » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveStatisticsChannel() {
+      const list = ids(val('statisticsChannel'));
+      if (!list.length) return toast('Indique un ID ou @nom de canal.', 'error');
+      try { const r = await api('/api/statistics/channel', 'POST', { channelId: list[0] }); await refresh(); statisticsPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeStatisticsChannel() { try { await api('/api/statistics/channel', 'DELETE'); await refresh(); statisticsPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function statisticsTest() {
+      try { const r = await api('/api/statistics/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
       catch (e) { toast(e.message, 'error'); }
     }
 
@@ -3519,6 +3564,7 @@ Faites-en bon usage !
         else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/overlap') overlapPage();
+        else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
