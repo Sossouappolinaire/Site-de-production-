@@ -16,6 +16,7 @@ const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const suitBreak = require('./suit-break');
+const overlap = require('./overlap');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const formationRelay = require('./formation-relay');
@@ -2286,6 +2287,11 @@ async function tick() {
       // la rupture déclenche sur son propre numéro, en prédisant le costume
       // original (voir suit-break.js).
       suitBreak.tick(),
+      // panneau « Chevauchement de prédictions » : surveille UNE source
+      // (stratégie, IA, formation, ou un autre panneau), déclenche sur la
+      // 2ᵉ prédiction quand elle arrive avant que la 1ʳᵉ soit vérifiée —
+      // même prédiction / miroir / +n (voir overlap.js).
+      overlap.tick(),
       // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
       // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur
       // début+34 déclenchées quand le jeu en live arrive à −3/−2 de la
@@ -2469,6 +2475,7 @@ async function applyDbConfigs() {
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
   await suitBreak.restoreFromDb();
+  await overlap.restoreFromDb();
   await cardsCount.restoreFromDb();
   await vip.restoreFromDb();
   await predictionControl.restoreFromDb();
@@ -2529,6 +2536,8 @@ async function startLoop() {
   suitStreak.setSender(senderFor);
   suitBreak.restore();
   suitBreak.setSender(senderFor);
+  overlap.restore();
+  overlap.setSender(senderFor);
   cardsCount.restore();
   cardsCount.setSender(senderFor);
   vip.restore();

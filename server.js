@@ -44,6 +44,7 @@ const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const suitBreak = require('./suit-break');
+const overlap = require('./overlap');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
@@ -298,6 +299,57 @@ app.post('/api/users/:id/reject', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
+// « Chevauchement de prédictions » (voir overlap.js) — pour aider l'admin à
+// retrouver une source par le NOM/ID du canal Telegram où elle publie déjà
+// (ex. l'admin connaît le canal « bo » mais pas forcément la clé interne de
+// la stratégie qui y envoie), on résout ici, pour chaque option disponible
+// dans overlap.options(), le(s) canal(aux) Telegram où cette source publie
+// ACTUELLEMENT — pour affichage uniquement dans le sélecteur du tableau de
+// bord (ça ne change rien au fonctionnement du panneau lui-même).
+async function overlapSourceChannelHints() {
+  const hints = {};
+  const bot = botStatus();
+  async function addHint(key, ids) {
+    if (!key || !Array.isArray(ids) || !ids.length) return;
+    const names = [];
+    for (const id of ids.slice(0, 3)) {
+      if (bot.tokenSet) {
+        const check = await resolveChat(id);
+        names.push(check.ok ? (check.chat.title || String(id)) : String(id));
+      } else {
+        names.push(String(id));
+      }
+    }
+    if (names.length) hints[key] = names;
+  }
+  // stratégies existantes : canal publié (celui du bouton « Envoyer »).
+  for (const def of strategies.LIST) {
+    await addHint(def.key, strategyChannels(def.key, 'published'));
+  }
+  // IA « Prédit » : canal propre du panneau.
+  await addHint('ia', predit.panel.channels);
+  // Formations : canal propre par stratégie, sinon canal par défaut du panneau.
+  const frStatus = formationRelay.status();
+  const frDefault = Array.isArray(frStatus.channels) ? frStatus.channels : [];
+  for (const s of (frStatus.strategies || [])) {
+    await addHint(`formation:${s.key}`, (Array.isArray(s.channels) && s.channels.length) ? s.channels : frDefault);
+  }
+  // panneaux « frères » (chaque tracker peut avoir son propre canal, sinon
+  // celui du panneau) : après-perte, combinée, répétition, rupture.
+  async function addPanelHints(mod, prefix) {
+    const st = mod.status();
+    const defaultChannels = Array.isArray(st.channels) ? st.channels : [];
+    for (const t of (mod.panel.trackers || [])) {
+      await addHint(`${prefix}:${t.id}`, (Array.isArray(t.channels) && t.channels.length) ? t.channels : defaultChannels);
+    }
+  }
+  await addPanelHints(afterLoss, 'after');
+  await addPanelHints(combined, 'combo');
+  await addPanelHints(suitStreak, 'streak');
+  await addPanelHints(suitBreak, 'break');
+  return hints;
+}
+
 app.get('/api/state', async (req, res) => {
   const aiCreatedKeys = new Set(aiRepair.status().createdStrategyKeys || []);
   res.json({
@@ -362,6 +414,7 @@ app.get('/api/state', async (req, res) => {
     combined: combined.status(),
     suitStreak: suitStreak.status(),
     suitBreak: suitBreak.status(),
+    overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     cardsCount: cardsCount.status(),
     vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
@@ -2129,6 +2182,74 @@ app.delete('/api/suit-streak/trackers/:id', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// « Chevauchement de prédictions » (voir overlap.js) — nouveau bouton
+// (demande admin) : sélection d'UNE source (stratégie, IA, formation, ou un
+// autre panneau), surveillance prédiction par prédiction — dès qu'une 2ᵉ
+// prédiction arrive alors que la 1ʳᵉ n'est pas encore vérifiée, on déclenche
+// SUR LA 2ᵉ (jamais la 1ʳᵉ), selon le mode choisi : même prédiction, costume
+// miroir, ou +n jeux.
+// ---------------------------------------------------------------------------
+app.get('/api/overlap', async (req, res) => res.json({ ...overlap.status(), channelHints: await overlapSourceChannelHints() }));
+
+app.post('/api/overlap/config', (req, res) => {
+  overlap.configure(req.body || {});
+  res.json(overlap.status());
+});
+
+app.post('/api/overlap/channel', async (req, res) => {
+  const idsList = overlap.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  overlap.configure({ channels: idsList });
+  const notice = await overlap.test();
+  res.json({ ok: true, channel: check.chat, notice, overlap: overlap.status() });
+});
+
+app.delete('/api/overlap/channel', (req, res) => {
+  overlap.configure({ channels: [] });
+  res.json(overlap.status());
+});
+
+app.post('/api/overlap/test', async (req, res) => {
+  const r = await overlap.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/overlap/scan', async (req, res) => {
+  await overlap.tick();
+  res.json(overlap.status());
+});
+
+app.post('/api/overlap/trackers', async (req, res) => {
+  try {
+    const t = overlap.addTracker(req.body && req.body.key, {
+      mode: req.body && req.body.mode,
+      offset: req.body && req.body.offset,
+      channels: req.body && req.body.channels,
+      siteChannelId: req.body && req.body.siteChannelId,
+      format: req.body && req.body.format,
+      maxR: req.body && req.body.maxR,
+      name: req.body && req.body.name,
+    });
+    res.json({ ok: true, tracker: t, overlap: overlap.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/overlap/trackers/:id', (req, res) => {
+  try {
+    const t = overlap.updateTracker(req.params.id, req.body || {});
+    if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    res.json({ ok: true, tracker: t, overlap: overlap.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/overlap/trackers/:id', (req, res) => {
+  overlap.removeTracker(req.params.id);
+  res.json(overlap.status());
+});
+
+// ---------------------------------------------------------------------------
 // « Rupture de costume » (voir suit-break.js) — nouveau bouton (demande
 // admin) : sélection d'UNE source (stratégie, IA, ou formation), série de N
 // prédictions CONSÉCUTIVES de MÊME costume, puis attente de la RUPTURE
@@ -2288,6 +2409,7 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   panels.push(await trackerPanel('combined', 'Prédiction combinée', combined, 'combined'));
   panels.push(await trackerPanel('suit-streak', 'Série de même costume', suitStreak, 'suit-streak'));
   panels.push(await trackerPanel('suit-break', 'Rupture de costume', suitBreak, 'suit-break'));
+  panels.push(await trackerPanel('overlap', 'Chevauchement de prédictions', overlap, 'overlap'));
   {
     const st = cardsCount.status();
     const cfg = st.config || st;
@@ -2390,7 +2512,7 @@ app.post('/api/prediction-control', (req, res) => {
 // existantes (série/rupture de costume, après-perte, combinée) ou l'entrée
 // « formation » par stratégie ; centralisé ici pour que le bouton « Canaux »
 // n'ait qu'un seul endpoint à appeler quel que soit le panneau d'origine.
-const TRACKER_PANELS = { 'after-loss': afterLoss, combined, 'suit-streak': suitStreak, 'suit-break': suitBreak };
+const TRACKER_PANELS = { 'after-loss': afterLoss, combined, 'suit-streak': suitStreak, 'suit-break': suitBreak, overlap };
 app.put('/api/diagnostics/panels/:panel/trackers/:id/channel', async (req, res) => {
   const mod = TRACKER_PANELS[req.params.panel];
   if (!mod) return res.status(404).json({ error: 'Panneau inconnu' });
