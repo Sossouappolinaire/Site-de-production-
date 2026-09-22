@@ -166,15 +166,31 @@ function hasStarted(g) {
 // AUTRE table/flux que celle réellement suivie (numérotation qui repart de
 // très bas, mélangée aux vrais numéros du jeu en cours — ex. #N1..#N9
 // mélangés à #N409/#N410). On ne relaie QUE le jeu réellement EN DIRECT
-// (state.live, déjà calculé par predictor.js — c'est lui la référence de
-// « quelle table on suit vraiment », pas une simple proximité de numéro) —
-// plus, pour finir proprement son édition finale, un jeu déjà suivi (il
-// ÉTAIT le jeu en direct à un tour précédent, avant de se terminer). Tout
-// le reste est bloqué : il ne vient pas de la table réellement suivie.
+// (state.live, déjà calculé par predictor.js) — plus, pour finir proprement
+// son édition finale, un jeu déjà suivi (il ÉTAIT le jeu en direct à un
+// tour précédent, avant de se terminer).
+//
+// RATTRAPAGE (correctif : « ça saute des jeux ») : certains jeux se
+// terminent si vite entre deux sondages (≈1,5 s) qu'ils ne sont JAMAIS
+// capturés comme « en direct » — ils apparaissent déjà terminés dès la
+// première fois qu'on les voit. Sans rattrapage, isRealLiveGame() les
+// bloquerait à tort (ni state.live, ni déjà suivi), créant des trous dans
+// le flux (#N448 puis #N451 directement, par exemple). On les accepte donc
+// aussi s'ils sont CONTIGUS avec ce qu'on a déjà confirmé comme réellement
+// suivi (le jeu en direct actuel, ou le dernier numéro déjà suivi) — une
+// autre table, elle, reste à des centaines de numéros d'écart et donc
+// bloquée.
+const CATCHUP_WINDOW = 15;
+function maxTrackedNumber() {
+  const nums = Object.keys(panel.tracked).map(Number);
+  return nums.length ? Math.max(...nums) : null;
+}
 function isRealLiveGame(g) {
   if (state.live && g.number === state.live.number) return true;
   if (panel.tracked[g.number]) return true;
-  return false;
+  const ref = state.live ? state.live.number : maxTrackedNumber();
+  if (ref == null) return true; // rien à comparer encore : on laisse passer prudemment
+  return g.finished && g.number < ref && (ref - g.number) <= CATCHUP_WINDOW;
 }
 
 // ---------------------------------------------------------------------------
