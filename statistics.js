@@ -162,6 +162,21 @@ function hasStarted(g) {
   return g.complete !== false && ((g.playerCards || 0) > 0 || (g.bankerCards || 0) > 0);
 }
 
+// BLOCAGE (demande admin) : l'API peut renvoyer/fusionner des jeux d'une
+// AUTRE table/flux que celle réellement suivie (numérotation qui repart de
+// très bas, mélangée aux vrais numéros du jeu en cours — ex. #N1..#N9
+// mélangés à #N409/#N410). On ne relaie QUE le jeu réellement EN DIRECT
+// (state.live, déjà calculé par predictor.js — c'est lui la référence de
+// « quelle table on suit vraiment », pas une simple proximité de numéro) —
+// plus, pour finir proprement son édition finale, un jeu déjà suivi (il
+// ÉTAIT le jeu en direct à un tour précédent, avant de se terminer). Tout
+// le reste est bloqué : il ne vient pas de la table réellement suivie.
+function isRealLiveGame(g) {
+  if (state.live && g.number === state.live.number) return true;
+  if (panel.tracked[g.number]) return true;
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Envoi / édition
 // ---------------------------------------------------------------------------
@@ -193,6 +208,7 @@ async function editExisting(messages, text) {
 
 async function processGame(g) {
   if (!hasStarted(g)) return; // « un jeu qui n'a pas encore commencé n'est pas envoyé »
+  if (!isRealLiveGame(g)) return; // pas la table réellement suivie : on bloque
   const sig = signatureOf(g);
   const entry = panel.tracked[g.number];
   const text = buildLine(g);
