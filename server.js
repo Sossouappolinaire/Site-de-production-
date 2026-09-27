@@ -20,8 +20,6 @@ process.on('uncaughtException', (err) => {
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
-const { Pool } = require('pg');
-const pgSessionStore = require('connect-pg-simple')(session);
 const hybridStore = require('./session-store');
 const { databaseUrl } = require('./database-url');
 const config = require('./config');
@@ -82,23 +80,27 @@ app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 // seule au démarrage) — sans ça (store par défaut = mémoire du process),
 // tout le monde est déconnecté à chaque redémarrage/redéploiement Render.
 // ---------------------------------------------------------------------------
-const SESSION_DB_URL = databaseUrl() || config.DATABASE_URL;
-const sessionPool = new Pool({
-  connectionString: SESSION_DB_URL,
-  ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
-  max: 4,
-});
-sessionPool.on('error', (e) => console.error('Pool de sessions (pg) :', e.message));
+const SESSION_DB_URL = databaseUrl(); // vide = mode sans base de données
+let sessionStoreInstance;
+if (SESSION_DB_URL) {
+  const { Pool } = require('pg');
+  const pgSessionStore = require('connect-pg-simple')(session);
+  const sessionPool = new Pool({
+    connectionString: SESSION_DB_URL,
+    ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
+    max: 4,
+  });
+  sessionPool.on('error', (e) => console.error('Pool de sessions (pg) :', e.message));
+  sessionStoreInstance = hybridStore(new pgSessionStore({
+    pool: sessionPool, tableName: 'user_sessions', createTableIfMissing: true, pruneSessionInterval: 60 * 60,
+  }));
+} else {
+  console.log('Mode sans base de données : sessions en mémoire.');
+  sessionStoreInstance = new session.MemoryStore();
+}
 
 app.use(session({
-  // base de données quand elle répond, mémoire du process en repli : ainsi la
-  // connexion de secours de l'administrateur marche même base éteinte.
-  store: hybridStore(new pgSessionStore({
-    pool: sessionPool,
-    tableName: 'user_sessions',
-    createTableIfMissing: true,
-    pruneSessionInterval: 60 * 60, // purge des sessions expirées toutes les heures
-  })),
+  store: sessionStoreInstance,
   name: 'baccara.sid',
   secret: process.env.SESSION_SECRET || 'baccara-bot-changeme-secret',
   resave: false,

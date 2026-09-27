@@ -22,6 +22,10 @@ module.exports = {
   // prioritaire pour changer de base sans modifier le code.
   DATABASE_URL: databaseUrl(),
 
+  // ---- compte administrateur (fonctionne sans base de données) --------
+  ADMIN_IDENTIFIER: (process.env.ADMIN_IDENTIFIER || 'sossoukouam').trim().toLowerCase(),
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'arrow2026',
+
   // ---- Telegram ---------------------------------------------------------
   BOT_TOKEN: process.env.BOT_TOKEN || '',
   SHOP_BOT_TOKEN: process.env.SHOP_BOT_TOKEN || '',

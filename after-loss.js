@@ -1007,6 +1007,7 @@ function updateTracker(id, patch = {}) {
     tracker.decadeSession = null;
     tracker.lastDecadeEnd = trackerBaseline(tracker.key);
   }
+
   if (patch.channels !== undefined) {
     tracker.channels = parseChannels(patch.channels);
   }

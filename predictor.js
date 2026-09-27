@@ -138,6 +138,9 @@ function setStrategyConfig(key, patch = {}) {
   // stratégie « Dominant Baccarat » : écart minimum (en jeux) entre deux
   // prédictions successives de cette stratégie
   if (key === 'dominant' && patch.gap !== undefined) next.gap = Math.max(1, Math.min(20, parseInt(patch.gap, 10) || 3));
+  // stratégie « Absence — costume absent chez le joueur » : liste des cases
+  // Abs:N cochées (voir strategies.js/sanitizeAbsenceEntries).
+  if (key === 'absenceJoueur' && patch.entries !== undefined) next.entries = strategies.sanitizeAbsenceEntries(patch.entries);
   // mode silencieux 1 — RÉSERVÉ à la stratégie « ombre », et OBLIGATOIRE pour
   // elle : ombre fonctionne exclusivement via ce filtre, `silent` ne peut donc
   // jamais y être désactivé (patch.silent est ignoré pour cette clé). Pour

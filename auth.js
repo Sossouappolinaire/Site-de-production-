@@ -15,8 +15,8 @@ const bcrypt = require('bcryptjs');
 const db = require('./db');
 const config = require('./config');
 
-const ADMIN_IDENTIFIER = 'sossoukouam';
-const ADMIN_PASSWORD_DEFAULT = 'arrow2026';
+const ADMIN_IDENTIFIER = config.ADMIN_IDENTIFIER || 'sossoukouam';
+const ADMIN_PASSWORD_DEFAULT = config.ADMIN_PASSWORD || 'arrow2026';
 // contact affiché à un compte bloqué (temps accordé par l'admin écoulé)
 const TELEGRAM_CONTACT = 't.me/Kouamappoloak';
 
@@ -70,9 +70,8 @@ async function login(identifierRaw, password) {
   // « arrow2026 ») est accepté même si la base de données n'est pas connectée,
   // pour ne jamais rester enfermé dehors pendant une panne/veille de la base.
   if (identifier === ADMIN_IDENTIFIER && pwd === ADMIN_PASSWORD_DEFAULT) {
-    if (!db.ready) {
-      return { ok: true, userId: -1, identifier: ADMIN_IDENTIFIER, role: 'admin', offline: true };
-    }
+    // Admin défini dans config.js : connexion immédiate, avec ou sans base.
+    return { ok: true, userId: -1, identifier: ADMIN_IDENTIFIER, role: 'admin', offline: !db.ready };
   }
   if (!db.ready) return { ok: false, error: 'Base de données non connectée.' };
   const user = await findUser(identifier);

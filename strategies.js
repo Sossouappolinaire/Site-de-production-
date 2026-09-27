@@ -796,6 +796,182 @@ const dizaine = {
 };
 
 // ---------------------------------------------------------------------------
+// 9bis) Absence — costume absent chez le joueur (demande admin)
+// ---------------------------------------------------------------------------
+// Surveille les 4 costumes sur la main du JOUEUR uniquement (jamais le
+// banquier). Pour chaque costume, calcule sa série d'absence EN COURS :
+// depuis combien de jeux CONSÉCUTIFS il n'est pas apparu chez le joueur.
+// L'admin coche une ou plusieurs cases par NOMBRE EXACT de jeux d'absence
+// (ex. Abs:2, Abs:3, Abs:4… — jamais une plage), chacune réglée
+// indépendamment. Dès que la série d'absence d'un costume atteint
+// EXACTEMENT une valeur cochée, deux choses partent, INDÉPENDANTES l'une de
+// l'autre :
+//   1) La 1ʳᵉ prédiction, selon le mode choisi pour cette case :
+//      - 'miroir_immediat' : miroir du costume absent, à +1
+//      - 'miroir_plus2'    : miroir du costume absent, à +2
+//      - 'absent_lui_meme' : le costume absent lui-même, à +1
+//   2) Une cascade : le costume absent lui-même, répété n fois, la 1ʳᵉ à
+//      +d puis +g à chaque fois — on attend la vérification de chaque
+//      prédiction avant de publier la suivante.
+// Une fois la cascade ENTIÈREMENT vérifiée (les n prédictions résolues),
+// UNE dernière prédiction part : le MIROIR du costume absent, à +d+k.
+//
+// Cette séquence est étalée sur PLUSIEURS appels de detect() (un par jeu
+// terminé) — une file d'attente en mémoire (absenceRuntime, jamais
+// persistée : elle repart toujours de zéro au redémarrage, comme le reste
+// du suivi de session dans ce projet) retient les étapes encore à envoyer.
+function sanitizeAbsenceMode(value) {
+  return (value === 'miroir_plus2' || value === 'absent_lui_meme') ? value : 'miroir_immediat';
+}
+function sanitizeAbsenceEntry(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : Math.max(1, parseInt(src.format, 10) || 1);
+  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
+  return {
+    games: Math.max(1, Math.min(30, parseInt(src.games, 10) || 2)), // nombre EXACT de jeux d'absence
+    enabled: !!src.enabled,
+    firstMode: sanitizeAbsenceMode(src.firstMode),
+    n: Math.max(0, Math.min(50, parseInt(src.n, 10) || 3)),
+    g: Math.max(1, Math.min(100, parseInt(src.g, 10) || 5)),
+    d: Math.max(1, Math.min(100, parseInt(src.d, 10) || 4)),
+    k: Math.max(0, Math.min(100, parseInt(src.k, 10) || 2)),
+    maxR: maxRRaw,
+    format: fmtRaw,
+  };
+}
+function sanitizeAbsenceEntries(input) {
+  const rawEntries = Array.isArray(input) ? input : [];
+  const byGames = new Map(); // une seule case par nombre exact de jeux (la dernière l'emporte en cas de doublon)
+  for (const e of rawEntries) {
+    const clean = sanitizeAbsenceEntry(e);
+    byGames.set(clean.games, clean);
+  }
+  return [...byGames.values()].sort((a, b) => a.games - b.games);
+}
+// file d'attente d'exécution — JAMAIS persistée (repart de zéro au
+// redémarrage, comme tout le suivi de session ailleurs dans ce projet).
+const absenceRuntime = { queue: [], lastAbsenceEnd: 0 };
+function playerAbsenceRun(gamesMap, lastNumber, suit, maxLookback) {
+  let run = 0;
+  for (let n = lastNumber; n >= 1 && run < maxLookback; n--) {
+    const g = gamesMap.get(n);
+    if (!g || !g.finished) break;
+    const ps = suitsOf(g.playerSuits);
+    if (!ps || !ps.length) break; // cartes non lisibles : on arrête le comptage ici
+    if (ps.includes(suit)) break; // le costume est présent : la série d'absence s'arrête ici
+    run += 1;
+  }
+  return run;
+}
+function absenceFirstPrediction(entry, suit, trigger) {
+  if (entry.firstMode === 'miroir_plus2') return { target: trigger + 2, suit: MIRROR[suit] || suit, mode: 'miroir à +2' };
+  if (entry.firstMode === 'absent_lui_meme') return { target: trigger + 1, suit, mode: 'costume absent à +1' };
+  return { target: trigger + 1, suit: MIRROR[suit] || suit, mode: 'miroir à +1' };
+}
+
+const absenceJoueur = {
+  key: 'absenceJoueur',
+  name: 'Absence — costume absent chez le joueur',
+  about:
+    "Surveille les 4 costumes sur la main du JOUEUR uniquement (jamais le " +
+    "banquier). Coche un ou plusieurs nombres EXACTS de jeux d'absence " +
+    "consécutive à surveiller (ex. Abs:2, Abs:3, Abs:4… — jamais une " +
+    "plage), chacun réglé indépendamment. Dès que la série d'absence d'un " +
+    "costume atteint EXACTEMENT une valeur cochée : (1) la 1ʳᵉ prédiction " +
+    "part aussitôt, selon le mode choisi (miroir immédiat à +1, miroir à " +
+    "+2, ou le costume absent lui-même à +1) ; (2) en parallèle, une " +
+    "cascade démarre : le costume absent répété n fois, la 1ʳᵉ à +d puis " +
+    "+g à chaque fois, en attendant la vérification de chacune avant la " +
+    "suivante ; (3) une fois cette cascade entièrement vérifiée, un " +
+    "dernier miroir du costume absent est prédit, à +d+k.",
+  defaults: {
+    enabled: false,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    template: null,
+    channels: [],
+    entries: [], // voir sanitizeAbsenceEntries()
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const predictions = ((ctx && ctx.predictions) || []).filter((p) => p.strategy === 'absenceJoueur');
+    const already = (target) => predictions.some((p) => p.target === target);
+    const resolved = (target) => {
+      const p = predictions.find((pr) => pr.target === target);
+      return !p || p.status !== 'en attente'; // introuvable (déjà écarté) = considéré comme résolu
+    };
+
+    // 1) vide la file d'attente en cours (1ʳᵉ prédiction / cascade / miroir final)
+    while (absenceRuntime.queue.length) {
+      const item = absenceRuntime.queue[0];
+      if (already(item.target)) { absenceRuntime.queue.shift(); continue; }
+      if (item.waitFor != null && !resolved(item.waitFor)) return null; // on attend encore la vérification
+      absenceRuntime.queue.shift();
+      return {
+        kind: 'suit', target: item.target, suit: item.suit, label: item.suit,
+        trigger: null, // pas de dédoublonnage par déclencheur ici : géré par absenceRuntime lui-même
+        maxR: item.maxR != null ? item.maxR : cfg.maxR,
+        format: item.format || null,
+        reason: item.reason,
+        meta: { absenceEntry: item.entryGames, step: item.step, triggerGame: item.trigger },
+      };
+    }
+
+    // 2) file vide : cherche un nouveau déclenchement (jeu par jeu, jamais
+    //    deux fois le même jeu terminé).
+    if (game.number <= absenceRuntime.lastAbsenceEnd) return null;
+    const entries = (cfg.entries || []).filter((e) => e && e.enabled);
+    if (!entries.length) return null;
+    const maxLookback = entries.reduce((m, e) => Math.max(m, e.games), 0);
+    for (const suit of SUITS) {
+      const run = playerAbsenceRun(ctx.games, game.number, suit, maxLookback);
+      if (!run) continue;
+      const entry = entries.find((e) => e.games === run);
+      if (!entry) continue;
+      absenceRuntime.lastAbsenceEnd = game.number;
+      const first = absenceFirstPrediction(entry, suit, game.number);
+      const queueItems = [{
+        target: first.target, suit: first.suit, waitFor: null, trigger: game.number,
+        entryGames: run, step: '1ʳᵉ prédiction', maxR: entry.maxR, format: entry.format,
+        reason: `Absence de ${suit} chez le joueur sur ${run} jeux (#N${game.number}) → 1ʳᵉ prédiction (${first.mode})`,
+      }];
+      let last = game.number;
+      const n = Math.max(0, entry.n || 0);
+      for (let i = 1; i <= n; i++) {
+        const target = i === 1 ? game.number + entry.d : last + entry.g;
+        queueItems.push({
+          target, suit, waitFor: i === 1 ? null : last, trigger: game.number,
+          entryGames: run, step: `costume absent ${i}/${n}`, maxR: entry.maxR, format: entry.format,
+          reason: `Absence de ${suit} chez le joueur sur ${run} jeux (#N${game.number}) → costume absent ${i}/${n} (#N${target})`,
+        });
+        last = target;
+      }
+      if (n > 0) {
+        queueItems.push({
+          target: game.number + entry.d + entry.k, suit: MIRROR[suit] || suit, waitFor: last, trigger: game.number,
+          entryGames: run, step: 'miroir final', maxR: entry.maxR, format: entry.format,
+          reason: `Absence de ${suit} chez le joueur sur ${run} jeux (#N${game.number}) → miroir final, une fois la cascade vérifiée (#N${game.number + entry.d + entry.k})`,
+        });
+      }
+      absenceRuntime.queue.push(...queueItems);
+      const head = absenceRuntime.queue.shift(); // on émet la 1ʳᵉ prédiction dès cet appel ; le reste se vide aux appels suivants
+      return {
+        kind: 'suit', target: head.target, suit: head.suit, label: head.suit,
+        trigger: null,
+        maxR: head.maxR != null ? head.maxR : cfg.maxR,
+        format: head.format || null,
+        reason: head.reason,
+        meta: { absenceEntry: head.entryGames, step: head.step, triggerGame: head.trigger },
+      };
+    }
+    return null;
+  },
+};
+
+// ---------------------------------------------------------------------------
 // 10) Costume faible sur 2 cartes (miroir) — demande admin
 // ---------------------------------------------------------------------------
 // Filtre obligatoire : joueur 2 cartes ET banquier 2 cartes (mains « naturelles »,
@@ -1007,7 +1183,7 @@ const collecte = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, costumeFaible, collecte];
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, costumeFaible, collecte];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {
@@ -1083,4 +1259,5 @@ function catalog() {
 module.exports = {
   LIST, BY_KEY, SUITS, INVERSE, MIRROR, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
   normParity, triggerAt, triggerIndexOf, lastTriggerAtOrBefore, nextTriggerAfter, triggerSequence, varCounterAt,
+  sanitizeAbsenceEntries,
 };
