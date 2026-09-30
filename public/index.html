@@ -1516,191 +1516,7 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveAfterLoss()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Stratégies suivies</span><h2 style="margin-top:7px">${trackers.length} stratégie(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.armed ? 'warn' : (t.counting ? 'warn' : 'good')}">${t.armed ? 'En attente de la prochaine prédiction' : (t.counting ? `Décompte en cours : ${esc(String(t.armedSeen))}/${esc(String(t.armedNeeded))}` : 'Surveillance')}</span></div>
-            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
-            ${afterLossNameRow('trk-' + t.id, t.name, t.name)}
-            ${afterLossCounters(t)}
-            <div id="opt-result-${esc(t.id)}"></div>
-            ${afterLossPredictionLists(t)}
-            ${t.category ? `<p class="small muted" style="margin:10px 0 0">${esc((AFTER_LOSS_CATEGORIES.find(c => c.id === t.category) || {}).name || '')}</p>` : ''}
-            ${afterLossCategoryBlocks('trk-' + t.id, t.category || 0, t)}
-            ${afterLossChannelFormatRow('trk-' + t.id, t)}
-            ${afterLossSummary(t)}
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser (IA)</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>'}</section>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
-          ${history.length ? `<table><thead><tr><th>Stratégie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
-    }
-    let afterLossNewCategory = 1;
-    function addAfterLossTrackerModal(category) {
-      afterLossNewCategory = [1, 2, 3].includes(Number(category)) ? Number(category) : afterLossNewCategory;
-      const cat = afterLossNewCategory;
-      const info = AFTER_LOSS_CATEGORIES.find(c => c.id === cat) || AFTER_LOSS_CATEGORIES[0];
-      const opts = (snapshot.afterLoss?.options || []).map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('');
-      const catOpts = AFTER_LOSS_CATEGORIES.map(c => `<option value="${c.id}" ${c.id === cat ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">1) Choisis la catégorie, 2) règle-la (rattrapage, canal, format), 3) choisis la stratégie à suivre, 4) donne-lui un nom avant d'enregistrer.</p></div></div>
-        <div class="field"><label>Catégorie de configuration</label><select id="newTrackerCategory" onchange="addAfterLossTrackerModal(this.value)">${catOpts}</select></div>
-        <p class="small muted" style="margin:0 0 6px">${esc(info.about)}</p>
-        ${afterLossCategoryBlocks('new', cat, null)}
-        ${afterLossChannelFormatRow('new', { channels: [], format: null })}
-        <div class="field" style="margin-top:14px"><label>Stratégie à suivre</label><select id="newTrackerKey">${opts}</select></div>
-        ${afterLossNameRow('new', '', 'ex. Rattrapage ♦️ +4')}
-        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
-    }
-    async function addAfterLossTracker(force) {
-      const key = val('newTrackerKey');
-      const category = afterLossNewCategory;
-      const blocks = readAfterLossCategoryBlocks('new', category);
-      const { channels, siteChannelId, format, maxR } = readAfterLossChannelFormat('new');
-      const payload = { key, category, name: val('new-name'), ...blocks, channels, siteChannelId, format, maxR, force: !!force };
-      try { await api('/api/after-loss/trackers', 'POST', payload); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
-      catch (e) {
-        // CORRECTIF « doublons de configuration » : au lieu d'un simple toast
-        // d'erreur, on affiche une fenêtre listant la (les) configuration(s)
-        // déjà identique(s), avec la possibilité de confirmer quand même.
-        if (e.status === 409 && e.data && e.data.code === 'DUPLICATE_CONFIG') {
-          showAfterLossConflictModal(e.data.conflicts || [], payload);
-          return;
-        }
-        toast(e.message, 'error');
-      }
-    }
-    function showAfterLossConflictModal(conflicts, payload) {
-      const rows = conflicts.map(c => `<tr>
-        <td>${esc(c.name)}</td>
-        <td class="mono">${esc((c.channels || []).join(', ') || '—')}</td>
-        <td>${esc(c.siteChannelId != null ? String(c.siteChannelId) : '—')}</td>
-        <td>${esc(String(c.format))}</td>
-      </tr>`).join('');
-      openModal(`<div class="modal-head"><div><span class="eyebrow">⚠️ Configuration déjà utilisée</span><h3 style="margin-top:8px">Cette stratégie suivie existe déjà avec les mêmes réglages</h3><p class="small" style="margin:0">Même stratégie suivie, même(s) canal(aux)/canal du site ET même format de prédiction qu'une configuration déjà enregistrée ci-dessous. Ajouter quand même créera un doublon (deux relais identiques pour le même résultat).</p></div></div>
-        <table style="margin-top:10px"><thead><tr><th>Stratégie suivie existante</th><th>Canal(aux)</th><th>Canal du site</th><th>Format</th></tr></thead><tbody>${rows}</tbody></table>
-        <div class="modal-actions" style="margin-top:14px">
-          <button class="button small danger" onclick="addAfterLossTracker(true)">Ajouter quand même</button>
-          <button class="button small ghost" onclick="addAfterLossTrackerModal()">Modifier les réglages</button>
-        </div>`);
-    }
-    async function updateAfterLossTriggers(id) {
-      const trk = (snapshot.afterLoss?.trackers || []).find(x => x.id === id) || {};
-      const cat = trk.category || 0;
-      const blocks = readAfterLossCategoryBlocks('trk-' + id, cat);
-      const { channels, siteChannelId, format, maxR } = readAfterLossChannelFormat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { name: val('trk-' + id + '-name'), category: cat, ...blocks, channels, siteChannelId, format, maxR }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function optimizeAfterLossTracker(id) {
-      const box = $(`#opt-result-${id}`);
-      if (box) box.innerHTML = '<div class="notice" style="margin:10px 0">Analyse de l\'historique en cours…</div>';
-      try {
-        const r = await api(`/api/after-loss/trackers/${encodeURIComponent(id)}/optimize`, 'POST', {});
-        if (!box) return;
-        const rows = (r.top || []).map(x => `<tr><td>${esc(x.label)}</td><td>${esc(String(x.n))}</td><td>${esc(String(x.wins))}/${esc(String(x.sends))}</td><td>${esc(String(x.ratePct))}%</td></tr>`).join('');
-        box.innerHTML = `<div class="notice" style="margin:10px 0"><b>Backtest sur ${esc(String(r.sampleSize))} prédiction(s) passée(s)</b><p class="small" style="margin:6px 0">${esc(r.explanation || '')}</p>${rows ? `<table style="margin-top:8px"><thead><tr><th>Déclencheur</th><th>N</th><th>Gagnés/Envois</th><th>Taux</th></tr></thead><tbody>${rows}</tbody></table>` : ''}</div>`;
-      } catch (e) { toast(e.message, 'error'); if (box) box.innerHTML = ''; }
-    }
-    async function removeAfterLossTracker(id) {
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); afterLossPage(); toast('Stratégie retirée du suivi.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function saveAfterLoss() {
-      const rawSite = val('afterLossSiteChannel');
-      try { await api('/api/after-loss/config', 'POST', { enabled: $('#afterLossEnabled')?.checked, lossNoticeEnabled: $('#afterLossLossNotice')?.checked, maxR: val('afterLossMaxR'), format: val('afterLossFormat'), channels: ids(val('afterLossChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); afterLossPage(); toast('Panneau « Prédiction après perte » enregistré.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function saveAfterLossChannel() {
-      const list = ids(val('afterLossChannel'));
-      if (!list.length) return toast('Renseigne un ID de canal.', 'error');
-      try { const r = await api('/api/after-loss/channel', 'POST', { channelId: list[0] }); await refresh(); afterLossPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function removeAfterLossChannel() { try { await api('/api/after-loss/channel', 'DELETE'); await refresh(); afterLossPage(); } catch (e) { toast(e.message, 'error'); } }
-
-    // -------------------------------------------------------------------
-    // « Prédiction combinée pour costume joueur » (voir combined.js) —
-    // même schéma d'écran que « Prédiction après perte », avec un « N »
-    // qui compte des occurrences CONSÉCUTIVES (pas un nombre à sauter), et
-    // un choix « même costume / inverse » + décalage +w au lieu d'un
-    // simple relais.
-    // -------------------------------------------------------------------
-    const COMBINED_LEVEL_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage 3', perdue: 'Perdue' };
-    function combinedRuleRows(prefix, rules) {
-      const r = rules || {};
-      return ['r1', 'r2', 'r3', 'perdue'].map((k) => {
-        const cur = r[k] || { enabled: false, need: 1, mode: 'relais', offset: 5 };
-        const m = cur.mode || 'relais';
-        // CORRECTIF (demande admin) : les options mode/+w étaient masquées
-        // tant que la case n'était pas cochée (repliées derrière un
-        // onchange) — désormais TOUJOURS visibles dès l'affichage de la
-        // ligne, cochée ou non, pour qu'on les voie immédiatement.
-        return `<div class="rule-row" style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-top:8px">
-          <div class="field-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <label class="check" style="flex:1;min-width:140px"><input id="${prefix}-${k}-on" type="checkbox" ${cur.enabled ? 'checked' : ''}> ${esc(COMBINED_LEVEL_LABELS[k])}</label>
-            <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Fois consécutives (N)</label><input id="${prefix}-${k}-need" type="number" min="1" max="20" value="${esc(String(cur.need || 1))}"></div>
-          </div>
-          <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e2e8f0" class="field-row">
-            <div class="field" style="max-width:340px;margin:0"><label style="font-size:11px">Une fois ce niveau atteint</label>
-              <select id="${prefix}-${k}-mode" onchange="document.getElementById('${prefix}-${k}-offset-wrap').style.display = this.value === 'relais' ? 'none' : ''">
-                <option value="relais" ${m === 'relais' ? 'selected' : ''}>Relayer la prochaine prédiction naturelle (défaut)</option>
-                <option value="meme" ${m === 'meme' ? 'selected' : ''}>Même costume que la dernière occurrence, +w jeux</option>
-                <option value="inverse" ${m === 'inverse' ? 'selected' : ''}>Son inverse (❤️↔♣️, ♦️↔♠️), +w jeux</option>
-              </select>
-            </div>
-            <div class="field" id="${prefix}-${k}-offset-wrap" style="max-width:130px;margin:0;${m === 'relais' ? 'display:none' : ''}"><label style="font-size:11px">Décalage (+w jeux)</label><input id="${prefix}-${k}-offset" type="number" min="1" max="50" value="${esc(String(cur.offset || 5))}"></div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-    function readCombinedRules(prefix) {
-      const out = {};
-      for (const k of ['r1', 'r2', 'r3', 'perdue']) {
-        out[k] = {
-          enabled: !!$(`#${prefix}-${k}-on`)?.checked,
-          need: val(`${prefix}-${k}-need`),
-          mode: val(`${prefix}-${k}-mode`),
-          offset: val(`${prefix}-${k}-offset`),
-        };
-      }
-      return out;
-    }
-    function combinedChannelFormatRow(prefix, tracker) {
-      const t = tracker || { channels: [], format: null };
-      return `<div class="field-row" style="display:flex;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
-        <div class="field" style="flex:1;min-width:220px;margin:0"><label style="font-size:11px">Canal(x) propre(s) (vide = canal du panneau)</label><input id="${prefix}-channels" value="${esc((t.channels || []).join(', '))}" placeholder="-1001234567890"></div>
-        <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Format propre (vide = panneau)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${t.format ?? ''}"></div>
-      </div>`;
-    }
-    function readCombinedChannelFormat(prefix) {
-      return { channels: ids(val(`${prefix}-channels`)), format: val(`${prefix}-format`) || null };
-    }
-    function combinedPage() {
-      setNav('combined');
-      const p = snapshot.combined || {};
-      const trackers = p.trackers || [];
-      const history = p.history || [];
-      const optsHtml = (opt) => {
-        const groups = {};
-        for (const o of (opt || [])) { (groups[o.group] = groups[o.group] || []).push(o); }
-        return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
-      };
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Sources multiples</span><h2 style="margin-top:7px">Prédiction combinée pour costume joueur</h2><p class="small">Sélectionne une ou plusieurs stratégies (ou formations) existantes. Pour chacune, coche un ou plusieurs niveaux de rattrapage avec un nombre N — N = combien de fois ce niveau doit arriver D'AFFILÉE avant de déclencher (N=2 → 2 rattrapages 2 consécutifs déclenchent au 2ᵉ ; N=1 → dès le 1ᵉʳ). Une fois déclenché, une nouvelle prédiction est envoyée automatiquement : même costume ou son inverse, +w jeux plus loin. Toujours sur la main du JOUEUR.</p></div><div class="toolbar"><button class="button primary" onclick="addCombinedTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="combinedPage()">Actualiser</button></div></div>
-        <div class="two-col">
-          <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit les prédictions combinées, sauf source avec son propre canal.</p>
-            <div class="field"><label>ID ou @nom du canal</label><input id="combinedChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
-            <div class="toolbar"><button class="button small primary" onclick="saveCombinedChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="combinedTest()">Envoyer un test</button><button class="button small danger" onclick="removeCombinedChannel()">Retirer</button></div>
-            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
-          <div class="panel"><h3>Réglages du panneau</h3>
-            <label class="check"><input id="combinedEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer la prédiction combinée</label>
-            <div class="two-col" style="margin-top:16px">
-              <div class="field"><label>Nombre de rattrapage</label><input id="combinedMaxR" type="number" min="0" max="9" value="${esc(String(p.maxR ?? 1))}"></div>
-              <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="combinedFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
-            </div>
-            <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveCombined()">Enregistrer</button></div></div>
-        </div>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.streakCount > 0 ? 'warn' : 'good'}">${t.streakCount > 0 ? `Série en cours : ${esc(COMBINED_LEVEL_LABELS[t.streakKind] || t.streakKind)} ×${esc(String(t.streakCount))}` : 'Surveillance'}</span></div>
-            <dl><dt>Envois combinés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(t.lastSentAt)}</dd>${t.armed ? `<dt>État</dt><dd><b>Armé — en attente de la prochaine prédiction source (${esc(COMBINED_LEVEL_LABELS[t.armedKind] || t.armedKind || '')})</b></dd>` : ''}<dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
-            ${combinedRuleRows('ct-' + t.id, t.rules)}
-            ${combinedChannelFormatRow('ct-' + t.id, t)}
-            <div class="field" style="margin-top:12px"><label>Nom de cette stratégie combinée <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ct-${esc(t.id)}-name" value="${esc(t.name)}"></div>
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateCombinedTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeCombinedTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+          <div id="ssCards">${suitStreakCardsHtml()}</div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers envois combinés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Source</th><th>Déclenché par</th><th>Mode</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${esc(h.triggeredBy || '—')}</td><td>${h.mode === 'inverse' ? 'Inverse' : h.mode === 'meme' ? 'Même costume' : 'Relais'}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun envoi combiné pour le moment.</div>'}</section>`;
     }
@@ -1803,13 +1619,17 @@ Faites-en bon usage !
         </div>
         <div class="field" id="${prefix}-mode-wrap" style="max-width:280px;margin:0;${predictSuit === 'mirror' ? 'display:none' : ''}"><label style="font-size:11px">Une fois la série atteinte, prédire sur</label>
           <select id="${prefix}-mode" onchange="document.getElementById('${prefix}-offset-wrap').style.display = this.value === 'offset' ? '' : 'none'">
-            <option value="next" ${mode !== 'offset' ? 'selected' : ''}>Le jeu suivant (target+1)</option>
+            <option value="next" ${mode === 'next' ? 'selected' : ''}>Le jeu suivant (target+1)</option>
+            <option value="nextpred" ${mode === 'nextpred' ? 'selected' : ''}>Au prédit suivant — même costume (dès que N atteint)</option>
+            <option value="mirror" ${mode === 'mirror' ? 'selected' : ''}>Au prédit suivant — miroir (❤️↔♦️, ♠️↔♣️)</option>
+            <option value="cross1" ${mode === 'cross1' ? 'selected' : ''}>Au prédit suivant — croisé A (♦️→♠️, ❤️→♣️)</option>
+            <option value="cross2" ${mode === 'cross2' ? 'selected' : ''}>Au prédit suivant — croisé B (❤️→♠️, ♦️→♣️)</option>
             <option value="offset" ${mode === 'offset' ? 'selected' : ''}>Décalage +Z jeux</option>
           </select>
         </div>
         <div class="field" id="${prefix}-offset-wrap" style="max-width:110px;margin:0;${mode === 'offset' ? '' : 'display:none'}"><label style="font-size:11px">Décalage +Z</label><input id="${prefix}-offset" type="number" min="1" max="20" value="${esc(String(offset))}"></div>
       </div>
-      <p class="small muted" style="margin:6px 0 0">Dès que N prédictions consécutives de même costume sont observées (peu importe gagné/perdu) : aucune perte parmi elles → prédiction immédiate. Au moins une perte parmi elles → le panneau attend que ce même costume revienne une prochaine fois (les autres costumes entre-temps n'interrompent pas l'attente), et c'est ce moment-là qui déclenche, une seule fois. Avec « Costume à surveiller » réglé sur un costume précis, toute prédiction d'un AUTRE costume est ignorée (ne compte ni ne casse la série) : seul ce costume-là est jamais compté. « Costume prédit » choisit ce qui est ensuite annoncé : le même costume que la série, sur le jeu suivant ou +Z décalage réglé ci-dessus — ou son miroir (❤️↔♦️, ♠️↔♣️), auquel cas le réglage « jeu suivant / décalage » ne s'applique PAS : le bot attend la PROCHAINE prédiction de la stratégie suivie (quel que soit son propre costume) et prédit le miroir de la série sur CE jeu-là, pas sur pred+1.</p>`;
+      <p class="small muted" style="margin:6px 0 0">Dès que N prédictions consécutives de même costume sont observées (peu importe gagné/perdu) : avec « même costume » + « jeu suivant », le panneau attend que la stratégie prédise un costume DIFFÉRENT (si c'est encore le même costume, il continue d'attendre) puis prédit le costume de la série sur le jeu de CETTE prédiction-là (ex. N=2 : 102♦️ 109♦️, puis 118❤️ → on prédit 118♦️). Avec « au prédit suivant » (même costume, croisé A ou croisé B) ou miroir : dès que N est atteint, il prédit sur la PROCHAINE prédiction de la stratégie (quel que soit son costume) — le costume de la série, son miroir, ou le costume croisé A/B. Avec « décalage +Z » : aucune perte parmi elles → prédiction immédiate. Au moins une perte parmi elles → le panneau attend que ce même costume revienne une prochaine fois (les autres costumes entre-temps n'interrompent pas l'attente), et c'est ce moment-là qui déclenche, une seule fois. Avec « Costume à surveiller » réglé sur un costume précis, toute prédiction d'un AUTRE costume est ignorée (ne compte ni ne casse la série) : seul ce costume-là est jamais compté. « Costume prédit » choisit ce qui est ensuite annoncé : le même costume que la série, sur le jeu suivant ou +Z décalage réglé ci-dessus — ou son miroir (❤️↔♦️, ♠️↔♣️), auquel cas le réglage « jeu suivant / décalage » ne s'applique PAS : le bot attend la PROCHAINE prédiction de la stratégie suivie (quel que soit son propre costume) et prédit le miroir de la série sur CE jeu-là, pas sur pred+1.</p>`;
     }
     function readSuitStreakSettings(prefix) {
       return { n: val(`${prefix}-n`), mode: val(`${prefix}-mode`), offset: val(`${prefix}-offset`), suitFilter: val(`${prefix}-suitFilter`), predictSuit: val(`${prefix}-predictSuit`) };
@@ -1832,6 +1652,82 @@ Faites-en bon usage !
       const siteChannelId = val(`${prefix}-siteChannel`);
       return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat, maxR: rawMaxR === '' ? null : rawMaxR };
     }
+    // Carte compacte d'une source : canal (nom + id), jeu en direct, les 4
+    // costumes aux 4 coins (compteur « x/N »), statut (En ligne / Stop /
+    // Planifié) et les 3 dernières prédictions publiées.
+    function suitStreakChannelsOf(t) {
+      const p = snapshot.suitStreak || {};
+      return (t.channels && t.channels.length) ? t.channels : (p.channels || []);
+    }
+    function suitStreakChannelLabel(id) {
+      const p = snapshot.suitStreak || {};
+      const title = (p.channelTitles || {})[String(id)];
+      return title ? `${title} · ${id}` : String(id);
+    }
+    function suitStreakStatus(t) {
+      const p = snapshot.suitStreak || {};
+      const c = snapshot.control || {};
+      const chans = suitStreakChannelsOf(t).map(x => String(x).toLowerCase());
+      if (p.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: 'panneau désactivé' };
+      if (c.paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'prédictions arrêtées' };
+      const paused = (c.pausedChannels || []).find(x => chans.includes(String(x.id).toLowerCase()) || (x.username && chans.includes(String(x.username).toLowerCase())));
+      if (paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'canal arrêté' };
+      const sched = (c.channelSchedules || []).find(x => chans.includes(String(x.id).toLowerCase())) || null;
+      const sc = sched ? sched.schedule : c.schedule;
+      if (sc) return { cls: 'warn', label: '📅 Planifié', hint: `arrêt ${sc.stopAt} · reprise ${sc.startAt}` };
+      return { cls: 'good', label: '🟢 En ligne', hint: '' };
+    }
+    function suitStreakCardHtml(t) {
+      const p = snapshot.suitStreak || {};
+      const live = snapshot.live;
+      const st = suitStreakStatus(t);
+      const chans = suitStreakChannelsOf(t);
+      const chanText = chans.length ? chans.map(id => esc(suitStreakChannelLabel(id))).join('<br>') : '—';
+      const cnt = (suit) => (t.streakSuit === suit ? (t.streakCount || 0) : 0);
+      const corner = (suit, pos) => `<div style="position:absolute;${pos};font-weight:700;font-size:15px;line-height:1.2;${pos.includes('right') ? 'text-align:right' : ''}">${suit}<br><span class="mono">${esc(String(cnt(suit)))}/${esc(String(t.n))}</span></div>`;
+      const preds = (t.lastPreds || []);
+      const icon = (s) => s === 'gagné' ? '✅' : (s === 'perdu' ? '❌' : (s === 'annulé' ? '🚫' : '⏳'));
+      const predsHtml = preds.length
+        ? preds.map(x => `<span class="tag ${x.status === 'gagné' ? 'good' : (x.status === 'perdu' ? 'bad' : '')}">#N${esc(String(x.target))} ${esc(x.suit || '')} ${icon(x.status)}</span>`).join(' ')
+        : '<span class="small muted">Aucune prédiction publiée</span>';
+      return `<article class="proposal">
+        <div class="split"><h3>${esc(t.name)}</h3><span class="tag ${st.cls}" title="${esc(st.hint)}">${st.label}</span></div>
+        ${st.hint ? `<p class="small muted" style="margin:2px 0 0">${esc(st.hint)}</p>` : ''}
+        <p class="small" style="margin:8px 0 0"><b>Canal</b> : ${chanText}</p>
+        <p class="small" style="margin:4px 0 0"><b>Jeu en live</b> : <span class="mono">${live ? '#N' + esc(String(live.number)) : '—'}</span></p>
+        <div style="position:relative;height:78px;margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;padding:8px 12px">
+          ${corner('❤️', 'top:8px;left:12px')}${corner('♠️', 'top:8px;right:12px')}${corner('♦️', 'bottom:8px;left:12px')}${corner('♣️', 'bottom:8px;right:12px')}
+        </div>
+        <div style="margin-bottom:6px"><span class="small muted">3 dernières prédictions</span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${predsHtml}</div>
+        <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="editSuitStreakTrackerModal('${esc(t.id)}')">Modifier</button><button class="button small danger" onclick="removeSuitStreakTracker('${esc(t.id)}')">Retirer</button></div>
+      </article>`;
+    }
+    function suitStreakCardsHtml() {
+      const trackers = (snapshot.suitStreak || {}).trackers || [];
+      if (!trackers.length) return '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>';
+      return `<div class="proposals">${trackers.map(suitStreakCardHtml).join('')}</div>`;
+    }
+    function editSuitStreakTrackerModal(id) {
+      const t = ((snapshot.suitStreak || {}).trackers || []).find(x => x.id === id);
+      if (!t) return;
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier la source</span><h3 style="margin-top:8px">${esc(t.name)}</h3></div></div>
+        ${suitStreakSettingsRow('ss-' + t.id, t)}
+        ${suitStreakChannelFormatRow('ss-' + t.id, t)}
+        <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ss-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateSuitStreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    // Rafraîchit seulement les cartes (le numéro du jeu en live, les compteurs,
+    // les 3 dernières prédictions) sans toucher aux champs en cours de saisie.
+    async function refreshSuitStreakCards() {
+      if (location.hash !== '#/suit-streak' || document.getElementById('modalRoot')) return;
+      const box = document.getElementById('ssCards');
+      if (!box) return;
+      await refresh();
+      const again = document.getElementById('ssCards');
+      if (again) again.innerHTML = suitStreakCardsHtml();
+    }
+    setInterval(() => { refreshSuitStreakCards().catch(() => {}); }, 5000);
     function suitStreakPage() {
       setNav('suit-streak');
       const p = snapshot.suitStreak || {};
@@ -1855,14 +1751,13 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveSuitStreak()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.mirrorPending || t.waitingSuit ? 'warn' : (t.streakCount > 0 ? 'warn' : 'good')}">${t.mirrorPending ? `Série ${esc(t.mirrorPending)} atteinte — en attente de la prochaine prédiction de la stratégie pour prédire son miroir` : (t.waitingSuit ? `En attente du retour de ${esc(t.waitingSuit)}` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}${t.streakHasLoss ? ' (perte présente)' : ''}` : 'Surveillance'))}</span></div>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.mirrorPending || t.diffPending || t.waitingSuit ? 'warn' : (t.streakCount > 0 ? 'warn' : 'good')}">${t.diffPending ? `Série ${esc(t.diffPending)} atteinte — en attente d'une prédiction d'un costume différent` : (t.mirrorPending ? `Série ${esc(t.mirrorPending)} atteinte — en attente de la prochaine prédiction de la stratégie pour prédire` : (t.waitingSuit ? `En attente du retour de ${esc(t.waitingSuit)}` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}${t.streakHasLoss ? ' (perte présente)' : ''}` : 'Surveillance')))}</span></div>
             <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
             ${suitStreakSettingsRow('ss-' + t.id, t)}
             ${suitStreakChannelFormatRow('ss-' + t.id, t)}
             <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ss-${esc(t.id)}-name" value="${esc(t.name)}"></div>
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateSuitStreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeSuitStreakTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
-          ${history.length ? `<table><thead><tr><th>Source</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
+        `;
     }
     function addSuitStreakTrackerModal() {
       const opts = optsHtmlGlobal(snapshot.suitStreak?.options || []);
@@ -1888,7 +1783,7 @@ Faites-en bon usage !
       const { n, mode, offset, suitFilter, predictSuit } = readSuitStreakSettings('ss-' + id);
       const { channels, siteChannelId, format, maxR } = readSuitStreakChannelFormat('ss-' + id);
       const name = val(`ss-${id}-name`);
-      try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'PUT', { n, mode, offset, suitFilter, predictSuit, channels, siteChannelId, format, maxR, name }); await refresh(); suitStreakPage(); toast('Réglages mis à jour.'); }
+      try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'PUT', { n, mode, offset, suitFilter, predictSuit, channels, siteChannelId, format, maxR, name }); closeModal(); await refresh(); suitStreakPage(); toast('Réglages mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function removeSuitStreakTracker(id) {
