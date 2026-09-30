@@ -1684,23 +1684,26 @@ Faites-en bon usage !
       const chans = suitStreakChannelsOf(t);
       const chanText = chans.length ? chans.map(id => esc(suitStreakChannelLabel(id))).join('<br>') : '—';
       const cnt = (suit) => (t.streakSuit === suit ? (t.streakCount || 0) : 0);
-      const corner = (suit, pos) => `<div style="position:absolute;${pos};font-weight:700;font-size:15px;line-height:1.2;${pos.includes('right') ? 'text-align:right' : ''}">${suit}<br><span class="mono">${esc(String(cnt(suit)))}/${esc(String(t.n))}</span></div>`;
+      const corner = (suit, align) => `<div style="text-align:${align};font-weight:700;font-size:20px;line-height:1.1">${suit}<div class="mono" style="font-size:14px;margin-top:2px">${esc(String(cnt(suit)))}/${esc(String(t.n))}</div></div>`;
+      const centerHtml = `<div style="grid-row:1 / span 2;grid-column:2;text-align:center;align-self:center" class="small muted">série en cours<br><b>${t.streakSuit ? esc(t.streakSuit) + ' ×' + esc(String(t.streakCount || 0)) : '—'}</b></div>`;
       const preds = (t.lastPreds || []);
-      const icon = (s) => s === 'gagné' ? '✅' : (s === 'perdu' ? '❌' : (s === 'annulé' ? '🚫' : '⏳'));
+      const stLabel = (x) => x.status === 'gagné' ? 'gagné' : (x.status === 'perdu' ? 'perdu' : (x.status === 'annulé' ? 'annulé' : 'attente'));
+      const stCls = (x) => x.status === 'gagné' ? 'good' : (x.status === 'perdu' ? 'bad' : (x.status === 'annulé' ? '' : 'warn'));
       const predsHtml = preds.length
-        ? preds.map(x => `<span class="tag ${x.status === 'gagné' ? 'good' : (x.status === 'perdu' ? 'bad' : '')}">#N${esc(String(x.target))} ${esc(x.suit || '')} ${icon(x.status)}</span>`).join(' ')
+        ? preds.map(x => `<div><span class="tag ${stCls(x)} mono" style="font-size:13px">#N${esc(String(x.target))} ${esc(x.suit || '')} ${stLabel(x)}</span></div>`).join('')
         : '<span class="small muted">Aucune prédiction publiée</span>';
       return `<article class="proposal">
         <div class="split"><h3>${esc(t.name)}</h3><span class="tag ${st.cls}" title="${esc(st.hint)}">${st.label}</span></div>
         ${st.hint ? `<p class="small muted" style="margin:2px 0 0">${esc(st.hint)}</p>` : ''}
-        <p class="small" style="margin:8px 0 0"><b>Canal</b> : ${chanText}</p>
-        <p class="small" style="margin:4px 0 0"><b>Jeu en live</b> : <span class="mono">${live ? '#N' + esc(String(live.number)) : '—'}</span></p>
-        <div style="position:relative;height:78px;margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;padding:8px 12px">
-          ${corner('❤️', 'top:8px;left:12px')}${corner('♠️', 'top:8px;right:12px')}${corner('♦️', 'bottom:8px;left:12px')}${corner('♣️', 'bottom:8px;right:12px')}
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-size:14px"><span class="muted">Canal</span><span style="text-align:right">${chanText}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Jeu en live</span><span class="mono">${live ? '#N' + esc(String(live.number)) : '—'}</span></div>
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;grid-template-rows:auto auto;gap:18px 8px;margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;padding:12px 16px;align-items:start">
+          <div style="grid-column:1;grid-row:1">${corner('❤️', 'left')}</div>${centerHtml}<div style="grid-column:3;grid-row:1">${corner('♠️', 'right')}</div>
+          <div style="grid-column:1;grid-row:2">${corner('♦️', 'left')}</div><div style="grid-column:3;grid-row:2">${corner('♣️', 'right')}</div>
         </div>
         <div style="margin-bottom:6px"><span class="small muted">3 dernières prédictions</span></div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${predsHtml}</div>
-        <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="editSuitStreakTrackerModal('${esc(t.id)}')">Modifier</button><button class="button small danger" onclick="removeSuitStreakTracker('${esc(t.id)}')">Retirer</button></div>
+        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">${predsHtml}</div>
+        <div class="toolbar" style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr"><button class="button small primary" onclick="editSuitStreakTrackerModal('${esc(t.id)}')">Modifier</button><button class="button small danger" onclick="removeSuitStreakTracker('${esc(t.id)}')">Retirer</button></div>
       </article>`;
     }
     function suitStreakCardsHtml() {
@@ -1751,12 +1754,7 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveSuitStreak()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.mirrorPending || t.diffPending || t.waitingSuit ? 'warn' : (t.streakCount > 0 ? 'warn' : 'good')}">${t.diffPending ? `Série ${esc(t.diffPending)} atteinte — en attente d'une prédiction d'un costume différent` : (t.mirrorPending ? `Série ${esc(t.mirrorPending)} atteinte — en attente de la prochaine prédiction de la stratégie pour prédire` : (t.waitingSuit ? `En attente du retour de ${esc(t.waitingSuit)}` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}${t.streakHasLoss ? ' (perte présente)' : ''}` : 'Surveillance')))}</span></div>
-            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
-            ${suitStreakSettingsRow('ss-' + t.id, t)}
-            ${suitStreakChannelFormatRow('ss-' + t.id, t)}
-            <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ss-${esc(t.id)}-name" value="${esc(t.name)}"></div>
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateSuitStreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeSuitStreakTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+          <div id="ssCards">${suitStreakCardsHtml()}</div></section>
         `;
     }
     function addSuitStreakTrackerModal() {
