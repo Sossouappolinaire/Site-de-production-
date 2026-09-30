@@ -598,7 +598,6 @@
       <div class="home-grid">
         ${card('#/canaux', '📡', 'Canaux', 'Fil des prédictions, style Telegram')}
         ${card('#/strategies', '🎯', 'Stratégies', `${(snapshot.strategies||[]).length} stratégie(s)`)}
-        ${card('#/boutique', '🛍️', 'Boutique', 'Stratégies vendues par code')}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
         ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
       </div>
@@ -659,295 +658,6 @@
           <div class="toolbar"><button class="button primary" onclick="repairCreateStrategy()">Créer la stratégie</button></div>
           <div id="repairStratMsg"></div></div>
         ${readyGrid}${pendingBlock}${empty}`;
-    }
-
-    // ── Boutique : stratégies vendues avec code de paiement ────────────────
-    let shopCache = { items: [], sources: { strategies: [], ia: [] }, pricing: { priceCatalog: 50, priceIa: 1.8 } };
-    function shopItemCard(it) {
-      const rate = Number.isFinite(it.rate) ? `${it.rate}%` : '—';
-      const price = Number.isFinite(it.price) ? `${it.price}€` : '—';
-      const payAmount = Number.isFinite(it.payAmountLocal) ? esc(it.payAmountLocal) : '<span class="tag bad">non réglé — le bouton Payer restera masqué</span>';
-      const badge = it.source === 'strategy' ? 'Catalogue' : it.source === 'ia' ? 'Créée par l\'IA' : 'Personnalisée';
-      const autoBadge = it.auto ? ` <span class="tag warn">Auto — IA &gt;93%</span>` : '';
-      // CORRECTIF : le code est régénéré automatiquement dès qu'il est utilisé
-      // (voir shop.js/redeem) — le code AFFICHÉ ICI (it.code) est donc TOUJOURS
-      // le code courant, jamais consommé. codeUsedBy/codeUsedAt ne décrivent
-      // que la DERNIÈRE vente (à titre d'information), ils ne doivent plus
-      // faire passer le code actuel pour « expiré ».
-      const lastSale = it.codeUsedBy ? `<dt>Dernière vente</dt><dd>Utilisateur Telegram <span class="mono">${esc(it.codeUsedBy)}</span> — ${formatDate(it.codeUsedAt)}${it.salesCount ? ` · ${esc(it.salesCount)} vente(s) au total` : ''}</dd>` : '';
-      return `<article class="proposal" data-shop="${esc(it.id)}">
-        <div class="split"><h3>${esc(it.aiName)}</h3><span class="tag ${it.active ? 'good' : 'bad'}">${it.active ? 'Active' : 'Désactivée'}</span></div>
-        <dl>
-          <dt>Origine</dt><dd>${esc(badge)}${it.realName ? ' · ' + esc(it.realName) : ''}${autoBadge}</dd>
-          <dt>Prix</dt><dd>${esc(price)}</dd>
-          <dt>Montant du lien de paiement</dt><dd>${payAmount}</dd>
-          <dt>Taux de réussite</dt><dd>${esc(rate)}</dd>
-          <dt>Code de paiement</dt><dd class="mono">${esc(it.code)} <span class="tag good">Code disponible — non utilisé</span></dd>
-          ${lastSale}
-          <dt>Détails</dt><dd>${esc((it.details || '').slice(0, 240))}${(it.details || '').length > 240 ? '…' : ''}</dd>
-          ${it.example ? `<dt>Exemple</dt><dd>${esc(it.example.slice(0, 200))}${it.example.length > 200 ? '…' : ''}</dd>` : ''}
-          <dt>Créée le</dt><dd>${formatDate(it.createdAt)}</dd>
-        </dl>
-        ${it.auto ? `<p class="small muted" style="margin-top:8px">Publiée et retirée automatiquement par le système (déclencheur IA au-dessus de 93% de réussite) — aucune configuration nécessaire.</p>` : ''}
-        <div class="toolbar" style="margin-top:12px">
-          <button class="button small ghost" onclick="shopEdit('${esc(it.id)}')">Modifier</button>
-          <button class="button small ghost" onclick="shopRename('${esc(it.id)}')">Nouveau nom IA</button>
-          <button class="button small ghost" onclick="shopNewCode('${esc(it.id)}')">Nouveau code</button>
-          ${it.source === 'strategy' ? `<button class="button small ghost" onclick="shopRefreshRate('${esc(it.id)}')">Actualiser le taux</button>` : ''}
-          ${it.auto ? '' : `<button class="button small ${it.active ? '' : 'primary'}" onclick="shopToggle('${esc(it.id)}', ${!it.active})">${it.active ? 'Désactiver' : 'Activer'}</button>`}
-          <button class="button small danger" onclick="shopDelete('${esc(it.id)}')">Supprimer</button>
-        </div>
-      </article>`;
-    }
-    function shopSourceOptions() {
-      const pc = Number.isFinite(shopCache.pricing?.priceCatalog) ? shopCache.pricing.priceCatalog : 50;
-      const pi100 = Number.isFinite(shopCache.pricing?.priceIa100) ? shopCache.pricing.priceIa100 : 2;
-      const pi93 = Number.isFinite(shopCache.pricing?.priceIa93) ? shopCache.pricing.priceIa93 : 1.8;
-      const strat = shopCache.sources.strategies.map(s => `<option value="strategy:${esc(s.key)}">📦 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — ${pc}€</option>`).join('');
-      const ia = shopCache.sources.ia.map(s => {
-        const p = Number.isFinite(s.rate) && s.rate >= 100 ? pi100 : pi93;
-        return `<option value="ia:${esc(s.id || s.key)}">🤖 ${esc(s.name)}${Number.isFinite(s.rate) ? ' — ' + s.rate + '%' : ''} — ${p}€</option>`;
-      }).join('');
-      return `<option value="custom">✏️ Stratégie personnalisée (saisie libre)</option>${strat}${ia}`;
-    }
-    function shopPricingPanel() {
-      const pc = Number.isFinite(shopCache.pricing?.priceCatalog) ? shopCache.pricing.priceCatalog : 50;
-      const pi100 = Number.isFinite(shopCache.pricing?.priceIa100) ? shopCache.pricing.priceIa100 : 2;
-      const pi93 = Number.isFinite(shopCache.pricing?.priceIa93) ? shopCache.pricing.priceIa93 : 1.8;
-      const fx = Number.isFinite(shopCache.pricing?.eurToXof) ? shopCache.pricing.eurToXof : 480;
-      const fxUsd = Number.isFinite(shopCache.pricing?.usdToXof) ? shopCache.pricing.usdToXof : 600;
-      return `<div class="panel"><h3>💶 Modifier les prix par méthode</h3>
-        <p class="small">Trois tarifs existent dans la boutique : les <b>stratégies existantes</b> (catalogue), et les <b>déclencheurs IA</b> qui ont deux paliers selon le taux de réussite au moment de la vente — <b>100% de réussite</b> et <b>93% à 99,99%</b>. Change un prix ci-dessous et appuie sur Enregistrer : il est appliqué automatiquement à TOUS les articles déjà publiés du palier concerné (le montant en francs du lien de paiement est recalculé en même temps), et devient le prix par défaut des prochaines publications de ce palier.</p>
-        <div class="three-col">
-          <div class="field"><label>📦 Stratégies existantes (catalogue)</label><input id="shopPriceCatalog" type="number" min="0" step="0.5" value="${esc(String(pc))}">
-            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePricing('strategy')">Enregistrer</button></div></div>
-          <div class="field"><label>🤖 Déclencheur IA — 100% de réussite</label><input id="shopPriceIa100" type="number" min="0" step="0.1" value="${esc(String(pi100))}">
-            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePricing('ia_100')">Enregistrer</button></div></div>
-          <div class="field"><label>🤖 Déclencheur IA — 93% à 99,99%</label><input id="shopPriceIa93" type="number" min="0" step="0.1" value="${esc(String(pi93))}">
-            <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePricing('ia_93')">Enregistrer</button></div></div>
-        </div>
-        <div id="shopPricingMsg"></div>
-      </div>
-      <div class="panel"><h3>💱 Taux de change (€ → F CFA)</h3>
-        <p class="small">Utilisé pour calculer automatiquement le montant à intégrer dans le lien de paiement Money Fusion, à partir du prix en €. Exemple : si le taux est à 505 et qu'une stratégie coûte 3€, le lien sera généré avec 505 × 3 = 1515 F CFA. Change la valeur ci-dessous et appuie sur Enregistrer : le montant en francs de TOUS les articles déjà publiés (avec un prix en € connu) est recalculé immédiatement, et ce taux devient le défaut des prochaines publications.</p>
-        <div class="field"><label>Taux (F CFA pour 1€)</label><input id="shopExchangeRate" type="number" min="0" step="1" value="${esc(String(fx))}">
-          <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSaveExchangeRate()">Enregistrer</button></div></div>
-        <div id="shopExchangeRateMsg"></div>
-      </div>
-      <div class="panel"><h3>💛 Taux de change (bouton Soutien, $ → F CFA)</h3>
-        <p class="small">Utilisé uniquement pour le bouton « Soutien » du bot (dons libres, sans lien avec une stratégie) : le client tape un montant en dollars, ce taux calcule l'équivalent en F CFA affiché avant paiement.</p>
-        <div class="field"><label>Taux (F CFA pour 1$)</label><input id="shopSupportRate" type="number" min="0" step="1" value="${esc(String(fxUsd))}">
-          <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSaveSupportRate()">Enregistrer</button></div></div>
-        <div id="shopSupportRateMsg"></div>
-      </div>`;
-    }
-    async function shopSavePricing(method) {
-      const fieldId = method === 'strategy' ? 'shopPriceCatalog' : method === 'ia_100' ? 'shopPriceIa100' : 'shopPriceIa93';
-      const price = Number(val(fieldId));
-      if (!Number.isFinite(price) || price < 0) return toast('Prix invalide.', 'error');
-      try {
-        const r = await api('/api/shop/pricing', 'POST', { method, price });
-        toast(`Prix mis à jour — ${r.updatedCount} article(s) modifié(s).`);
-        boutiquePage();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopSavePayLink(method) {
-      const fieldId = method === 'strategy' ? 'payLinkStrategy' : method === 'ia_100' ? 'payLinkIa100' : 'payLinkIa93';
-      const url = val(fieldId).trim();
-      if (!url) return toast('Colle un lien de paiement.', 'error');
-      try {
-        const r = await api('/api/shop/pay-link', 'POST', { method, url });
-        shopCache.pricing = r.pricing;
-        toast('Lien de paiement enregistré.');
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopSavePaymentProvider() {
-      const provider = val('paymentProvider');
-      try {
-        const r = await api('/api/shop/payment-provider', 'POST', { provider });
-        shopCache.pricing = r.pricing;
-        toast(provider === 'sebpay' ? 'SebPay activé — vérifie que les clés API sont bien renseignées ci-dessous.' : 'Money Fusion activé.');
-        boutiquePage();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopSaveSebpayKeys() {
-      const publicKey = val('sebpayPublicKey').trim();
-      const secretKey = val('sebpaySecretKey').trim(); // vide = ne pas changer (voir server.js)
-      const country = val('sebpayCountry').trim() || 'BJ';
-      const currency = val('sebpayCurrency').trim() || 'XOF';
-      if (!publicKey) return toast('Colle au moins la clé publique SebPay.', 'error');
-      try {
-        const body = { publicKey, country, currency };
-        if (secretKey) body.secretKey = secretKey;
-        await api('/api/shop/sebpay-keys', 'POST', body);
-        toast('Clés SebPay enregistrées.');
-        boutiquePage();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopSaveExchangeRate() {
-      const rate = Number(val('shopExchangeRate'));
-      if (!Number.isFinite(rate) || rate <= 0) return toast('Taux invalide.', 'error');
-      try {
-        const r = await api('/api/shop/exchange-rate', 'POST', { rate });
-        toast(`Taux mis à jour — ${r.updatedCount} article(s) modifié(s).`);
-        boutiquePage();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopSaveSupportRate() {
-      const rate = Number(val('shopSupportRate'));
-      if (!Number.isFinite(rate) || rate <= 0) return toast('Taux invalide.', 'error');
-      try {
-        await api('/api/shop/support-rate', 'POST', { rate });
-        toast('Taux de soutien mis à jour.');
-        boutiquePage();
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    async function boutiquePage() {
-      setNav('boutique');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vente</span><h2 style="margin-top:7px">Boutique de stratégies</h2><p class="small">Publie une stratégie (du catalogue, créée par l'IA, ou personnalisée) : l'IA lui donne un nom de code sans rapport avec son vrai nom, et un code de paiement à usage unique est généré. Distribue ce code à l'acheteur — dans le bot Telegram, il choisit sa langue, sélectionne la stratégie par son nom de code, entre le code, et reçoit alors le détail complet traduit dans sa langue. <b>Vente automatique</b> : tout déclencheur créé par l'IA qui dépasse 93% de réussite est publié tout seul à 4€ (repéré par le badge « Auto »), et disparaît automatiquement dès que son taux redescend à 93% ou moins — aucune configuration nécessaire.</p></div>
-        <button class="button small ghost" onclick="boutiquePage()">Actualiser</button></div>
-        <div class="panel" id="paiementPanel"><h3>💳 Paiement en ligne</h3>
-          <p class="small">Choisis le fournisseur de paiement actif pour <b>toute la boutique</b> — un seul actif à la fois.</p>
-          <div id="paiementFields"><div class="loading">Chargement…</div></div>
-        </div>
-        <div class="panel" id="paiementPendingPanel"><h3>⏳ Paiements en attente de confirmation</h3>
-          <div id="paiementPending"><div class="loading">Chargement…</div></div>
-        </div>
-        ${shopPricingPanel()}
-        <div class="panel"><h3>Publier une nouvelle stratégie</h3>
-          <div class="field"><label>Source</label><select id="shopSource" onchange="shopSourceChanged()">${shopSourceOptions()}</select></div>
-          <div class="field"><label>Nom (référence interne, optionnel pour une source du catalogue/IA)</label><input id="shopRealName" placeholder="Ex. Stratégie ombre variante 2"></div>
-          <div class="field" id="shopDetailsField"><label id="shopDetailsLabel">Détails de la stratégie (avec exemple intégré ou séparé ci-dessous)</label><textarea id="shopDetails" rows="5" placeholder="Décris la stratégie en détail : logique, déclencheur, quand l'utiliser…"></textarea></div>
-          <div class="field"><label>Exemple concret <span class="small">(optionnel)</span></label><textarea id="shopExample" rows="3" placeholder="Ex. Si tu observes ♦️ absent pendant 5 jeux consécutifs, prédis ♦️ sur le jeu suivant…"></textarea></div>
-          <div class="field" id="shopRateField"><label>Taux de réussite (%) — pour une stratégie personnalisée</label><input id="shopRate" type="number" min="0" max="100" placeholder="Ex. 82"></div>
-          <div class="field"><label>Prix (€) <span class="small">— 50€ par défaut pour le catalogue, 4€ pour un déclencheur IA, laisse vide pour garder ce défaut</span></label><input id="shopPrice" type="number" min="0" step="0.5" placeholder="Ex. 50"></div>
-          <div class="field"><label>Montant du lien de paiement <span class="small">(unité Money Fusion — préréglé à 24000 pour le catalogue et 1000 pour l'IA, laisse vide pour garder ce préréglage)</span></label><input id="shopPayAmount" type="number" min="0" step="1" placeholder="Ex. 24000"></div>
-          <div class="toolbar"><button class="button primary" onclick="shopCreate()">Publier dans la boutique</button></div>
-          <div id="shopCreateMsg"></div>
-        </div>
-        <div class="proposals" id="shopList" style="margin-top:18px"><div class="empty">Chargement…</div></div>`;
-      shopSourceChanged();
-      try {
-        const r = await api('/api/shop');
-        shopCache = r;
-        $('#shopSource').innerHTML = shopSourceOptions();
-        const pricingEl = $('#shopPriceCatalog')?.closest('.panel');
-        if (pricingEl) pricingEl.outerHTML = shopPricingPanel();
-        const list = $('#shopList');
-        list.innerHTML = shopCache.items.length ? shopCache.items.map(shopItemCard).join('') : '<div class="empty">Aucune stratégie publiée pour le moment.</div>';
-      } catch (e) { toast(e.message, 'error'); }
-      try {
-        const p = await api('/api/paiement/config');
-        const pr = shopCache && shopCache.pricing ? shopCache.pricing : {};
-        const provider = pr.paymentProvider || 'fusion';
-        $('#paiementFields').innerHTML = `
-          <div class="field"><label>Fournisseur actif</label>
-            <select id="paymentProvider" onchange="shopSavePaymentProvider()">
-              <option value="fusion" ${provider === 'fusion' ? 'selected' : ''}>Money Fusion — lien fixe par catégorie</option>
-              <option value="sebpay" ${provider === 'sebpay' ? 'selected' : ''}>SebPay — Mobile Money (API, numéro + opérateur)</option>
-            </select>
-          </div>
-          <div id="fusionFields" style="${provider === 'fusion' ? '' : 'display:none'}">
-            <p class="small">Colle ici le lien de paiement Money Fusion complet (ex. <code>https://payin.moneyfusion.net/payment/ID/PRIX/NOM</code>) pour chacune des 3 catégories — TOUS les articles de la catégorie utiliseront ce même lien. La redirection après paiement (<code>succes.html</code>) est déjà configurée côté Money Fusion, rien à faire ici pour ça.</p>
-            <div class="field"><label>📦 Stratégies existantes (catalogue)</label><input id="payLinkStrategy" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkStrategy || '')}">
-              <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('strategy')">Enregistrer</button></div></div>
-            <div class="field"><label>🤖 Déclencheur IA — 100% de réussite</label><input id="payLinkIa100" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa100 || '')}">
-              <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_100')">Enregistrer</button></div></div>
-            <div class="field"><label>🤖 Déclencheur IA — 93% à 99,99%</label><input id="payLinkIa93" placeholder="https://payin.moneyfusion.net/payment/…" value="${esc(pr.payLinkIa93 || '')}">
-              <div class="toolbar" style="margin-top:8px"><button class="button primary" onclick="shopSavePayLink('ia_93')">Enregistrer</button></div></div>
-            <div id="payLinkMsg"></div>
-          </div>
-          <div id="sebpayFields" style="${provider === 'sebpay' ? '' : 'display:none'}">
-            <p class="small">Le client donne son numéro et son opérateur Mobile Money sur une page dédiée (<code>pay-sebpay.html</code>) — le code lui est révélé automatiquement une fois le paiement confirmé par SebPay (webhook), pas de lien à coller par catégorie ici.</p>
-            <div class="field"><label>🔑 Clé publique (X-Public-Key)</label><input id="sebpayPublicKey" placeholder="pk_live_… ou pk_test_…" value="${esc(pr.sebpayPublicKey || '')}"></div>
-            <div class="field"><label>🔒 Clé secrète (X-Secret-Key)</label><input id="sebpaySecretKey" type="password" placeholder="${pr.sebpaySecretKeySet ? '••••••••  (déjà enregistrée — laisser vide pour ne pas la changer)' : 'sk_live_… ou sk_test_…'}"></div>
-            <div class="field"><label>🌍 Pays</label><input id="sebpayCountry" placeholder="BJ" value="${esc(pr.sebpayCountry || 'BJ')}"></div>
-            <div class="field"><label>💰 Devise</label><input id="sebpayCurrency" placeholder="XOF" value="${esc(pr.sebpayCurrency || 'XOF')}"></div>
-            <p class="small">Callback webhook à renseigner (automatique) : <code>${esc((typeof location !== 'undefined' ? location.origin : '') + '/api/sebpay/webhook')}</code></p>
-            <div class="toolbar"><button class="button primary" onclick="shopSaveSebpayKeys()">Enregistrer les clés SebPay</button></div>
-            <div id="sebpayKeysMsg"></div>
-          </div>
-          ${p.lastError ? `<div class="notice error">Dernier échec (${formatDate(p.lastErrorAt)}) : ${esc(p.lastError)}</div>` : ''}`;
-      } catch (e) { $('#paiementFields').innerHTML = `<div class="empty">Impossible de charger le statut.</div>`; }
-      try {
-        const pend = await api('/api/paiement/pending');
-        $('#paiementPending').innerHTML = pend.items.length ? pend.items.map(paiementPendingCard).join('') : '<div class="empty">Aucun paiement en attente.</div>';
-      } catch (e) { $('#paiementPending').innerHTML = `<div class="empty">Impossible de charger les paiements en attente.</div>`; }
-    }
-    function paiementPendingCard(r) {
-      return `<div class="card" style="margin-top:10px"><dl class="meta"><dt>Article</dt><dd>${esc(r.aiName || r.itemId)}</dd><dt>Client</dt><dd>${esc(r.buyerName || r.userId)}</dd><dt>Montant attendu</dt><dd>${esc(r.amount)}</dd><dt>Demandé le</dt><dd>${formatDate(r.createdAt)}</dd></dl><p class="small">En attente que le client termine le paiement sur Money Fusion (confirmation automatique).</p><div class="toolbar"><button class="button ghost" onclick="paiementCancel('${r.ref}')">Annuler cette réservation</button></div></div>`;
-    }
-    async function paiementCancel(ref) {
-      try { await api('/api/paiement/cancel/' + encodeURIComponent(ref), 'POST', {}); toast('Paiement annulé.'); boutiquePage(); } catch (e) { toast(e.message, 'error'); }
-    }
-    function shopSourceChanged() {
-      const v = val('shopSource');
-      const custom = v === 'custom' || !v;
-      const realName = $('#shopRealName'); const rateField = $('#shopRateField');
-      if (realName) realName.closest('.field').style.display = custom ? '' : 'none';
-      if (rateField) rateField.style.display = custom ? '' : 'none';
-      // Pour une stratégie du catalogue/IA (déjà connue du bot), pas besoin de
-      // retaper la description à la main : l'IA explique déjà toute seule à
-      // partir de la vraie stratégie (voir resolvedDetails() côté serveur).
-      // Le champ reste disponible seulement pour la surcharger si voulu.
-      const label = $('#shopDetailsLabel'); const details = $('#shopDetails');
-      if (label) label.textContent = custom ? 'Détails de la stratégie (avec exemple intégré ou séparé ci-dessous)' : 'Détails de la stratégie (optionnel — laisse vide : l\'IA utilise déjà la vraie description de cette stratégie)';
-      if (details) details.placeholder = custom ? 'Décris la stratégie en détail : logique, déclencheur, quand l\'utiliser…' : 'Laisse vide pour que l\'IA explique la stratégie telle qu\'elle existe déjà. Ne remplis que pour surcharger.';
-    }
-    async function shopCreate() {
-      const raw = val('shopSource');
-      const [source, sourceKey] = raw.includes(':') ? raw.split(/:(.+)/) : ['custom', null];
-      const body = {
-        source, sourceKey,
-        realName: val('shopRealName'),
-        details: val('shopDetails'),
-        example: val('shopExample'),
-        rate: val('shopRate') ? Number(val('shopRate')) : null,
-        price: val('shopPrice') ? Number(val('shopPrice')) : null,
-        payAmountLocal: val('shopPayAmount') ? Number(val('shopPayAmount')) : null,
-      };
-      if (!body.details && source === 'custom') return toast('Ajoute au moins les détails de la stratégie.', 'error');
-      const msg = $('#shopCreateMsg'); if (msg) msg.innerHTML = '<div class="loading">Publication en cours (l\'IA invente le nom de code)…</div>';
-      try {
-        await api('/api/shop', 'POST', body);
-        toast('Stratégie publiée dans la boutique.');
-        boutiquePage();
-      } catch (e) { toast(e.message, 'error'); if (msg) msg.innerHTML = ''; }
-    }
-    async function shopToggle(id, active) {
-      try { await api(`/api/shop/${id}`, 'POST', { active }); toast(active ? 'Stratégie activée.' : 'Stratégie désactivée.'); boutiquePage(); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopDelete(id) {
-      if (!confirm('Supprimer définitivement cette stratégie de la boutique ?')) return;
-      try { await api(`/api/shop/${id}`, 'DELETE'); toast('Stratégie supprimée.'); boutiquePage(); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopNewCode(id) {
-      try { const r = await api(`/api/shop/${id}/code`, 'POST'); toast(`Nouveau code : ${r.item.code}`); boutiquePage(); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopRename(id) {
-      try { const r = await api(`/api/shop/${id}/rename`, 'POST'); toast(`Nouveau nom : ${r.item.aiName}`); boutiquePage(); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function shopRefreshRate(id) {
-      try { await api(`/api/shop/${id}/refresh-rate`, 'POST'); toast('Taux actualisé.'); boutiquePage(); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    function shopEdit(id) {
-      const it = shopCache.items.find(i => i.id === id); if (!it) return;
-      const details = prompt('Modifier les détails de la stratégie :', it.details || '');
-      if (details === null) return;
-      const example = prompt('Modifier l\'exemple :', it.example || '');
-      if (example === null) return;
-      const priceRaw = prompt('Modifier le prix (€) :', Number.isFinite(it.price) ? String(it.price) : '');
-      if (priceRaw === null) return;
-      const price = priceRaw.trim() === '' ? null : Number(priceRaw);
-      const payRaw = prompt('Modifier le montant du lien de paiement (Money Fusion) :', Number.isFinite(it.payAmountLocal) ? String(it.payAmountLocal) : '');
-      if (payRaw === null) return;
-      const payAmountLocal = payRaw.trim() === '' ? null : Number(payRaw);
-      api(`/api/shop/${id}`, 'POST', { details, example, price, payAmountLocal }).then(() => { toast('Stratégie mise à jour.'); boutiquePage(); }).catch(e => toast(e.message, 'error'));
     }
 
     // ── Panneau administrateur : Utilisateurs ──────────────────────────────
@@ -1124,11 +834,12 @@ Faites-en bon usage !
             <div class="panel" style="margin-top:6px"><div class="split"><b>${dc.count}/10 jeux comptés</b><span class="tag">#N${dc.decadeStart} → #N${dc.decadeEnd}</span></div>
             <p class="small">Se remet à 0 juste après l'envoi de la prédiction du jeu #N${dc.decadeEnd} (déclencheur). Prochaine prédiction visée : <b>#N${dc.nextTarget}</b> (+${dc.lead}).</p></div></div>`; })() : ''}
           ${s.key === 'dominant' ? `<div class="three-col"><div class="field"><label>Écart minimum entre 2 prédictions (jeux)</label><input id="cfgGap" type="number" min="1" max="20" value="${c.gap ?? 3}"></div></div><p class="small">Un déclencheur au jeu N est ignoré si le costume à prédire est apparu sur la main du joueur dans 2 jeux consécutifs parmi N-2, N-1 et N (N-2+N-1, ou N-1+N), ou si l'écart avec la dernière prédiction « dominant » est inférieur à cette valeur.</p>` : ''}
+          ${s.key === 'absenceJoueur' ? absenceEntriesRow('cfg', c.entries || [], snapshot.formatCount) : ''}
           <div class="field"><label>Format du message</label><p class="small">Les 89 formats complets sont accessibles depuis le bouton Formats.</p></div><label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <label class="check" style="margin-top:10px"><input id="cfgAiAuto" type="checkbox" ${c.aiAuto ? 'checked' : ''}> 🤖 Ajustement automatique par l'IA</label>
           <label class="check" style="margin-top:10px"><input id="cfgLossNotice" type="checkbox" ${c.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
           <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé — les deux doivent être cochés à la fois.</p>
-          <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine'].includes(s.key)
+          <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine','absenceJoueur'].includes(s.key)
             ? "Désactivé (par défaut) : la stratégie prédit normalement. Activé : avant chaque envoi, l'IA compare le taux de réussite récent du costume que la stratégie s'apprête à jouer avec celui des 3 autres costumes POUR CETTE STRATÉGIE. Si un autre costume affiche un net avantage (échantillon et écart suffisants), il est substitué automatiquement — le motif de la prédiction indique alors clairement la substitution."
             : "Cette stratégie ne prédit pas de costume : ce réglage n'a aucun effet ici (laissez-le désactivé)."}</p>
           <div class="toolbar" style="margin-top:18px"><button class="button primary" onclick="saveStrategy('${s.key}')">Enregistrer les réglages</button><button class="button ghost" onclick="resetStrategy('${s.key}')">Réinitialiser</button><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester le canal</button>${s.key === 'ombre' ? '' : `<button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester canal silencieux</button>`}</div><div id="strategyMessage"></div></div>
@@ -1197,6 +908,7 @@ Faites-en bon usage !
     function val(id) { return document.getElementById(id)?.value ?? ''; }
     async function saveStrategy(key) {
       const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
+      if (key === 'absenceJoueur') patch.entries = readAbsenceEntries('cfg');
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
       try { await api(`/api/strategies/${key}`, 'POST', patch); await refresh(); await strategyPage(key); toast('Réglages enregistrés.'); } catch (e) { toast(e.message, 'error'); }
@@ -1563,61 +1275,94 @@ Faites-en bon usage !
     // « Série de même costume » : count prédictions consécutives du même
     // costume → nj nouvelles prédictions espacées de n jeux (a+n, a+2n, …).
     function afterLossStreakRow(prefix, streak, formatCount) {
-      const s = streak || { enabled: false, count: 3, n: 4, nj: 4, maxR: null, format: null };
-      const maxR = (s.maxR === null || s.maxR === undefined) ? '' : s.maxR;
-      const format = (s.format === null || s.format === undefined) ? '' : s.format;
+      const s = streak || { enabled: false, count: 3, n: 4, nj: 4 };
       return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
         <label class="check" style="flex:1;min-width:200px"><input id="${prefix}-streak-on" type="checkbox" ${s.enabled ? 'checked' : ''}> Série de même costume → nouvelles prédictions</label>
         <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Prédits consécutifs même costume</label><input id="${prefix}-streak-count" type="number" min="2" max="10" value="${esc(String(s.count || 3))}"></div>
         <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Écart n (a+n)</label><input id="${prefix}-streak-n" type="number" min="1" max="50" value="${esc(String(s.n || 4))}"></div>
         <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Nombre de prédits Nj</label><input id="${prefix}-streak-nj" type="number" min="1" max="20" value="${esc(String(s.nj || 4))}"></div>
-        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Rattrapage (optionnel)</label><input id="${prefix}-streak-maxR" type="number" min="0" max="9" value="${esc(String(maxR))}" placeholder="panneau"></div>
-        <div class="field" style="max-width:120px;margin:0"><label style="font-size:11px">Format (optionnel)</label><input id="${prefix}-streak-format" type="number" min="1" max="${esc(String(formatCount || 88))}" value="${esc(String(format))}" placeholder="panneau"></div>
       </div>
       <p class="small muted" style="margin:6px 0 0">Exemple : 3 prédits consécutifs du même costume (794♦️, 810♦️, 815♦️) avec n = 4 et Nj = 4 → le bot publie 819♦️, 823♦️, 827♦️, 831♦️. Indépendant des déclencheurs ci-dessus.</p>`;
     }
     function readAfterLossStreak(prefix) {
-      const maxR = val(`${prefix}-streak-maxR`);
-      const format = val(`${prefix}-streak-format`);
       return {
         enabled: !!$(`#${prefix}-streak-on`)?.checked,
         count: val(`${prefix}-streak-count`),
         n: val(`${prefix}-streak-n`),
         nj: val(`${prefix}-streak-nj`),
-        maxR: maxR === '' ? null : maxR,
-        format: format === '' ? null : format,
       };
     }
     // « Comptage dizaine » : count prédictions consécutives du même costume →
     // 1ʳᵉ prédiction à +n, puis les suivantes à +ni UNE PAR UNE (après
     // vérification de la précédente), jusqu'à Nk prédictions.
     function afterLossDecadeRow(prefix, decade, formatCount) {
-      const d = decade || { enabled: false, count: 3, n: 8, ni: 10, nk: 4, maxR: null, format: null };
-      const maxR = (d.maxR === null || d.maxR === undefined) ? '' : d.maxR;
-      const format = (d.format === null || d.format === undefined) ? '' : d.format;
+      const d = decade || { enabled: false, count: 3, n: 8, ni: 10, nk: 4 };
       return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
         <label class="check" style="flex:1;min-width:200px"><input id="${prefix}-decade-on" type="checkbox" ${d.enabled ? 'checked' : ''}> Stratégie comptage dizaine</label>
         <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Prédits consécutifs même costume</label><input id="${prefix}-decade-count" type="number" min="2" max="10" value="${esc(String(d.count || 3))}"></div>
         <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Écart n (1ʳᵉ prédit)</label><input id="${prefix}-decade-n" type="number" min="1" max="100" value="${esc(String(d.n || 8))}"></div>
         <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Écart ni (suivants)</label><input id="${prefix}-decade-ni" type="number" min="1" max="100" value="${esc(String(d.ni || 10))}"></div>
         <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Nombre de prédits Nk</label><input id="${prefix}-decade-nk" type="number" min="1" max="20" value="${esc(String(d.nk || 4))}"></div>
-        <div class="field" style="max-width:110px;margin:0"><label style="font-size:11px">Rattrapage (optionnel)</label><input id="${prefix}-decade-maxR" type="number" min="0" max="9" value="${esc(String(maxR))}" placeholder="panneau"></div>
-        <div class="field" style="max-width:120px;margin:0"><label style="font-size:11px">Format (optionnel)</label><input id="${prefix}-decade-format" type="number" min="1" max="${esc(String(formatCount || 88))}" value="${esc(String(format))}" placeholder="panneau"></div>
       </div>
       <p class="small muted" style="margin:6px 0 0">Exemple : 134♦️, 144♦️, 154♦️ (count = 3) avec n = 8, ni = 10, Nk = 4 → le bot prédit 162♦️, puis attend le résultat de 162 avant de publier 172♦️, puis 182♦️, puis 192♦️, et s'arrête jusqu'à la prochaine série.</p>`;
     }
     function readAfterLossDecade(prefix) {
-      const maxR = val(`${prefix}-decade-maxR`);
-      const format = val(`${prefix}-decade-format`);
       return {
         enabled: !!$(`#${prefix}-decade-on`)?.checked,
         count: val(`${prefix}-decade-count`),
         n: val(`${prefix}-decade-n`),
         ni: val(`${prefix}-decade-ni`),
         nk: val(`${prefix}-decade-nk`),
-        maxR: maxR === '' ? null : maxR,
-        format: format === '' ? null : format,
       };
+    }
+    // « Absence — costume absent chez le joueur » (nouvelle stratégie, voir
+    // strategies.js) — une case par nombre EXACT de jeux d'absence
+    // consécutive chez le JOUEUR (Abs:1 à Abs:15), chacune configurable
+    // indépendamment : mode de la 1ʳᵉ prédiction (miroir immédiat / miroir
+    // à +2 / costume absent lui-même), puis n répétitions du costume absent
+    // (1ʳᵉ à +d, pas +g), puis un miroir final une fois la cascade
+    // terminée, à +d+k.
+    const ABSENCE_LEVELS = Array.from({ length: 15 }, (_, i) => i + 1);
+    function absenceEntriesRow(prefix, entries, formatCount) {
+      const byGames = {};
+      for (const e of (entries || [])) byGames[e.games] = e;
+      const rows = ABSENCE_LEVELS.map(n => {
+        const e = byGames[n] || { enabled: false, firstMode: 'miroir_immediat', n: 3, g: 5, d: 4, k: 2 };
+        return `<div class="field-row" style="display:flex;align-items:flex-end;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <label class="check" style="min-width:90px"><input id="${prefix}-abs-${n}-on" type="checkbox" ${e.enabled ? 'checked' : ''} onchange="document.getElementById('${prefix}-abs-${n}-wrap').style.display = this.checked ? '' : 'none'"> Abs:${n}</label>
+          <div id="${prefix}-abs-${n}-wrap" style="display:${e.enabled ? 'flex' : 'none'};gap:8px;flex-wrap:wrap;flex:1">
+            <div class="field" style="max-width:200px;margin:0"><label style="font-size:11px">1ʳᵉ prédiction</label>
+              <select id="${prefix}-abs-${n}-mode">
+                <option value="miroir_immediat" ${e.firstMode === 'miroir_immediat' ? 'selected' : ''}>Miroir, immédiat (+1)</option>
+                <option value="miroir_plus2" ${e.firstMode === 'miroir_plus2' ? 'selected' : ''}>Miroir, à +2</option>
+                <option value="absent_lui_meme" ${e.firstMode === 'absent_lui_meme' ? 'selected' : ''}>Costume absent lui-même (+1)</option>
+              </select>
+            </div>
+            <div class="field" style="max-width:70px;margin:0"><label style="font-size:11px">n</label><input id="${prefix}-abs-${n}-n" type="number" min="0" max="50" value="${esc(String(e.n ?? 3))}"></div>
+            <div class="field" style="max-width:70px;margin:0"><label style="font-size:11px">g</label><input id="${prefix}-abs-${n}-g" type="number" min="1" max="100" value="${esc(String(e.g ?? 5))}"></div>
+            <div class="field" style="max-width:70px;margin:0"><label style="font-size:11px">d</label><input id="${prefix}-abs-${n}-d" type="number" min="1" max="100" value="${esc(String(e.d ?? 4))}"></div>
+            <div class="field" style="max-width:70px;margin:0"><label style="font-size:11px">k</label><input id="${prefix}-abs-${n}-k" type="number" min="0" max="100" value="${esc(String(e.k ?? 2))}"></div>
+          </div>
+        </div>`;
+      }).join('');
+      return `<div style="margin-top:14px">
+        <p class="small muted" style="margin:0 0 8px">Coche un nombre EXACT de jeux d'absence consécutive à surveiller chez le JOUEUR (une case = un seuil indépendant, sa propre config). Au déclenchement : la 1ʳᵉ prédiction (mode choisi) part immédiatement ; en parallèle, n répétitions du costume absent démarrent (1ʳᵉ à +d, puis +g à chaque fois, en attendant la vérification de chacune) ; puis, une fois ces n prédictions toutes vérifiées, un miroir final part à +d+k.</p>
+        ${rows}
+      </div>`;
+    }
+    function readAbsenceEntries(prefix) {
+      return ABSENCE_LEVELS.map(n => {
+        if (!$(`#${prefix}-abs-${n}-on`)?.checked) return null;
+        return {
+          games: n,
+          enabled: true,
+          firstMode: val(`${prefix}-abs-${n}-mode`),
+          n: val(`${prefix}-abs-${n}-n`),
+          g: val(`${prefix}-abs-${n}-g`),
+          d: val(`${prefix}-abs-${n}-d`),
+          k: val(`${prefix}-abs-${n}-k`),
+        };
+      }).filter(Boolean);
     }
     // options du sélecteur « canal du site » : la même liste que la page
     // Canaux (voir siteChannelsView côté serveur), avec une option vide pour
@@ -1632,17 +1377,20 @@ Faites-en bon usage !
       const t = tracker || {};
       const channels = (t.channels || []).join(', ');
       const format = (t.format === null || t.format === undefined) ? '' : t.format;
+      const maxR = (t.maxR === null || t.maxR === undefined) ? '' : t.maxR;
       return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
-        <div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram propre (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
-        <div class="field" style="flex:1;min-width:160px;margin:0"><label style="font-size:11px">Canal du site propre (optionnel)</label><select id="${prefix}-siteChannel">${siteChannelOptions(t.siteChannelId)}</select></div>
-        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format propre (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = format du panneau"></div>
+        <div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+        <div class="field" style="flex:1;min-width:160px;margin:0"><label style="font-size:11px">Canal du site (optionnel)</label><select id="${prefix}-siteChannel">${siteChannelOptions(t.siteChannelId)}</select></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = panneau"></div>
+        <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Rattrapage (optionnel)</label><input id="${prefix}-maxR" type="number" min="0" max="9" value="${esc(String(maxR))}" placeholder="vide = panneau"></div>
       </div>
-      <p class="small muted" style="margin:6px 0 0">Laisse ces champs vides/« aucun » pour utiliser les réglages du panneau (en haut de la page). Renseigne-les pour envoyer cette stratégie ailleurs — Telegram et canal du site sont indépendants, tu peux activer l'un, l'autre, ou les deux.</p>`;
+      <p class="small muted" style="margin:6px 0 0">Un seul jeu de réglages par stratégie : canal, format et rattrapage s'appliquent à TOUS ses relais (déclencheurs, série, comptage dizaine). Laisse vide/« aucun » pour utiliser les réglages du panneau (en haut de la page). Telegram et canal du site sont indépendants, tu peux activer l'un, l'autre, ou les deux.</p>`;
     }
     function readAfterLossChannelFormat(prefix) {
       const rawFormat = val(`${prefix}-format`);
+      const rawMaxR = val(`${prefix}-maxR`);
       const siteChannelId = val(`${prefix}-siteChannel`);
-      return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat };
+      return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat, maxR: rawMaxR === '' ? null : rawMaxR };
     }
     // Compteurs live des configurations (ex. « 1/2 » puis « 2/2 » pour deux
     // prédits du même costume). Les valeurs viennent du serveur, où elles sont
@@ -1769,7 +1517,7 @@ Faites-en bon usage !
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Stratégies suivies</span><h2 style="margin-top:7px">${trackers.length} stratégie(s)</h2></div></div>
           ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.armed ? 'warn' : (t.counting ? 'warn' : 'good')}">${t.armed ? 'En attente de la prochaine prédiction' : (t.counting ? `Décompte en cours : ${esc(String(t.armedSeen))}/${esc(String(t.armedNeeded))}` : 'Surveillance')}</span></div>
-            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
+            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
             ${afterLossNameRow('trk-' + t.id, t.name, t.name)}
             ${afterLossCounters(t)}
             <div id="opt-result-${esc(t.id)}"></div>
@@ -1802,8 +1550,8 @@ Faites-en bon usage !
       const key = val('newTrackerKey');
       const category = afterLossNewCategory;
       const blocks = readAfterLossCategoryBlocks('new', category);
-      const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
-      const payload = { key, category, name: val('new-name'), ...blocks, channels, siteChannelId, format, force: !!force };
+      const { channels, siteChannelId, format, maxR } = readAfterLossChannelFormat('new');
+      const payload = { key, category, name: val('new-name'), ...blocks, channels, siteChannelId, format, maxR, force: !!force };
       try { await api('/api/after-loss/trackers', 'POST', payload); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
       catch (e) {
         // CORRECTIF « doublons de configuration » : au lieu d'un simple toast
@@ -1834,8 +1582,8 @@ Faites-en bon usage !
       const trk = (snapshot.afterLoss?.trackers || []).find(x => x.id === id) || {};
       const cat = trk.category || 0;
       const blocks = readAfterLossCategoryBlocks('trk-' + id, cat);
-      const { channels, siteChannelId, format } = readAfterLossChannelFormat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { name: val('trk-' + id + '-name'), category: cat, ...blocks, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      const { channels, siteChannelId, format, maxR } = readAfterLossChannelFormat('trk-' + id);
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { name: val('trk-' + id + '-name'), category: cat, ...blocks, channels, siteChannelId, format, maxR }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function optimizeAfterLossTracker(id) {
@@ -2034,9 +1782,26 @@ Faites-en bon usage !
       const n = t?.n ?? 2;
       const mode = t?.mode || 'next';
       const offset = t?.offset ?? 1;
+      const suitFilter = t?.suitFilter || '';
+      const predictSuit = t?.predictSuit || 'same';
       return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
         <div class="field" style="max-width:220px;margin:0"><label style="font-size:11px">Prédictions consécutives même costume (N)</label><input id="${prefix}-n" type="number" min="2" max="20" value="${esc(String(n))}"></div>
-        <div class="field" style="max-width:280px;margin:0"><label style="font-size:11px">Une fois la série atteinte, prédire sur</label>
+        <div class="field" style="max-width:200px;margin:0"><label style="font-size:11px">Costume à surveiller</label>
+          <select id="${prefix}-suitFilter">
+            <option value="" ${suitFilter === '' ? 'selected' : ''}>Tous costumes (comportement actuel)</option>
+            <option value="❤️" ${suitFilter === '❤️' ? 'selected' : ''}>❤️ uniquement</option>
+            <option value="♦️" ${suitFilter === '♦️' ? 'selected' : ''}>♦️ uniquement</option>
+            <option value="♠️" ${suitFilter === '♠️' ? 'selected' : ''}>♠️ uniquement</option>
+            <option value="♣️" ${suitFilter === '♣️' ? 'selected' : ''}>♣️ uniquement</option>
+          </select>
+        </div>
+        <div class="field" style="max-width:220px;margin:0"><label style="font-size:11px">Costume prédit</label>
+          <select id="${prefix}-predictSuit" onchange="document.getElementById('${prefix}-mode-wrap').style.display = this.value === 'mirror' ? 'none' : ''">
+            <option value="same" ${predictSuit !== 'mirror' ? 'selected' : ''}>Le même costume que la série</option>
+            <option value="mirror" ${predictSuit === 'mirror' ? 'selected' : ''}>Son miroir (❤️↔♦️, ♠️↔♣️)</option>
+          </select>
+        </div>
+        <div class="field" id="${prefix}-mode-wrap" style="max-width:280px;margin:0;${predictSuit === 'mirror' ? 'display:none' : ''}"><label style="font-size:11px">Une fois la série atteinte, prédire sur</label>
           <select id="${prefix}-mode" onchange="document.getElementById('${prefix}-offset-wrap').style.display = this.value === 'offset' ? '' : 'none'">
             <option value="next" ${mode !== 'offset' ? 'selected' : ''}>Le jeu suivant (target+1)</option>
             <option value="offset" ${mode === 'offset' ? 'selected' : ''}>Décalage +Z jeux</option>
@@ -2044,10 +1809,10 @@ Faites-en bon usage !
         </div>
         <div class="field" id="${prefix}-offset-wrap" style="max-width:110px;margin:0;${mode === 'offset' ? '' : 'display:none'}"><label style="font-size:11px">Décalage +Z</label><input id="${prefix}-offset" type="number" min="1" max="20" value="${esc(String(offset))}"></div>
       </div>
-      <p class="small muted" style="margin:6px 0 0">Dès que N prédictions consécutives de même costume sont observées (peu importe gagné/perdu) : aucune perte parmi elles → prédiction immédiate du même costume. Au moins une perte parmi elles → le panneau attend que la source reprédise ce même costume une prochaine fois (les autres costumes entre-temps n'interrompent pas l'attente), et c'est ce moment-là qui déclenche, une seule fois.</p>`;
+      <p class="small muted" style="margin:6px 0 0">Dès que N prédictions consécutives de même costume sont observées (peu importe gagné/perdu) : aucune perte parmi elles → prédiction immédiate. Au moins une perte parmi elles → le panneau attend que ce même costume revienne une prochaine fois (les autres costumes entre-temps n'interrompent pas l'attente), et c'est ce moment-là qui déclenche, une seule fois. Avec « Costume à surveiller » réglé sur un costume précis, toute prédiction d'un AUTRE costume est ignorée (ne compte ni ne casse la série) : seul ce costume-là est jamais compté. « Costume prédit » choisit ce qui est ensuite annoncé : le même costume que la série, sur le jeu suivant ou +Z décalage réglé ci-dessus — ou son miroir (❤️↔♦️, ♠️↔♣️), auquel cas le réglage « jeu suivant / décalage » ne s'applique PAS : le bot attend la PROCHAINE prédiction de la stratégie suivie (quel que soit son propre costume) et prédit le miroir de la série sur CE jeu-là, pas sur pred+1.</p>`;
     }
     function readSuitStreakSettings(prefix) {
-      return { n: val(`${prefix}-n`), mode: val(`${prefix}-mode`), offset: val(`${prefix}-offset`) };
+      return { n: val(`${prefix}-n`), mode: val(`${prefix}-mode`), offset: val(`${prefix}-offset`), suitFilter: val(`${prefix}-suitFilter`), predictSuit: val(`${prefix}-predictSuit`) };
     }
     function suitStreakChannelFormatRow(prefix, tracker) {
       const t = tracker || {};
@@ -2090,7 +1855,7 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveSuitStreak()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.waitingSuit ? 'warn' : (t.streakCount > 0 ? 'warn' : 'good')}">${t.waitingSuit ? `En attente du retour de ${esc(t.waitingSuit)}` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}${t.streakHasLoss ? ' (perte présente)' : ''}` : 'Surveillance')}</span></div>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.mirrorPending || t.waitingSuit ? 'warn' : (t.streakCount > 0 ? 'warn' : 'good')}">${t.mirrorPending ? `Série ${esc(t.mirrorPending)} atteinte — en attente de la prochaine prédiction de la stratégie pour prédire son miroir` : (t.waitingSuit ? `En attente du retour de ${esc(t.waitingSuit)}` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}${t.streakHasLoss ? ' (perte présente)' : ''}` : 'Surveillance'))}</span></div>
             <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
             ${suitStreakSettingsRow('ss-' + t.id, t)}
             ${suitStreakChannelFormatRow('ss-' + t.id, t)}
@@ -2110,20 +1875,20 @@ Faites-en bon usage !
     }
     async function addSuitStreakTracker() {
       const key = val('newSuitStreakKey');
-      const { n, mode, offset } = readSuitStreakSettings('ssnew');
+      const { n, mode, offset, suitFilter, predictSuit } = readSuitStreakSettings('ssnew');
       const { channels, siteChannelId, format, maxR } = readSuitStreakChannelFormat('ssnew');
       const name = val('ssnew-name');
       try {
-        await api('/api/suit-streak/trackers', 'POST', { key, n, mode, offset, channels, siteChannelId, format, maxR, name });
+        await api('/api/suit-streak/trackers', 'POST', { key, n, mode, offset, suitFilter, predictSuit, channels, siteChannelId, format, maxR, name });
         closeModal(); await refresh(); suitStreakPage();
         toast('Source ajoutée à la répétition de costume.');
       } catch (e) { toast(e.message, 'error'); }
     }
     async function updateSuitStreakTracker(id) {
-      const { n, mode, offset } = readSuitStreakSettings('ss-' + id);
+      const { n, mode, offset, suitFilter, predictSuit } = readSuitStreakSettings('ss-' + id);
       const { channels, siteChannelId, format, maxR } = readSuitStreakChannelFormat('ss-' + id);
       const name = val(`ss-${id}-name`);
-      try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'PUT', { n, mode, offset, channels, siteChannelId, format, maxR, name }); await refresh(); suitStreakPage(); toast('Réglages mis à jour.'); }
+      try { await api(`/api/suit-streak/trackers/${encodeURIComponent(id)}`, 'PUT', { n, mode, offset, suitFilter, predictSuit, channels, siteChannelId, format, maxR, name }); await refresh(); suitStreakPage(); toast('Réglages mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function removeSuitStreakTracker(id) {
@@ -3058,7 +2823,7 @@ Faites-en bon usage !
     async function saveProposal(proposal) { try { await api('/api/ai/strategies', 'POST', { proposal }); await refresh(); toast('Plan de stratégie enregistré, désactivé par sécurité.'); } catch(e) { toast(e.message, 'error'); } }
     async function formatsPage() { setNav('formats'); $('#app').innerHTML = '<div class="loading">Chargement des formats…</div>'; try { const r = await api('/api/formats'); $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Bibliothèque Telegram</span><h2 style="margin-top:7px">Formats de prédiction</h2><p class="small">${r.count} formats affichés avec leur aperçu réel.</p></div><input id="formatSearch" style="max-width:250px" placeholder="Rechercher un format..." oninput="filterFormats()"></div><div id="formatGrid" class="format-grid">${r.formats.map(f => `<article class="format-card" data-search="${esc(`${f.id} ${f.label} ${f.preview}`.toLowerCase())}"><b>FORMAT ${f.id}</b><pre>${esc(f.preview)}</pre></article>`).join('')}</div>`; } catch(e) { toast(e.message, 'error'); } }
     function filterFormats() { const q = val('formatSearch').toLowerCase(); document.querySelectorAll('.format-card').forEach(c => c.style.display = c.dataset.search.includes(q) ? '' : 'none'); }
-    function settingsPage() { setNav('settings'); const bot = snapshot.bot || {}, shopBot = snapshot.shopBot || {}, db = snapshot.db || {}; $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Système</span><h2 style="margin-top:7px">Configuration générale</h2><p class="small">Les réglages de chaque stratégie restent dans sa propre fiche.</p></div></div><div class="two-col"><div class="panel"><h3>Bot Telegram</h3><div class="notice ${bot.tokenSet ? '' : 'warn'}">${bot.tokenSet ? `Token enregistré : ${esc(bot.tokenMasked || 'masqué')}` : 'Aucun token Telegram configuré.'}</div><div class="field"><label>Token du bot</label><input id="botToken" type="password" autocomplete="off" placeholder="Coller le token Telegram pour le remplacer"></div><div class="field"><label>ID administrateur</label><input id="adminId" type="number" value="${esc(bot.adminId || '')}"></div><div class="field"><label>ID du canal principal</label><input id="mainChannel" placeholder="-1001234567890 ou @moncanal" value="${esc((snapshot.channels || []).filter(c => c.active).map(c => c.id).join(', '))}"></div><div class="toolbar"><button class="button primary" onclick="saveBot()">Enregistrer et redémarrer</button><button class="button orange" onclick="saveMainChannel()">Vérifier le canal et envoyer un message</button>${bot.tokenSet ? `<button class="button danger" onclick="disconnectBot()">Déconnecter / supprimer le token</button>` : ''}</div><div id="settingsMessage"></div></div><div class="panel"><h3>Bot de la boutique</h3><p class="small">Token API totalement séparé du bot principal — utilisé UNIQUEMENT pour /boutique, la langue, la saisie du code de paiement et les questions sur la stratégie achetée.</p><div class="notice ${shopBot.tokenSet ? '' : 'warn'}">${shopBot.tokenSet ? `Token enregistré : ${esc(shopBot.tokenMasked || 'masqué')}${shopBot.username ? ' — @' + esc(shopBot.username) : ''}` : 'Aucun token configuré pour la boutique.'}</div>${shopBot.error ? `<div class="notice warn">${esc(shopBot.error)}</div>` : ''}<div class="field"><label>Token du bot boutique</label><input id="shopBotToken" type="password" autocomplete="off" placeholder="Coller le token Telegram dédié à la boutique"></div><div class="toolbar"><button class="button primary" onclick="saveShopBot()">Enregistrer et redémarrer</button>${shopBot.tokenSet ? `<button class="button danger" onclick="disconnectShopBot()">Déconnecter / supprimer le token</button>` : ''}</div><div id="shopBotMessage"></div></div><div class="panel"><h3>Base de données</h3><div class="notice ${db.ready ? '' : 'warn'}">${db.ready ? 'PostgreSQL connectée et prête.' : 'Base non connectée : le bot peut fonctionner avec l’historique en mémoire.'}</div><div class="field"><label>DATABASE_URL (optionnel)</label><input id="dbUrl" type="password" autocomplete="off" placeholder="URL PostgreSQL Render"></div><button class="button ghost" onclick="saveDb()">Connecter la base</button><p class="small" style="margin-top:15px">Sur Render, préfère la variable d’environnement <code>DATABASE_URL</code>.</p></div></div><div class="section"><div class="panel"><h3>Sécurité — accès au tableau de bord</h3><div class="notice ${snapshot.mail && snapshot.mail.configured ? '' : 'warn'}">${snapshot.mail && snapshot.mail.configured ? `Envoi des codes via Brevo, expéditeur : ${esc(snapshot.mail.from || '(non défini)')}` : "Aucune clé API Brevo configurée pour l'envoi des codes de confirmation."}</div><div class="field"><label>Clé API Brevo</label><input id="mailApiKey" type="password" autocomplete="off" placeholder="xkeysib-xxxxxxxxxxxxxxxx"></div><div class="field"><label>Adresse expéditrice</label><input id="mailFrom" type="text" autocomplete="off" placeholder="Baccara Bot <votre.adresse@gmail.com>"></div><div class="toolbar"><button class="button primary" onclick="saveMailConfig()">Enregistrer (une seule fois)</button><button class="button ghost" onclick="doLogout()">Se déconnecter</button></div><p class="small" style="margin-top:15px">Créez une clé API gratuite sur <a href="https://app.brevo.com/settings/keys/api" target="_blank" rel="noopener">app.brevo.com (Settings &gt; SMTP &amp; API)</a>. Contrairement à Resend, aucun domaine à vérifier : validez simplement l'adresse expéditrice une fois dans Brevo (Settings &gt; Senders) — un compte Gmail existant convient. Une fois validée, elle peut envoyer vers n'importe quelle adresse Gmail destinataire.</p><div id="mailMessage"></div></div></div><div class="section"><div class="panel"><h3>Compteur — Taux Miroir (joueur &amp; banquier)</h3><p class="small">Compte, carte par carte, le costume du joueur ET du banquier séparément, et publie le résultat dans le canal Telegram ci-dessous après chaque jeu terminé (le même message est mis à jour, pas de spam). Remise à zéro automatique à chaque heure pile.</p><div class="field"><label>ID du canal Telegram</label><input id="mirrorChannelId" type="text" autocomplete="off" placeholder="-1001234567890" value="${esc(snapshot.mirrorCounter ? snapshot.mirrorCounter.channelId || '' : '')}"></div><div class="toolbar"><button class="button primary" onclick="saveMirrorChannel()">Enregistrer le canal</button><button class="button ghost" onclick="testMirrorCounter()">Envoyer un aperçu maintenant</button></div><div id="mirrorMessage"></div><p class="small" style="margin-top:15px">Depuis le dernier reset : ${snapshot.mirrorCounter ? snapshot.mirrorCounter.games || 0 : 0} jeu(x) comptabilisé(s).</p></div></div><div class="section"><div class="panel"><h3>Réglages globaux historiques</h3><div class="three-col"><div class="field"><label>Compteur B</label><input id="globalB" type="number" min="1" value="${snapshot.b}"></div><div class="field"><label>Rattrapages</label><input id="globalR" type="number" min="0" max="9" value="${snapshot.maxR}"></div><div class="field"><label>Format par défaut</label><input id="globalF" type="number" min="1" max="${snapshot.formatCount}" value="${snapshot.format}"></div></div><button class="button primary" onclick="saveGlobals()">Enregistrer les réglages globaux</button></div></div><div class="section"><div class="panel"><h3>💬 Message de perte + formation VIP</h3><p class="small">Envoyé automatiquement dans le canal, EN PLUS du ❌, dès qu'une prédiction (stratégie existante, « Prédit IA », ou relais « après perte ») se solde par une perte — pour renvoyer l'abonné vers l'administrateur (remboursement) et lui rappeler la formation VIP.</p>
+    function settingsPage() { setNav('settings'); const bot = snapshot.bot || {}, db = snapshot.db || {}; $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Système</span><h2 style="margin-top:7px">Configuration générale</h2><p class="small">Les réglages de chaque stratégie restent dans sa propre fiche.</p></div></div><div class="two-col"><div class="panel"><h3>Bot Telegram</h3><div class="notice ${bot.tokenSet ? '' : 'warn'}">${bot.tokenSet ? `Token enregistré : ${esc(bot.tokenMasked || 'masqué')}` : 'Aucun token Telegram configuré.'}</div><div class="field"><label>Token du bot</label><input id="botToken" type="password" autocomplete="off" placeholder="Coller le token Telegram pour le remplacer"></div><div class="field"><label>ID administrateur</label><input id="adminId" type="number" value="${esc(bot.adminId || '')}"></div><div class="field"><label>ID du canal principal</label><input id="mainChannel" placeholder="-1001234567890 ou @moncanal" value="${esc((snapshot.channels || []).filter(c => c.active).map(c => c.id).join(', '))}"></div><div class="toolbar"><button class="button primary" onclick="saveBot()">Enregistrer et redémarrer</button><button class="button orange" onclick="saveMainChannel()">Vérifier le canal et envoyer un message</button>${bot.tokenSet ? `<button class="button danger" onclick="disconnectBot()">Déconnecter / supprimer le token</button>` : ''}</div><div id="settingsMessage"></div></div><div class="panel"><h3>Base de données</h3><div class="notice ${db.ready ? '' : 'warn'}">${db.ready ? 'PostgreSQL connectée et prête.' : 'Base non connectée : le bot peut fonctionner avec l’historique en mémoire.'}</div><div class="field"><label>DATABASE_URL (optionnel)</label><input id="dbUrl" type="password" autocomplete="off" placeholder="URL PostgreSQL Render"></div><button class="button ghost" onclick="saveDb()">Connecter la base</button><p class="small" style="margin-top:15px">Sur Render, préfère la variable d’environnement <code>DATABASE_URL</code>.</p></div></div><div class="section"><div class="panel"><h3>Sécurité — accès au tableau de bord</h3><div class="notice ${snapshot.mail && snapshot.mail.configured ? '' : 'warn'}">${snapshot.mail && snapshot.mail.configured ? `Envoi des codes via Brevo, expéditeur : ${esc(snapshot.mail.from || '(non défini)')}` : "Aucune clé API Brevo configurée pour l'envoi des codes de confirmation."}</div><div class="field"><label>Clé API Brevo</label><input id="mailApiKey" type="password" autocomplete="off" placeholder="xkeysib-xxxxxxxxxxxxxxxx"></div><div class="field"><label>Adresse expéditrice</label><input id="mailFrom" type="text" autocomplete="off" placeholder="Baccara Bot <votre.adresse@gmail.com>"></div><div class="toolbar"><button class="button primary" onclick="saveMailConfig()">Enregistrer (une seule fois)</button><button class="button ghost" onclick="doLogout()">Se déconnecter</button></div><p class="small" style="margin-top:15px">Créez une clé API gratuite sur <a href="https://app.brevo.com/settings/keys/api" target="_blank" rel="noopener">app.brevo.com (Settings &gt; SMTP &amp; API)</a>. Contrairement à Resend, aucun domaine à vérifier : validez simplement l'adresse expéditrice une fois dans Brevo (Settings &gt; Senders) — un compte Gmail existant convient. Une fois validée, elle peut envoyer vers n'importe quelle adresse Gmail destinataire.</p><div id="mailMessage"></div></div></div><div class="section"><div class="panel"><h3>Compteur — Taux Miroir (joueur &amp; banquier)</h3><p class="small">Compte, carte par carte, le costume du joueur ET du banquier séparément, et publie le résultat dans le canal Telegram ci-dessous après chaque jeu terminé (le même message est mis à jour, pas de spam). Remise à zéro automatique à chaque heure pile.</p><div class="field"><label>ID du canal Telegram</label><input id="mirrorChannelId" type="text" autocomplete="off" placeholder="-1001234567890" value="${esc(snapshot.mirrorCounter ? snapshot.mirrorCounter.channelId || '' : '')}"></div><div class="toolbar"><button class="button primary" onclick="saveMirrorChannel()">Enregistrer le canal</button><button class="button ghost" onclick="testMirrorCounter()">Envoyer un aperçu maintenant</button></div><div id="mirrorMessage"></div><p class="small" style="margin-top:15px">Depuis le dernier reset : ${snapshot.mirrorCounter ? snapshot.mirrorCounter.games || 0 : 0} jeu(x) comptabilisé(s).</p></div></div><div class="section"><div class="panel"><h3>Réglages globaux historiques</h3><div class="three-col"><div class="field"><label>Compteur B</label><input id="globalB" type="number" min="1" value="${snapshot.b}"></div><div class="field"><label>Rattrapages</label><input id="globalR" type="number" min="0" max="9" value="${snapshot.maxR}"></div><div class="field"><label>Format par défaut</label><input id="globalF" type="number" min="1" max="${snapshot.formatCount}" value="${snapshot.format}"></div></div><button class="button primary" onclick="saveGlobals()">Enregistrer les réglages globaux</button></div></div><div class="section"><div class="panel"><h3>💬 Message de perte + formation VIP</h3><p class="small">Envoyé automatiquement dans le canal, EN PLUS du ❌, dès qu'une prédiction (stratégie existante, « Prédit IA », ou relais « après perte ») se solde par une perte — pour renvoyer l'abonné vers l'administrateur (remboursement) et lui rappeler la formation VIP.</p>
       <label class="check"><input id="lossNoticeEnabled" type="checkbox" ${snapshot.lossNotice && snapshot.lossNotice.enabled ? 'checked' : ''}> Activer ce message automatique</label>
       <div class="field"><label>Message de perte</label><textarea id="lossNoticeMessage" rows="3">${esc(snapshot.lossNotice ? snapshot.lossNotice.message : '')}</textarea></div>
       <div class="field"><label>Rappel formation VIP (texte)</label><textarea id="lossNoticeVipText" rows="2">${esc(snapshot.lossNotice ? snapshot.lossNotice.vipText : '')}</textarea></div>
@@ -3070,11 +2835,6 @@ Faites-en bon usage !
     async function disconnectBot() {
       if (!confirm('Déconnecter le bot principal ? Le token sera supprimé et le bot ne répondra plus sur Telegram jusqu\'à ce qu\'un nouveau token soit configuré.')) return;
       try { await api('/api/bot/token', 'DELETE'); await refresh(); settingsPage(); toast('Bot principal déconnecté — token supprimé.'); } catch(e) { toast(e.message, 'error'); }
-    }
-    async function saveShopBot() { try { const token = val('shopBotToken'); if (!token) { toast('Colle le token dédié à la boutique.', 'error'); return; } await api('/api/shop/bot/token', 'POST', { token }); await refresh(); settingsPage(); toast('Token de la boutique enregistré.'); } catch(e) { toast(e.message, 'error'); } }
-    async function disconnectShopBot() {
-      if (!confirm('Déconnecter le bot de la boutique ? Le token sera supprimé et ce bot ne répondra plus sur Telegram jusqu\'à ce qu\'un nouveau token soit configuré.')) return;
-      try { await api('/api/shop/bot/token', 'DELETE'); await refresh(); settingsPage(); toast('Bot boutique déconnecté — token supprimé.'); } catch(e) { toast(e.message, 'error'); }
     }
     async function saveMainChannel() {
       const box = $('#settingsMessage');
@@ -3557,7 +3317,6 @@ Faites-en bon usage !
         else if (h === '#/ai-strategies') aiStrategiesPage();
         else if (h === '#/ai-repair') await repairPage();
         else if (h === '#/ai-created') aiCreatedStrategiesPage();
-        else if (h === '#/boutique') await boutiquePage();
         else if (h === '#/predit') preditPage();
         else if (h === '#/after-loss') afterLossPage();
         else if (h === '#/combined') combinedPage();
