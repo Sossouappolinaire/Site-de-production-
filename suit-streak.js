@@ -49,6 +49,7 @@ const panel = {
   maxR: 1,
   trackers: [],
   pendingMessages: [],
+  channelTitles: {},
   history: [],
   sentCount: 0,
   lastSentAt: null,
@@ -175,7 +176,12 @@ function sanitizeN(value) {
 }
 
 function sanitizeMode(value) {
-  return value === 'offset' ? 'offset' : 'next'; // 'next' = target+1 ; 'offset' = target+offset
+  // 'next'     = attendre un costume DIFFÉRENT puis prédire sur son jeu (mode « même costume »)
+  // 'nextpred' = prédire sur la PROCHAINE prédiction de la source, quel que soit son costume
+  // 'offset'   = target+offset
+  // 'cross1' / 'cross2' = comme 'nextpred' mais avec le costume croisé A / B
+  if (value === 'offset' || value === 'nextpred' || value === 'cross1' || value === 'cross2' || value === 'mirror') return value;
+  return 'next';
 }
 
 // ---------------------------------------------------------------------------
@@ -197,8 +203,26 @@ function sanitizeSuitFilter(value) {
 // d'origine), soit son MIROIR (❤️↔♦️, ♠️↔♣️ — voir strategies.MIRROR),
 // exactement comme le mode 'miroir' de « Répétition après perte »
 // (after-loss.js) et « Chevauchement » (overlap.js).
+// Deux options « croisées » (demande admin) : cross1 = ♦️→♠️ et ❤️→♣️ ;
+// cross2 = ❤️→♠️ et ♦️→♣️ (et les correspondances inverses ♠️→♦️/♣️→❤️
+// pour cross1, ♠️→❤️/♣️→♦️ pour cross2). Comme le miroir, elles sont
+// appliquées sur la PROCHAINE prédiction de la source dès que N est atteint.
+const CROSS = {
+  cross1: { '♦️': '♠️', '❤️': '♣️', '♠️': '♦️', '♣️': '❤️' },
+  cross2: { '❤️': '♠️', '♦️': '♣️', '♠️': '❤️', '♣️': '♦️' },
+  mirror: { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' },
+};
+
 function sanitizePredictSuit(value) {
   return value === 'mirror' ? 'mirror' : 'same';
+}
+
+// Costume réellement prédit : miroir (« Costume prédit »), ou croisé A/B
+// (choisi dans « Une fois la série atteinte, prédire sur » → tracker.mode).
+function mapSuit(tracker, suit) {
+  if (tracker.predictSuit === 'mirror') return strategies.MIRROR[suit] || suit;
+  if (CROSS[tracker.mode]) return CROSS[tracker.mode][suit] || suit;
+  return suit;
 }
 
 function sanitizeOffset(value) {
@@ -248,6 +272,7 @@ function persist() {
     config: config(), trackers: panel.trackers, history: panel.history,
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
+    channelTitles: panel.channelTitles,
   };
   try { store.patch({ suitStreak: saved }); } catch (_) {}
   if (db.ready) db.setSetting('suit_streak_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
@@ -272,6 +297,7 @@ async function restoreFromDb() {
 }
 
 function applySaved(saved) {
+  if (saved.channelTitles && typeof saved.channelTitles === 'object') panel.channelTitles = { ...saved.channelTitles };
   if (saved.config) {
     panel.enabled = saved.config.enabled !== false;
     panel.channels = parseChannels(saved.config.channels);
@@ -285,7 +311,7 @@ function applySaved(saved) {
       key: t.key,
       name: t.name || (optionByKey(t.key) || {}).name || t.key,
       n: sanitizeN(t.n),
-      mode: sanitizeMode(t.mode),
+      mode: (t.predictSuit === 'cross1' || t.predictSuit === 'cross2') ? t.predictSuit : sanitizeMode(t.mode),
       offset: sanitizeOffset(t.offset),
       suitFilter: sanitizeSuitFilter(t.suitFilter),
       predictSuit: sanitizePredictSuit(t.predictSuit),
@@ -302,6 +328,7 @@ function applySaved(saved) {
       streakHasLoss: false,
       waitingSuit: null,
       mirrorPending: null,
+      diffPending: null,
       lastSeenTarget: currentMaxTarget(t.key),
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
       lastSentAt: t.lastSentAt || null,
@@ -341,6 +368,7 @@ function addTracker(key, extra = {}) {
     streakHasLoss: false,
     waitingSuit: null,
     mirrorPending: null,
+    diffPending: null,
     // on ne rejoue pas l'historique déjà passé au moment de l'ajout.
     lastSeenTarget: currentMaxTarget(opt.key),
     sentCount: 0,
@@ -372,6 +400,7 @@ function updateTracker(id, patch = {}) {
     tracker.streakHasLoss = false;
     tracker.waitingSuit = null;
     tracker.mirrorPending = null;
+    tracker.diffPending = null;
   }
   if (patch.channels !== undefined) tracker.channels = parseChannels(patch.channels);
   if (patch.siteChannelId !== undefined) tracker.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
@@ -422,6 +451,21 @@ async function processTracker(tracker) {
     // miroir du costume de la série. Prioritaire sur tout le reste : cette
     // prédiction-là ne compte pour rien d'autre (ni filtre, ni nouvelle
     // série, ni attente de perte).
+    // Mode « même costume » + « jeu suivant » (réglage par défaut du
+    // panneau) — demande admin : une fois la série de N même costume
+    // atteinte, on attend que la stratégie suivie prédise un costume
+    // DIFFÉRENT de celui de la série. Cette prédiction-là (son jeu, pas +1)
+    // reçoit le costume de la série. Si elle prédit encore le même costume,
+    // on continue d'attendre. Exemple N=2 : 102♦️ 109♦️ → série atteinte ;
+    // 118❤️ → on prédit ♦️ sur 118.
+    if (tracker.diffPending) {
+      if (suit && suit !== tracker.diffPending) {
+        await send(tracker, { target: pred.target, suit: tracker.diffPending, sourceTarget: pred.target });
+        tracker.diffPending = null;
+      }
+      continue;
+    }
+
     if (tracker.mirrorPending) {
       if (suit) {
         await fireMirrorNext(tracker, pred, tracker.mirrorPending);
@@ -457,10 +501,15 @@ async function processTracker(tracker) {
     if (pred.status === 'perdu') tracker.streakHasLoss = true;
 
     if (tracker.streakCount >= tracker.n) {
-      if (tracker.predictSuit === 'mirror') {
-        // toujours différé sur la PROCHAINE prédiction de la stratégie
+      if (tracker.predictSuit === 'mirror' || tracker.mode === 'nextpred' || CROSS[tracker.mode]) {
+        // miroir / croisé / « prédit suivant » : toujours différé sur la
+        // PROCHAINE prédiction de la stratégie, quel que soit son costume
         // (peu importe perte ou pas dans la série qui vient de se terminer).
         tracker.mirrorPending = tracker.streakSuit;
+      } else if (tracker.mode !== 'offset') {
+        // « même costume » + « jeu suivant » : on attend un costume différent
+        // (voir diffPending ci-dessus), peu importe les pertes dans la série.
+        tracker.diffPending = tracker.streakSuit;
       } else if (!tracker.streakHasLoss) {
         // aucune perte dans la série : on déclenche tout de suite.
         await fire(tracker, pred);
@@ -488,7 +537,7 @@ async function fire(tracker, pred) {
 // jamais +1 ni +offset) qui reçoit le miroir du costume de la série
 // (streakSuit), quel que soit le costume que pred porte lui-même.
 async function fireMirrorNext(tracker, pred, streakSuit) {
-  const suit = strategies.MIRROR[streakSuit] || streakSuit;
+  const suit = mapSuit(tracker, streakSuit);
   await send(tracker, { target: pred.target, suit, sourceTarget: pred.target });
 }
 
@@ -522,12 +571,14 @@ async function send(tracker, syn) {
       // CORRECTIF (envoi en retard) : envoi en PARALLÈLE à tous les canaux.
       const results = await Promise.all(targetChannels.map((id) =>
         bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
-          .then((m) => ({ ok: true, id, messageId: m.message_id }))
+          // canal arrêté par /stop : le garde-fou de bot.js renvoie un faux
+          // message (skipped) — ce n'est PAS un envoi, on ne le compte pas.
+          .then((m) => (m && m.skipped ? { ok: false, skipped: true, id } : { ok: true, id, messageId: m.message_id }))
           .catch((e) => ({ ok: false, id, error: e.message }))
       ));
       for (const r of results) {
         if (r.ok) { sentMessages.push({ chatId: r.id, messageId: r.messageId }); ok = true; }
-        else errors.push(`${r.id} : ${r.error}`);
+        else if (!r.skipped) errors.push(`${r.id} : ${r.error}`);
       }
     }
   }
@@ -636,7 +687,7 @@ async function verifyPending() {
 
 setOnShoeReset(() => {
   for (const t of panel.trackers) {
-    t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0; t.streakHasLoss = false; t.waitingSuit = null; t.mirrorPending = null;
+    t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0; t.streakHasLoss = false; t.waitingSuit = null; t.mirrorPending = null; t.diffPending = null;
   }
   for (const entry of panel.pendingMessages) {
     if (entry.status !== 'en attente') continue;
@@ -679,6 +730,24 @@ async function test() {
   return { ok: sent.length > 0, sent, errors };
 }
 
+// Nom lisible d'un canal Telegram (titre relevé à la vérification du canal).
+function setChannelTitle(id, title) {
+  const key = String(id == null ? '' : id).trim();
+  if (!key || !title) return;
+  panel.channelTitles[key] = String(title).slice(0, 120);
+  persist();
+}
+
+// Les 3 dernières prédictions publiées par UNE source (plus récente d'abord),
+// avec leur résultat : « en attente », « gagné », « perdu » ou « annulé ».
+function lastPredsFor(trackerId, limit = 3) {
+  return panel.pendingMessages
+    .filter((e) => e.trackerId === trackerId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, limit)
+    .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt }));
+}
+
 function statusView() {
   return {
     ...config(),
@@ -687,12 +756,14 @@ function statusView() {
     // la page « Canaux » (voir predictor.js/siteChannelsView), identique à
     // after-loss.js.
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
+    channelTitles: panel.channelTitles,
     trackers: panel.trackers.map((t) => ({
       id: t.id, key: t.key, name: t.name, n: t.n, mode: t.mode, offset: t.offset, suitFilter: t.suitFilter || null,
       predictSuit: t.predictSuit || 'same',
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
-      streakSuit: t.streakSuit, streakCount: t.streakCount, streakHasLoss: t.streakHasLoss, waitingSuit: t.waitingSuit, mirrorPending: t.mirrorPending || null,
+      streakSuit: t.streakSuit, streakCount: t.streakCount, streakHasLoss: t.streakHasLoss, waitingSuit: t.waitingSuit, mirrorPending: t.mirrorPending || null, diffPending: t.diffPending || null,
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
+      lastPreds: lastPredsFor(t.id, 3),
     })),
     history: panel.history.slice(0, 30),
     sentCount: panel.sentCount,
@@ -705,5 +776,5 @@ function statusView() {
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
   options, addTracker, updateTracker, removeTracker,
-  restore, restoreFromDb, parseChannels, pendingFor,
+  restore, restoreFromDb, parseChannels, pendingFor, setChannelTitle,
 };

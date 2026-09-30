@@ -375,6 +375,7 @@ app.get('/api/state', async (req, res) => {
     afterLoss: afterLoss.status(),
     combined: combined.status(),
     suitStreak: suitStreak.status(),
+    control: predictionControl.status(),
     suitBreak: suitBreak.status(),
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     statistics: statistics.status(),
@@ -1695,6 +1696,7 @@ app.post('/api/suit-streak/channel', async (req, res) => {
   const check = await resolveChat(idsList[0]);
   if (!check.ok) return res.status(400).json({ error: check.error });
   suitStreak.configure({ channels: idsList });
+  if (check.chat && check.chat.title) suitStreak.setChannelTitle(idsList[0], check.chat.title);
   const notice = await suitStreak.test();
   res.json({ ok: true, channel: check.chat, notice, suitStreak: suitStreak.status() });
 });
@@ -1714,6 +1716,13 @@ app.post('/api/suit-streak/scan', async (req, res) => {
   res.json(suitStreak.status());
 });
 
+// Relève le nom (titre) des canaux propres d'une source, sans bloquer la réponse.
+function rememberSuitStreakTitles(list) {
+  for (const id of (list || [])) {
+    resolveChat(id).then((c) => { if (c && c.ok && c.chat && c.chat.title) suitStreak.setChannelTitle(id, c.chat.title); }).catch(() => {});
+  }
+}
+
 app.post('/api/suit-streak/trackers', async (req, res) => {
   try {
     const t = suitStreak.addTracker(req.body && req.body.key, {
@@ -1728,6 +1737,7 @@ app.post('/api/suit-streak/trackers', async (req, res) => {
       maxR: req.body && req.body.maxR,
       name: req.body && req.body.name,
     });
+    rememberSuitStreakTitles(t && t.channels);
     res.json({ ok: true, tracker: t, suitStreak: suitStreak.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -1736,6 +1746,7 @@ app.put('/api/suit-streak/trackers/:id', (req, res) => {
   try {
     const t = suitStreak.updateTracker(req.params.id, req.body || {});
     if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    rememberSuitStreakTitles(t && t.channels);
     res.json({ ok: true, tracker: t, suitStreak: suitStreak.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
