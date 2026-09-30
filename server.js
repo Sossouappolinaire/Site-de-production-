@@ -43,6 +43,7 @@ const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const copyAnnounce = require('./copy-announce');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
@@ -377,6 +378,7 @@ app.get('/api/state', async (req, res) => {
     suitStreak: suitStreak.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
+    copyAnnounce: { ...copyAnnounce.status(), channels: configuredChannelList() },
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
@@ -1717,11 +1719,12 @@ app.post('/api/suit-streak/scan', async (req, res) => {
 });
 
 // Relève le nom (titre) des canaux propres d'une source, sans bloquer la réponse.
-function rememberSuitStreakTitles(list) {
+function rememberPanelTitles(mod, list) {
   for (const id of (list || [])) {
-    resolveChat(id).then((c) => { if (c && c.ok && c.chat && c.chat.title) suitStreak.setChannelTitle(id, c.chat.title); }).catch(() => {});
+    resolveChat(id).then((c) => { if (c && c.ok && c.chat && c.chat.title) mod.setChannelTitle(id, c.chat.title); }).catch(() => {});
   }
 }
+function rememberSuitStreakTitles(list) { rememberPanelTitles(suitStreak, list); }
 
 app.post('/api/suit-streak/trackers', async (req, res) => {
   try {
@@ -1777,6 +1780,7 @@ app.post('/api/overlap/channel', async (req, res) => {
   const check = await resolveChat(idsList[0]);
   if (!check.ok) return res.status(400).json({ error: check.error });
   overlap.configure({ channels: idsList });
+  if (check.chat && check.chat.title) overlap.setChannelTitle(idsList[0], check.chat.title);
   const notice = await overlap.test();
   res.json({ ok: true, channel: check.chat, notice, overlap: overlap.status() });
 });
@@ -1813,6 +1817,7 @@ app.post('/api/overlap/trackers', async (req, res) => {
       maxR: req.body && req.body.maxR,
       name: req.body && req.body.name,
     });
+    for (const t of (r.created || [])) rememberPanelTitles(overlap, t && t.channels);
     res.json({ ok: true, created: r.created, errors: r.errors, overlap: overlap.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -1821,6 +1826,7 @@ app.put('/api/overlap/trackers/:id', (req, res) => {
   try {
     const t = overlap.updateTracker(req.params.id, req.body || {});
     if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    rememberPanelTitles(overlap, t && t.channels);
     res.json({ ok: true, tracker: t, overlap: overlap.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -1889,6 +1895,7 @@ app.post('/api/suit-break/channel', async (req, res) => {
   const check = await resolveChat(idsList[0]);
   if (!check.ok) return res.status(400).json({ error: check.error });
   suitBreak.configure({ channels: idsList });
+  if (check.chat && check.chat.title) suitBreak.setChannelTitle(idsList[0], check.chat.title);
   const notice = await suitBreak.test();
   res.json({ ok: true, channel: check.chat, notice, suitBreak: suitBreak.status() });
 });
@@ -1918,6 +1925,7 @@ app.post('/api/suit-break/trackers', async (req, res) => {
       maxR: req.body && req.body.maxR,
       name: req.body && req.body.name,
     });
+    rememberPanelTitles(suitBreak, t && t.channels);
     res.json({ ok: true, tracker: t, suitBreak: suitBreak.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -1926,6 +1934,7 @@ app.put('/api/suit-break/trackers/:id', (req, res) => {
   try {
     const t = suitBreak.updateTracker(req.params.id, req.body || {});
     if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    rememberPanelTitles(suitBreak, t && t.channels);
     res.json({ ok: true, tracker: t, suitBreak: suitBreak.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -2170,6 +2179,107 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
     res.json(formationRelay.setStrategy(req.params.id, { channels: req.body && req.body.channelId ? [String(req.body.channelId).trim()] : [] }));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+// ---------------------------------------------------------------------------
+// « Copie et annonce » (voir copy-announce.js) — règles : source (stratégie,
+// stratégie enregistrée ou canal) → canal de destination, copie des
+// prédictions et/ou annonces planifiées (intervalle ou heures pile).
+// ---------------------------------------------------------------------------
+// Liste de TOUS les canaux (id) déjà configurés quelque part — stratégies
+// (public/silencieux), panneaux et leurs sources suivies, canaux actifs —
+// pour le sélecteur « source = canal » et « destination » de Copie et annonce.
+// Aucun appel réseau : les noms viennent des titres déjà relevés.
+function configuredChannelList() {
+  const rows = new Map();
+  const titles = {};
+  for (const mod of [suitStreak, suitBreak, overlap, copyAnnounce]) {
+    try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
+  }
+  const add = (id, source) => {
+    if (id === null || id === undefined || id === '') return;
+    const key = String(id);
+    if (!rows.has(key)) rows.set(key, { id: key, title: titles[key] || '', sources: [] });
+    const row = rows.get(key);
+    if (!row.sources.includes(source)) row.sources.push(source);
+  };
+  try {
+    for (const def of strategies.LIST) {
+      for (const mode of ['published', 'shadow']) {
+        for (const id of strategyChannels(def.key, mode)) add(id, `${def.name}${mode === 'shadow' ? ' · silencieux' : ''}`);
+      }
+    }
+  } catch (_) {}
+  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit]];
+  for (const [label, mod] of panelsList) {
+    try {
+      const st = mod.status() || {};
+      (Array.isArray(st.channels) ? st.channels : []).forEach((id) => add(id, label));
+      (Array.isArray(st.trackers) ? st.trackers : []).forEach((t) => (Array.isArray(t.channels) ? t.channels : []).forEach((id) => add(id, `${label} · ${t.name || t.key}`)));
+    } catch (_) {}
+  }
+  try {
+    const fr = formationRelay.status() || {};
+    (Array.isArray(fr.channels) ? fr.channels : []).forEach((id) => add(id, 'Formation'));
+  } catch (_) {}
+  (Array.isArray(state.activeChannels) ? state.activeChannels : []).forEach((id) => add(id, 'Canaux actifs'));
+  return [...rows.values()];
+}
+
+app.get('/api/copy-announce', (req, res) => res.json({ ...copyAnnounce.status(), channels: configuredChannelList() }));
+
+app.post('/api/copy-announce/config', (req, res) => {
+  copyAnnounce.configure(req.body || {});
+  res.json(copyAnnounce.status());
+});
+
+// Vérifie les canaux de destination auprès de Telegram (le bot doit y être
+// administrateur) et retient leur nom pour l'affichage « Nom · id ».
+async function checkCopyDest(list) {
+  const titles = [];
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`${id} : ${check.error}`);
+    if (check.chat && check.chat.canPost === false) throw new Error(`${id} : le bot ne peut pas publier dans ce canal`);
+    if (check.chat && check.chat.title) copyAnnounce.setChannelTitle(id, check.chat.title);
+    titles.push(id);
+  }
+  return titles;
+}
+app.post('/api/copy-announce/rules', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const dest = copyAnnounce.parseChannels(body.destChannels);
+    if (botStatus().tokenSet) await checkCopyDest(dest);
+    const rule = copyAnnounce.addRule(body);
+    res.json({ ok: true, rule, copyAnnounce: copyAnnounce.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/copy-announce/rules/:id', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.destChannels !== undefined && botStatus().tokenSet) await checkCopyDest(copyAnnounce.parseChannels(body.destChannels));
+    const rule = copyAnnounce.updateRule(req.params.id, body);
+    if (!rule) return res.status(404).json({ error: 'Règle introuvable' });
+    res.json({ ok: true, rule, copyAnnounce: copyAnnounce.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/copy-announce/rules/:id', (req, res) => {
+  copyAnnounce.removeRule(req.params.id);
+  res.json(copyAnnounce.status());
+});
+
+app.post('/api/copy-announce/rules/:id/test', async (req, res) => {
+  const r = await copyAnnounce.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/copy-announce/scan', async (req, res) => {
+  await copyAnnounce.tick();
+  res.json(copyAnnounce.status());
+});
+
 
 // ---------------------------------------------------------------------------
 // Démarrage : on connecte la base et on sème le compte admin AVANT d'ouvrir

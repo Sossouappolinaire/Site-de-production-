@@ -47,6 +47,7 @@ const panel = {
   maxR: 1,
   trackers: [],
   pendingMessages: [],
+  channelTitles: {},
   history: [],
   // GARDE-FOU ANTI-DOUBLON PERSISTANT (demande admin) : contrairement à
   // history/pendingMessages (vidés à chaque démarrage — voir applySaved),
@@ -227,6 +228,7 @@ function persist() {
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
     // celle-ci SURVIT au nettoyage de restore() — voir applySaved().
     sentFingerprints: panel.sentFingerprints,
+    channelTitles: panel.channelTitles,
   };
   try { store.patch({ suitBreak: saved }); } catch (_) {}
   if (db.ready) db.setSetting('suit_break_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
@@ -254,6 +256,7 @@ async function restoreFromDb() {
 }
 
 function applySaved(saved) {
+  if (saved.channelTitles && typeof saved.channelTitles === 'object') panel.channelTitles = { ...saved.channelTitles };
   if (saved.config) {
     panel.enabled = saved.config.enabled !== false;
     panel.channels = parseChannels(saved.config.channels);
@@ -663,11 +666,33 @@ async function test() {
   return { ok: sent.length > 0, sent, errors };
 }
 
+// Nom (titre) des canaux Telegram propres/du panneau, pour la carte compacte
+// des sources suivies (« Nom du canal · id »).
+function setChannelTitle(id, title) {
+  const key = String(id == null ? '' : id).trim();
+  if (!key || !title) return;
+  if (!panel.channelTitles) panel.channelTitles = {};
+  if (panel.channelTitles[key] === String(title).slice(0, 120)) return;
+  panel.channelTitles[key] = String(title).slice(0, 120);
+  persist();
+}
+
+// Les 3 dernières prédictions publiées par UNE source (plus récente d'abord),
+// avec leur résultat : « en attente », « gagné », « perdu » ou « annulé ».
+function lastPredsFor(trackerId, limit = 3) {
+  return panel.pendingMessages
+    .filter((e) => e.trackerId === trackerId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, limit)
+    .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt }));
+}
+
 function statusView() {
   return {
     ...config(),
     options: options(),
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
+    channelTitles: panel.channelTitles,
     trackers: panel.trackers.map((t) => ({
       id: t.id, key: t.key, name: t.name, n: t.n,
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
@@ -682,6 +707,7 @@ function statusView() {
         .map((p) => ({ target: p.target, suit: p.suit || null, status: p.status || 'en attente' }))
         .reverse(),
       pending: pendingFor(t.id).slice().reverse(),
+      lastPreds: lastPredsFor(t.id, 3),
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),
@@ -695,5 +721,5 @@ function statusView() {
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
   options, addTracker, updateTracker, removeTracker,
-  restore, restoreFromDb, parseChannels, pendingFor,
+  restore, restoreFromDb, parseChannels, pendingFor, setChannelTitle,
 };

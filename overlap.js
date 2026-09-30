@@ -45,6 +45,7 @@ const panel = {
   maxR: 1,
   trackers: [],
   pendingMessages: [],
+  channelTitles: {},
   history: [],
   sentCount: 0,
   lastSentAt: null,
@@ -235,6 +236,7 @@ function persist() {
     config: config(), trackers: panel.trackers, history: panel.history,
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
+    channelTitles: panel.channelTitles,
   };
   try { store.patch({ overlap: saved }); } catch (_) {}
   if (db.ready) db.setSetting('overlap_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
@@ -259,6 +261,7 @@ async function restoreFromDb() {
 }
 
 function applySaved(saved) {
+  if (saved.channelTitles && typeof saved.channelTitles === 'object') panel.channelTitles = { ...saved.channelTitles };
   if (saved.config) {
     panel.enabled = saved.config.enabled !== false;
     panel.channels = parseChannels(saved.config.channels);
@@ -628,6 +631,39 @@ async function test() {
   return { ok: sent.length > 0, sent, errors };
 }
 
+// Nom (titre) des canaux Telegram propres/du panneau, pour la carte compacte
+// des sources suivies (« Nom du canal · id »).
+function setChannelTitle(id, title) {
+  const key = String(id == null ? '' : id).trim();
+  if (!key || !title) return;
+  if (!panel.channelTitles) panel.channelTitles = {};
+  if (panel.channelTitles[key] === String(title).slice(0, 120)) return;
+  panel.channelTitles[key] = String(title).slice(0, 120);
+  persist();
+}
+
+// Les 3 dernières prédictions publiées par UNE source (plus récente d'abord),
+// avec leur résultat : « en attente », « gagné », « perdu » ou « annulé ».
+function lastPredsFor(trackerId, limit = 3) {
+  return panel.pendingMessages
+    .filter((e) => e.trackerId === trackerId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, limit)
+    .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt }));
+}
+
+// Combien de relais de chaque costume cette source a envoyés (depuis le
+// dernier démarrage) — affichés « x/total » aux 4 coins de la carte.
+function suitCountsFor(trackerId) {
+  const out = { '❤️': 0, '♦️': 0, '♠️': 0, '♣️': 0 };
+  for (const h of panel.history) {
+    if (h.trackerId !== trackerId) continue;
+    const k = String(h.suit || '').replace(/\uFE0F/g, '');
+    for (const s of Object.keys(out)) if (s.replace(/\uFE0F/g, '') === k) out[s] += 1;
+  }
+  return out;
+}
+
 function statusView() {
   return {
     ...config(),
@@ -636,10 +672,13 @@ function statusView() {
     // la page « Canaux » (voir predictor.js/siteChannelsView), identique
     // aux autres panneaux.
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
+    channelTitles: panel.channelTitles,
     trackers: panel.trackers.map((t) => ({
       id: t.id, key: t.key, name: t.name, mode: t.mode, offset: t.offset,
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
       watching: t.watching, overlapCount: t.overlapCount,
+      lastPreds: lastPredsFor(t.id, 3),
+      suitCounts: suitCountsFor(t.id),
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),
@@ -653,5 +692,5 @@ function statusView() {
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
   options, addTracker, addTrackers, updateTracker, removeTracker,
-  restore, restoreFromDb, parseChannels, pendingFor,
+  restore, restoreFromDb, parseChannels, pendingFor, setChannelTitle,
 };

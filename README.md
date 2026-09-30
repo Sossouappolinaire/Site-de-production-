@@ -303,3 +303,10 @@ Page `#/ai-repair` du tableau de bord (bouton « 🛠 Réparation IA » dans le 
 Routes : `GET /api/ai/repair`, `POST /api/ai/repair/diagnose|fix|verify|reset` (administrateur uniquement).
 Clé Groq : `GROQ_API_KEY` (déjà présente dans `config.js`), modèle réglable via `GROQ_MODEL`.
 Le palier gratuit Groq limite le débit (8000 tokens/min) : les erreurs 429 sont réessayées automatiquement.
+
+## Version 1.25 — Copie et annonce
+
+- Nouvelle page `#/copy-announce` (« Copie et annonce »), module `copy-announce.js`.
+- Chaque règle : une source (stratégie existante, stratégie enregistrée — après perte, combinée, répétition, rupture, chevauchement — ou canal déjà configuré) vers un canal de destination.
+- **Copie** des prédictions publiées (mise à jour du résultat dans le canal de destination) et/ou **annonces planifiées** (intervalle en minutes : 30 min, 1 h, 3 h… ou heures pile HH:MM, heure du serveur). Les deux options peuvent être actives ensemble ou séparément.
+- Seules les prédictions publiées après l'ajout de la règle sont copiées.

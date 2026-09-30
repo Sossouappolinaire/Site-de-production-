@@ -13,6 +13,7 @@ const aiQa = require('./ai-qa');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
+const copyAnnounce = require('./copy-announce');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const suitBreak = require('./suit-break');
@@ -1900,6 +1901,9 @@ async function tick() {
       // sinon attente du retour de ce costume avant de déclencher (voir
       // suit-streak.js).
       suitStreak.tick(),
+      // panneau « Copie et annonce » : recopie des prédictions d'une source
+      // vers un canal + annonces planifiées (voir copy-announce.js).
+      copyAnnounce.tick(),
       // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
       // IA ou formation), série de N prédictions consécutives de MÊME
       // costume puis attente de la RUPTURE (prochain costume différent) —
@@ -2092,6 +2096,7 @@ async function applyDbConfigs() {
   await afterLoss.restoreFromDb();
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
+  await copyAnnounce.restoreFromDb();
   await suitBreak.restoreFromDb();
   await overlap.restoreFromDb();
   await statistics.restoreFromDb();
@@ -2151,6 +2156,8 @@ async function startLoop() {
   combined.setSender(senderFor);
   suitStreak.restore();
   suitStreak.setSender(senderFor);
+  copyAnnounce.restore();
+  copyAnnounce.setSender(senderFor);
   suitBreak.restore();
   suitBreak.setSender(senderFor);
   overlap.restore();
