@@ -376,6 +376,7 @@
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
+        <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/vip" data-nav="vip">VIP</a>
@@ -613,6 +614,7 @@
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/copy-announce', '📣', 'Copie et annonce', `${(snapshot.copyAnnounce?.rules || []).length} règle(s)`)}
         ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
@@ -1652,22 +1654,32 @@ Faites-en bon usage !
       const siteChannelId = val(`${prefix}-siteChannel`);
       return { channels: ids(val(`${prefix}-channels`)), siteChannelId: siteChannelId === '' ? null : siteChannelId, format: rawFormat === '' ? null : rawFormat, maxR: rawMaxR === '' ? null : rawMaxR };
     }
-    // Carte compacte d'une source : canal (nom + id), jeu en direct, les 4
-    // costumes aux 4 coins (compteur « x/N »), statut (En ligne / Stop /
-    // Planifié) et les 3 dernières prédictions publiées.
-    function suitStreakChannelsOf(t) {
-      const p = snapshot.suitStreak || {};
+    // -------------------------------------------------------------------
+    // Carte compacte COMMUNE à tous les panneaux « source suivie »
+    // (Répétition costume, Rupture costume, Chevauchement) : nom du canal
+    // + id, numéro du jeu en live, les 4 costumes aux 4 coins avec « x/N »,
+    // statut (En ligne / Stop / Planifié) et les 3 dernières prédictions.
+    // Les boutons Modifier / Retirer ouvrent le même formulaire qu'avant.
+    // -------------------------------------------------------------------
+    const TRACKER_KINDS = {
+      suitStreak: { snap: 'suitStreak', box: 'ssCards', hash: '#/suit-streak', edit: 'editSuitStreakTrackerModal', remove: 'removeSuitStreakTracker' },
+      suitBreak: { snap: 'suitBreak', box: 'sbCards', hash: '#/suit-break', edit: 'editSuitBreakTrackerModal', remove: 'removeSuitBreakTracker' },
+      overlap: { snap: 'overlap', box: 'ovCards', hash: '#/overlap', edit: 'editOverlapTrackerModal', remove: 'removeOverlapTracker' },
+    };
+    const trackerSuitKey = (x) => String(x || '').replace(/\uFE0F/g, '');
+    function trackerChannelsOf(kind, t) {
+      const p = snapshot[TRACKER_KINDS[kind].snap] || {};
       return (t.channels && t.channels.length) ? t.channels : (p.channels || []);
     }
-    function suitStreakChannelLabel(id) {
-      const p = snapshot.suitStreak || {};
+    function trackerChannelLabel(kind, id) {
+      const p = snapshot[TRACKER_KINDS[kind].snap] || {};
       const title = (p.channelTitles || {})[String(id)];
       return title ? `${title} · ${id}` : String(id);
     }
-    function suitStreakStatus(t) {
-      const p = snapshot.suitStreak || {};
+    function trackerStatus(kind, t) {
+      const p = snapshot[TRACKER_KINDS[kind].snap] || {};
       const c = snapshot.control || {};
-      const chans = suitStreakChannelsOf(t).map(x => String(x).toLowerCase());
+      const chans = trackerChannelsOf(kind, t).map(x => String(x).toLowerCase());
       if (p.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: 'panneau désactivé' };
       if (c.paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'prédictions arrêtées' };
       const paused = (c.pausedChannels || []).find(x => chans.includes(String(x.id).toLowerCase()) || (x.username && chans.includes(String(x.username).toLowerCase())));
@@ -1677,15 +1689,31 @@ Faites-en bon usage !
       if (sc) return { cls: 'warn', label: '📅 Planifié', hint: `arrêt ${sc.stopAt} · reprise ${sc.startAt}` };
       return { cls: 'good', label: '🟢 En ligne', hint: '' };
     }
-    function suitStreakCardHtml(t) {
-      const p = snapshot.suitStreak || {};
+    // Compteurs des 4 coins + texte du centre, selon le type de panneau.
+    function trackerCounters(kind, t) {
+      if (kind === 'overlap') {
+        const sc = t.suitCounts || {};
+        const total = Object.values(sc).reduce((a, b) => a + (Number(b) || 0), 0);
+        return {
+          get: (suit) => Number(sc[suit]) || 0, total,
+          center: `relais envoyés<br><b>×${esc(String(total))}</b>${t.watching ? `<br><span class="small">surveille #N${esc(String(t.watching))}</span>` : ''}`,
+        };
+      }
+      const count = Number(t.streakCount) || 0;
+      const armed = kind === 'suitBreak' && count >= t.n;
+      return {
+        get: (suit) => (t.streakSuit && trackerSuitKey(t.streakSuit) === trackerSuitKey(suit) ? count : 0), total: t.n,
+        center: `${armed ? 'armé — attend la rupture' : 'série en cours'}<br><b>${t.streakSuit ? esc(t.streakSuit) + ' ×' + esc(String(count)) : '—'}</b>`,
+      };
+    }
+    function trackerCardHtml(kind, t) {
+      const K = TRACKER_KINDS[kind];
       const live = snapshot.live;
-      const st = suitStreakStatus(t);
-      const chans = suitStreakChannelsOf(t);
-      const chanText = chans.length ? chans.map(id => esc(suitStreakChannelLabel(id))).join('<br>') : '—';
-      const cnt = (suit) => (t.streakSuit === suit ? (t.streakCount || 0) : 0);
-      const corner = (suit, align) => `<div style="text-align:${align};font-weight:700;font-size:20px;line-height:1.1">${suit}<div class="mono" style="font-size:14px;margin-top:2px">${esc(String(cnt(suit)))}/${esc(String(t.n))}</div></div>`;
-      const centerHtml = `<div style="grid-row:1 / span 2;grid-column:2;text-align:center;align-self:center" class="small muted">série en cours<br><b>${t.streakSuit ? esc(t.streakSuit) + ' ×' + esc(String(t.streakCount || 0)) : '—'}</b></div>`;
+      const st = trackerStatus(kind, t);
+      const chans = trackerChannelsOf(kind, t);
+      const chanText = chans.length ? chans.map(id => esc(trackerChannelLabel(kind, id))).join('<br>') : '—';
+      const k = trackerCounters(kind, t);
+      const corner = (suit, align) => `<div style="display:flex;flex-direction:column;align-items:${align === 'left' ? 'flex-start' : 'flex-end'}"><span style="display:block;height:28px;line-height:28px;font-size:24px;font-weight:700">${suit}</span><span class="mono" style="display:block;height:20px;line-height:20px;font-size:14px">${esc(String(k.get(suit)))}/${esc(String(k.total))}</span></div>`;
       const preds = (t.lastPreds || []);
       const stLabel = (x) => x.status === 'gagné' ? 'gagné' : (x.status === 'perdu' ? 'perdu' : (x.status === 'annulé' ? 'annulé' : 'attente'));
       const stCls = (x) => x.status === 'gagné' ? 'good' : (x.status === 'perdu' ? 'bad' : (x.status === 'annulé' ? '' : 'warn'));
@@ -1697,20 +1725,25 @@ Faites-en bon usage !
         ${st.hint ? `<p class="small muted" style="margin:2px 0 0">${esc(st.hint)}</p>` : ''}
         <div style="display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-size:14px"><span class="muted">Canal</span><span style="text-align:right">${chanText}</span></div>
         <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Jeu en live</span><span class="mono">${live ? '#N' + esc(String(live.number)) : '—'}</span></div>
-        <div style="display:grid;grid-template-columns:1fr auto 1fr;grid-template-rows:auto auto;gap:18px 8px;margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;padding:12px 16px;align-items:start">
-          <div style="grid-column:1;grid-row:1">${corner('❤️', 'left')}</div>${centerHtml}<div style="grid-column:3;grid-row:1">${corner('♠️', 'right')}</div>
-          <div style="grid-column:1;grid-row:2">${corner('♦️', 'left')}</div><div style="grid-column:3;grid-row:2">${corner('♣️', 'right')}</div>
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;grid-template-rows:auto auto;column-gap:8px;row-gap:16px;margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;align-items:start">
+          <div style="grid-column:1;grid-row:1">${corner('❤️', 'left')}</div>
+          <div style="grid-column:2;grid-row:1 / span 2;text-align:center;align-self:center" class="small muted">${k.center}</div>
+          <div style="grid-column:3;grid-row:1">${corner('♠️', 'right')}</div>
+          <div style="grid-column:1;grid-row:2">${corner('♦️', 'left')}</div>
+          <div style="grid-column:3;grid-row:2">${corner('♣️', 'right')}</div>
         </div>
         <div style="margin-bottom:6px"><span class="small muted">3 dernières prédictions</span></div>
         <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">${predsHtml}</div>
-        <div class="toolbar" style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr"><button class="button small primary" onclick="editSuitStreakTrackerModal('${esc(t.id)}')">Modifier</button><button class="button small danger" onclick="removeSuitStreakTracker('${esc(t.id)}')">Retirer</button></div>
+        <div class="toolbar" style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr"><button class="button small primary" onclick="${K.edit}('${esc(t.id)}')">Modifier</button><button class="button small danger" onclick="${K.remove}('${esc(t.id)}')">Retirer</button></div>
       </article>`;
     }
-    function suitStreakCardsHtml() {
-      const trackers = (snapshot.suitStreak || {}).trackers || [];
+    function trackerCardsHtml(kind) {
+      const trackers = (snapshot[TRACKER_KINDS[kind].snap] || {}).trackers || [];
       if (!trackers.length) return '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>';
-      return `<div class="proposals">${trackers.map(suitStreakCardHtml).join('')}</div>`;
+      return `<div class="proposals">${trackers.map(t => trackerCardHtml(kind, t)).join('')}</div>`;
     }
+    // Compatibilité avec les anciens appels.
+    function suitStreakCardsHtml() { return trackerCardsHtml('suitStreak'); }
     function editSuitStreakTrackerModal(id) {
       const t = ((snapshot.suitStreak || {}).trackers || []).find(x => x.id === id);
       if (!t) return;
@@ -1722,15 +1755,15 @@ Faites-en bon usage !
     }
     // Rafraîchit seulement les cartes (le numéro du jeu en live, les compteurs,
     // les 3 dernières prédictions) sans toucher aux champs en cours de saisie.
-    async function refreshSuitStreakCards() {
-      if (location.hash !== '#/suit-streak' || document.getElementById('modalRoot')) return;
-      const box = document.getElementById('ssCards');
-      if (!box) return;
+    async function refreshTrackerCards() {
+      const kind = Object.keys(TRACKER_KINDS).find(x => TRACKER_KINDS[x].hash === location.hash);
+      if (!kind || document.getElementById('modalRoot')) return;
+      if (!document.getElementById(TRACKER_KINDS[kind].box)) return;
       await refresh();
-      const again = document.getElementById('ssCards');
-      if (again) again.innerHTML = suitStreakCardsHtml();
+      const again = document.getElementById(TRACKER_KINDS[kind].box);
+      if (again) again.innerHTML = trackerCardsHtml(kind);
     }
-    setInterval(() => { refreshSuitStreakCards().catch(() => {}); }, 5000);
+    setInterval(() => { refreshTrackerCards().catch(() => {}); }, 5000);
     function suitStreakPage() {
       setNav('suit-streak');
       const p = snapshot.suitStreak || {};
@@ -1862,12 +1895,7 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveOverlap()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.watching ? 'warn' : 'good'}">${t.watching ? `Surveille le jeu #N${esc(String(t.watching))} (pas encore vérifié)` : 'Veille'}</span></div>
-            <dl><dt>Chevauchements détectés</dt><dd>${esc(String(t.overlapCount || 0))}</dd><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
-            ${overlapSettingsRow('ov-' + t.id, t)}
-            ${overlapChannelFormatRow('ov-' + t.id, t)}
-            <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ov-${esc(t.id)}-name" value="${esc(t.name)}"></div>
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateOverlapTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeOverlapTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+          <div id="ovCards">${trackerCardsHtml('overlap')}</div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Source</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
     }
@@ -1894,11 +1922,20 @@ Faites-en bon usage !
         toast(`${r.created?.length || keys.length} source(s) ajoutée(s) au chevauchement de prédictions.`);
       } catch (e) { toast(e.message, 'error'); }
     }
+    function editOverlapTrackerModal(id) {
+      const t = ((snapshot.overlap || {}).trackers || []).find(x => x.id === id);
+      if (!t) return;
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier la source</span><h3 style="margin-top:8px">${esc(t.name)}</h3></div></div>
+        ${overlapSettingsRow('ov-' + t.id, t)}
+        ${overlapChannelFormatRow('ov-' + t.id, t)}
+        <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ov-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateOverlapTracker('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
     async function updateOverlapTracker(id) {
       const { mode, offset } = readOverlapSettings('ov-' + id);
       const { channels, siteChannelId, format, maxR } = readOverlapChannelFormat('ov-' + id);
       const name = val(`ov-${id}-name`);
-      try { await api(`/api/overlap/trackers/${encodeURIComponent(id)}`, 'PUT', { mode, offset, channels, siteChannelId, format, maxR, name }); await refresh(); overlapPage(); toast('Réglages mis à jour.'); }
+      try { await api(`/api/overlap/trackers/${encodeURIComponent(id)}`, 'PUT', { mode, offset, channels, siteChannelId, format, maxR, name }); closeModal(); await refresh(); overlapPage(); toast('Réglages mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function removeOverlapTracker(id) {
@@ -2052,13 +2089,7 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveSuitBreak()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
-          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.streakCount >= t.n ? 'warn' : 'good'}">${t.streakCount >= t.n ? `Armé — attend la rupture de ${esc(t.streakSuit || '')} (×${esc(String(t.streakCount))})` : (t.streakCount > 0 ? `Série en cours : ${esc(t.streakSuit || '')} ×${esc(String(t.streakCount))}` : 'Surveillance')}</span></div>
-            <dl><dt>Relais envoyés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier relais</dt><dd>${formatDate(t.lastSentAt)}</dd><dt>Canal Telegram utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Canal du site utilisé</dt><dd>${(() => { const sid = (t.siteChannelId !== null && t.siteChannelId !== undefined) ? t.siteChannelId : p.siteChannelId; if (!sid) return '—'; const c = (p.siteChannels || []).find(x => String(x.id) === String(sid)); return esc((c ? c.name : sid) + ((t.siteChannelId === null || t.siteChannelId === undefined) ? ' (panneau)' : '')); })()}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd><dt>Rattrapage utilisé</dt><dd>${(t.maxR === null || t.maxR === undefined) ? `Panneau (${esc(String(p.maxR ?? 1))})` : esc(String(t.maxR))}</dd></dl>
-            ${suitBreakSettingsRow('sb-' + t.id, t)}
-            ${suitBreakChannelFormatRow('sb-' + t.id, t)}
-            <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="sb-${esc(t.id)}-name" value="${esc(t.name)}"></div>
-            ${suitBreakTrackerAudit(t)}
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateSuitBreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeSuitBreakTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+          <div id="sbCards">${trackerCardsHtml('suitBreak')}</div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Source</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
     }
@@ -2082,11 +2113,21 @@ Faites-en bon usage !
         toast('Source ajoutée à la rupture de costume.');
       } catch (e) { toast(e.message, 'error'); }
     }
+    function editSuitBreakTrackerModal(id) {
+      const t = ((snapshot.suitBreak || {}).trackers || []).find(x => x.id === id);
+      if (!t) return;
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier la source</span><h3 style="margin-top:8px">${esc(t.name)}</h3></div></div>
+        ${suitBreakSettingsRow('sb-' + t.id, t)}
+        ${suitBreakChannelFormatRow('sb-' + t.id, t)}
+        <div class="field" style="margin-top:12px"><label>Nom de cette source <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="sb-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+        ${suitBreakTrackerAudit(t)}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateSuitBreakTracker('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
     async function updateSuitBreakTracker(id) {
       const { n } = readSuitBreakSettings('sb-' + id);
       const { channels, siteChannelId, format, maxR } = readSuitBreakChannelFormat('sb-' + id);
       const name = val(`sb-${id}-name`);
-      try { await api(`/api/suit-break/trackers/${encodeURIComponent(id)}`, 'PUT', { n, channels, siteChannelId, format, maxR, name }); await refresh(); suitBreakPage(); toast('Réglages mis à jour.'); }
+      try { await api(`/api/suit-break/trackers/${encodeURIComponent(id)}`, 'PUT', { n, channels, siteChannelId, format, maxR, name }); closeModal(); await refresh(); suitBreakPage(); toast('Réglages mis à jour.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function removeSuitBreakTracker(id) {
@@ -3196,6 +3237,202 @@ Faites-en bon usage !
       try { const d = await api('/api/game21/analyze', 'POST', { variant: g21Variant }); await game21AiPage(d); toast('Analyse IA terminée.'); }
       catch (e) { toast(e.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = "Analyser avec l'IA"; } }
     }
+    // -------------------------------------------------------------------
+    // « Copie et annonce » (voir copy-announce.js) — chaque règle relie une
+    // source (stratégie existante, stratégie enregistrée, ou canal déjà
+    // configuré) à un canal de destination : copie des prédictions
+    // et/ou annonces planifiées (toutes les X minutes ou à heures pile).
+    // -------------------------------------------------------------------
+    let caDraft = null;
+    function caChannelLabel(id) {
+      const p = snapshot.copyAnnounce || {};
+      const t = (p.channelTitles || {})[String(id)] || ((p.channels || []).find(c => String(c.id) === String(id)) || {}).title;
+      return t ? `${t} · ${id}` : String(id);
+    }
+    function caRuleStatus(r) {
+      const c = snapshot.control || {};
+      const p = snapshot.copyAnnounce || {};
+      const chans = (r.destChannels || []).map(x => String(x).toLowerCase());
+      if (p.enabled === false || r.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: r.enabled === false ? 'règle désactivée' : 'panneau désactivé' };
+      if (c.paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'prédictions arrêtées' };
+      const paused = (c.pausedChannels || []).find(x => chans.includes(String(x.id).toLowerCase()) || (x.username && chans.includes(String(x.username).toLowerCase())));
+      if (paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'canal arrêté' };
+      const sched = (c.channelSchedules || []).find(x => chans.includes(String(x.id).toLowerCase())) || null;
+      const sc = sched ? sched.schedule : c.schedule;
+      if (sc) return { cls: 'warn', label: '📅 Planifié', hint: `arrêt ${sc.stopAt} · reprise ${sc.startAt}` };
+      return { cls: 'good', label: '🟢 En ligne', hint: '' };
+    }
+    function caEveryLabel(min) {
+      const n = Number(min) || 0;
+      if (n > 0 && n % 1440 === 0) return `tous les ${n / 1440} jour(s)`;
+      if (n > 0 && n % 60 === 0) return n === 60 ? 'toutes les heures' : `toutes les ${n / 60} h`;
+      return `toutes les ${n} min`;
+    }
+    function caScheduleLabel(a) {
+      return a.mode === 'times' ? `à ${(a.times || []).join(', ')}` : caEveryLabel(a.everyMin);
+    }
+    function caRuleCardHtml(r) {
+      const live = snapshot.live;
+      const st = caRuleStatus(r);
+      const dest = (r.destChannels || []).map(id => esc(caChannelLabel(id))).join('<br>') || '—';
+      const badge = (on, label) => `<span class="tag ${on ? 'good' : ''}">${on ? '✅' : '⛔'} ${label}</span>`;
+      const stLabel = (x) => x.status === 'gagné' ? 'gagné' : (x.status === 'perdu' ? 'perdu' : (x.status === 'annulé' ? 'annulé' : 'attente'));
+      const stCls = (x) => x.status === 'gagné' ? 'good' : (x.status === 'perdu' ? 'bad' : (x.status === 'annulé' ? '' : 'warn'));
+      const preds = r.lastPreds || [];
+      const copyBlock = r.copyEnabled ? `
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Source copiée</span><span style="text-align:right">${esc(r.sourceName || '—')}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Jeu en live</span><span class="mono">${live ? '#N' + esc(String(live.number)) : '—'}</span></div>
+        <div style="margin:12px 0 6px"><span class="small muted">3 dernières prédictions copiées · ${esc(String(r.copiedCount || 0))} au total</span></div>
+        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">${preds.length
+          ? preds.map(x => `<div><span class="tag ${stCls(x)} mono" style="font-size:13px">#N${esc(String(x.target))} ${esc(x.suit || '')} ${stLabel(x)}</span></div>`).join('')
+          : '<span class="small muted">Aucune prédiction copiée pour le moment</span>'}</div>` : '';
+      const annBlock = r.announceEnabled ? `
+        <div style="margin:12px 0 6px"><span class="small muted">Annonces planifiées · ${esc(String(r.announcedCount || 0))} envoyée(s)</span></div>
+        <div style="display:flex;flex-direction:column;gap:6px">${(r.announcements || []).map(a => `<div class="small" style="border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;${a.enabled ? '' : 'opacity:.55'}"><b>${esc(caScheduleLabel(a))}</b>${a.enabled ? '' : ' · désactivée'}<br><span class="muted">${esc(a.text.length > 90 ? a.text.slice(0, 90) + '…' : a.text)}</span>${a.lastSentAt ? `<br><span class="muted">Dernier envoi : ${formatDate(a.lastSentAt)}</span>` : ''}</div>`).join('')}</div>` : '';
+      return `<article class="proposal">
+        <div class="split"><h3>${esc(r.name)}</h3><span class="tag ${st.cls}" title="${esc(st.hint)}">${st.label}</span></div>
+        ${st.hint ? `<p class="small muted" style="margin:2px 0 0">${esc(st.hint)}</p>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">${badge(r.copyEnabled, 'Copie')}${badge(r.announceEnabled, 'Annonces')}</div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-size:14px"><span class="muted">Canal</span><span style="text-align:right">${dest}</span></div>
+        ${copyBlock}${annBlock}
+        ${r.lastError ? `<div class="notice error" style="margin-top:10px">${esc(r.lastError)}</div>` : ''}
+        <div class="toolbar" style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr"><button class="button small primary" onclick="editCopyRuleModal('${esc(r.id)}')">Modifier</button><button class="button small ghost" onclick="copyRuleTest('${esc(r.id)}')">Test</button><button class="button small danger" onclick="removeCopyRule('${esc(r.id)}')">Retirer</button></div>
+      </article>`;
+    }
+    function caCardsHtml() {
+      const rules = (snapshot.copyAnnounce || {}).rules || [];
+      if (!rules.length) return '<div class="empty">Aucune règle pour le moment. Clique sur « Ajouter » pour commencer.</div>';
+      return `<div class="proposals">${rules.map(caRuleCardHtml).join('')}</div>`;
+    }
+    async function refreshCopyCards() {
+      if (location.hash !== '#/copy-announce' || document.getElementById('modalRoot')) return;
+      const box = document.getElementById('caCards');
+      if (!box) return;
+      await refresh();
+      const again = document.getElementById('caCards');
+      if (again) again.innerHTML = caCardsHtml();
+    }
+    setInterval(() => { refreshCopyCards().catch(() => {}); }, 5000);
+    function copyAnnouncePage() {
+      setNav('copy-announce');
+      const p = snapshot.copyAnnounce || {};
+      const rules = p.rules || [];
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Relais et messages planifiés</span><h2 style="margin-top:7px">Copie et annonce</h2><p class="small">Choisis une stratégie existante, une stratégie enregistrée (après perte, rupture, répétition…) ou un canal déjà configuré, puis le canal de destination. Tu peux <b>copier</b> les prédictions dedans, envoyer des <b>annonces planifiées</b> (toutes les 30 min, 1 h, 3 h… ou à heures pile), ou les deux ensemble.</p></div><div class="toolbar"><button class="button primary" onclick="addCopyRuleModal()">Ajouter</button><button class="button ghost" onclick="copyAnnouncePage()">Actualiser</button></div></div>
+        <div class="panel"><label class="check"><input id="caEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''} onchange="saveCopyAnnounce()"> Activer « Copie et annonce »</label>
+          ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Règles</span><h2 style="margin-top:7px">${rules.length} règle(s)</h2></div></div>
+          <div id="caCards">${caCardsHtml()}</div></section>`;
+    }
+    async function saveCopyAnnounce() {
+      try { await api('/api/copy-announce/config', 'POST', { enabled: $('#caEnabled')?.checked }); await refresh(); copyAnnouncePage(); toast('Réglage enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    function caSourceOptionsHtml(current) {
+      const p = snapshot.copyAnnounce || {};
+      const groups = {};
+      for (const o of (p.options || [])) (groups[o.group] = groups[o.group] || []).push(o);
+      const sel = (k) => (k === current ? 'selected' : '');
+      const strat = Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}" ${sel(o.key)}>${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
+      const chans = (p.channels || []).map(c => `<option value="channel:${esc(c.id)}" ${sel('channel:' + c.id)}>${esc(c.title ? c.title + ' · ' + c.id : String(c.id))}${c.sources?.length ? ' — ' + esc(c.sources.slice(0, 2).join(', ')) : ''}</option>`).join('');
+      return `<option value="">— choisir —</option>${strat}${chans ? `<optgroup label="Canaux déjà configurés (id)">${chans}</optgroup>` : ''}`;
+    }
+    function caDestPickerHtml() {
+      const p = snapshot.copyAnnounce || {};
+      const opts = (p.channels || []).map(c => `<option value="${esc(c.id)}">${esc(c.title ? c.title + ' · ' + c.id : String(c.id))}</option>`).join('');
+      return opts ? `<select onchange="if(this.value){const i=document.getElementById('ca-dest');const cur=ids(i.value);if(!cur.includes(this.value))cur.push(this.value);i.value=cur.join(', ');this.value='';}"><option value="">Choisir un canal déjà configuré…</option>${opts}</select>` : '';
+    }
+    function caAnnRowHtml(a, i) {
+      const presets = [[30, '30 min'], [60, '1 h'], [120, '2 h'], [180, '3 h'], [360, '6 h'], [720, '12 h'], [1440, '24 h']];
+      const every = a.everyMin || 60;
+      return `<div class="route-card" style="margin-top:10px" data-ann="${i}">
+        <div class="field" style="margin:0"><label style="font-size:12px;font-weight:700">✍️ Annonce ${i + 1} — écris ici le message qui sera envoyé</label><textarea id="ca-ann-${i}-text" rows="5" maxlength="3500" style="width:100%;min-height:120px" placeholder="Ex. 📢 Nouvelle session dans 10 minutes, restez connectés !" oninput="document.getElementById('ca-ann-${i}-count').textContent = this.value.length + ' / 3500'">${esc(a.text || '')}</textarea><span id="ca-ann-${i}-count" class="small muted" style="display:block;text-align:right;margin-top:3px">${esc(String((a.text || '').length))} / 3500</span></div>
+        <div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:10px;flex-wrap:wrap">
+          <div class="field" style="margin:0"><label style="font-size:11px">Envoi</label>
+            <select id="ca-ann-${i}-mode" onchange="caSyncDraft();caRenderAnns()"><option value="interval" ${a.mode !== 'times' ? 'selected' : ''}>À intervalle régulier</option><option value="times" ${a.mode === 'times' ? 'selected' : ''}>À heures pile</option></select></div>
+          ${a.mode === 'times'
+            ? `<div class="field" style="margin:0;flex:1;min-width:160px"><label style="font-size:11px">Heures (HH:MM, séparées par une virgule)</label><input id="ca-ann-${i}-times" value="${esc((a.times || []).join(', '))}" placeholder="08:00, 12:00, 18:00"></div>`
+            : `<div class="field" style="margin:0"><label style="font-size:11px">Intervalle</label><select id="ca-ann-${i}-preset" onchange="if(this.value){document.getElementById('ca-ann-${i}-every').value=this.value;}">${presets.map(([v, l]) => `<option value="${v}" ${v === every ? 'selected' : ''}>${l}</option>`).join('')}<option value="" ${presets.some(([v]) => v === every) ? '' : 'selected'}>Autre…</option></select></div>
+               <div class="field" style="margin:0;max-width:110px"><label style="font-size:11px">Minutes</label><input id="ca-ann-${i}-every" type="number" min="1" max="10080" value="${esc(String(every))}"></div>`}
+          <label class="check" style="margin:0"><input id="ca-ann-${i}-on" type="checkbox" ${a.enabled !== false ? 'checked' : ''}> Active</label>
+          <button class="button small danger" type="button" onclick="caRemoveAnn(${i})">Supprimer</button>
+        </div></div>`;
+    }
+    function caRenderAnns() {
+      const box = document.getElementById('ca-anns');
+      if (box) box.innerHTML = (caDraft.announcements || []).map(caAnnRowHtml).join('') || '<p class="small muted">Aucune annonce. Clique sur « Ajouter une annonce ».</p>';
+    }
+    function caSyncDraft() {
+      if (!caDraft) return;
+      caDraft.announcements = (caDraft.announcements || []).map((a, i) => {
+        if (!document.getElementById(`ca-ann-${i}-text`)) return a;
+        const mode = val(`ca-ann-${i}-mode`) || a.mode;
+        return { id: a.id, text: val(`ca-ann-${i}-text`), mode, enabled: !!document.getElementById(`ca-ann-${i}-on`)?.checked,
+          everyMin: mode === 'interval' ? (parseInt(val(`ca-ann-${i}-every`), 10) || a.everyMin || 60) : a.everyMin,
+          times: mode === 'times' ? val(`ca-ann-${i}-times`) : (a.times || []) };
+      });
+    }
+    function caAddAnn() { caSyncDraft(); caDraft.announcements.push({ text: '', mode: 'interval', everyMin: 60, times: [], enabled: true }); caRenderAnns(); }
+    function caRemoveAnn(i) { caSyncDraft(); caDraft.announcements.splice(i, 1); caRenderAnns(); }
+    function caToggleBlocks() {
+      const copy = document.getElementById('ca-copy')?.checked;
+      const ann = document.getElementById('ca-announce')?.checked;
+      const a = document.getElementById('ca-copy-block'); if (a) a.style.display = copy ? '' : 'none';
+      const b = document.getElementById('ca-ann-block'); if (b) b.style.display = ann ? '' : 'none';
+      if (ann && caDraft && !(caDraft.announcements || []).length) caAddAnn();
+    }
+    function copyRuleFormHtml(r) {
+      const isNew = !r.id;
+      return `<div class="modal-head"><div><span class="eyebrow">${isNew ? 'Nouvelle règle' : 'Modifier la règle'}</span><h3 style="margin-top:8px">Copie et annonce</h3></div></div>
+        <div class="field"><label>Nom <span class="small">(optionnel)</span></label><input id="ca-name" value="${esc(r.name || '')}" placeholder="Ex. Copie Dominant → VIP"></div>
+        <div class="field"><label>ID du canal de destination</label><input id="ca-dest" value="${esc((r.destChannels || []).join(', '))}" placeholder="-1001234567890">${caDestPickerHtml()}</div>
+        <label class="check" style="margin-top:12px"><input id="ca-copy" type="checkbox" ${r.copyEnabled !== false ? 'checked' : ''} onchange="caToggleBlocks()"> Copier les prédictions vers ce canal</label>
+        <div id="ca-copy-block" style="${r.copyEnabled !== false ? '' : 'display:none'}"><div class="field" style="margin-top:8px"><label>Source à copier</label><select id="ca-source">${caSourceOptionsHtml(r.sourceKey || '')}</select></div>
+          <p class="small muted" style="margin:0">Seules les prédictions publiées à partir de maintenant sont copiées, et leur résultat (gagné / perdu) est mis à jour dans le canal.</p></div>
+        <label class="check" style="margin-top:14px"><input id="ca-announce" type="checkbox" ${r.announceEnabled ? 'checked' : ''} onchange="caToggleBlocks()"> Envoyer des annonces planifiées dans ce canal</label>
+        <div id="ca-ann-block" style="${r.announceEnabled ? '' : 'display:none'}"><div id="ca-anns"></div>
+          <div class="toolbar" style="margin-top:10px"><button class="button small ghost" type="button" onclick="caAddAnn()">Ajouter une annonce</button></div>
+          <p class="small muted" style="margin:6px 0 0">Heure du serveur. Une heure pile manquée de plus de 10 minutes n'est pas rattrapée.</p></div>
+        <label class="check" style="margin-top:14px"><input id="ca-enabled" type="checkbox" ${r.enabled !== false ? 'checked' : ''}> Règle active</label>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveCopyRule('${esc(r.id || '')}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`;
+    }
+    function addCopyRuleModal() {
+      caDraft = { announcements: [{ text: '', mode: 'interval', everyMin: 60, times: [], enabled: true }] };
+      openModal(copyRuleFormHtml({ copyEnabled: true, announceEnabled: true, enabled: true }));
+      caRenderAnns();
+    }
+    function editCopyRuleModal(id) {
+      const r = ((snapshot.copyAnnounce || {}).rules || []).find(x => x.id === id);
+      if (!r) return;
+      caDraft = { announcements: (r.announcements || []).map(a => ({ ...a })) };
+      openModal(copyRuleFormHtml(r));
+      caRenderAnns();
+    }
+    async function saveCopyRule(id) {
+      caSyncDraft();
+      const copyEnabled = !!document.getElementById('ca-copy')?.checked;
+      const announceEnabled = !!document.getElementById('ca-announce')?.checked;
+      if (announceEnabled && !caDraft.announcements.some(a => String(a.text || '').trim())) return toast("Écris le message de l'annonce, ou décoche « annonces planifiées ».", 'error');
+      const body = {
+        name: val('ca-name'), destChannels: val('ca-dest'), copyEnabled, announceEnabled,
+        sourceKey: copyEnabled ? val('ca-source') : '',
+        announcements: announceEnabled ? caDraft.announcements.filter(a => String(a.text || '').trim()) : [],
+        enabled: !!document.getElementById('ca-enabled')?.checked,
+      };
+      try {
+        await api(id ? `/api/copy-announce/rules/${encodeURIComponent(id)}` : '/api/copy-announce/rules', id ? 'PUT' : 'POST', body);
+        closeModal(); await refresh(); copyAnnouncePage();
+        toast(id ? 'Règle mise à jour.' : 'Règle ajoutée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeCopyRule(id) {
+      try { await api(`/api/copy-announce/rules/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); copyAnnouncePage(); toast('Règle retirée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function copyRuleTest(id) {
+      try { const r = await api(`/api/copy-announce/rules/${encodeURIComponent(id)}/test`, 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
     async function route() {
       try {
         await refresh();
@@ -3217,6 +3454,7 @@ Faites-en bon usage !
         else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/overlap') overlapPage();
+        else if (h === '#/copy-announce') copyAnnouncePage();
         else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/vip') vipPage();
