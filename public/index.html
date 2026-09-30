@@ -2441,6 +2441,7 @@ Faites-en bon usage !
             ? `Arrêtées depuis ${formatDate(c.pausedAt)}${c.pausedBy ? ' (par ' + esc(c.pausedBy) + ')' : ''}${c.pauseReason ? ' — ' + esc(c.pauseReason) : ''}. Ceci arrête TOUTES les stratégies et TOUS les panneaux, sur TOUS les canaux — pas seulement celui où la commande a été tapée.`
             : `Actives${c.resumedAt ? ' — reprises le ' + formatDate(c.resumedAt) + (c.resumedBy ? ' (par ' + esc(c.resumedBy) + ')' : '') : ''}.`}</p>
           <p class="small">${schedText}</p>
+          ${(c.pausedChannels && c.pausedChannels.length) ? `<p class="small"><b>Canaux arrêtés individuellement (/stop tapé dans le canal) :</b> ${c.pausedChannels.map(x => esc(x.title || x.username || x.id) + ' <span class="muted">(' + esc(x.id) + ')</span>').join(', ')} — les autres canaux continuent. Pour en relancer un : /start dans ce canal.</p>` : ''}
           <div class="toolbar">
             ${c.paused
               ? `<button class="button small" onclick="predictionControlAction('resume')">▶️ Démarrer</button>`
