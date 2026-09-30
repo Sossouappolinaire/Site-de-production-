@@ -178,6 +178,29 @@ function sanitizeMode(value) {
   return value === 'offset' ? 'offset' : 'next'; // 'next' = target+1 ; 'offset' = target+offset
 }
 
+// ---------------------------------------------------------------------------
+// Filtre de costume (demande admin) : par défaut (null / « tous »), la série
+// compte N prédictions consécutives, QUEL QUE SOIT le costume — c'est ce
+// costume-là qui est ensuite prédit. Avec un filtre choisi (❤️, ♦️, ♠️ ou
+// ♣️), le panneau IGNORE toute prédiction d'un AUTRE costume (elle ne compte
+// ni ne casse la série) et ne compte que les occurrences DU costume choisi :
+// dès qu'il en est vu N, c'est toujours LUI qui est prédit — jamais un autre
+// costume, jamais son miroir.
+// ---------------------------------------------------------------------------
+function sanitizeSuitFilter(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return strategies.normSuit(value) || null;
+}
+
+// Option « costume prédit » (demande admin) : une fois la série de N même
+// costume détectée, on peut prédire soit CE costume (comportement
+// d'origine), soit son MIROIR (❤️↔♦️, ♠️↔♣️ — voir strategies.MIRROR),
+// exactement comme le mode 'miroir' de « Répétition après perte »
+// (after-loss.js) et « Chevauchement » (overlap.js).
+function sanitizePredictSuit(value) {
+  return value === 'mirror' ? 'mirror' : 'same';
+}
+
 function sanitizeOffset(value) {
   const z = parseInt(value, 10);
   return Number.isFinite(z) ? Math.max(1, Math.min(20, z)) : 1;
@@ -264,6 +287,8 @@ function applySaved(saved) {
       n: sanitizeN(t.n),
       mode: sanitizeMode(t.mode),
       offset: sanitizeOffset(t.offset),
+      suitFilter: sanitizeSuitFilter(t.suitFilter),
+      predictSuit: sanitizePredictSuit(t.predictSuit),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: t.format ? fmt.clampFormat(t.format) : null,
@@ -276,6 +301,7 @@ function applySaved(saved) {
       streakCount: 0,
       streakHasLoss: false,
       waitingSuit: null,
+      mirrorPending: null,
       lastSeenTarget: currentMaxTarget(t.key),
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
       lastSentAt: t.lastSentAt || null,
@@ -304,6 +330,8 @@ function addTracker(key, extra = {}) {
     n: sanitizeN(extra.n),
     mode: sanitizeMode(extra.mode),
     offset: sanitizeOffset(extra.offset),
+    suitFilter: sanitizeSuitFilter(extra.suitFilter),
+    predictSuit: sanitizePredictSuit(extra.predictSuit),
     channels: parseChannels(extra.channels),
     siteChannelId: sanitizeSiteChannelId(extra.siteChannelId),
     format: sanitizeTrackerFormat(extra.format),
@@ -312,6 +340,7 @@ function addTracker(key, extra = {}) {
     streakCount: 0,
     streakHasLoss: false,
     waitingSuit: null,
+    mirrorPending: null,
     // on ne rejoue pas l'historique déjà passé au moment de l'ajout.
     lastSeenTarget: currentMaxTarget(opt.key),
     sentCount: 0,
@@ -333,13 +362,16 @@ function updateTracker(id, patch = {}) {
   if (patch.n !== undefined) tracker.n = sanitizeN(patch.n);
   if (patch.mode !== undefined) tracker.mode = sanitizeMode(patch.mode);
   if (patch.offset !== undefined) tracker.offset = sanitizeOffset(patch.offset);
-  if (patch.n !== undefined || patch.mode !== undefined || patch.offset !== undefined) {
+  if (patch.suitFilter !== undefined) tracker.suitFilter = sanitizeSuitFilter(patch.suitFilter);
+  if (patch.predictSuit !== undefined) tracker.predictSuit = sanitizePredictSuit(patch.predictSuit);
+  if (patch.n !== undefined || patch.mode !== undefined || patch.offset !== undefined || patch.suitFilter !== undefined || patch.predictSuit !== undefined) {
     // changement de réglage : on annule la série/l'attente en cours pour
     // repartir proprement sur les nouvelles règles.
     tracker.streakSuit = null;
     tracker.streakCount = 0;
     tracker.streakHasLoss = false;
     tracker.waitingSuit = null;
+    tracker.mirrorPending = null;
   }
   if (patch.channels !== undefined) tracker.channels = parseChannels(patch.channels);
   if (patch.siteChannelId !== undefined) tracker.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
@@ -382,12 +414,35 @@ async function processTracker(tracker) {
     // connu au moment du passage.
     tracker.lastSeenTarget = pred.target;
     const suit = pred.suit;
+
+    // « Costume prédit » = miroir (demande admin) : une fois la série
+    // détectée, on ne prédit PAS sur pred.target+1 (« jeu suivant ») ni sur
+    // +Z (« décalage ») — on attend la PROCHAINE prédiction de la stratégie
+    // suivie, quel que soit son costume, et c'est SON jeu qui reçoit le
+    // miroir du costume de la série. Prioritaire sur tout le reste : cette
+    // prédiction-là ne compte pour rien d'autre (ni filtre, ni nouvelle
+    // série, ni attente de perte).
+    if (tracker.mirrorPending) {
+      if (suit) {
+        await fireMirrorNext(tracker, pred, tracker.mirrorPending);
+        tracker.mirrorPending = null;
+      }
+      continue;
+    }
+
     if (!suit) continue; // ce panneau ne suit que les prédictions de costume (parité/cartes non gérées)
+    // Filtre de costume (voir sanitizeSuitFilter) : une prédiction d'un
+    // AUTRE costume que celui choisi est totalement ignorée — elle ne
+    // compte pas dans la série et ne la casse pas non plus.
+    if (tracker.suitFilter && suit !== tracker.suitFilter) continue;
 
     // Une perte est déjà survenue dans une série précédente de ce costume :
     // on attend SPÉCIFIQUEMENT son retour, quel que soit le costume prédit
     // entre-temps (une prédiction d'un autre costume n'interrompt PAS cette
     // attente — voir le commentaire d'en-tête, exemple ❤️ au jeu 7).
+    // Ne s'applique qu'en mode « même costume » — en mode miroir, c'est
+    // mirrorPending (ci-dessus) qui gère l'attente, sur N'IMPORTE quel
+    // costume suivant, pas spécifiquement le même.
     if (tracker.waitingSuit) {
       if (suit === tracker.waitingSuit) {
         await fire(tracker, pred);
@@ -402,7 +457,11 @@ async function processTracker(tracker) {
     if (pred.status === 'perdu') tracker.streakHasLoss = true;
 
     if (tracker.streakCount >= tracker.n) {
-      if (!tracker.streakHasLoss) {
+      if (tracker.predictSuit === 'mirror') {
+        // toujours différé sur la PROCHAINE prédiction de la stratégie
+        // (peu importe perte ou pas dans la série qui vient de se terminer).
+        tracker.mirrorPending = tracker.streakSuit;
+      } else if (!tracker.streakHasLoss) {
         // aucune perte dans la série : on déclenche tout de suite.
         await fire(tracker, pred);
       } else {
@@ -418,8 +477,19 @@ async function processTracker(tracker) {
 }
 
 async function fire(tracker, pred) {
+  // Mode « même costume » (predictSuit !== 'mirror') uniquement : le mode
+  // miroir ne passe plus par ici, voir fireMirrorNext() et mirrorPending.
   const target = pred.target + (tracker.mode === 'offset' ? tracker.offset : 1);
   await send(tracker, { target, suit: pred.suit, sourceTarget: pred.target });
+}
+
+// « Costume prédit » = miroir : pred est la PROCHAINE prédiction de la
+// stratégie suivie après la série détectée — c'est SON jeu (pred.target,
+// jamais +1 ni +offset) qui reçoit le miroir du costume de la série
+// (streakSuit), quel que soit le costume que pred porte lui-même.
+async function fireMirrorNext(tracker, pred, streakSuit) {
+  const suit = strategies.MIRROR[streakSuit] || streakSuit;
+  await send(tracker, { target: pred.target, suit, sourceTarget: pred.target });
 }
 
 function messageText(tracker, syn) {
@@ -618,9 +688,10 @@ function statusView() {
     // after-loss.js.
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     trackers: panel.trackers.map((t) => ({
-      id: t.id, key: t.key, name: t.name, n: t.n, mode: t.mode, offset: t.offset,
+      id: t.id, key: t.key, name: t.name, n: t.n, mode: t.mode, offset: t.offset, suitFilter: t.suitFilter || null,
+      predictSuit: t.predictSuit || 'same',
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
-      streakSuit: t.streakSuit, streakCount: t.streakCount, streakHasLoss: t.streakHasLoss, waitingSuit: t.waitingSuit,
+      streakSuit: t.streakSuit, streakCount: t.streakCount, streakHasLoss: t.streakHasLoss, waitingSuit: t.waitingSuit, mirrorPending: t.mirrorPending || null,
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),

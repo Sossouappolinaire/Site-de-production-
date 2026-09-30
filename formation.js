@@ -368,20 +368,6 @@ function silentModeFinding(name, silent) {
   return `En simulant le mode silencieux (confirmation par ${silent.lossTrigger} perte(s) rapprochée(s), fenêtre de ${silent.lossWindow}) sur « ${name} », ${silent.avoided} perte(s) sur ${silent.totalLosses} (${silent.avoidedRate}%) seraient restées silencieuses au lieu d'être envoyées publiquement — les ${silent.stillLost} autre(s) seraient quand même parties.`;
 }
 
-// Même constat que silentModeFinding() ci-dessus, mais formulé pour
-// l'ACHETEUR final (message de fin d'achat envoyé depuis le bot, voir
-// shop.js — formationFindingsFor/closingMessage) : jamais le nom technique
-// « mode silencieux » (terminologie interne du panneau admin), seulement le
-// comportement conseillé en langage clair — jouer dès le rattrapage suivant,
-// ou attendre une confirmation (une 2ᵉ perte rapprochée) avant de rejouer.
-function silentModeFindingCustomer(name, silent) {
-  if (!silent) return null;
-  if (!silent.avoided) {
-    return `Sur « ${name} », attendre une confirmation supplémentaire après une perte n'aurait évité aucune des ${silent.totalLosses} perte(s) observée(s) : mieux vaut rejouer dès le rattrapage suivant plutôt que patienter.`;
-  }
-  return `Sur « ${name} », attendre qu'une 2ᵉ perte rapprochée confirme le signal avant de rejouer aurait évité ${silent.avoided} perte(s) sur ${silent.totalLosses} (${silent.avoidedRate}%) — mais les ${silent.stillLost} autre(s) seraient quand même survenue(s). À toi de voir si tu préfères jouer directement après un rattrapage, ou patienter un peu pour plus de sécurité.`;
-}
-
 async function buildEntry(key, name, list, silentCfg) {
   const { events, doneCount } = troubleRuns(list);
   const rates = chainRates(events);
@@ -398,14 +384,6 @@ async function buildEntry(key, name, list, silentCfg) {
   const silentLine = silentModeFinding(name, silent);
   if (silentLine) findings.push(silentLine);
 
-  // Constat destiné à l'ACHETEUR (bot, message de fin d'achat) : mêmes
-  // observations que ci-dessus, mais sans jamais nommer « mode silencieux ».
-  const customerFindings = findingText(name, events, rates);
-  if (suitReturnLine) customerFindings.push(suitReturnLine);
-  if (mirrorLine) customerFindings.push(mirrorLine);
-  const silentLineCustomer = silentModeFindingCustomer(name, silent);
-  if (silentLineCustomer) customerFindings.push(silentLineCustomer);
-
   return {
     key,
     name,
@@ -416,7 +394,6 @@ async function buildEntry(key, name, list, silentCfg) {
     support: best ? best.support : 0,
     reliable: isReliable(best),
     findings,
-    customerFindings,
     rates,
     suitReturn,
     mirror,

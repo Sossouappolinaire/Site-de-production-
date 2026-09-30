@@ -2,7 +2,7 @@
 //
 // AUCUNE clé privée n'est écrite ici : tout se règle par variables
 // d'environnement sur Render (ou depuis le tableau de bord pour les clés IA,
-// les canaux Telegram et les clés de paiement, stockées en base).
+// les canaux Telegram, stockées en base).
 'use strict';
 
 const { databaseUrl } = require('./database-url');
@@ -22,13 +22,8 @@ module.exports = {
   // prioritaire pour changer de base sans modifier le code.
   DATABASE_URL: databaseUrl(),
 
-  // ---- compte administrateur (fonctionne sans base de données) --------
-  ADMIN_IDENTIFIER: (process.env.ADMIN_IDENTIFIER || 'sossoukouam').trim().toLowerCase(),
-  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'arrow2026',
-
   // ---- Telegram ---------------------------------------------------------
   BOT_TOKEN: process.env.BOT_TOKEN || '',
-  SHOP_BOT_TOKEN: process.env.SHOP_BOT_TOKEN || '',
   ADMIN_ID: process.env.ADMIN_ID || '',
   // CORRECTIF « le site doit marcher même sans base de données » (demande
   // admin) : le token et l'admin survivent déjà à un redémarrage via ces
@@ -45,6 +40,16 @@ module.exports = {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => (/^-?\d+$/.test(s) ? Number(s) : s)),
+
+  // ---- compte administrateur ---------------------------------------------
+  // Identifiants fixes du compte admin, en dur ici (pas seulement en base) :
+  // le site doit marcher SANS base de données connectée, sur N'IMPORTE QUEL
+  // hébergeur (pas seulement Render) — voir auth.js (secours admin hors
+  // ligne) et session-store.js (sessions en mémoire si la base ne répond
+  // pas). Redéfinissables par variable d'environnement si besoin, sinon ces
+  // valeurs par défaut s'appliquent automatiquement dès le déploiement.
+  ADMIN_IDENTIFIER: process.env.ADMIN_IDENTIFIER || 'sossoukouam',
+  ADMIN_PASSWORD_DEFAULT: process.env.ADMIN_PASSWORD_DEFAULT || 'arrow2026',
 
   // ---- flux des jeux 1xbet Baccara --------------------------------------
   // 1xBet a changé de domaine et l'ancien championnat 2196545 ne renvoie
@@ -113,7 +118,4 @@ module.exports = {
   // ---- emails (confirmations, notifications) ----------------------------
   BREVO_API_KEY: process.env.BREVO_API_KEY || '',
   BREVO_FROM: process.env.BREVO_FROM || '',
-
-  // ---- paiements --------------------------------------------------------
-  SEBPAY_API_URL: (process.env.SEBPAY_API_URL || 'https://new.sebpay.bj/api/v1').replace(/\/+$/, ''),
 };

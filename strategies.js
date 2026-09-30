@@ -825,8 +825,8 @@ function sanitizeAbsenceMode(value) {
 }
 function sanitizeAbsenceEntry(input) {
   const src = input && typeof input === 'object' ? input : {};
-  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : Math.max(1, parseInt(src.format, 10) || 1);
-  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
+  // Le format et le nombre de rattrapage sont ceux de la stratégie elle-même
+  // (cfg.format / cfg.maxR) : aucun doublon propre à chaque case Abs:N.
   return {
     games: Math.max(1, Math.min(30, parseInt(src.games, 10) || 2)), // nombre EXACT de jeux d'absence
     enabled: !!src.enabled,
@@ -835,8 +835,6 @@ function sanitizeAbsenceEntry(input) {
     g: Math.max(1, Math.min(100, parseInt(src.g, 10) || 5)),
     d: Math.max(1, Math.min(100, parseInt(src.d, 10) || 4)),
     k: Math.max(0, Math.min(100, parseInt(src.k, 10) || 2)),
-    maxR: maxRRaw,
-    format: fmtRaw,
   };
 }
 function sanitizeAbsenceEntries(input) {
@@ -913,8 +911,7 @@ const absenceJoueur = {
       return {
         kind: 'suit', target: item.target, suit: item.suit, label: item.suit,
         trigger: null, // pas de dédoublonnage par déclencheur ici : géré par absenceRuntime lui-même
-        maxR: item.maxR != null ? item.maxR : cfg.maxR,
-        format: item.format || null,
+        maxR: cfg.maxR,
         reason: item.reason,
         meta: { absenceEntry: item.entryGames, step: item.step, triggerGame: item.trigger },
       };
@@ -935,7 +932,7 @@ const absenceJoueur = {
       const first = absenceFirstPrediction(entry, suit, game.number);
       const queueItems = [{
         target: first.target, suit: first.suit, waitFor: null, trigger: game.number,
-        entryGames: run, step: '1ʳᵉ prédiction', maxR: entry.maxR, format: entry.format,
+        entryGames: run, step: '1ʳᵉ prédiction',
         reason: `Absence de ${suit} chez le joueur sur ${run} jeux (#N${game.number}) → 1ʳᵉ prédiction (${first.mode})`,
       }];
       let last = game.number;
@@ -944,7 +941,7 @@ const absenceJoueur = {
         const target = i === 1 ? game.number + entry.d : last + entry.g;
         queueItems.push({
           target, suit, waitFor: i === 1 ? null : last, trigger: game.number,
-          entryGames: run, step: `costume absent ${i}/${n}`, maxR: entry.maxR, format: entry.format,
+          entryGames: run, step: `costume absent ${i}/${n}`,
           reason: `Absence de ${suit} chez le joueur sur ${run} jeux (#N${game.number}) → costume absent ${i}/${n} (#N${target})`,
         });
         last = target;
@@ -952,7 +949,7 @@ const absenceJoueur = {
       if (n > 0) {
         queueItems.push({
           target: game.number + entry.d + entry.k, suit: MIRROR[suit] || suit, waitFor: last, trigger: game.number,
-          entryGames: run, step: 'miroir final', maxR: entry.maxR, format: entry.format,
+          entryGames: run, step: 'miroir final',
           reason: `Absence de ${suit} chez le joueur sur ${run} jeux (#N${game.number}) → miroir final, une fois la cascade vérifiée (#N${game.number + entry.d + entry.k})`,
         });
       }
@@ -961,8 +958,7 @@ const absenceJoueur = {
       return {
         kind: 'suit', target: head.target, suit: head.suit, label: head.suit,
         trigger: null,
-        maxR: head.maxR != null ? head.maxR : cfg.maxR,
-        format: head.format || null,
+        maxR: cfg.maxR,
         reason: head.reason,
         meta: { absenceEntry: head.entryGames, step: head.step, triggerGame: head.trigger },
       };

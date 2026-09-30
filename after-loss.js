@@ -220,20 +220,17 @@ function sanitizeRepeat(input) {
 // `nj` nouvelles prédictions de ce même costume, espacées de `n` jeux à
 // partir du dernier jeu de la série (a + n, a + 2n, …).
 // Exemple : count = 3, n = 4, nj = 4 → après 815♦️ : 819♦️, 823♦️, 827♦️,
-// 831♦️. Nombre de rattrapage et format sont propres à cette option
-// (vides = réglages du panneau / de la stratégie).
+// 831♦️. Le format et le nombre de rattrapage sont ceux de la stratégie
+// suivie (un seul jeu de réglages par stratégie, voir effectiveFormat /
+// effectiveMaxR) — plus de doublon propre à l'option.
 // ---------------------------------------------------------------------------
 function sanitizeStreak(input) {
   const src = input && typeof input === 'object' ? input : {};
-  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : fmt.clampFormat(src.format);
-  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
   return {
     enabled: !!src.enabled,
     count: Math.max(2, Math.min(10, parseInt(src.count, 10) || 3)),
     n: Math.max(1, Math.min(50, parseInt(src.n, 10) || 4)),
     nj: Math.max(1, Math.min(20, parseInt(src.nj, 10) || 4)),
-    maxR: maxRRaw,
-    format: fmtRaw,
   };
 }
 
@@ -249,21 +246,18 @@ function sanitizeStreak(input) {
 //     182♦️, 192♦️ avec ni = 10).
 //   • La session s'arrête après `nk` prédictions publiées (ex. Nk = 4), puis
 //     le panneau attend une nouvelle série pour repartir.
-//   • Nombre de rattrapage et format sont propres à cette option (vides =
-//     réglages du panneau / de la stratégie).
+//   • Le format et le nombre de rattrapage sont ceux de la stratégie suivie
+//     (un seul jeu de réglages par stratégie — plus de doublon propre à
+//     l'option).
 // ---------------------------------------------------------------------------
 function sanitizeDecade(input) {
   const src = input && typeof input === 'object' ? input : {};
-  const fmtRaw = (src.format === undefined || src.format === null || src.format === '') ? null : fmt.clampFormat(src.format);
-  const maxRRaw = (src.maxR === undefined || src.maxR === null || src.maxR === '') ? null : Math.max(0, Math.min(9, parseInt(src.maxR, 10) || 0));
   return {
     enabled: !!src.enabled,
     count: Math.max(2, Math.min(10, parseInt(src.count, 10) || 3)),
     n: Math.max(1, Math.min(100, parseInt(src.n, 10) || 8)),
     ni: Math.max(1, Math.min(100, parseInt(src.ni, 10) || 10)),
     nk: Math.max(1, Math.min(20, parseInt(src.nk, 10) || 4)),
-    maxR: maxRRaw,
-    format: fmtRaw,
   };
 }
 
@@ -373,6 +367,15 @@ function sanitizeTrackerFormat(input) {
   return fmt.clampFormat(input);
 }
 
+// Nombre de rattrapage PROPRE à la stratégie suivie (vide = celui du panneau).
+// C'est l'UNIQUE réglage de rattrapage d'une stratégie suivie : il s'applique
+// à tous ses relais (déclencheurs, même costume, série, comptage dizaine).
+function sanitizeTrackerMaxR(input) {
+  if (input === undefined || input === null || input === '') return null;
+  const n = parseInt(input, 10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(9, n)) : null;
+}
+
 // canal DU SITE : on ne valide pas contre la liste courante ici (elle peut
 // changer indépendamment, et un id momentanément inconnu ne doit pas
 // empêcher d'enregistrer les autres réglages) — l'envoi silencieusement
@@ -389,6 +392,10 @@ function effectiveChannels(tracker) {
 
 function effectiveFormat(tracker) {
   return (tracker.format !== null && tracker.format !== undefined) ? tracker.format : panel.format;
+}
+
+function effectiveMaxR(tracker) {
+  return (tracker.maxR !== null && tracker.maxR !== undefined) ? tracker.maxR : panel.maxR;
 }
 
 function effectiveSiteChannelId(tracker) {
@@ -543,6 +550,60 @@ function isAlreadySentBySource(tracker, target, suit) {
 }
 
 // ---------------------------------------------------------------------------
+// CORRECTIF « rattrapage différent de celui configuré » (catégories 1 et 3).
+// Quand la cible calculée par le relais (comptage dizaine / série de même
+// costume) tombe sur un jeu + costume DÉJÀ publié par la stratégie source
+// (ex. « Prédit » dont le rattrapage propre est 1), l'anti-doublon bloque le
+// relais : c'est donc le message de la SOURCE qui reste dans le canal, avec
+// SON rattrapage (« Dogon +1 ») et non celui configuré sur la stratégie
+// suivie (« Dogon +3 »). On aligne alors la prédiction source encore « en
+// attente » sur le rattrapage propre de la stratégie suivie : la vérification
+// (predit.js / predictor.js lisent p.maxR) et le message du canal (édité)
+// affichent tous deux la valeur configurée. Sans rattrapage propre renseigné
+// sur la stratégie suivie, on ne touche à rien.
+// ---------------------------------------------------------------------------
+function findSourcePred(tracker, target, suit) {
+  for (const p of trackerPredictions(tracker.key)) {
+    if (Number(p.target) !== Number(target)) continue;
+    if (String(p.suit || p.card) !== String(suit)) continue;
+    if (Array.isArray(p.messages) && p.messages.length) return p;
+  }
+  return null;
+}
+
+function sourceMessageText(tracker, p) {
+  if (tracker.key === 'ia') return predit.predictionText(p);
+  return require('./predictor').predictionText(p);
+}
+
+function alignSourceRetries(tracker, target, suit) {
+  try {
+    if (tracker.maxR === null || tracker.maxR === undefined) return false;
+    const wanted = effectiveMaxR(tracker);
+    const p = findSourcePred(tracker, target, suit);
+    if (!p || p.status !== 'en attente') return false;
+    if (Number(p.maxR) === wanted) return false;
+    if ((p.step || 0) > wanted) return false; // déjà plus loin que le rattrapage voulu
+    p.maxR = wanted;
+    const bot = typeof sender === 'function' ? sender() : null;
+    if (!bot) return true;
+    const out = sourceMessageText(tracker, p);
+    const chans = effectiveChannels(tracker);
+    for (const m of p.messages) {
+      if (chans.length && !chans.includes(m.chatId)) continue;
+      bot.editMessageText(out.text, {
+        chat_id: m.chatId, message_id: m.messageId,
+        ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}),
+      }).catch(() => {});
+    }
+    return true;
+  } catch (e) {
+    panel.lastError = e.message;
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ANTI-DOUBLON GLOBAL « même numéro + même costume » (demande admin).
 //
 // POURQUOI LES CATÉGORIES 1 (comptage dizaine) ET 3 (série de même costume)
@@ -694,6 +755,17 @@ function applySaved(saved) {
     panel.lossNoticeEnabled = !!saved.config.lossNoticeEnabled;
   }
   if (Array.isArray(saved.trackers)) {
+    // MIGRATION (suppression des doublons de configuration) : avant, les blocs
+    // « comptage dizaine » et « série de même costume » avaient leur propre
+    // format et leur propre rattrapage, en plus du format de la stratégie. Il
+    // n'y a plus qu'UN réglage par stratégie : on récupère la valeur du bloc
+    // actif (s'il y en avait une) pour ne rien perdre de ce qui était utilisé.
+    const legacyOf = (t, field) => {
+      for (const blk of [t.decade, t.streak]) {
+        if (blk && blk.enabled && blk[field] !== undefined && blk[field] !== null && blk[field] !== '') return blk[field];
+      }
+      return null;
+    };
     panel.trackers = saved.trackers.map((t) => ({
       id: t.id,
       key: t.key,
@@ -719,7 +791,8 @@ function applySaved(saved) {
       streakSession: null,
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
-      format: sanitizeTrackerFormat(t.format),
+      format: sanitizeTrackerFormat(t.format !== undefined && t.format !== null ? t.format : legacyOf(t, 'format')),
+      maxR: sanitizeTrackerMaxR(t.maxR !== undefined && t.maxR !== null ? t.maxR : legacyOf(t, 'maxR')),
       lastRepeatSource: 0,
       counting: false,
       armedTrigger: null,
@@ -885,6 +958,7 @@ function addTracker(key, triggers, repeat, extra = {}) {
   const wantedChannels = parseChannels(extra.channels);
   const wantedSiteChannelId = sanitizeSiteChannelId(extra.siteChannelId);
   const wantedFormat = sanitizeTrackerFormat(extra.format);
+  const wantedMaxR = sanitizeTrackerMaxR(extra.maxR);
   if (!extra.force) {
     const conflicts = findConfigConflicts(opt.key, wantedChannels, wantedSiteChannelId, wantedFormat);
     if (conflicts.length) {
@@ -932,6 +1006,7 @@ function addTracker(key, triggers, repeat, extra = {}) {
     channels: wantedChannels,
     siteChannelId: wantedSiteChannelId,
     format: wantedFormat,
+    maxR: wantedMaxR,
     // on ne rejoue pas les pertes déjà passées au moment de l'ajout.
     lastRepeatSource: trackerBaseline(opt.key),
     counting: false,
@@ -1017,6 +1092,9 @@ function updateTracker(id, patch = {}) {
   if (patch.format !== undefined) {
     tracker.format = sanitizeTrackerFormat(patch.format);
   }
+  if (patch.maxR !== undefined) {
+    tracker.maxR = sanitizeTrackerMaxR(patch.maxR);
+  }
   // la catégorie a le dernier mot : elle n'active que son propre bloc.
   if (tracker.category) {
     const parts = applyCategory(tracker.category, {
@@ -1077,7 +1155,7 @@ function relayText(tracker, pred) {
     gameNumber: pred.target,
     suit: pred.suit || pred.card, // 'carte-banquier' : pas de costume, on affiche la carte
     strategy: tracker.name,
-    maxR: panel.maxR,
+    maxR: effectiveMaxR(tracker),
     status: 'en attente',
     rattrapage: 0,
   }, null);
@@ -1110,7 +1188,7 @@ function pushPending(tracker, pred, messages) {
     kind: pred.kind || 'suit',
     strategyName: tracker.name,
     format: effectiveFormat(tracker),
-    maxR: panel.maxR,
+    maxR: effectiveMaxR(tracker),
     step: 0,
     gap: 0,
     skipped: 0,
@@ -1357,6 +1435,7 @@ async function forward(tracker, pred, meta = {}) {
     return false;
   }
   if (isAlreadySentBySource(tracker, pred.target, pred.suit || pred.card)) {
+    alignSourceRetries(tracker, pred.target, pred.suit || pred.card);
     panel.lastError = `Relais ignoré pour « ${tracker.name} » : le jeu #N${pred.target} (${pred.suit || pred.card || ''}) a déjà été envoyé dans ce canal par la stratégie elle-même (doublon évité).`;
     return false;
   }
@@ -1554,6 +1633,7 @@ async function forwardSynth(tracker, synth, opts = {}) {
     return 'doublon';
   }
   if (isAlreadySentBySource(tracker, synth.target, synth.suit)) {
+    alignSourceRetries(tracker, synth.target, synth.suit);
     panel.lastError = `Relais ignoré pour « ${opts.historyName || tracker.name} » : le jeu #N${synth.target} (${synth.suit || ''}) a déjà été envoyé dans ce canal par la stratégie elle-même (doublon évité).`;
     return 'doublon';
   }
@@ -1570,11 +1650,11 @@ async function forwardSynth(tracker, synth, opts = {}) {
     panel.lastError = `Aucun canal configuré pour « ${tracker.name} » (ni Telegram, ni canal du site, sur la stratégie ou le panneau)`;
     return false;
   }
-  const out = fmt.renderMessage(opts.format !== undefined && opts.format !== null ? fmt.clampFormat(opts.format) : effectiveFormat(tracker), {
+  const out = fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: synth.target,
     suit: synth.suit,
     strategy: opts.label || tracker.name,
-    maxR: (opts.maxR !== undefined && opts.maxR !== null) ? opts.maxR : panel.maxR,
+    maxR: effectiveMaxR(tracker),
     status: 'en attente',
     rattrapage: 0,
   }, null);
@@ -1734,8 +1814,6 @@ async function processStreak(tracker) {
       const ok = await forwardSynth(tracker, { target, suit: open.suit, kind: 'suit' }, {
         label: `${tracker.name} — série de ${st.count} ${open.suit} (+${st.n}) — prédit ${i}/${open.total}`,
         historyName: `${tracker.name} (série ${st.count}× même costume ${i}/${open.total})`,
-        format: st.format,
-        maxR: st.maxR,
         trail: open.trail || [],
         note: `Série ${st.count}/${st.count} de ${open.suit} (fin #N${open.end}) → prédit ${i}/${open.total} à +${st.n * i}`,
       });
@@ -1767,8 +1845,6 @@ async function processStreak(tracker) {
       const ok = await forwardSynth(tracker, { target, suit: s.suit, kind: 'suit' }, {
         label: `${tracker.name} — série de ${st.count} ${s.suit} (+${st.n}) — prédit ${i}/${st.nj}`,
         historyName: `${tracker.name} (série ${st.count}× même costume ${i}/${st.nj})`,
-        format: st.format,
-        maxR: st.maxR,
         trail: sess.trail || [],
         note: `Série ${st.count}/${st.count} de ${s.suit} (fin #N${s.end}) → prédit ${i}/${st.nj} à +${st.n * i}`,
       });
@@ -1804,7 +1880,7 @@ function decadeTargetVerified(tracker, target, maxR) {
 async function processDecade(tracker) {
   const dc = tracker.decade;
   if (!dc || !dc.enabled) return;
-  const maxR = (dc.maxR !== undefined && dc.maxR !== null) ? dc.maxR : panel.maxR;
+  const maxR = effectiveMaxR(tracker);
   const label = (suit) => `${tracker.name} — comptage dizaine ${suit} (+${dc.ni})`;
 
   // 1) session en cours : on ne publie la suivante qu'APRÈS vérification de
@@ -1818,8 +1894,6 @@ async function processDecade(tracker) {
     const ok = await forwardSynth(tracker, { target, suit: s.suit, kind: 'suit' }, {
       label: label(s.suit),
       historyName: `${tracker.name} (comptage dizaine ${s.sent + 1}/${dc.nk})`,
-      format: dc.format,
-      maxR: dc.maxR,
       trail: s.trail || [],
       note: `Comptage dizaine ${s.suit} → prédit ${s.sent + 1}/${dc.nk} à +${dc.ni} (#N${target})`,
     });
@@ -1841,8 +1915,6 @@ async function processDecade(tracker) {
     const ok = await forwardSynth(tracker, { target: first, suit: st.suit, kind: 'suit' }, {
       label: `${tracker.name} — comptage dizaine ${st.suit} (série de ${dc.count}, +${dc.n})`,
       historyName: `${tracker.name} (comptage dizaine 1/${dc.nk})`,
-      format: dc.format,
-      maxR: dc.maxR,
     });
     // CORRECTIF : on ne « consomme » la série qu'une fois l'envoi réussi.
     // Avant, un échec d'envoi (canal injoignable) perdait la série pour
@@ -2246,6 +2318,7 @@ function status() {
       channels: t.channels,
       siteChannelId: t.siteChannelId,
       format: t.format,
+      maxR: t.maxR === undefined ? null : t.maxR,
       counting: t.counting,
       armedTrigger: t.armedTrigger,
       armedNeeded: t.armedNeeded,

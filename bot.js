@@ -23,8 +23,6 @@ const vip = require('./vip');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
-const shop = require('./shop');
-const paiement = require('./paiement');
 const mirrorCounter = require('./mirror-counter');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
@@ -39,14 +37,10 @@ const {
 } = require('./predictor');
 
 let bot = null;
-let shopBot = null;
 let loopStarted = false;
 
 const saved = store.read();
 state.botToken = saved.botToken || config.BOT_TOKEN || '';
-// Token API dédié EXCLUSIVEMENT à la boutique de stratégies (shop.js) —
-// jamais partagé avec le bot principal ni avec un autre service.
-state.shopBotToken = saved.shopBotToken || config.SHOP_BOT_TOKEN || '';
 state.adminId = saved.adminId || config.ADMIN_ID;
 if (Array.isArray(saved.channels)) state.channels = saved.channels;
 if (Array.isArray(saved.activeChannels)) state.activeChannels = saved.activeChannels;
@@ -101,7 +95,6 @@ let dbDirty = false;
 function persist() {
   store.patch({
     botToken: state.botToken,
-    shopBotToken: state.shopBotToken,
     adminId: state.adminId,
     channels: state.channels,
     activeChannels: state.activeChannels,
@@ -130,9 +123,6 @@ function persist() {
       template: state.template || '',
       savedAt: new Date().toISOString(),
     });
-    // token de la boutique : clé séparée, jamais mêlée à saveAppConfig()
-    // (qui ne concerne que le bot principal).
-    db.setSetting('shop_bot_token', state.shopBotToken || '');
     db.setSetting('site_channels', JSON.stringify(state.siteChannels || []));
     db.setSetting('B', state.B);
     db.setSetting('maxR', state.maxR);
@@ -180,8 +170,6 @@ function listChannels() {
 
 const HELP =
   '🎴 *Bot Baccara 1xbet — main du JOUEUR*\n\n' +
-  'ℹ️ La boutique de stratégies (/start, /boutique, /langue) est sur son ' +
-  'propre bot Telegram — ce bot-ci ne gère que les prédictions et l\'admin.\n\n' +
   '*Jeu*\n' +
   '/live — jeu réellement en cours (cartes + costumes joueur)\n' +
   '/stats — statistiques des prédictions\n' +
@@ -375,13 +363,6 @@ function wire(b) {
     try { b.processUpdate({ update_id: 0, message: asMessage }); }
     catch (e) { console.error('Commande de canal :', e.message); }
   });
-
-  // ---------------------------------------------------------------------
-  // La boutique de stratégies (shop.js) vit désormais sur son PROPRE bot
-  // Telegram, avec son propre token (voir wireShop() + state.shopBotToken
-  // ci-dessous) : le bot principal ne gère plus /boutique, /langue, /start
-  // ni la saisie des codes de paiement.
-  // ---------------------------------------------------------------------
 
   // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une
   // commande (ne commence pas par /) est transmis à l'IA générale
@@ -1206,316 +1187,6 @@ function wire(b) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Bot DÉDIÉ à la boutique de stratégies (shop.js) — token API totalement
-// séparé de celui du bot principal (state.botToken). Ce bot ne gère QUE :
-// accueil multilingue, liste de stratégies, saisie du code de paiement,
-// explication IA restreinte à la stratégie achetée. Voir shop.js.
-// ---------------------------------------------------------------------------
-function wireShop(b) {
-  b.on('polling_error', (e) => {
-    state.shopBotError = e.message;
-    // même correctif que le bot principal : un webhook actif bloque getUpdates
-    if (/409|conflict|webhook/i.test(e.message || '')) b.deleteWebHook().catch(() => {});
-  });
-
-  function langKeyboard() {
-    return { inline_keyboard: shop.LANGS.map((l) => [{ text: `${l.flag} ${l.label}`, callback_data: `lang:${l.code}` }]) };
-  }
-
-  async function sendWelcome(chatId) {
-    await b.sendMessage(chatId, shop.t('welcome', 'fr'), { parse_mode: 'Markdown', reply_markup: langKeyboard() });
-  }
-
-  async function sendShopMenu(chatId, userId, lang) {
-    // Les stratégies déjà achetées par CET utilisateur ne réapparaissent
-    // plus dans la liste principale — elles restent accessibles via le
-    // bouton « Mes stratégies » (voir myitems:list ci-dessous).
-    const items = shop.listActive().filter((it) => !shop.hasUnlocked(userId, it.id));
-    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}${Number.isFinite(it.price) ? ' — ' + it.price + '€' : ''}`, callback_data: `shop:${it.id}` }]);
-    if (shop.listUnlocked(userId).length) {
-      rows.push([{ text: shop.t('myItemsButton', lang), callback_data: 'myitems:list' }]);
-    }
-    rows.push([{ text: shop.t('supportButton', lang), callback_data: 'support:start' }]);
-    await b.sendMessage(chatId, items.length ? shop.t('shopIntro', lang) : shop.t('noItems', lang), { reply_markup: { inline_keyboard: rows } });
-  }
-
-  async function sendMyItemsMenu(chatId, userId, lang) {
-    const items = shop.listUnlocked(userId);
-    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}`, callback_data: `shop:${it.id}` }]);
-    await b.sendMessage(chatId, items.length ? shop.t('myItemsIntro', lang) : shop.t('noItemsUnlocked', lang), { reply_markup: { inline_keyboard: rows } });
-  }
-
-  // Présentation d'une stratégie débloquée (code accepté, ou réouverture
-  // depuis « Mes stratégies ») + les deux boutons de suite : « Répondre-moi »
-  // (pose une question à l'IA sur cette stratégie) et « J'ai compris »
-  // (remerciement + conseil de formation, voir shop.closingMessage). La
-  // saisie libre au clavier reste TOUJOURS possible en parallèle (voir le
-  // handler 'message' plus bas, qui route déjà vers explain()/closingMessage
-  // selon le texte tapé) — les boutons ne font que rendre ces deux actions
-  // explicites, sans rien retirer à l'ancien fonctionnement au clavier.
-  async function sendUnlockedPresentation(chatId, userId, item, lang) {
-    shop.setActiveItem(userId, item.id);
-    const text = await shop.fullPresentation(item, lang);
-    await b.sendMessage(chatId, text);
-    const buttons = [[
-      { text: shop.t('askButton', lang), callback_data: `strategy:ask:${item.id}` },
-      { text: shop.t('understoodButton', lang), callback_data: `strategy:understood:${item.id}` },
-    ]];
-    await b.sendMessage(chatId, shop.t('canAsk', lang), { reply_markup: { inline_keyboard: buttons } });
-  }
-
-  b.on('callback_query', async (q) => {
-    try {
-      const data = String(q.data || '');
-      const chatId = q.message && q.message.chat && q.message.chat.id;
-      const userId = q.from && q.from.id;
-      if (!chatId || !userId) return b.answerCallbackQuery(q.id);
-
-      if (data.startsWith('lang:')) {
-        const lang = data.slice(5);
-        shop.setLang(userId, lang);
-        await b.answerCallbackQuery(q.id, { text: shop.t('langSaved', lang) });
-        await sendShopMenu(chatId, userId, lang);
-        return;
-      }
-      if (data.startsWith('strategy:ask:')) {
-        const itemId = data.slice('strategy:ask:'.length);
-        const lang = shop.getLang(userId) || 'fr';
-        shop.setActiveItem(userId, itemId); // garantit le routage vers l'IA (explain()) au prochain message tapé
-        await b.answerCallbackQuery(q.id);
-        await b.sendMessage(chatId, shop.t('askPrompt', lang));
-        return;
-      }
-      if (data.startsWith('strategy:understood:')) {
-        const itemId = data.slice('strategy:understood:'.length);
-        const item = shop.getItem(itemId);
-        const lang = shop.getLang(userId) || 'fr';
-        await b.answerCallbackQuery(q.id);
-        if (!item) return;
-        const closing = await shop.closingMessage(item, lang);
-        await b.sendMessage(chatId, closing);
-        // Explication détaillée du déclencheur (uniquement pour un
-        // déclencheur IA — voir shop.explainTrigger).
-        const explanation = shop.explainTrigger(item);
-        if (explanation) await b.sendMessage(chatId, explanation);
-        return;
-      }
-      if (data === 'support:start') {
-        const lang = shop.getLang(userId) || 'fr';
-        shop.setPendingSupport(userId, true);
-        await b.answerCallbackQuery(q.id);
-        await b.sendMessage(chatId, shop.t('supportAskAmount', lang));
-        return;
-      }
-      if (data === 'myitems:list') {
-        const lang = shop.getLang(userId) || 'fr';
-        await b.answerCallbackQuery(q.id);
-        await sendMyItemsMenu(chatId, userId, lang);
-        return;
-      }
-      if (data.startsWith('support:pay:')) {
-        const lang = shop.getLang(userId) || 'fr';
-        const amountUsd = Number(data.slice('support:pay:'.length));
-        await b.answerCallbackQuery(q.id);
-        if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
-        const rate = shop.getUsdToXof();
-        const amountLocal = Math.round(amountUsd * rate);
-        const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
-        const pay = await paiement.initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal });
-        if (pay.ok) {
-          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: pay.checkoutUrl }]];
-          await b.sendMessage(chatId, shop.t('supportPayIntro', lang), { reply_markup: { inline_keyboard: buttons } });
-          return;
-        }
-        console.error('Soutien (initiation) :', pay.error);
-        return;
-      }
-      if (data.startsWith('shop:')) {
-        const itemId = data.slice(5);
-        const item = shop.getItem(itemId);
-        const lang = shop.getLang(userId) || 'fr';
-        if (!item || !item.active) {
-          await b.answerCallbackQuery(q.id);
-          return b.sendMessage(chatId, shop.t('itemInactive', lang));
-        }
-        if (shop.hasUnlocked(userId, itemId)) {
-          // déjà acheté : on rouvre directement le mode questions, sans redemander le code.
-          await b.answerCallbackQuery(q.id);
-          return sendUnlockedPresentation(chatId, userId, item, lang);
-        }
-        shop.setPendingCode(userId, itemId);
-        await b.answerCallbackQuery(q.id);
-        // Lien de paiement direct Money Fusion (paiement.js, SANS appel API —
-        // voir commentaire en tête de ce fichier) : le lien est construit
-        // localement (id du modèle + montant + nom du client), pas de
-        // vérification automatique du paiement. La saisie manuelle d'un
-        // code reste possible en parallèle (ex. code donné par l'admin par
-        // un autre moyen), voir le handler 'message' plus bas.
-        const payAmountLocal = shop.paymentAmountFor(item);
-        {
-          // Verrou de 3 minutes sur CETTE stratégie (voir paiement.js) : tant
-          // qu'un autre acheteur a une réservation active dessus, on ne
-          // relance pas de nouveau paiement — ça évite que deux acheteurs
-          // se voient attribuer/afficher en même temps le même code (unique
-          // et partagé tant qu'il n'a pas été consommé), qui pourrait être
-          // régénéré pour l'un pendant que l'autre le croit encore valide.
-          const lock = paiement.lockItem(itemId, userId);
-          if (!lock) {
-            return b.sendMessage(chatId, shop.t('itemLocked', lang));
-          }
-          const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
-          // Fenêtre d'information envoyée DÈS que le verrou de 3 minutes est
-          // obtenu (avant même de générer le lien de paiement) : elle
-          // confirme au client qu'il est désormais prioritaire sur cette
-          // stratégie et personne d'autre ne pourra lancer de paiement
-          // pendant ce délai.
-          const infoText = shop.t('reservationInfo', lang)
-            .replace('{lastName}', q.from.last_name || '—')
-            .replace('{firstName}', q.from.first_name || '—')
-            .replace('{userId}', String(userId))
-            .replace('{strategy}', item.aiName);
-          await b.sendMessage(chatId, infoText);
-          const pay = await paiement.initiatePayment({
-            item: { ...item, payAmountLocal },
-            userId,
-            chatId,
-            lang,
-            buyerName,
-          });
-          if (pay.ok) {
-            // Le code COURANT de la stratégie est attaché à cette réservation
-            // avec 10s de délai (pas immédiatement au clic) : tant que ce
-            // délai n'est pas écoulé, succes.html affiche « code pas encore
-            // disponible » si le client clique trop vite sur « Voir mon
-            // code ». Passé les 10s, le code apparaît sur succes.html au
-            // clic sur ce bouton — jamais envoyé dans le chat Telegram. On
-            // revérifie juste avant l'attachement que CETTE réservation
-            // précise (pay.ref) est toujours active : si elle a expiré
-            // entre-temps (voir paiement.js — expireRecord, déclenché par le
-            // minuteur de 3 min posé à l'initiation), on n'attache rien.
-            // UNIQUEMENT pour Money Fusion (lien fixe, confirmation par
-            // simple arrivée sur succes.html) : pour SebPay, le code n'est
-            // attaché qu'à la confirmation RÉELLE du webhook (voir
-            // paiement.confirmSebpayPayment, server.js — POST
-            // /api/sebpay/webhook), jamais par ce minuteur aveugle.
-            if (pay.provider !== 'sebpay') {
-              setTimeout(() => {
-                const rec = paiement.getRecord(pay.ref);
-                if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
-                paiement.attachCode(pay.ref, item.code);
-              }, 10000);
-            }
-            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: pay.checkoutUrl }]];
-            await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
-            // 30s après avoir ouvert le lien de paiement, rappel : le client
-            // peut aussi taper directement un code déjà en sa possession
-            // (ex. donné par l'admin) — pas de vérification automatique du
-            // paiement en mode lien direct, donc ce message reste utile même
-            // après avoir cliqué sur Payer, tant que rien n'est débloqué.
-            setTimeout(() => {
-              if (shop.hasUnlocked(userId, itemId)) return; // déjà débloqué entre-temps, inutile de relancer
-              b.sendMessage(chatId, shop.t('askCode', lang)).catch((e) => {
-                console.error('Paiement (rappel code) :', e.message);
-              });
-            }, 30000);
-            return;
-          }
-          paiement.unlockItem(itemId); // l'initiation a échoué : on relâche le verrou immédiatement
-          console.error('Paiement (initiation) :', pay.error);
-        }
-        return b.sendMessage(chatId, shop.t('askCode', lang));
-      }
-      await b.answerCallbackQuery(q.id);
-    } catch (e) {
-      // AVANT : l'erreur était totalement avalée (catch (_) {}) — un clic sur
-      // un bouton (langue, stratégie...) qui échouait en interne ne laissait
-      // AUCUNE trace : le bouton semblait "ne pas répondre" sans qu'on sache
-      // pourquoi. On log désormais l'erreur et on la garde visible dans
-      // /api/shop/bot (state.shopBotError), comme pour polling_error.
-      console.error('Boutique — erreur callback_query (' + (q.data || '?') + ') :', e && e.message);
-      state.shopBotError = e && e.message ? e.message : String(e);
-      try { await b.answerCallbackQuery(q.id); } catch (__) {}
-    }
-  });
-
-  b.onText(/^\/boutique/, async (msg) => {
-    const userId = msg.from.id;
-    const lang = shop.getLang(userId);
-    if (!lang) return sendWelcome(msg.chat.id);
-    return sendShopMenu(msg.chat.id, userId, lang);
-  });
-
-  b.onText(/^\/langue/, (msg) => sendWelcome(msg.chat.id));
-  b.onText(/^\/start/, (msg) => sendWelcome(msg.chat.id));
-
-  // Code de paiement saisi une fois avec succès → CODE EXPIRÉ immédiatement
-  // (voir shop.redeem()) : un nouveau code est régénéré automatiquement pour
-  // cette stratégie, donc l'ancien code ne peut plus servir à personne.
-  b.on('message', async (msg) => {
-    if (!msg.text || msg.text.startsWith('/')) return;
-    if (!msg.chat || msg.chat.type !== 'private') return;
-    const userId = msg.from && msg.from.id;
-    if (!userId) return;
-    const lang = shop.getLang(userId);
-    if (!lang) return sendWelcome(msg.chat.id);
-
-    // Montant de soutien en $ attendu (bouton « Soutien » du menu) : on
-    // valide le nombre, on affiche l'équivalent en F CFA, et on propose un
-    // bouton « Payer » (voir callback support:pay:<montant> plus haut).
-    if (shop.getPendingSupport(userId)) {
-      const amountUsd = Number(String(msg.text).replace(',', '.').trim());
-      if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
-        return b.sendMessage(msg.chat.id, shop.t('supportAmountInvalid', lang));
-      }
-      shop.clearPendingSupport(userId);
-      const rate = shop.getUsdToXof();
-      const amountLocal = Math.round(amountUsd * rate);
-      const text = shop.t('supportAmountShown', lang)
-        .replace('{usd}', String(amountUsd))
-        .replace('{francs}', String(amountLocal));
-      const buttons = [[{ text: `💛 ${shop.t('payButton', lang)}`, callback_data: `support:pay:${amountUsd}` }]];
-      return b.sendMessage(msg.chat.id, text, { reply_markup: { inline_keyboard: buttons } });
-    }
-
-    const pendingItemId = shop.getPendingCode(userId);
-    if (pendingItemId) {
-      const r = shop.redeem(userId, pendingItemId, msg.text);
-      if (r.ok) {
-        await b.sendMessage(msg.chat.id, shop.t('unlockedHeader', lang));
-        return sendUnlockedPresentation(msg.chat.id, userId, r.item, lang);
-      }
-      if (r.reason === 'used') return b.sendMessage(msg.chat.id, shop.t('codeUsed', lang));
-      if (r.reason === 'inactive') return b.sendMessage(msg.chat.id, shop.t('itemInactive', lang));
-      return b.sendMessage(msg.chat.id, shop.t('codeWrong', lang));
-    }
-    const activeItemId = shop.getActiveItem(userId);
-    if (activeItemId) {
-      const item = shop.getItem(activeItemId);
-      if (item) {
-        // L'acheteur signale qu'il a compris (fr/en/ar/ru/es, voir
-        // shop.isUnderstoodMessage) → on conclut la présentation : remerciement
-        // + bonne chance + vrai conseil du panneau Formation pour CETTE
-        // stratégie (voir shop.closingMessage / formation.js), au lieu de
-        // renvoyer ça à l'IA de Q&A comme une question ordinaire.
-        if (shop.isUnderstoodMessage(msg.text)) {
-          const closing = await shop.closingMessage(item, lang);
-          await b.sendMessage(msg.chat.id, closing);
-          // Explication détaillée du déclencheur (uniquement pour un
-          // déclencheur IA — voir shop.explainTrigger, retourne null pour
-          // une stratégie du catalogue existant, qui n'en a pas besoin).
-          const explanation = shop.explainTrigger(item);
-          if (explanation) await b.sendMessage(msg.chat.id, explanation);
-          return;
-        }
-        const answer = await shop.explain(item, msg.text, lang);
-        return b.sendMessage(msg.chat.id, answer);
-      }
-    }
-    return sendShopMenu(msg.chat.id, userId, lang);
-  });
-}
-
 function activate(id) {
   if (!state.activeChannels.includes(id)) state.activeChannels.push(id);
   if (!state.channels.some((c) => c.id === id)) state.channels.push({ id, title: String(id) });
@@ -1528,14 +1199,6 @@ function deactivate(id) {
 }
 
 async function startBot(token) {
-  // Validation AVANT toute mutation d'état / persistance : un token en
-  // conflit avec celui de la boutique ne doit jamais être enregistré, même
-  // temporairement (sinon un redémarrage ultérieur repartirait bloqué).
-  const nextToken = token ? token.trim() : state.botToken;
-  if (nextToken && state.shopBotToken && nextToken === state.shopBotToken) {
-    state.botError = 'Ce token est déjà utilisé par la boutique : configure un token différent pour le bot principal.';
-    return { ok: false, error: state.botError };
-  }
   if (token) state.botToken = token.trim();
   persist();
   state.botError = null;
@@ -1610,101 +1273,6 @@ async function disconnectBot() {
   state.botError = null;
   persist();
   return { ok: true };
-}
-
-// ---------------------------------------------------------------------------
-// Cycle de vie du bot DÉDIÉ à la boutique — token strictement séparé du bot
-// principal (voir wireShop() et la vérification croisée ci-dessus/ci-dessous :
-// aucun des deux bots ne démarre si les deux tokens sont identiques).
-// ---------------------------------------------------------------------------
-// Paiement confirmé automatiquement (arrivée du client sur succes.html
-// après validation Money Fusion, voir paiement.js/markPaidOnArrival) :
-// - achat de stratégie (record.kind === 'item') : le code reste uniquement
-//   sur succes.html ; le client doit le copier et l'envoyer au bot.
-// - soutien (record.kind === 'support') : AUCUN code n'est envoyé, juste un
-//   message de remerciement personnalisé (voir shop.supportThanksMessage).
-// Enregistrée une seule fois (le handler regarde `shopBot` à l'appel, pas à
-// l'enregistrement, donc il fonctionne même si le bot redémarre entre-temps).
-// ---------------------------------------------------------------------------
-paiement.setPaidHandler(async (record) => {
-  if (record.kind === 'support') {
-    if (!shopBot) return;
-    try {
-      await shopBot.sendMessage(record.chatId, shop.supportThanksMessage(record, record.lang));
-    } catch (e) { console.error('Soutien (envoi Telegram après paiement) :', e.message); }
-    return;
-  }
-});
-
-// À l'expiration, seul le code courant lié à ce paiement est remplacé.
-// Aucun message « Code accepté » n'est envoyé automatiquement.
-paiement.setExpiredHandler(async (record) => {
-  if (record.kind === 'item') shop.expirePaymentCode(record.itemId, record.code);
-});
-
-async function startShopBot(token) {
-  // Même garde-fou que startBot() ci-dessus, dans l'autre sens : rien n'est
-  // persisté si le token entre en conflit avec celui du bot principal.
-  const nextToken = token ? token.trim() : state.shopBotToken;
-  if (nextToken && state.botToken && nextToken === state.botToken) {
-    state.shopBotError = 'Ce token est déjà utilisé par le bot principal : configure un token différent, réservé uniquement à la boutique.';
-    return { ok: false, error: state.shopBotError };
-  }
-  if (token) state.shopBotToken = token.trim();
-  persist();
-  state.shopBotError = null;
-  if (shopBot) {
-    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
-    shopBot = null;
-  }
-  if (!state.shopBotToken) {
-    state.shopBotError = 'Aucun token configuré';
-    return { ok: false, error: state.shopBotError };
-  }
-  try {
-    // Même correctif que pour le bot principal : webhook supprimé avant de
-    // lancer la réception, sinon aucune commande de la boutique n'arrive.
-    shopBot = new TelegramBot(state.shopBotToken, {
-      polling: { autoStart: false, params: { timeout: 30 } },
-    });
-    wireShop(shopBot);
-    const me = await shopBot.getMe();
-    state.shopBotUsername = me.username;
-    try { await shopBot.deleteWebHook({ drop_pending_updates: false }); }
-    catch (e) { console.error('Boutique : suppression du webhook impossible :', e.message); }
-    await shopBot.startPolling({ restart: true });
-    console.log('🛍️ Bot boutique @' + me.username + ' : réception des commandes active.');
-    return { ok: true, username: me.username };
-  } catch (e) {
-    state.shopBotError = e.message;
-    if (shopBot) { try { await shopBot.stopPolling({ cancel: true }); } catch (_) {} }
-    shopBot = null;
-    return { ok: false, error: e.message };
-  }
-}
-
-// Déconnexion volontaire du bot boutique — même logique que disconnectBot()
-// ci-dessus, côté token séparé (voir shop_bot_token dans persist()).
-async function disconnectShopBot() {
-  if (shopBot) {
-    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
-    shopBot = null;
-  }
-  state.shopBotToken = '';
-  state.shopBotUsername = null;
-  state.shopBotError = null;
-  persist();
-  return { ok: true };
-}
-
-function shopBotStatus() {
-  return {
-    running: !!shopBot,
-    username: state.shopBotUsername || null,
-    tokenSet: !!state.shopBotToken,
-    tokenMasked: state.shopBotToken ? state.shopBotToken.slice(0, 8) + '••••••' + state.shopBotToken.slice(-4) : null,
-    error: state.shopBotError || null,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2372,11 +1940,6 @@ async function applyDbConfigs() {
       state.siteChannels = app.siteChannels; restored.push('canaux du site');
     }
   }
-  // token de la boutique : restauré depuis sa clé dédiée (jamais depuis
-  // loadAppConfig(), réservé au bot principal) — garantit la séparation
-  // même après un redémarrage.
-  const shopToken = await db.getSetting('shop_bot_token');
-  if (shopToken) { state.shopBotToken = shopToken; restored.push('token boutique'); }
   if (!state.siteChannels.length) {
     const rawSiteChannels = await db.getSetting('site_channels');
     if (rawSiteChannels) {
@@ -2491,8 +2054,6 @@ async function applyDbConfigs() {
   // redémarrage du process.
   const restoredCount = await restorePredictions();
   if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
-  await shop.loadFromDb();
-  await paiement.loadFromDb();
   await mirrorCounter.loadFromDb();
   await lossNotice.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
@@ -2608,17 +2169,8 @@ async function startLoop() {
     loopStarted = true;
     setInterval(tick, config.POLL_INTERVAL_MS);
     tick();
-    // Vente automatique des déclencheurs IA >93% (shop.js/syncAutoIaListings) :
-    // intervalle dédié, séparé du tick jeu-par-jeu (1.5s) — la génération du
-    // nom de code par l'IA peut prendre plusieurs secondes, ça ne doit jamais
-    // ralentir le suivi des jeux en direct. « fire and forget » volontaire.
-    setInterval(() => {
-      shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
-    }, 60 * 1000);
-    shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
   }
   startBot();
-  startShopBot();
 }
 
-module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };
+module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, disconnectBot, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };

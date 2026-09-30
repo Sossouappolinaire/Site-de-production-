@@ -1,9 +1,10 @@
 // auth.js — protection du tableau de bord web
 //
-//  • Compte administrateur fixe : identifiant « sossoukouam » / mot de passe
-//    « arrow2026 » (semé automatiquement en base au premier démarrage, une
-//    seule fois — un changement de mot de passe ultérieur n'est jamais
-//    écrasé au redémarrage).
+//  • Compte administrateur fixe (identifiant + mot de passe définis dans
+//    config.js — ADMIN_IDENTIFIER / ADMIN_PASSWORD_DEFAULT, en dur pour que
+//    le site marche sans base de données, sur n'importe quel hébergeur) —
+//    semé automatiquement en base au premier démarrage, une seule fois : un
+//    changement de mot de passe ultérieur n'est jamais écrasé au redémarrage.
 //  • Si les identifiants ne correspondent à aucun compte connu, la personne
 //    peut créer un compte : email @gmail.com + mot de passe + confirmation.
 //  • AUCUN code n'est envoyé par email : dès l'inscription, le compte est
@@ -15,8 +16,8 @@ const bcrypt = require('bcryptjs');
 const db = require('./db');
 const config = require('./config');
 
-const ADMIN_IDENTIFIER = config.ADMIN_IDENTIFIER || 'sossoukouam';
-const ADMIN_PASSWORD_DEFAULT = config.ADMIN_PASSWORD || 'arrow2026';
+const ADMIN_IDENTIFIER = config.ADMIN_IDENTIFIER;
+const ADMIN_PASSWORD_DEFAULT = config.ADMIN_PASSWORD_DEFAULT;
 // contact affiché à un compte bloqué (temps accordé par l'admin écoulé)
 const TELEGRAM_CONTACT = 't.me/Kouamappoloak';
 
@@ -70,8 +71,9 @@ async function login(identifierRaw, password) {
   // « arrow2026 ») est accepté même si la base de données n'est pas connectée,
   // pour ne jamais rester enfermé dehors pendant une panne/veille de la base.
   if (identifier === ADMIN_IDENTIFIER && pwd === ADMIN_PASSWORD_DEFAULT) {
-    // Admin défini dans config.js : connexion immédiate, avec ou sans base.
-    return { ok: true, userId: -1, identifier: ADMIN_IDENTIFIER, role: 'admin', offline: !db.ready };
+    if (!db.ready) {
+      return { ok: true, userId: -1, identifier: ADMIN_IDENTIFIER, role: 'admin', offline: true };
+    }
   }
   if (!db.ready) return { ok: false, error: 'Base de données non connectée.' };
   const user = await findUser(identifier);

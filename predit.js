@@ -19,8 +19,8 @@
 //  • FILTRE « PERTES RAPPROCHÉES » (optionnel, désactivé par défaut) : une
 //    fois activé, une prédiction n'est publiée sur le canal qu'APRÈS avoir
 //    observé une série de pertes rapprochées (même principe que le filtre de
-//    la stratégie « ombre », jamais nommé ainsi dans les messages envoyés à
-//    l'acheteur — voir shop.js). Tant que le filtre n'est pas armé, les
+//    la stratégie « ombre », jamais nommé ainsi dans les messages envoyés).
+//    Tant que le filtre n'est pas armé, les
 //    prédictions restent suivies en interne (elles alimentent le compteur de
 //    pertes) mais ne partent jamais sur Telegram. Une victoire publiée
 //    referme le filtre. Voir panel.silentMode / silentLossTrigger /
@@ -54,7 +54,7 @@ const panel = {
   // défaut (demande admin), indépendant du panneau « Prédit » lui-même.
   lossNoticeEnabled: false,
   // ── Filtre « pertes rapprochées » (même principe que la stratégie « ombre »,
-  // jamais nommé ainsi dans les messages envoyés — voir shop.js/formation.js) ──
+  // jamais nommé ainsi dans les messages envoyés) ──
   // Quand actif, une prédiction du panneau n'est PUBLIÉE qu'après confirmation :
   // tant qu'aucune série de pertes rapprochées n'a été observée, les
   // prédictions restent TRACKÉES en interne (elles alimentent le compteur)
@@ -971,4 +971,4 @@ function status() {
   };
 }
 
-module.exports = { panel, status, config, configure, restore, restoreFromDb, setSender, tick, mirror, test, parseChannels, sendBilans, globalBilanText, strategiesView };
+module.exports = { panel, predictionText, status, config, configure, restore, restoreFromDb, setSender, tick, mirror, test, parseChannels, sendBilans, globalBilanText, strategiesView };

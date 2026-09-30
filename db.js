@@ -14,7 +14,7 @@ let lastError = null;
 // > dernier lien enregistré via /setdb ou le panel web. La base par défaut
 // passe devant l'ancien lien resté dans data.json, pour que le changement de
 // base soit effectif même sur un service déjà déployé.
-let url = databaseUrl(); // MODE SANS BASE : uniquement si DATABASE_URL est définie
+let url = databaseUrl() || store.read().databaseUrl || config.DATABASE_URL || '';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (

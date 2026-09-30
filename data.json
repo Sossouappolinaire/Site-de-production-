@@ -2,7 +2,7 @@
   "formationRelay": {
     "enabled": true,
     "channels": [],
-    "maxR": 3,
+    "maxR": 4,
     "format": 5,
     "strategies": {
       "costume": {
@@ -354,7 +354,6 @@
         "armedTrigger": null,
         "armedNeeded": 0,
         "armedSeen": 0,
-        "armedTrail": [],
         "armed": false,
         "armedAt": null,
         "lastSeenTarget": 0,
@@ -367,10 +366,9 @@
     "pendingMessages": [],
     "tally": {},
     "verified": {},
-    "sentKeys": [],
     "sentCount": 0,
     "lastSentAt": null,
-    "lastScanAt": 1790526570612
+    "lastScanAt": 1789459393309
   },
   "combined": {
     "config": {
@@ -467,7 +465,7 @@
     "pendingMessages": [],
     "sentCount": 0,
     "lastSentAt": null,
-    "lastScanAt": 1790526570610
+    "lastScanAt": 1789459393309
   },
   "suitStreak": {
     "config": {
@@ -501,15 +499,24 @@
         "createdAt": 1788813991824
       }
     ],
-    "history": [],
+    "history": [
+      {
+        "trackerId": "ss-1788813991824-3vvhz",
+        "trackerName": "Stratégie IA (Prédit)",
+        "target": 56,
+        "suit": "♠️",
+        "sourceTarget": 55,
+        "sentAt": 1788813991827
+      }
+    ],
     "pendingMessages": [],
     "sentCount": 1,
     "lastSentAt": 1788813991827,
-    "lastScanAt": 1790526570611
+    "lastScanAt": 1789459393310
   },
   "botToken": "",
   "shopBotToken": "",
-  "adminId": "",
+  "adminId": 0,
   "channels": [],
   "activeChannels": [],
   "siteChannels": [],
@@ -846,35 +853,6 @@
       "b": 0,
       "template": null,
       "channels": []
-    },
-    "absenceJoueur": {
-      "token": null,
-      "bilan": true,
-      "silent": false,
-      "lossWindow": 3,
-      "lossTrigger": 2,
-      "lossInterval": 4,
-      "autoUnlockMin": 0,
-      "resetOnWin": true,
-      "sendOnlyNext": false,
-      "autoEnabled": false,
-      "autoTrigger": "perte",
-      "autoRattrapage": 2,
-      "autoSkip": 3,
-      "autoSend": 1,
-      "publishedChannels": [],
-      "shadowChannels": [],
-      "publishedChannelInfos": [],
-      "shadowChannelInfos": [],
-      "aiAuto": false,
-      "lossNoticeEnabled": false,
-      "enabled": false,
-      "format": 1,
-      "maxR": 4,
-      "b": 0,
-      "template": null,
-      "channels": [],
-      "entries": []
     }
   },
   "aiAnalyses": [
@@ -948,8 +926,8 @@
       }
     },
     "block": {
-      "start": 691,
-      "end": 720,
+      "start": 511,
+      "end": 540,
       "counts": {
         "3/2": 0,
         "3/3": 0,
@@ -957,199 +935,11 @@
       },
       "counted": []
     },
-    "pending": [
-      {
-        "id": "cc-545-1790526547356-uqys",
-        "target": 545,
-        "signal": "3/2",
-        "blockStart": 511,
-        "status": "annulé",
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "maxR": 1,
-        "messages": [],
-        "createdAt": 1790526547356,
-        "sentAt": null,
-        "resolvedAt": 1790526547356
-      },
-      {
-        "id": "cc-575-1790526552283-z15b",
-        "target": 575,
-        "signal": "3/2",
-        "blockStart": 541,
-        "status": "annulé",
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "maxR": 1,
-        "messages": [],
-        "createdAt": 1790526552283,
-        "sentAt": null,
-        "resolvedAt": 1790526552283
-      },
-      {
-        "id": "cc-605-1790526557267-lkyd",
-        "target": 605,
-        "signal": "3/2",
-        "blockStart": 571,
-        "status": "annulé",
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "maxR": 1,
-        "messages": [],
-        "createdAt": 1790526557267,
-        "sentAt": null,
-        "resolvedAt": 1790526557267
-      },
-      {
-        "id": "cc-635-1790526560655-dqav",
-        "target": 635,
-        "signal": "3/2",
-        "blockStart": 601,
-        "status": "annulé",
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "maxR": 1,
-        "messages": [],
-        "createdAt": 1790526560655,
-        "sentAt": null,
-        "resolvedAt": 1790526560655
-      },
-      {
-        "id": "cc-665-1790526565587-rxk9",
-        "target": 665,
-        "signal": "3/2",
-        "blockStart": 631,
-        "status": "annulé",
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "maxR": 1,
-        "messages": [],
-        "createdAt": 1790526565588,
-        "sentAt": null,
-        "resolvedAt": 1790526565588
-      },
-      {
-        "id": "cc-695-1790526570607-lcjo",
-        "target": 695,
-        "signal": "3/2",
-        "blockStart": 661,
-        "status": "annulé",
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "maxR": 1,
-        "messages": [],
-        "createdAt": 1790526570607,
-        "sentAt": null,
-        "resolvedAt": 1790526570607
-      }
-    ],
-    "history": [
-      {
-        "start": 661,
-        "end": 690,
-        "counts": {
-          "3/2": 0,
-          "3/3": 0,
-          "2/2": 0
-        },
-        "predicted": true,
-        "signal": "3/2",
-        "selected": true,
-        "targets": [
-          695
-        ],
-        "closedAt": 1790526570607
-      },
-      {
-        "start": 631,
-        "end": 660,
-        "counts": {
-          "3/2": 0,
-          "3/3": 0,
-          "2/2": 0
-        },
-        "predicted": true,
-        "signal": "3/2",
-        "selected": true,
-        "targets": [
-          665
-        ],
-        "closedAt": 1790526565588
-      },
-      {
-        "start": 601,
-        "end": 630,
-        "counts": {
-          "3/2": 0,
-          "3/3": 0,
-          "2/2": 0
-        },
-        "predicted": true,
-        "signal": "3/2",
-        "selected": true,
-        "targets": [
-          635
-        ],
-        "closedAt": 1790526560655
-      },
-      {
-        "start": 571,
-        "end": 600,
-        "counts": {
-          "3/2": 0,
-          "3/3": 0,
-          "2/2": 0
-        },
-        "predicted": true,
-        "signal": "3/2",
-        "selected": true,
-        "targets": [
-          605
-        ],
-        "closedAt": 1790526557267
-      },
-      {
-        "start": 541,
-        "end": 570,
-        "counts": {
-          "3/2": 0,
-          "3/3": 0,
-          "2/2": 0
-        },
-        "predicted": true,
-        "signal": "3/2",
-        "selected": true,
-        "targets": [
-          575
-        ],
-        "closedAt": 1790526552283
-      },
-      {
-        "start": 511,
-        "end": 540,
-        "counts": {
-          "3/2": 0,
-          "3/3": 0,
-          "2/2": 0
-        },
-        "predicted": true,
-        "signal": "3/2",
-        "selected": true,
-        "targets": [
-          545
-        ],
-        "closedAt": 1790526547356
-      }
-    ],
+    "pending": [],
+    "history": [],
     "sentCount": 0,
     "lastSentAt": null,
-    "lastScanAt": 1790526570608
+    "lastScanAt": 1789459393310
   },
   "vip": {
     "config": {
@@ -1162,31 +952,14 @@
       "lossRelay": 2,
       "suitNeed": 3,
       "suitRelay": 2,
-      "selected": {
-        "costume": false,
-        "dominant": false,
-        "matchnul": false,
-        "parite": false,
-        "absente": false,
-        "carteBanquier": false,
-        "ombre": false,
-        "ombreJoueur": false,
-        "dizaine": false,
-        "absenceJoueur": false,
-        "costumeFaible": false,
-        "collecte": false,
-        "ia": false,
-        "after:t-1789459347620-155he": false,
-        "combo:ct-1": false,
-        "combo:ct-1788813649566-nybwr": false
-      }
+      "selected": {}
     },
     "trackers": {},
     "pendingMessages": [],
     "history": [],
     "sentCount": 0,
     "lastSentAt": null,
-    "lastScanAt": 1790526570609
+    "lastScanAt": 1789459393310
   },
   "suitBreak": {
     "config": {
@@ -1208,48 +981,49 @@
         "siteChannelId": null,
         "format": null,
         "maxR": 1,
-        "streakSuit": null,
-        "streakCount": 0,
-        "lastSeenTarget": 995,
-        "seen": [],
-        "readCount": 0,
-        "fireCount": 0,
-        "lastFireAt": null,
-        "sentCount": 0,
-        "lastSentAt": null,
+        "streakSuit": "❤",
+        "streakCount": 1,
+        "lastSeenTarget": 3,
+        "sentCount": 1,
+        "lastSentAt": 1789498464262,
         "createdAt": 1789498464258
       }
     ],
-    "history": [],
-    "pendingMessages": [],
-    "sentCount": 0,
-    "lastSentAt": null,
-    "lastScanAt": 1790526570611,
-    "sentFingerprints": []
-  },
-  "overlap": {
-    "config": {
-      "enabled": true,
-      "channels": [],
-      "siteChannelId": null,
-      "format": 1,
-      "maxR": 1
-    },
-    "trackers": [],
-    "history": [],
-    "pendingMessages": [],
-    "sentCount": 0,
-    "lastSentAt": null,
-    "lastScanAt": 1790526570609
-  },
-  "statistics": {
-    "config": {
-      "enabled": true,
-      "channels": []
-    },
-    "tracked": {},
-    "sentCount": 0,
-    "lastSentAt": null,
-    "lastScanAt": 1790526570612
+    "history": [
+      {
+        "trackerId": "sb-1789498464258-iqnmx",
+        "trackerName": "Costume par numéro",
+        "target": 3,
+        "suit": "♦",
+        "sourceTarget": 3,
+        "sentAt": 1789498464262
+      }
+    ],
+    "pendingMessages": [
+      {
+        "id": "p-1789498464262-z08b9",
+        "trackerId": "sb-1789498464258-iqnmx",
+        "target": 3,
+        "suit": "♦",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "gagné",
+        "messages": [
+          {
+            "chatId": -100123,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1789498464262,
+        "resolvedAt": 1789498464262
+      }
+    ],
+    "sentCount": 1,
+    "lastSentAt": 1789498464262,
+    "lastScanAt": 1789498464266
   }
 }

@@ -20,6 +20,8 @@ process.on('uncaughtException', (err) => {
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
+const { Pool } = require('pg');
+const pgSessionStore = require('connect-pg-simple')(session);
 const hybridStore = require('./session-store');
 const { databaseUrl } = require('./database-url');
 const config = require('./config');
@@ -48,10 +50,7 @@ const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
-const shop = require('./shop');
-const paiement = require('./paiement');
 const mirrorCounter = require('./mirror-counter');
-const sebpay = require('./sebpay');
 const lossNotice = require('./loss-notice');
 const game21 = require('./game21');
 const game21Strategies = require('./game21-strategies');
@@ -64,43 +63,34 @@ const {
   predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock, dizaineCounterView,
   announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, addSiteChannelMessage, siteChannelFeed,
 } = require('./predictor');
-const { startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
+const { startLoop, startBot, botStatus, disconnectBot, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
 
 const app = express();
 app.set('trust proxy', 1); // Render est derrière un proxy HTTPS : nécessaire pour les cookies "secure"
-// `verify` conserve le corps BRUT de chaque requête (req.rawBody) EN PLUS du
-// JSON parsé habituel (req.body, inchangé partout ailleurs) — nécessaire
-// pour vérifier la signature HMAC du webhook SebPay (voir sebpay.js —
-// verifyWebhookSignature exige le texte brut, un JSON.parse+stringify ne
-// redonnerait pas exactement les mêmes octets que ceux signés par SebPay).
-app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
+app.use(express.json());
 
 // ---------------------------------------------------------------------------
 // Sessions stockées en base Postgres (table "user_sessions", créée toute
 // seule au démarrage) — sans ça (store par défaut = mémoire du process),
 // tout le monde est déconnecté à chaque redémarrage/redéploiement Render.
 // ---------------------------------------------------------------------------
-const SESSION_DB_URL = databaseUrl(); // vide = mode sans base de données
-let sessionStoreInstance;
-if (SESSION_DB_URL) {
-  const { Pool } = require('pg');
-  const pgSessionStore = require('connect-pg-simple')(session);
-  const sessionPool = new Pool({
-    connectionString: SESSION_DB_URL,
-    ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
-    max: 4,
-  });
-  sessionPool.on('error', (e) => console.error('Pool de sessions (pg) :', e.message));
-  sessionStoreInstance = hybridStore(new pgSessionStore({
-    pool: sessionPool, tableName: 'user_sessions', createTableIfMissing: true, pruneSessionInterval: 60 * 60,
-  }));
-} else {
-  console.log('Mode sans base de données : sessions en mémoire.');
-  sessionStoreInstance = new session.MemoryStore();
-}
+const SESSION_DB_URL = databaseUrl() || config.DATABASE_URL;
+const sessionPool = new Pool({
+  connectionString: SESSION_DB_URL,
+  ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
+  max: 4,
+});
+sessionPool.on('error', (e) => console.error('Pool de sessions (pg) :', e.message));
 
 app.use(session({
-  store: sessionStoreInstance,
+  // base de données quand elle répond, mémoire du process en repli : ainsi la
+  // connexion de secours de l'administrateur marche même base éteinte.
+  store: hybridStore(new pgSessionStore({
+    pool: sessionPool,
+    tableName: 'user_sessions',
+    createTableIfMissing: true,
+    pruneSessionInterval: 60 * 60, // purge des sessions expirées toutes les heures
+  })),
   name: 'baccara.sid',
   secret: process.env.SESSION_SECRET || 'baccara-bot-changeme-secret',
   resave: false,
@@ -168,58 +158,28 @@ app.post('/api/auth/mail-config', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
-// --- verrou d'accès : tout le reste du site exige une session valide ------
-const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/succes.html', '/pay-sebpay.html']);
-const PUBLIC_PAIEMENT_PATTERNS = [
-  /^\/api\/paiement\/webhook$/,
-  /^\/api\/paiement\/statut\/[^/]+$/,
-  /^\/api\/paiement\/copie\/[^/]+$/,
-  // consultées par succes.html — navigateur de l'acheteur, JAMAIS connecté
-  // au site (session admin/utilisateur) : ces routes doivent rester
-  // publiques, comme statut/copie ci-dessus, sinon le bouton « Voir mon
-  // code » échoue systématiquement avec "Authentification requise."
-  /^\/api\/paiement\/actif$/,
-  /^\/api\/paiement\/chercher\/[^/]+$/,
-  /^\/api\/paiement\/confirmer$/,
-  // consultées par pay-sebpay.html (navigateur de l'acheteur, jamais
-  // connecté) et par le webhook SebPay lui-même (serveur-à-serveur, protégé
-  // par sa propre signature HMAC — voir sebpay.verifyWebhookSignature —
-  // jamais par une session admin).
-  /^\/api\/sebpay\/info\/[^/]+$/,
-  /^\/api\/sebpay\/operators$/,
-  /^\/api\/sebpay\/collect\/[^/]+$/,
-  /^\/api\/sebpay\/webhook$/,
-];
+// ---------------------------------------------------------------------------
+// Accès public (demande admin, 30/09/2026) : plus de mot de passe, plus de
+// compte à créer — tout le monde qui arrive sur le site a exactement les
+// mêmes droits que l'administrateur (lecture ET écriture partout). Le
+// système de comptes (auth.js, /api/auth/*, panneau « Utilisateurs ») reste
+// en place et fonctionnel si besoin de le réactiver un jour : il suffit de
+// remettre l'ancien verrou (conservé juste au-dessus en commentaire dans
+// l'historique du fichier) à la place du middleware ci-dessous.
+// ---------------------------------------------------------------------------
+const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico']);
 function isPublicPath(p) {
   if (PUBLIC_EXACT.has(p)) return true;
   if (p.startsWith('/api/auth/')) return true;
-  // webhook FusionPay (appel serveur-à-serveur) et consultation du statut
-  // depuis succes.html (navigateur de l'acheteur, jamais connecté au site) —
-  // protégés par leur propre clé/référence, pas par une session admin.
-  if (PUBLIC_PAIEMENT_PATTERNS.some((re) => re.test(p))) return true;
   return false;
 }
-app.use(async (req, res, next) => {
-  if (isPublicPath(req.path)) return next();
-  if (req.session && req.session.userId) {
-    // vérifie, sur chaque requête, qu'un compte « user » n'a pas dépassé le
-    // temps accordé par l'administrateur (coupure immédiate, même en pleine
-    // session) — l'admin, lui, n'est jamais concerné par cette vérification.
-    if (req.session.role !== 'admin') {
-      const access = await auth.checkAccess(req.session.userId);
-      if (!access.ok) {
-        return req.session.destroy(() => {
-          if (req.path.startsWith('/api/')) {
-            return res.status(401).json({ error: access.error, blocked: !!access.blocked, telegram: access.telegram || null });
-          }
-          return res.redirect(`/login.html?blocked=1&telegram=${encodeURIComponent(access.telegram || auth.TELEGRAM_CONTACT)}`);
-        });
-      }
-    }
-    return next();
+app.use((req, res, next) => {
+  if (req.session) {
+    req.session.role = 'admin';
+    if (!req.session.userId) req.session.userId = 'public';
+    if (!req.session.identifier) req.session.identifier = 'Visiteur';
   }
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Authentification requise.' });
-  return res.redirect('/login.html');
+  next();
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -372,7 +332,6 @@ app.get('/api/state', async (req, res) => {
     lastFinished: state.lastFinished,
     error: state.lastError,
     bot: botStatus(),
-    shopBot: shopBotStatus(),
     db: db.status(),
     apiUrl: api.endpoints()[0],
     champId: config.CHAMP_ID,
@@ -572,28 +531,6 @@ app.post('/api/bot/admin', (req, res) => {
   state.adminId = id;
   persist();
   res.json({ ok: true, bot: botStatus() });
-});
-
-// --- bot de la boutique (token séparé, exclusivement dédié à shop.js) ------
-app.get('/api/shop/bot', (req, res) => res.json(shopBotStatus()));
-
-app.post('/api/shop/bot/token', async (req, res) => {
-  const token = (req.body.token || '').trim();
-  if (!/^\d+:[\w-]{20,}$/.test(token)) return res.status(400).json({ error: 'Token Telegram invalide' });
-  const r = await startShopBot(token);
-  res.status(r.ok ? 200 : 400).json({ ...r, bot: shopBotStatus() });
-});
-
-app.post('/api/shop/bot/restart', async (req, res) => {
-  const r = await startShopBot();
-  res.json({ ...r, bot: shopBotStatus() });
-});
-
-// Déconnexion volontaire du bot boutique — même principe que
-// DELETE /api/bot/token ci-dessus, côté token séparé de la boutique.
-app.delete('/api/shop/bot/token', async (req, res) => {
-  const r = await disconnectShopBot();
-  res.json({ ...r, bot: shopBotStatus() });
 });
 
 // --- base de données --------------------------------------------------------
@@ -916,385 +853,6 @@ app.post('/api/mirror-counter/test', async (req, res) => {
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
-});
-
-// ---------------------------------------------------------------------------
-// Boutique — publication de stratégies vendues avec code de paiement.
-// Lecture accessible à tout compte connecté (GET), écriture réservée à
-// l'administrateur (voir le middleware générique plus haut : USER_WRITE_*).
-// ---------------------------------------------------------------------------
-app.get('/api/shop', (req, res) => {
-  res.json({
-    items: shop.listAll(),
-    sources: {
-      strategies: strategies.LIST.map((d) => ({ key: d.key, name: d.name, about: d.about, rate: (stats(d.key) || {}).rate ?? null })),
-      ia: aiAuto.listStrategies(),
-    },
-    pricing: shop.getPricingSettings(),
-  });
-});
-
-// Modifie le tarif d'une méthode/palier de vente : 'strategy' (catalogue),
-// 'ia_100' (déclencheurs IA à 100% de réussite) ou 'ia_93' (93 à 99,99%).
-// Appliqué à tous les articles déjà publiés du palier concerné (avec le
-// montant en francs recalculé automatiquement) ET retenu comme nouveau
-// défaut pour les prochaines publications (voir shop.setMethodPrice).
-app.post('/api/shop/pricing', (req, res) => {
-  try {
-    const { method, price } = req.body || {};
-    const result = shop.setMethodPrice(method, price);
-    res.json({ ok: true, ...result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Change le taux de change € -> F CFA utilisé pour calculer automatiquement
-// le montant en francs des liens de paiement Money Fusion. Appliqué à tous
-// les articles déjà publiés (montant recalculé) ET retenu comme nouveau
-// défaut pour les prochaines publications (voir shop.setExchangeRate).
-app.post('/api/shop/exchange-rate', (req, res) => {
-  try {
-    const { rate } = req.body || {};
-    const result = shop.setExchangeRate(rate);
-    res.json({ ok: true, ...result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Change le taux de change $ -> F CFA utilisé pour le bouton « Soutien »
-// (dons libres, distincts des ventes de stratégies).
-app.post('/api/shop/support-rate', (req, res) => {
-  try {
-    const { rate } = req.body || {};
-    const result = shop.setSupportRate(rate);
-    res.json({ ok: true, ...result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Colle le lien de paiement Money Fusion d'UNE catégorie ('strategy',
-// 'ia_100' ou 'ia_93') — lien complet copié tel quel depuis Money Fusion
-// (ex. https://payin.moneyfusion.net/payment/{id}/{prix}/{nom}), utilisé
-// ensuite pour TOUS les articles de cette catégorie.
-app.post('/api/shop/pay-link', (req, res) => {
-  try {
-    const { method, url } = req.body || {};
-    const result = shop.setPayLink(method, url);
-    res.json({ ok: true, pricing: result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Choix admin du fournisseur de paiement ACTIF pour tout le catalogue —
-// 'fusion' (lien fixe collé par catégorie) ou 'sebpay' (API Mobile Money,
-// voir sebpay.js/paiement.js) — voir panneau Boutique → Paiement.
-app.post('/api/shop/payment-provider', (req, res) => {
-  try {
-    const provider = shop.setPaymentProvider(req.body && req.body.provider);
-    res.json({ ok: true, provider, pricing: shop.getPricingSettings() });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Enregistre les clés API SebPay (X-Public-Key/X-Secret-Key) + pays/devise
-// par défaut — la clé secrète n'est JAMAIS renvoyée en clair ensuite (voir
-// shop.getPricingSettings — seulement `sebpaySecretKeySet: true/false`).
-app.post('/api/shop/sebpay-keys', (req, res) => {
-  try {
-    const { publicKey, secretKey, country, currency } = req.body || {};
-    const result = shop.setSebpayKeys({ publicKey, secretKey, country, currency });
-    res.json({ ok: true, publicKey: result.publicKey, secretKeySet: !!result.secretKey, country: result.country, currency: result.currency });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Message de perte + rappel formation VIP, envoyé automatiquement dans le
-// canal dès qu'une prédiction (stratégie existante, « Prédit IA », ou relais
-// « après perte ») se solde par une perte (voir loss-notice.js, bot.js —
-// updateResult, predit.js — update, after-loss.js — editPending).
-app.get('/api/loss-notice', (req, res) => {
-  res.json({ ok: true, settings: lossNotice.getSettings() });
-});
-app.post('/api/loss-notice', (req, res) => {
-  try {
-    const { enabled, message, vipText, vipLink } = req.body || {};
-    const result = lossNotice.setSettings({ enabled, message, vipText, vipLink });
-    res.json({ ok: true, settings: result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-app.post('/api/shop', async (req, res) => {
-  try {
-    const { source, sourceKey, details, example, rate, realName, price, payAmountLocal } = req.body || {};
-    const priceNum = Number.isFinite(price) ? price : null;
-    const payAmountNum = Number.isFinite(payAmountLocal) ? payAmountLocal : null;
-    let item;
-    if (source === 'strategy' && sourceKey) {
-      item = await shop.publishFromStrategy(sourceKey, { details, example, price: priceNum, payAmountLocal: payAmountNum });
-    } else if (source === 'ia' && sourceKey) {
-      const aiItem = aiAuto.listStrategies().find((s) => s.id === sourceKey || s.key === sourceKey);
-      if (!aiItem) return res.status(404).json({ error: "Stratégie IA introuvable (peut-être expirée après 1h)." });
-      item = await shop.publishFromAiStrategy(aiItem, { details, example, price: priceNum, payAmountLocal: payAmountNum });
-    } else {
-      item = await shop.createItem({ source: 'custom', realName, details, example, rate: Number.isFinite(rate) ? rate : null, price: priceNum, payAmountLocal: payAmountNum });
-    }
-    res.json({ ok: true, item });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post('/api/shop/:id', (req, res) => {
-  const item = shop.updateItem(req.params.id, req.body || {});
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-app.delete('/api/shop/:id', (req, res) => {
-  const ok = shop.deleteItem(req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true });
-});
-
-app.post('/api/shop/:id/code', (req, res) => {
-  const item = shop.regenerateCode(req.params.id);
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-app.post('/api/shop/:id/rename', async (req, res) => {
-  const item = await shop.renameItem(req.params.id);
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-app.post('/api/shop/:id/refresh-rate', (req, res) => {
-  const item = shop.refreshRateFromStrategy(req.params.id);
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-// ---------------------------------------------------------------------------
-// Paiement en ligne (Money Fusion) — voir paiement.js. Lien fixe, rien à
-// configurer côté admin. Confirmation AUTOMATIQUE : dès que le navigateur
-// du client charge succes.html (atteint, côté Money Fusion, uniquement
-// après un paiement réellement validé), le paiement est marqué payé et le
-// code affiché sur succes.html — voir paiement.markPaidOnArrival.
-// ---------------------------------------------------------------------------
-app.get('/api/paiement/config', (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  res.json(paiement.getConfig());
-});
-
-// Marque un paiement en attente comme annulé/échoué (ex. nettoyage manuel
-// d'une réservation abandonnée) sans envoyer de code.
-app.post('/api/paiement/cancel/:ref', (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const r = paiement.cancelPayment(req.params.ref);
-  if (!r.ok) return res.status(404).json(r);
-  res.json(r);
-});
-
-// Historique des transactions (lecture seule, pour info admin) — plus
-// besoin d'y confirmer quoi que ce soit, tout est automatique.
-app.get('/api/paiement/pending', (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const list = paiement.listPending().map((r) => {
-    const item = shop.getItem(r.itemId);
-    return { ...r, aiName: item ? item.aiName : null };
-  });
-  res.json({ items: list });
-});
-
-// Consultée par la page succes.html (navigateur de l'acheteur, jamais
-// connecté au site) pour afficher le code. succes.html n'est atteinte,
-// côté Money Fusion, qu'après un paiement réellement validé (URL de succès
-// configurée sur le compte Money Fusion) — ce premier appel confirme donc
-// automatiquement le paiement (voir paiement.markPaidOnArrival) et affiche
-// le code pendant les 3 minutes ; la stratégie est débloquée uniquement
-// après saisie manuelle du code dans Telegram.
-app.get('/api/paiement/statut/:ref', async (req, res) => {
-  const record = await paiement.markPaidOnArrival(req.params.ref);
-  if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
-  const item = record.itemId ? shop.getItem(record.itemId) : null;
-  res.json({
-    status: record.status,
-    kind: record.kind || 'item',
-    code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),
-    aiName: item ? item.aiName : null,
-    amount: record.amount,
-    amountUsd: record.amountUsd ?? null,
-    buyerName: record.buyerName || null,
-    userId: record.userId || null,
-    expiresAt: record.expiresAt || null,
-  });
-});
-
-// Consultée par succes.html dès que le client clique sur « 📋 Copier » :
-// le code reste valide 30 secondes pour laisser le temps de le renvoyer
-// dans Telegram, puis il est remplacé automatiquement.
-app.post('/api/paiement/copie/:ref', async (req, res) => {
-  const record = await paiement.expireAfterCopy(req.params.ref);
-  if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
-  res.json({ ok: true, status: record.status });
-});
-
-// Réservation active EN CE MOMENT — consultée par succes.html à l'arrivée
-// sans ref (lien de succès Money Fusion fixe) pour retrouver automatiquement
-// le client qui vient de payer, sans rien lui faire saisir (voir
-// paiement.currentActiveRecord — s'appuie sur le verrou global d'achat).
-app.get('/api/paiement/actif', (req, res) => {
-  const record = paiement.currentActiveRecord();
-  if (!record) return res.status(404).json({ ok: false, error: 'Aucun paiement en cours actuellement.' });
-  res.json({ ok: true, ref: record.ref, uid: record.userId || null, buyerName: record.buyerName || null });
-});
-
-// Recherche du ref actif pour un ID Telegram — consultée par succes.html
-// quand la page est atteinte SANS ref dans l'URL (lien de succès Money
-// Fusion fixe). Ne marque rien comme payé : ne fait que reconstruire le
-// lien classique ?ref=...&uid=...&fn=...&ln=..., que le navigateur ouvre
-// ensuite lui-même (voir public/succes.html — lookupByUserId).
-app.get('/api/paiement/chercher/:userId', (req, res) => {
-  const record = paiement.findActiveRecordByUserId(req.params.userId);
-  if (!record) return res.status(404).json({ ok: false, error: "Aucun paiement en cours trouvé pour cet ID Telegram. Lance d'abord un paiement depuis le bot Telegram." });
-  res.json({ ok: true, ref: record.ref, buyerName: record.buyerName || null });
-});
-
-// Consultée par succes.html quand le client colle son ID Telegram et tape
-// « Je viens de payer » (le lien de paiement étant désormais fixe, Money
-// Fusion ne peut plus transmettre de référence dans l'URL de retour) — voir
-// paiement.confirmByUserId.
-app.post('/api/paiement/confirmer', async (req, res) => {
-  const userId = req.body && req.body.userId ? String(req.body.userId).trim() : '';
-  if (!userId) return res.status(400).json({ ok: false, error: 'ID Telegram manquant.' });
-  const r = await paiement.confirmByUserId(userId);
-  if (!r.ok) return res.status(404).json(r);
-  const record = r.record;
-  const item = record.itemId ? shop.getItem(record.itemId) : null;
-  res.json({
-    ok: true,
-    ref: record.ref,
-    status: record.status,
-    kind: record.kind || 'item',
-    code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),
-    aiName: item ? item.aiName : null,
-    amount: record.amount,
-    amountUsd: record.amountUsd ?? null,
-    buyerName: record.buyerName || null,
-    userId: record.userId || null,
-    expiresAt: record.expiresAt || null,
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SebPay — second fournisseur de paiement Mobile Money au choix de l'admin
-// (voir shop.getPaymentProvider/setPaymentProvider, sebpay.js). Contrairement
-// à Money Fusion (lien fixe collé par l'admin), le client donne son
-// numéro/opérateur sur notre propre page public/pay-sebpay.html, qui appelle
-// ces routes. Toutes publiques (le client n'est jamais connecté au site) —
-// la sécurité tient à la référence `ref` (générée aléatoirement côté
-// serveur, voir paiement.shortRef) et à la vérification de signature sur le
-// webhook plus bas.
-// ---------------------------------------------------------------------------
-
-// Consultée par pay-sebpay.html au chargement : montant à payer, devise et
-// nom de la stratégie, pour affichage — ne révèle jamais les clés API.
-app.get('/api/sebpay/info/:ref', (req, res) => {
-  const record = paiement.getRecord(req.params.ref);
-  if (!record || record.provider !== 'sebpay') return res.status(404).json({ ok: false, error: 'Paiement introuvable.' });
-  if (record.status !== 'pending') return res.status(410).json({ ok: false, error: 'Ce paiement n\'est plus actif.' });
-  const item = record.itemId ? shop.getItem(record.itemId) : null;
-  const keys = shop.getSebpayKeys();
-  res.json({
-    ok: true,
-    amount: record.amount,
-    currency: keys.currency,
-    country: keys.country,
-    itemName: item ? item.aiName : (record.kind === 'support' ? 'Soutien' : null),
-    buyerName: record.buyerName || null,
-    userId: record.userId || null,
-  });
-});
-
-// Liste des opérateurs Mobile Money disponibles (avec `otp_required` par
-// opérateur, voir https://new.sebpay.bj/fr/docs/otp) — relayée depuis notre
-// serveur pour ne jamais exposer les clés API au navigateur du client.
-app.get('/api/sebpay/operators', async (req, res) => {
-  const keys = shop.getSebpayKeys();
-  const r = await sebpay.getOperators(req.query.country || keys.country);
-  if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
-  res.json({ ok: true, operators: r.data });
-});
-
-// Lance (ou finalise, si otpCode fourni) l'encaissement SebPay pour cette
-// réservation. Deux passages possibles côté opérateurs qui l'exigent (voir
-// docs OTP) : 1) sans otpCode → si l'opérateur choisi l'exige, on répond
-// needsOtp + le code USSD à composer, SANS appeler /collections ; 2) avec
-// otpCode → on appelle réellement /collections.
-app.post('/api/sebpay/collect/:ref', async (req, res) => {
-  const record = paiement.getRecord(req.params.ref);
-  if (!record || record.provider !== 'sebpay') return res.status(404).json({ ok: false, error: 'Paiement introuvable.' });
-  if (record.status !== 'pending') return res.status(410).json({ ok: false, error: 'Ce paiement n\'est plus actif.' });
-  const phone = String((req.body && req.body.phone) || '').trim();
-  const operator = String((req.body && req.body.operator) || '').trim();
-  const otpCode = req.body && req.body.otpCode ? String(req.body.otpCode).trim() : null;
-  if (!phone || !operator) return res.status(400).json({ ok: false, error: 'Numéro de téléphone et opérateur requis.' });
-
-  const keys = shop.getSebpayKeys();
-  if (!otpCode) {
-    const ops = await sebpay.getOperators(keys.country);
-    if (ops.ok) {
-      const list = Array.isArray(ops.data) ? ops.data : (ops.data && ops.data.operators) || [];
-      const found = list.find((o) => o.slug === operator || o.code === operator);
-      if (found && found.otp_required) {
-        return res.json({ ok: true, needsOtp: true, ussdCode: found.ussd_code || null });
-      }
-    }
-  }
-
-  const callbackUrl = `${config.PUBLIC_URL}/api/sebpay/webhook`;
-  const r = await sebpay.createCollection({
-    amount: record.amount,
-    currency: keys.currency,
-    phone,
-    operator,
-    country: keys.country,
-    externalReference: record.ref,
-    callbackUrl,
-    otpCode,
-  });
-  if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
-  paiement.attachSebpayTransaction(record.ref, {
-    transactionId: r.data.transaction_id,
-    phone,
-    operator,
-    providerLink: r.data.provider_link || null,
-  });
-  res.json({ ok: true, transactionId: r.data.transaction_id, providerLink: r.data.provider_link || null, status: r.data.status || 'pending' });
-});
-
-// Webhook SebPay — appelé par SebPay (jamais par le navigateur du client)
-// dès qu'un paiement change de statut. Signature HMAC-SHA256 obligatoire
-// (en-tête X-SebPay-Signature, voir sebpay.verifyWebhookSignature) sur le
-// corps BRUT (req.rawBody, voir express.json({verify}) plus haut) : un
-// webhook sans signature valide n'est JAMAIS traité, quoi qu'il prétende.
-// Répond 200 en moins de 5s comme l'exige la doc, même en cas d'erreur de
-// traitement (pour éviter un déluge de réémissions), sauf signature invalide
-// (401, volontairement, pour que ça reste visible dans les logs SebPay).
-app.post('/api/sebpay/webhook', async (req, res) => {
-  const signature = req.get('X-SebPay-Signature');
-  const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
-  if (!sebpay.verifyWebhookSignature(raw, signature)) {
-    console.error('Webhook SebPay : signature invalide, ignoré.');
-    return res.status(401).json({ ok: false, error: 'Signature invalide.' });
-  }
-  try {
-    const body = req.body || {};
-    const ref = body.external_reference;
-    if (!ref) return res.status(200).json({ ok: true }); // rien à faire, mais on répond 200 (idempotence)
-    if (body.status === 'approved') {
-      await paiement.confirmSebpayPayment(ref);
-    } else if (body.status === 'rejected') {
-      paiement.failSebpayPayment(ref);
-    }
-    // statut intermédiaire (pending) : rien à faire, SebPay renverra un
-    // webhook final plus tard.
-  } catch (e) {
-    console.error('Webhook SebPay (traitement) :', e.message);
-  }
-  res.status(200).json({ ok: true });
 });
 
 app.get('/api/strategies/:key', (req, res) => {
@@ -2162,6 +1720,8 @@ app.post('/api/suit-streak/trackers', async (req, res) => {
       n: req.body && req.body.n,
       mode: req.body && req.body.mode,
       offset: req.body && req.body.offset,
+      suitFilter: req.body && req.body.suitFilter,
+      predictSuit: req.body && req.body.predictSuit,
       channels: req.body && req.body.channels,
       siteChannelId: req.body && req.body.siteChannelId,
       format: req.body && req.body.format,
@@ -2613,14 +2173,6 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
   if (s.ready) {
     await auth.ensureAdminSeed();
     console.log('🔐 Compte admin vérifié/créé (' + auth.ADMIN_IDENTIFIER + ')');
-    // Le disque local (data.json) n'est PAS persistant sur Render gratuit :
-    // un redémarrage du conteneur (veille, redéploiement...) peut le vider.
-    // On recharge donc les réservations de paiement en attente depuis
-    // PostgreSQL (persistant) AVANT d'ouvrir le port, pour qu'un client qui
-    // revient sur succes.html juste après un redémarrage retrouve bien sa
-    // réservation au lieu de tomber sur « Aucun paiement en cours ».
-    const loaded = await paiement.loadFromDb();
-    console.log(loaded ? '💳 Réservations de paiement rechargées depuis la base' : '💳 Aucune réservation de paiement à recharger depuis la base');
   } else {
     console.error('⚠️ Le compte admin ne peut pas être créé tant que la base n\'est pas connectée — vérifiez DATABASE_URL sur Render.');
   }
