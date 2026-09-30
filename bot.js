@@ -229,7 +229,7 @@ const HELP =
   '/pred [date] — prédictions enregistrées + taux\n' +
   '/sql <SELECT ...> — requête de lecture seule\n\n' +
   '*Export / Import*\n' +
-  '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA)\n' +
+  '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA, tous les panneaux)\n' +
   '/importer — puis envoie un fichier .xlsx (ou envoie-le directement, sans /importer) pour restaurer la configuration';
 
 // ---------------------------------------------------------------------------
@@ -261,26 +261,44 @@ function parsePredictionControlCommand(text) {
   return null;
 }
 
-function runPredictionControlCommand(cmd, by) {
+function runPredictionControlCommand(cmd, by, chat) {
   try {
+    // Commande tapée DANS un canal (chat fourni) : elle ne concerne QUE ce
+    // canal — les autres canaux continuent de recevoir leurs prédictions.
+    if (chat) {
+      switch (cmd.action) {
+        case 'stop':
+          predictionControl.pauseChannel(chat, cmd.reason, by);
+          return `⏸️ Prédictions arrêtées pour CE canal${cmd.reason ? ` (${cmd.reason})` : ''}. Les autres canaux continuent normalement.\nEnvoie /start ici pour les relancer.`;
+        case 'start':
+          predictionControl.resumeChannel(chat, by);
+          return '▶️ Prédictions relancées pour ce canal.';
+        case 'schedule':
+          predictionControl.setChannelSchedule(chat, cmd.stopAt, cmd.startAt);
+          return `📅 Planification de CE canal enregistrée : arrêt automatique à ${cmd.stopAt}, reprise automatique à ${cmd.startAt} (tous les jours). Les autres canaux ne sont pas concernés.`;
+        case 'schedule-off':
+          predictionControl.clearChannelSchedule(chat);
+          return '📅 Planification de ce canal désactivée.';
+        case 'schedule-status':
+        case 'status':
+          return predictionControl.channelStatusText(chat);
+        default:
+          return null;
+      }
+    }
     switch (cmd.action) {
       case 'stop':
         predictionControl.pause(cmd.reason, by);
-        // précision demande admin : /stop est un interrupteur GLOBAL (toutes
-        // les stratégies, tous les panneaux, TOUS les canaux) — pas seulement
-        // ce canal-ci. On le dit explicitement pour éviter toute confusion
-        // avec un canal qui continuerait de recevoir des prédictions d'une
-        // AUTRE stratégie/configuration (voir la page « Envois » du site).
-        return `⏸️ Prédictions arrêtées PARTOUT${cmd.reason ? ` (${cmd.reason})` : ''} — toutes les stratégies, tous les panneaux, sur tous les canaux (pas seulement celui-ci).\nEnvoie /start (dans ce canal ou un autre) pour les relancer partout.`;
+        return `⏸️ Prédictions arrêtées PARTOUT${cmd.reason ? ` (${cmd.reason})` : ''} — toutes les stratégies, tous les panneaux, sur tous les canaux.\nEnvoie /start pour les relancer partout. (Pour arrêter un seul canal, tape /stop directement dans ce canal.)`;
       case 'start':
         predictionControl.resume(by);
-        return '▶️ Prédictions relancées PARTOUT — toutes les stratégies, tous les panneaux, sur tous les canaux.';
+        return '▶️ Prédictions relancées PARTOUT (l\'interrupteur global est levé ; les canaux arrêtés individuellement le restent jusqu\'à leur propre /start).';
       case 'schedule':
         predictionControl.setSchedule(cmd.stopAt, cmd.startAt);
-        return `📅 Planification enregistrée : arrêt automatique à ${cmd.stopAt}, reprise automatique à ${cmd.startAt} (tous les jours).`;
+        return `📅 Planification globale enregistrée : arrêt automatique à ${cmd.stopAt}, reprise automatique à ${cmd.startAt} (tous les jours).`;
       case 'schedule-off':
         predictionControl.clearSchedule();
-        return '📅 Planification automatique désactivée.';
+        return '📅 Planification globale désactivée.';
       case 'schedule-status':
       case 'status':
         return predictionControl.statusText();
@@ -290,6 +308,38 @@ function runPredictionControlCommand(cmd, by) {
   } catch (e) {
     return `⚠️ ${e.message}`;
   }
+}
+
+// Garde-fou d'envoi PAR CANAL : tout sendMessage vers un canal arrêté par
+// /stop est retenu (les autres canaux ne sont pas touchés). L'appelant reçoit
+// un message factice sans message_id ; les éditions/suppressions visant ce
+// message factice sont ignorées. Les messages DÉJÀ envoyés avant l'arrêt
+// restent éditables (résultat gagné/perdu). sendMessageUnguarded sert aux
+// réponses aux commandes (/start, /statut…) dans le canal arrêté.
+function installChannelGuard(inst) {
+  if (!inst || inst.__channelGuard) return inst;
+  inst.__channelGuard = true;
+  const send = inst.sendMessage.bind(inst);
+  inst.sendMessageUnguarded = send;
+  inst.sendMessage = function guardedSend(chatId, ...rest) {
+    if (predictionControl.isChannelPaused(chatId)) {
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
+    }
+    return send(chatId, ...rest);
+  };
+  const edit = inst.editMessageText.bind(inst);
+  inst.editMessageText = function guardedEdit(text, opts) {
+    if (opts && (opts.message_id === null || opts.message_id === undefined) && opts.inline_message_id === undefined) return Promise.resolve(true);
+    return edit(text, opts);
+  };
+  if (typeof inst.deleteMessage === 'function') {
+    const del = inst.deleteMessage.bind(inst);
+    inst.deleteMessage = function guardedDelete(chatId, messageId, ...rest) {
+      if (messageId === null || messageId === undefined) return Promise.resolve(true);
+      return del(chatId, messageId, ...rest);
+    };
+  }
+  return inst;
 }
 
 function settingsText() {
@@ -344,10 +394,9 @@ function wire(b) {
     if (!m.text) return;
     const cmd = parsePredictionControlCommand(m.text);
     if (cmd) {
-      const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`);
-      if (reply) b.sendMessage(m.chat.id, reply, { parse_mode: 'Markdown' }).catch(() => {
-        b.sendMessage(m.chat.id, reply).catch(() => {});
-      });
+      const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`, m.chat);
+      const raw = b.sendMessageUnguarded || b.sendMessage.bind(b); // la réponse doit passer même si le canal est arrêté
+      if (reply) raw(m.chat.id, reply).catch(() => {});
       return;
     }
     if (!m.text.startsWith('/')) return;
@@ -414,7 +463,7 @@ function wire(b) {
       await b.sendDocument(
         msg.chat.id,
         buffer,
-        { caption: '📦 Export complet de la configuration (tokens, canaux, stratégies, stratégies IA, analyses IA).' },
+        { caption: '📦 Export complet de la configuration (tokens, canaux, stratégies, stratégies IA, analyses IA, tous les panneaux : Répétition costume, Après perte, Combinée, etc.).' },
         { filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
       );
     } catch (e) {
@@ -1232,6 +1281,7 @@ async function startBot(token) {
         },
       },
     });
+    installChannelGuard(bot);
     wire(bot);
     const me = await bot.getMe(); // valide le token avant de lancer le polling
     state.botUsername = me.username;
@@ -1288,7 +1338,7 @@ function senderFor() {
   if (!token) return null;
   if (bot) return bot;                      // bot principal (polling actif)
   if (!senders.has(token)) {
-    try { senders.set(token, new TelegramBot(token, { polling: false })); }
+    try { senders.set(token, installChannelGuard(new TelegramBot(token, { polling: false }))); }
     catch (e) { console.error('Token Telegram invalide :', e.message); senders.set(token, null); }
   }
   return senders.get(token) || null;

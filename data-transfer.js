@@ -1,5 +1,5 @@
 // data-transfer.js — export/import de TOUTE la configuration du bot (tokens
-// API, ID de canaux, réglages de format, configuration de chaque stratégie,
+// API, ID de canaux, TOUS les panneaux, réglages de format, configuration de chaque stratégie,
 // stratégies créées par l'IA, historique des analyses IA…) sous forme d'un
 // classeur Excel (.xlsx), envoyé/reçu directement par le bot Telegram
 // (commandes /exporter et /importer, voir bot.js — réservées à
@@ -16,7 +16,10 @@ const XLSX = require('xlsx');
 const { state, initStrategies, setStrategyConfig } = require('./predictor');
 const strategies = require('./strategies');
 
+const store = require('./store');
+
 const SHEETS = {
+  PANNEAUX: 'Panneaux',
   GENERAL: 'Général',
   CANAUX: 'Canaux',
   STRATEGIES: 'Strategies',
@@ -70,6 +73,87 @@ function fromSheet(wb, name) {
   });
 }
 
+
+// ---------------------------------------------------------------------------
+// PANNEAUX — CORRECTIF « l'Excel n'exporte pas toutes les configurations » :
+// l'export ne couvrait que state.* (général, canaux, stratégies de base,
+// stratégies IA). Tous les panneaux (Répétition costume, Après perte,
+// Prédiction combinée, Rupture de costume, Chevauchement, Comptage 2/2,
+// Prédit IA, Formation, VIP, Statistiques, Jeu 21, message de perte,
+// Taux Miroir, arrêt/planification) gardent leur réglage dans data.json
+// (store) et n'étaient donc JAMAIS exportés. On les exporte maintenant tous,
+// dans une feuille « Panneaux » : une ligne par morceau de JSON (une cellule
+// Excel est limitée à 32 767 caractères, on découpe donc en morceaux).
+// ---------------------------------------------------------------------------
+const CHUNK = 30000;
+
+// clé dans data.json -> module à recharger après import (chargé à la demande
+// pour éviter toute dépendance circulaire avec bot.js/predictor.js)
+const PANELS = {
+  predit: { mod: './predit' },
+  game21Predict: { mod: './game21-predict' },
+  afterLoss: { mod: './after-loss' },
+  combined: { mod: './combined' },
+  suitStreak: { mod: './suit-streak' },
+  suitBreak: { mod: './suit-break' },
+  overlap: { mod: './overlap' },
+  statistics: { mod: './statistics' },
+  cardsCount: { mod: './cards-count' },
+  vip: { mod: './vip' },
+  formationRelay: { mod: './formation-relay' },
+  predictionControl: { mod: './prediction-control' },
+  lossNotice: { mod: './loss-notice' },
+  mirrorCounter: { mod: './mirror-counter' },
+};
+
+function panelRows() {
+  const data = store.read() || {};
+  const rows = [];
+  for (const key of Object.keys(PANELS)) {
+    if (data[key] === undefined || data[key] === null) continue;
+    const json = JSON.stringify(data[key]);
+    for (let i = 0, part = 1; i < json.length; i += CHUNK, part += 1) {
+      rows.push({ panneau: key, partie: part, json: json.slice(i, i + CHUNK) });
+    }
+  }
+  return rows;
+}
+
+// lecture BRUTE de la feuille (pas de fromCell : un morceau de JSON ne doit
+// pas être parsé tout seul).
+function readPanels(wb) {
+  const sheet = wb.Sheets[SHEETS.PANNEAUX];
+  if (!sheet) return {};
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const parts = {};
+  for (const r of rows) {
+    const key = String(r.panneau || '').trim();
+    if (!PANELS[key]) continue;
+    (parts[key] = parts[key] || []).push({ n: Number(r.partie) || 0, json: String(r.json ?? '') });
+  }
+  const out = {};
+  for (const [key, list] of Object.entries(parts)) {
+    list.sort((a, b) => a.n - b.n);
+    try { out[key] = JSON.parse(list.map((x) => x.json).join('')); } catch (_) { /* JSON illisible : panneau ignoré */ }
+  }
+  return out;
+}
+
+function applyPanel(key, value) {
+  store.patch({ [key]: value });
+  const m = require(PANELS[key].mod);
+  // 1) recharge le module depuis data.json (mêmes contrôles qu'au démarrage)
+  if (key === 'lossNotice') m.setSettings(value);
+  else if (key === 'mirrorCounter') m.setChannel(value && value.channelId);
+  else if (typeof m.restore === 'function') m.restore();
+  // 2) réécrit l'état en base (sinon la base, qui prime au redémarrage,
+  //    remettrait les anciens réglages) : configure(config()) déclenche la
+  //    persistance propre à chaque module.
+  if (key !== 'lossNotice' && key !== 'mirrorCounter' && typeof m.configure === 'function' && typeof m.config === 'function') {
+    try { m.configure(m.config()); } catch (_) { /* best-effort */ }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // EXPORT
 // ---------------------------------------------------------------------------
@@ -84,6 +168,7 @@ function buildWorkbook() {
     { cle: 'template', valeur: state.template || '' },
     { cle: 'B', valeur: state.B },
     { cle: 'maxR', valeur: state.maxR },
+    { cle: 'siteChannels', valeur: state.siteChannels || [] },
   ];
   XLSX.utils.book_append_sheet(wb, toSheet(general), SHEETS.GENERAL);
 
@@ -102,6 +187,7 @@ function buildWorkbook() {
 
   XLSX.utils.book_append_sheet(wb, toSheet(state.aiStrategies || []), SHEETS.IA_STRATEGIES);
   XLSX.utils.book_append_sheet(wb, toSheet(state.aiAnalyses || []), SHEETS.IA_ANALYSES);
+  XLSX.utils.book_append_sheet(wb, toSheet(panelRows()), SHEETS.PANNEAUX);
 
   return wb;
 }
@@ -132,6 +218,7 @@ function importBuffer(buffer) {
     if (map.template) state.template = String(map.template);
     if (map.B !== undefined && map.B !== '') state.B = Number(map.B) || state.B;
     if (map.maxR !== undefined && map.maxR !== '') state.maxR = Number(map.maxR);
+    if (Array.isArray(map.siteChannels)) state.siteChannels = map.siteChannels;
     applied.push(SHEETS.GENERAL);
   } else skipped.push(SHEETS.GENERAL);
 
@@ -166,6 +253,16 @@ function importBuffer(buffer) {
   const iaAnalyses = fromSheet(wb, SHEETS.IA_ANALYSES);
   if (iaAnalyses.length) { state.aiAnalyses = iaAnalyses; applied.push(`${SHEETS.IA_ANALYSES} (${iaAnalyses.length})`); }
   else skipped.push(SHEETS.IA_ANALYSES);
+
+  const panels = readPanels(wb);
+  const panelKeys = Object.keys(panels);
+  if (panelKeys.length) {
+    const done = [];
+    for (const key of panelKeys) {
+      try { applyPanel(key, panels[key]); done.push(key); } catch (e) { skipped.push(`${key} (${e.message})`); }
+    }
+    applied.push(`${SHEETS.PANNEAUX} (${done.length} : ${done.join(', ')})`);
+  } else skipped.push(SHEETS.PANNEAUX);
 
   return { applied, skipped };
 }

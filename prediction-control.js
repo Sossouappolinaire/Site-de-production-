@@ -1,5 +1,6 @@
-// prediction-control.js — interrupteur GLOBAL « arrêter / démarrer / planifier
-// les prédictions », commandable directement depuis un canal Telegram par
+// prediction-control.js — interrupteur « arrêter / démarrer / planifier
+// les prédictions » : GLOBAL depuis le site ou en message privé à l'admin, et
+// PAR CANAL quand la commande est tapée dans un canal (n'arrête que lui). Commandable directement depuis un canal Telegram par
 // l'administrateur de ce canal (demande admin).
 //
 // Portée volontairement large : quand `paused` est vrai, bot.js saute
@@ -36,7 +37,51 @@ const state = {
   // anti-double-déclenchement : dernière minute où l'automatique a agi, pour
   // ne pas re-déclencher pause()/resume() en boucle pendant la même minute.
   lastAutoKey: null,
+  // ARRÊT PAR CANAL (demande admin) : /stop, /start, /planifier tapés DANS un
+  // canal ne concernent QUE ce canal — les autres canaux continuent de
+  // recevoir leurs prédictions. Clé = id du canal en texte ; chaque entrée :
+  // { id, username, title, paused, pausedAt, reason, by, resumedAt,
+  //   resumedBy, schedule, lastAutoKey }.
+  channels: {},
 };
+
+function chatKey(chat) {
+  const id = chat && typeof chat === 'object' ? chat.id : chat;
+  return String(id == null ? '' : id).trim();
+}
+function chatUsername(chat) {
+  const u = chat && typeof chat === 'object' ? chat.username : null;
+  return u ? `@${String(u).replace(/^@/, '').toLowerCase()}` : null;
+}
+function channelEntry(chat, create) {
+  const key = chatKey(chat);
+  if (!key) return null;
+  let e = state.channels[key];
+  if (!e && create) {
+    e = state.channels[key] = {
+      id: key, username: null, title: null, paused: false, pausedAt: null, reason: null, by: null,
+      resumedAt: null, resumedBy: null, schedule: null, lastAutoKey: null,
+    };
+  }
+  if (e && chat && typeof chat === 'object') {
+    const u = chatUsername(chat);
+    if (u) e.username = u;
+    if (chat.title) e.title = String(chat.title);
+  }
+  return e || null;
+}
+// vrai si CE canal (id numérique ou @nom) est arrêté individuellement.
+function isChannelPaused(chatId) {
+  const key = chatKey(chatId);
+  if (!key) return false;
+  const direct = state.channels[key];
+  if (direct) return !!direct.paused;
+  if (key.startsWith('@')) {
+    const low = key.toLowerCase();
+    for (const e of Object.values(state.channels)) if (e.paused && e.username === low) return true;
+  }
+  return false;
+}
 
 function isPaused() { return !!state.paused; }
 
@@ -85,6 +130,73 @@ function clearSchedule() {
   return status();
 }
 
+
+function pauseChannel(chat, reason, by) {
+  const e = channelEntry(chat, true);
+  if (!e) throw new Error('Canal inconnu.');
+  e.paused = true;
+  e.pausedAt = Date.now();
+  e.reason = reason ? String(reason).trim().slice(0, 200) || null : null;
+  e.by = by || null;
+  persist();
+  return channelStatus(chat);
+}
+function resumeChannel(chat, by) {
+  const e = channelEntry(chat, true);
+  if (!e) throw new Error('Canal inconnu.');
+  e.paused = false;
+  e.resumedAt = Date.now();
+  e.resumedBy = by || null;
+  persist();
+  return channelStatus(chat);
+}
+function setChannelSchedule(chat, stopAt, startAt) {
+  const a = sanitizeTime(stopAt);
+  const b = sanitizeTime(startAt);
+  if (!a || !b) throw new Error("Heures invalides — format attendu HH:MM pour l'arrêt et la reprise (ex. 23:00 07:00).");
+  const e = channelEntry(chat, true);
+  e.schedule = { stopAt: a, startAt: b };
+  e.lastAutoKey = null;
+  persist();
+  return channelStatus(chat);
+}
+function clearChannelSchedule(chat) {
+  const e = channelEntry(chat, false);
+  if (e) { e.schedule = null; e.lastAutoKey = null; persist(); }
+  return channelStatus(chat);
+}
+function channelStatus(chat) {
+  const e = channelEntry(chat, false);
+  return {
+    id: chatKey(chat),
+    paused: !!(e && e.paused),
+    pausedAt: e ? e.pausedAt : null,
+    pauseReason: e ? e.reason : null,
+    pausedBy: e ? e.by : null,
+    resumedAt: e ? e.resumedAt : null,
+    resumedBy: e ? e.resumedBy : null,
+    schedule: e ? e.schedule : null,
+  };
+}
+function channelStatusText(chat) {
+  const s = channelStatus(chat);
+  const lines = [];
+  lines.push(s.paused ? '⏸️ Prédictions ARRÊTÉES pour CE canal (les autres canaux continuent).' : '▶️ Prédictions ACTIVES pour ce canal.');
+  if (s.paused && s.pausedAt) {
+    lines.push(`Depuis le ${new Date(s.pausedAt).toLocaleString('fr-FR')}${s.pauseReason ? ` — ${s.pauseReason}` : ''}.`);
+  }
+  lines.push(s.schedule
+    ? `📅 Planification de ce canal : arrêt automatique à ${s.schedule.stopAt}, reprise automatique à ${s.schedule.startAt}.`
+    : '📅 Aucune planification pour ce canal.');
+  if (state.paused) lines.push('⚠️ L\'interrupteur GLOBAL est aussi actif : plus aucune nouvelle prédiction sur aucun canal.');
+  return lines.join('\n');
+}
+function pausedChannels() {
+  return Object.values(state.channels).filter((e) => e.paused).map((e) => ({
+    id: e.id, username: e.username, title: e.title, pausedAt: e.pausedAt, reason: e.reason, by: e.by, schedule: e.schedule,
+  }));
+}
+
 function status() {
   return {
     paused: state.paused,
@@ -94,6 +206,8 @@ function status() {
     resumedAt: state.resumedAt,
     resumedBy: state.resumedBy,
     schedule: state.schedule,
+    pausedChannels: pausedChannels(),
+    channelSchedules: Object.values(state.channels).filter((e) => e.schedule).map((e) => ({ id: e.id, title: e.title, schedule: e.schedule })),
   };
 }
 
@@ -119,7 +233,25 @@ function statusText() {
 // par occurrence (lastAutoKey empêche de redéclencher en boucle pendant la
 // même minute tant que le tick tourne plusieurs fois dedans).
 // ---------------------------------------------------------------------------
+function tickChannelSchedules() {
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const dayKey = now.toDateString();
+  for (const e of Object.values(state.channels)) {
+    const sch = e.schedule;
+    if (!sch) continue;
+    if (hhmm === sch.stopAt) {
+      const key = `stop-${dayKey}-${hhmm}`;
+      if (!e.paused && e.lastAutoKey !== key) { e.lastAutoKey = key; e.paused = true; e.pausedAt = Date.now(); e.reason = 'Arrêt automatique planifié'; e.by = 'planification'; persist(); }
+    } else if (hhmm === sch.startAt) {
+      const key = `start-${dayKey}-${hhmm}`;
+      if (e.paused && e.lastAutoKey !== key) { e.lastAutoKey = key; e.paused = false; e.resumedAt = Date.now(); e.resumedBy = 'planification'; persist(); }
+    }
+  }
+}
+
 function tickSchedule() {
+  tickChannelSchedules();
   const sch = state.schedule;
   if (!sch) return;
   const now = new Date();
@@ -159,6 +291,20 @@ function applySaved(saved) {
   state.schedule = (saved.schedule && sanitizeTime(saved.schedule.stopAt) && sanitizeTime(saved.schedule.startAt))
     ? { stopAt: sanitizeTime(saved.schedule.stopAt), startAt: sanitizeTime(saved.schedule.startAt) }
     : null;
+  state.channels = {};
+  if (saved.channels && typeof saved.channels === 'object') {
+    for (const [k, e] of Object.entries(saved.channels)) {
+      if (!e || typeof e !== 'object') continue;
+      state.channels[String(k)] = {
+        id: String(k), username: e.username || null, title: e.title || null, paused: !!e.paused,
+        pausedAt: e.pausedAt || null, reason: e.reason || null, by: e.by || null,
+        resumedAt: e.resumedAt || null, resumedBy: e.resumedBy || null,
+        schedule: (e.schedule && sanitizeTime(e.schedule.stopAt) && sanitizeTime(e.schedule.startAt))
+          ? { stopAt: sanitizeTime(e.schedule.stopAt), startAt: sanitizeTime(e.schedule.startAt) } : null,
+        lastAutoKey: null,
+      };
+    }
+  }
   state.lastAutoKey = null; // on réévalue proprement au prochain tick après un redémarrage
 }
 
@@ -178,6 +324,8 @@ async function restoreFromDb() {
 }
 
 module.exports = {
+  isChannelPaused, pauseChannel, resumeChannel, setChannelSchedule, clearChannelSchedule,
+  channelStatus, channelStatusText, pausedChannels,
   isPaused, pause, resume, setSchedule, clearSchedule, status, statusText,
   tickSchedule, restore, restoreFromDb,
 };

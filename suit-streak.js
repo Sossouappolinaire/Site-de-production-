@@ -636,7 +636,7 @@ async function verifyPending() {
 
 setOnShoeReset(() => {
   for (const t of panel.trackers) {
-    t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0; t.streakHasLoss = false; t.waitingSuit = null;
+    t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0; t.streakHasLoss = false; t.waitingSuit = null; t.mirrorPending = null;
   }
   for (const entry of panel.pendingMessages) {
     if (entry.status !== 'en attente') continue;
