@@ -253,6 +253,8 @@ async function q(sql, params = []) {
 
 // ---- jeux ------------------------------------------------------------------
 async function saveGame(g) {
+  // un jeu EN LIVE (non terminé) n'est jamais enregistré en base
+  if (!g || !g.finished) return null;
   return q(
     `INSERT INTO games (number, played_on, winner, player_cards, banker_cards,
         player_suits, banker_suits, player_value, banker_value,

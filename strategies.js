@@ -968,6 +968,67 @@ const absenceJoueur = {
 };
 
 // ---------------------------------------------------------------------------
+// 9bis) Absence + décalage (demande admin) — costume absent N jeux, prédit à +Z
+// ---------------------------------------------------------------------------
+// Deux réglages : « nombre d'absences » (N) et « décalage » (Z). On surveille
+// les 4 costumes sur la main du JOUEUR. Dès qu'un costume est absent pendant
+// EXACTEMENT N jeux consécutifs (ex. N = 4 : jeux 2, 3, 4, 5 sans ❤️), le
+// dernier numéro de la série (5) + le décalage (2) donne le jeu à prédire
+// (7) : on prédit alors automatiquement ❤️ sur le jeu 7. La vérification
+// (rattrapages, canal, format) est celle de toutes les stratégies.
+// « Exactement N » : la prédiction part une seule fois par série d'absence
+// (quand elle atteint N), pas à chaque jeu suivant. Si plusieurs costumes
+// atteignent N sur le même jeu, un seul est joué (ordre ♦️ ❤️ ♣️ ♠️,
+// déterministe) car ils viseraient le même numéro.
+const absenceDecalage = {
+  key: 'absenceDecalage',
+  name: 'Absence + décalage',
+  about:
+    "Surveille les 4 costumes sur la main du JOUEUR. Quand un costume est absent pendant " +
+    "exactement N jeux consécutifs (nombre d'absences, ex. 4 → jeux 2, 3, 4, 5), la " +
+    "prédiction part automatiquement sur le dernier numéro de la série + le décalage " +
+    "(ex. 5 + 2 = jeu 7) avec ce même costume. Rattrapages, canal et format sont réglables " +
+    "comme pour toute stratégie.",
+  defaults: {
+    enabled: false,
+    format: config.DEFAULT_FORMAT,
+    maxR: 2,
+    b: 0,
+    absence: 4,
+    decalage: 2,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const need = Math.max(1, Math.min(30, parseInt(cfg && cfg.absence, 10) || 4));
+    const offset = Math.max(1, Math.min(99, parseInt(cfg && cfg.decalage, 10) || 2));
+    const games = (ctx && ctx.games) || new Map();
+    for (const suit of SUITS) {
+      // on regarde un jeu de plus que N : la série doit valoir EXACTEMENT N
+      const run = playerAbsenceRun(games, game.number, suit, need + 1);
+      if (run !== need) continue;
+      const target = game.number + offset;
+      return {
+        kind: 'suit',
+        target,
+        suit,
+        label: suit,
+        trigger: game.number,
+        reason:
+          `${suit} absent chez le joueur sur ${need} jeux consécutifs ` +
+          `(#N${game.number - need + 1} → #N${game.number}) → dernier numéro ${game.number} ` +
+          `+ décalage ${offset} = prédiction ${suit} sur #N${target}`,
+        meta: { absence: need, decalage: offset, from: game.number - need + 1, to: game.number },
+      };
+    }
+    return null;
+  },
+};
+
+// ---------------------------------------------------------------------------
 // 10) Costume faible sur 2 cartes (miroir) — demande admin
 // ---------------------------------------------------------------------------
 // Filtre obligatoire : joueur 2 cartes ET banquier 2 cartes (mains « naturelles »,
@@ -1179,7 +1240,7 @@ const collecte = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, costumeFaible, collecte];
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, collecte];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

@@ -233,7 +233,7 @@ function postToSiteChannel(tracker, text) {
 // ---------------------------------------------------------------------------
 function persist() {
   const saved = {
-    config: config(), trackers: panel.trackers, history: panel.history,
+    config: config(), trackers: panel.trackers.map((t) => ({ ...t, watching: null })), history: panel.history,
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
     channelTitles: panel.channelTitles,

@@ -310,3 +310,20 @@ Le palier gratuit Groq limite le débit (8000 tokens/min) : les erreurs 429 sont
 - Chaque règle : une source (stratégie existante, stratégie enregistrée — après perte, combinée, répétition, rupture, chevauchement — ou canal déjà configuré) vers un canal de destination.
 - **Copie** des prédictions publiées (mise à jour du résultat dans le canal de destination) et/ou **annonces planifiées** (intervalle en minutes : 30 min, 1 h, 3 h… ou heures pile HH:MM, heure du serveur). Les deux options peuvent être actives ensemble ou séparément.
 - Seules les prédictions publiées après l'ajout de la règle sont copiées.
+
+## Version 1.27
+
+- « Copie et annonce » : une prédiction déjà publiée et encore en attente au moment de la création de la règle est copiée tout de suite ; la copie et les annonces tournent sur leur propre minuterie (4 s), indépendante du flux de jeux ; en pause, les résultats déjà copiés continuent d'être mis à jour.
+- Nouvelle stratégie « Absence + décalage » (`absenceDecalage`) : costume absent exactement N jeux consécutifs chez le joueur → prédiction sur dernier numéro + décalage (ex. 4 absences, décalage 2 : jeux 2-5 sans ❤️ → ❤️ sur #7). Format, rattrapages et canal comme les autres stratégies.
+
+## Version 1.28 — Export Excel complet (/exporter, /importer)
+
+- Panneaux ajoutés à la feuille « Panneaux » : **Copie et annonce** et **stratégies Jeu 21** (ils n'étaient pas exportés).
+- Nouvelle feuille « Reglages » : clés Gemini / Groq / OpenRouter, analyse IA automatique, clé e-mail (Brevo), lien de base de données (jamais remplacé s'il existe déjà), liste, historique et **code source** des stratégies créées par l'IA.
+- `copy-announce.js` ajouté au générateur de déploiement.
+
+## Version 1.29 — Aucun jeu en live stocké
+
+- L'export Excel ne contient plus aucune donnée issue du jeu en cours : feuilles « Annonces », « Portes » et « Predictions » supprimées ; dans « Panneaux », les champs en direct (prédictions en attente, numéro surveillé, progression de série, bloc de comptage, dernier scan) sont retirés. À l'import, ces champs ne sont jamais écrasés.
+- Un jeu non terminé n'est jamais enregistré en base (`db.saveGame`), et le numéro surveillé par « Chevauchement » n'est plus persisté.
+- Le jeu en live n'existe qu'en mémoire vive, pour l'affichage et les stratégies.

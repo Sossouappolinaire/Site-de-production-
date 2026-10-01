@@ -25,6 +25,7 @@ const SHEETS = {
   STRATEGIES: 'Strategies',
   IA_STRATEGIES: 'StrategiesIA',
   IA_ANALYSES: 'AnalysesIA',
+  REGLAGES: 'Reglages',
 };
 
 // ---------------------------------------------------------------------------
@@ -87,6 +88,54 @@ function fromSheet(wb, name) {
 // ---------------------------------------------------------------------------
 const CHUNK = 30000;
 
+// JEUX EN LIVE : l'export Excel ne doit contenir AUCUNE donnée issue du jeu en
+// cours (numéro surveillé, progression de série, prédictions en attente de
+// résultat, dernier scan…). On ne garde que la configuration et l'historique
+// terminé. À l'import, ces champs sont conservés tels qu'ils sont en direct
+// sur le bot (jamais écrasés par un fichier).
+const LIVE_KEYS = [
+  'pendingMessages', 'pending', 'block', 'watching', 'lastSeenTarget',
+  'streakSuit', 'streakCount', 'lastScanAt', 'live', 'liveGame', 'currentGame',
+];
+// Retrait limité au PREMIER niveau du panneau et aux éléments de `trackers` :
+// aucune clé portant ce nom plus profondément (configuration, historique
+// terminé) n'est touchée.
+function stripLive(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (LIVE_KEYS.includes(k)) continue;
+    out[k] = v;
+  }
+  if (Array.isArray(out.trackers)) {
+    out.trackers = out.trackers.map((t) => {
+      if (!t || typeof t !== 'object') return t;
+      const c = {};
+      for (const [k, v] of Object.entries(t)) if (!LIVE_KEYS.includes(k)) c[k] = v;
+      return c;
+    });
+  }
+  return out;
+}
+// reprend dans `current` les champs live (au premier niveau et dans trackers)
+function keepLive(imported, current) {
+  if (!imported || typeof imported !== 'object' || Array.isArray(imported)) return imported;
+  const out = { ...imported };
+  if (current && typeof current === 'object') {
+    for (const k of LIVE_KEYS) if (current[k] !== undefined) out[k] = current[k];
+    if (Array.isArray(out.trackers) && Array.isArray(current.trackers)) {
+      out.trackers = out.trackers.map((t) => {
+        const cur = current.trackers.find((x) => x && t && x.id === t.id);
+        if (!cur) return t;
+        const merged = { ...t };
+        for (const k of LIVE_KEYS) if (cur[k] !== undefined) merged[k] = cur[k];
+        return merged;
+      });
+    }
+  }
+  return out;
+}
+
 // clé dans data.json -> module à recharger après import (chargé à la demande
 // pour éviter toute dépendance circulaire avec bot.js/predictor.js)
 const PANELS = {
@@ -104,6 +153,8 @@ const PANELS = {
   predictionControl: { mod: './prediction-control' },
   lossNotice: { mod: './loss-notice' },
   mirrorCounter: { mod: './mirror-counter' },
+  copyAnnounce: { mod: './copy-announce' },        // « Copie et annonce »
+  game21Strategies: { mod: './game21-strategies' }, // stratégies Jeu 21 (liste lue directement dans data.json)
 };
 
 function panelRows() {
@@ -111,7 +162,7 @@ function panelRows() {
   const rows = [];
   for (const key of Object.keys(PANELS)) {
     if (data[key] === undefined || data[key] === null) continue;
-    const json = JSON.stringify(data[key]);
+    const json = JSON.stringify(stripLive(data[key]));
     for (let i = 0, part = 1; i < json.length; i += CHUNK, part += 1) {
       rows.push({ panneau: key, partie: part, json: json.slice(i, i + CHUNK) });
     }
@@ -140,7 +191,7 @@ function readPanels(wb) {
 }
 
 function applyPanel(key, value) {
-  store.patch({ [key]: value });
+  store.patch({ [key]: keepLive(value, (store.read() || {})[key]) });
   const m = require(PANELS[key].mod);
   // 1) recharge le module depuis data.json (mêmes contrôles qu'au démarrage)
   if (key === 'lossNotice') m.setSettings(value);
@@ -154,16 +205,94 @@ function applyPanel(key, value) {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// RÉGLAGES — tout ce qui n'était PAS dans data.json ni dans state : clés API
+// saisies à chaud (Gemini, Groq, OpenRouter), interrupteur de l'analyse IA
+// automatique, clé d'envoi d'e-mails (Brevo), lien de base de données, liste
+// et code source des stratégies créées par l'IA (sinon la liste « Créé par
+// moi avec IA » et leur code repartent de zéro sur un nouvel hébergement).
+// Une ligne par morceau (cellule Excel limitée à 32 767 caractères).
+// ---------------------------------------------------------------------------
+const DB_SETTINGS = [
+  'brevo_api_key', 'brevo_from', 'ai_created_strategy_keys', 'ai_created_strategy_history', 'ai_strategy_code_blocks',
+];
+
+function lazy(name) { try { return require(name); } catch (_) { return null; } }
+
+async function settingRows() {
+  const rows = [];
+  const add = (cle, valeur) => {
+    if (valeur === undefined || valeur === null || valeur === '') return;
+    const text = typeof valeur === 'string' ? valeur : JSON.stringify(valeur);
+    for (let i = 0, part = 1; i < text.length; i += CHUNK, part += 1) rows.push({ cle, partie: part, valeur: text.slice(i, i + CHUNK) });
+  };
+  const ai = lazy('./ai-analyzer');
+  if (ai) {
+    add('ai_gemini_key', ai.geminiKey && ai.geminiKey());
+    add('ai_groq_key', ai.groqKey && ai.groqKey());
+    add('ai_openrouter_key', ai.openrouterKey && ai.openrouterKey());
+  }
+  const aiAuto = lazy('./ai-auto');
+  if (aiAuto && aiAuto.auto) add('ai_auto_enabled', aiAuto.auto.enabled ? 'true' : 'false');
+  add('databaseUrl', (store.read() || {}).databaseUrl);
+  const db = lazy('./db');
+  if (db && db.ready) {
+    for (const key of DB_SETTINGS) {
+      try { add(key, await db.getSetting(key)); } catch (_) { /* best-effort */ }
+    }
+  }
+  return rows;
+}
+
+async function importSettings(wb, report) {
+  const sheet = wb.Sheets[SHEETS.REGLAGES];
+  if (!sheet) { report.skipped.push(SHEETS.REGLAGES); return; }
+  const parts = {};
+  for (const r of XLSX.utils.sheet_to_json(sheet, { defval: '' })) {
+    const key = String(r.cle || '').trim();
+    if (!key) continue;
+    (parts[key] = parts[key] || []).push({ n: Number(r.partie) || 0, v: String(r.valeur ?? '') });
+  }
+  const val = {};
+  for (const [k, list] of Object.entries(parts)) { list.sort((a, b) => a.n - b.n); val[k] = list.map((x) => x.v).join(''); }
+  const db = lazy('./db');
+  const done = [];
+  const ai = lazy('./ai-analyzer');
+  const saveDb = async (key, value) => { if (db && db.ready) { try { await db.setSetting(key, value); } catch (_) { /* best-effort */ } } };
+  if (ai && val.ai_gemini_key) { ai.setGeminiKey(val.ai_gemini_key); await saveDb('ai_gemini_key', val.ai_gemini_key); done.push('clé Gemini'); }
+  if (ai && val.ai_groq_key) { ai.setGroqKey(val.ai_groq_key); await saveDb('ai_groq_key', val.ai_groq_key); done.push('clé Groq'); }
+  if (ai && val.ai_openrouter_key) { ai.setOpenrouterKey(val.ai_openrouter_key); await saveDb('ai_openrouter_key', val.ai_openrouter_key); done.push('clé OpenRouter'); }
+  const aiAuto = lazy('./ai-auto');
+  if (aiAuto && aiAuto.auto && val.ai_auto_enabled !== undefined) {
+    aiAuto.auto.enabled = val.ai_auto_enabled !== 'false';
+    await saveDb('ai_auto_enabled', val.ai_auto_enabled);
+    done.push('analyse IA auto');
+  }
+  for (const key of DB_SETTINGS) {
+    if (val[key] === undefined) continue;
+    await saveDb(key, val[key]);
+    done.push(key);
+  }
+  // lien de base : on ne remplace JAMAIS une base déjà configurée (cela
+  // couperait la connexion en cours) ; il sert seulement à un hébergement neuf.
+  if (val.databaseUrl && !(store.read() || {}).databaseUrl) {
+    store.patch({ databaseUrl: val.databaseUrl });
+    done.push('lien de base (redémarrage requis)');
+  }
+  report.applied.push(`${SHEETS.REGLAGES} (${done.length}${done.length ? ' : ' + done.join(', ') : ''})`);
+}
+
 // ---------------------------------------------------------------------------
 // EXPORT
 // ---------------------------------------------------------------------------
-function buildWorkbook() {
+async function buildWorkbook() {
   const wb = XLSX.utils.book_new();
 
   const general = [
     { cle: 'botToken', valeur: state.botToken || '' },
     { cle: 'adminId', valeur: state.adminId || '' },
-    { cle: 'shopBotToken', valeur: state.shopBotToken || '' },
+    { cle: 'shopBotToken', valeur: state.shopBotToken || (store.read() || {}).shopBotToken || '' },
     { cle: 'format', valeur: state.format },
     { cle: 'template', valeur: state.template || '' },
     { cle: 'B', valeur: state.B },
@@ -188,12 +317,16 @@ function buildWorkbook() {
   XLSX.utils.book_append_sheet(wb, toSheet(state.aiStrategies || []), SHEETS.IA_STRATEGIES);
   XLSX.utils.book_append_sheet(wb, toSheet(state.aiAnalyses || []), SHEETS.IA_ANALYSES);
   XLSX.utils.book_append_sheet(wb, toSheet(panelRows()), SHEETS.PANNEAUX);
+  XLSX.utils.book_append_sheet(wb, toSheet(await settingRows()), SHEETS.REGLAGES);
+
+  // Pas de feuille « Predictions », « Annonces » ni « Portes » : ce sont des
+  // données issues du jeu en live (cibles en cours, compteurs de pertes).
 
   return wb;
 }
 
-function exportBuffer() {
-  const wb = buildWorkbook();
+async function exportBuffer() {
+  const wb = await buildWorkbook();
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
@@ -202,8 +335,7 @@ function exportBuffer() {
 // certaines feuilles ne touche QUE les données correspondantes, le reste de
 // la configuration actuelle reste intact.
 // ---------------------------------------------------------------------------
-function importBuffer(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+function importWorkbook(wb) {
   const applied = [];
   const skipped = [];
 
@@ -213,7 +345,7 @@ function importBuffer(buffer) {
     for (const row of general) map[row.cle] = row.valeur;
     if (map.botToken) state.botToken = String(map.botToken);
     if (map.adminId !== undefined && map.adminId !== '') state.adminId = Number(map.adminId) || map.adminId;
-    if (map.shopBotToken) state.shopBotToken = String(map.shopBotToken);
+    if (map.shopBotToken) { state.shopBotToken = String(map.shopBotToken); store.patch({ shopBotToken: state.shopBotToken }); }
     if (map.format !== undefined && map.format !== '') state.format = Number(map.format) || state.format;
     if (map.template) state.template = String(map.template);
     if (map.B !== undefined && map.B !== '') state.B = Number(map.B) || state.B;
@@ -267,4 +399,17 @@ function importBuffer(buffer) {
   return { applied, skipped };
 }
 
-module.exports = { SHEETS, exportBuffer, importBuffer };
+// import synchrone (compatibilité) : tout sauf la feuille « Reglages »
+function importBuffer(buffer) {
+  return importWorkbook(XLSX.read(buffer, { type: 'buffer' }));
+}
+
+// import complet : y compris les réglages stockés en base (clés API, e-mails…)
+async function importBufferAsync(buffer) {
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const report = importWorkbook(wb);
+  await importSettings(wb, report);
+  return report;
+}
+
+module.exports = { SHEETS, exportBuffer, importBuffer, importBufferAsync, stripLive, keepLive };

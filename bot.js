@@ -459,12 +459,12 @@ function wire(b) {
   b.onText(/^\/exporter\b/, async (msg) => {
     if (!isAdmin(msg)) return deny(msg.chat.id);
     try {
-      const buffer = dataTransfer.exportBuffer();
+      const buffer = await dataTransfer.exportBuffer();
       const filename = `baccara-config-${new Date().toISOString().slice(0, 10)}.xlsx`;
       await b.sendDocument(
         msg.chat.id,
         buffer,
-        { caption: '📦 Export complet de la configuration (tokens, canaux, stratégies, stratégies IA, analyses IA, tous les panneaux : Répétition costume, Après perte, Combinée, etc.).' },
+        { caption: '📦 Export complet de la configuration (tokens, clés API, canaux, stratégies, stratégies IA et leur code, analyses IA, annonces, tous les panneaux : Répétition costume, Rupture, Chevauchement, Après perte, Combinée, Copie et annonce, Jeu 21, etc.).' },
         { filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
       );
     } catch (e) {
@@ -492,7 +492,7 @@ function wire(b) {
       const resp = await fetch(link);
       if (!resp.ok) throw new Error(`Téléchargement du fichier impossible (HTTP ${resp.status}).`);
       const buffer = Buffer.from(await resp.arrayBuffer());
-      const report = dataTransfer.importBuffer(buffer);
+      const report = await dataTransfer.importBufferAsync(buffer);
       persist();
       if (db.ready) await saveConfigsToDb();
       const lines = ['✅ Import terminé.'];
@@ -1901,9 +1901,6 @@ async function tick() {
       // sinon attente du retour de ce costume avant de déclencher (voir
       // suit-streak.js).
       suitStreak.tick(),
-      // panneau « Copie et annonce » : recopie des prédictions d'une source
-      // vers un canal + annonces planifiées (voir copy-announce.js).
-      copyAnnounce.tick(),
       // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
       // IA ou formation), série de N prédictions consécutives de MÊME
       // costume puis attente de la RUPTURE (prochain costume différent) —
@@ -2158,6 +2155,15 @@ async function startLoop() {
   suitStreak.setSender(senderFor);
   copyAnnounce.restore();
   copyAnnounce.setSender(senderFor);
+  // « Copie et annonce » tourne sur SA PROPRE minuterie : elle ne dépend ni
+  // du flux de jeux (tick() s'arrête si l'API échoue) ni de la pause des
+  // prédictions pour mettre à jour les résultats copiés ; les annonces
+  // planifiées partent à l'heure même si le flux est coupé.
+  if (!global.__copyAnnounceTimer) {
+    global.__copyAnnounceTimer = setInterval(() => {
+      copyAnnounce.tick({ paused: predictionControl.isPaused() }).catch(() => {});
+    }, 4000);
+  }
   suitBreak.restore();
   suitBreak.setSender(senderFor);
   overlap.restore();

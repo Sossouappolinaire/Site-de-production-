@@ -184,6 +184,16 @@ function sanitizeAnnouncement(a, previous) {
   return out;
 }
 
+// Historique à ignorer à la création d'une règle : tout ce qui est DÉJÀ
+// terminé. Une prédiction publiée et encore « en attente » est en cours de
+// jeu : elle est copiée tout de suite (sinon la règle semble ne rien faire
+// jusqu'à la prochaine prédiction de la source).
+function historyUids(sourceKey) {
+  return sourceEntries(sourceKey)
+    .filter((e) => e.status !== 'en attente' || !(e.messages || []).length)
+    .map((e) => e.uid);
+}
+
 function buildRule(body, previous) {
   const copyEnabled = body.copyEnabled !== undefined ? !!body.copyEnabled : (previous ? previous.copyEnabled : true);
   const announceEnabled = body.announceEnabled !== undefined ? !!body.announceEnabled : (previous ? previous.announceEnabled : false);
@@ -221,13 +231,13 @@ function buildRule(body, previous) {
   if (!rule.name) rule.name = copyEnabled ? `Copie ${sourceName(sourceKey)}` : 'Annonces planifiées';
   // nouvelle source : on ignore tout ce qui existe déjà (historique)
   if (!previous || previous.sourceKey !== sourceKey) {
-    rule.seen = sourceKey ? sourceEntries(sourceKey).map((e) => e.uid) : [];
+    rule.seen = sourceKey ? historyUids(sourceKey) : [];
     rule.mirrors = [];
     rule.recent = [];
   }
   // la copie vient d'être activée : même principe, on repart d'aujourd'hui
   if (previous && !previous.copyEnabled && copyEnabled) {
-    rule.seen = sourceEntries(sourceKey).map((e) => e.uid);
+    rule.seen = historyUids(sourceKey);
     rule.mirrors = [];
     rule.recent = [];
   }
@@ -356,7 +366,7 @@ async function editMirror(mirror, entry) {
   }
 }
 
-async function processCopy(rule) {
+async function processCopy(rule, paused) {
   const entries = sourceEntries(rule.sourceKey);
   const byUid = new Map(entries.map((e) => [e.uid, e]));
   // 1) mettre à jour les messages déjà copiés quand le résultat change
@@ -371,6 +381,7 @@ async function processCopy(rule) {
     }
   }
   rule.mirrors = rule.mirrors.filter((m) => m.status === 'en attente');
+  if (paused) return;
   // 2) copier les nouvelles prédictions publiées (les plus anciennes d'abord)
   const fresh = entries.filter((e) => !rule.seen.includes(e.uid)).sort((a, b) => a.target - b.target);
   for (const e of fresh) {
@@ -432,15 +443,16 @@ async function processAnnouncements(rule) {
   }
 }
 
-async function tick() {
+async function tick(opts = {}) {
   if (busy || !panel.enabled) return panel;
+  const paused = !!opts.paused;
   busy = true;
   try {
     for (const rule of panel.rules) {
       if (!rule.enabled) continue;
       try {
-        if (rule.copyEnabled) await processCopy(rule);
-        if (rule.announceEnabled) await processAnnouncements(rule);
+        if (rule.copyEnabled) await processCopy(rule, paused);
+        if (rule.announceEnabled && !paused) await processAnnouncements(rule);
       } catch (e) { rule.lastError = e.message; }
     }
     panel.lastScanAt = Date.now();
