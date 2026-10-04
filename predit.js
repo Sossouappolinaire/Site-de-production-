@@ -35,6 +35,7 @@ const db = require('./db');
 const fmt = require('./formats');
 const { state } = require('./predictor');
 const lossNotice = require('./loss-notice');
+const earlyVerify = require('./early-verify');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
 
@@ -623,7 +624,9 @@ function verify(games) {
       // Tour déjà présent mais PAS ENCORE TERMINÉ : on ne le saute pas, on
       // attend simplement le prochain passage. Le sauter reviendrait à
       // vérifier la prédiction sur le mauvais numéro de jeu.
-      if (g && (g.finished === false || g.complete === false)) break;
+      // vérification anticipée : costume déjà chez le joueur → validé sans attendre la fin du jeu (early-verify.js)
+      const earlyWin = g && g.finished === false && earlyVerify.hit(g, null, (gg) => suitsOf(gg).includes(pred.suit));
+      if (g && (g.finished === false || g.complete === false) && !earlyWin) break;
       // Tour absent du flux ou sans cartes lisibles : ignoré, il ne consomme
       // PAS d'étape de rattrapage et ne peut donc pas provoquer une fausse
       // perte. Au-delà de 6 tours illisibles consécutifs, la prédiction est

@@ -1298,6 +1298,11 @@ function defaultsFor(key) {
     // Sans quoi (bouton désactivé, ou stratégie sans costume comme « Match nul »
     // ou « Pair/Impair »), rien ne change : comportement normal.
     aiAuto: false,
+    // RETARD D'ENVOI (demande admin, voir send-delay.js) : si activé, la prédiction
+    // n'est envoyée qu'une fois le jeu situé juste avant la cible en cours, plus
+    // `delaySec` secondes. Désactivé par défaut.
+    delayEnabled: false,
+    delaySec: 10,
     // message de perte + formation VIP (voir loss-notice.js) — CASE PAR
     // STRATÉGIE, désactivée par défaut (demande admin) : rien n'est envoyé
     // pour une stratégie tant que l'admin ne l'a pas explicitement activée

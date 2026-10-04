@@ -144,6 +144,7 @@ const PANELS = {
   afterLoss: { mod: './after-loss' },
   combined: { mod: './combined' },
   suitStreak: { mod: './suit-streak' },
+  dizaineTop: { mod: './dizaine-top' },
   suitBreak: { mod: './suit-break' },
   overlap: { mod: './overlap' },
   statistics: { mod: './statistics' },

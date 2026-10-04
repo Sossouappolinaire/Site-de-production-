@@ -11,11 +11,14 @@ const aiAuto = require('./ai-auto');
 const ai = require('./ai-analyzer');
 const aiQa = require('./ai-qa');
 const fmt = require('./formats');
+const statusAnimator = require('./status-animator');
+const sendDelay = require('./send-delay');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const copyAnnounce = require('./copy-announce');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const dizaineTop = require('./dizaine-top');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
@@ -321,22 +324,34 @@ function installChannelGuard(inst) {
   if (!inst || inst.__channelGuard) return inst;
   inst.__channelGuard = true;
   const send = inst.sendMessage.bind(inst);
+  const edit = inst.editMessageText.bind(inst);
   inst.sendMessageUnguarded = send;
   inst.sendMessage = function guardedSend(chatId, ...rest) {
     if (predictionControl.isChannelPaused(chatId)) {
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
-    return send(chatId, ...rest);
+    // prédiction « en cours » → animation du statut (status-animator.js)
+    return Promise.resolve(send(chatId, ...rest)).then((m) => {
+      try { statusAnimator.maybeTrack(edit, chatId, m, rest[0], rest[1]); } catch (_) { /* l'animation ne doit jamais bloquer l'envoi */ }
+      return m;
+    });
   };
-  const edit = inst.editMessageText.bind(inst);
   inst.editMessageText = function guardedEdit(text, opts) {
     if (opts && (opts.message_id === null || opts.message_id === undefined) && opts.inline_message_id === undefined) return Promise.resolve(true);
+    const key = statusAnimator.keyFromOpts(opts);
+    if (key && statusAnimator.has(key)) {
+      // nouveau texte « en cours » : l'animation continue ; sinon (résultat final)
+      // elle s'arrête et l'édition finale passe en dernier.
+      if (statusAnimator.matchPending(text)) return statusAnimator.rebase(key, text).then(() => edit(text, opts));
+      return statusAnimator.stop(key).then(() => edit(text, opts));
+    }
     return edit(text, opts);
   };
   if (typeof inst.deleteMessage === 'function') {
     const del = inst.deleteMessage.bind(inst);
     inst.deleteMessage = function guardedDelete(chatId, messageId, ...rest) {
       if (messageId === null || messageId === undefined) return Promise.resolve(true);
+      statusAnimator.stop(`${chatId}:${messageId}`).catch(() => {});
       return del(chatId, messageId, ...rest);
     };
   }
@@ -589,7 +604,7 @@ function wire(b) {
       );
     state.template = m[1].trim();
     persist();
-    b.sendMessage(msg.chat.id, `✅ Template personnalisé actif :\n\n${fmt.renderMessage(state.format, { gameNumber: 1234, suit: '♦️', maxR: state.maxR }, state.template).text}`);
+    b.sendMessage(msg.chat.id, `✅ Template personnalisé actif :\n\n${fmt.renderMessage(state.format, { gameNumber: 1234, suit: '♦️', maxR: state.maxR }, state.template, { noAnimate: true }).text}`);
   });
 
   b.onText(/^\/notemplate/, (msg) => {
@@ -801,15 +816,16 @@ function wire(b) {
       silence: 'silent', silencieux: 'silent', silent: 'silent',
       fenetre: 'lossWindow', intervalle: 'lossWindow', perte: 'lossWindow',
       resetgain: 'resetOnWin',
+      retard: 'delayEnabled', retardement: 'delayEnabled', delai: 'delaySec', delay: 'delaySec',
     };
-    if (!map[field]) return b.sendMessage(msg.chat.id, '⚠️ Champ inconnu (format, formatdistribution, maxr, b, lead, depart, var, decalage, streak, absence, scope, silence, fenetre, resetgain, template).');
+    if (!map[field]) return b.sendMessage(msg.chat.id, '⚠️ Champ inconnu (format, formatdistribution, maxr, b, lead, depart, var, decalage, streak, absence, scope, silence, fenetre, resetgain, retard, delai, template).');
     const target = map[field];
     if (target === 'silent')
       return b.sendMessage(msg.chat.id, 'ℹ️ Le mode silencieux 1 est toujours actif pour « ombre » et n\'est pas désactivable ; il n\'existe pour aucune autre stratégie.');
     if ((target === 'lossWindow' || target === 'resetOnWin') && key !== 'ombre')
       return b.sendMessage(msg.chat.id, '⚠️ Le mode silencieux est réservé à la stratégie « ombre ».');
     let parsed = value;
-    if (target === 'resetOnWin') parsed = /^(1|oui|on|true|actif)$/i.test(value);
+    if (target === 'resetOnWin' || target === 'delayEnabled') parsed = /^(1|oui|on|true|actif)$/i.test(value);
     const cfg = setStrategyConfig(key, { [target]: parsed });
     persist();
     b.sendMessage(msg.chat.id, `✅ ${strategies.BY_KEY[key].name} → ${field} = ${cfg[target]}\n\n${fmt.formatPreview(cfg.format, { maxR: cfg.maxR })}`);
@@ -1780,6 +1796,10 @@ async function tick() {
     const freed = sweepAutoUnlock();
     if (freed.length) console.log('🔓 Déblocage automatique : ' + freed.join(', '));
 
+    // retard d'envoi : libère les prédictions retenues dont l'heure est venue
+    // (AVANT verify() pour annuler celles dont le jeu cible a déjà commencé)
+    if (!predictionControl.isPaused()) { try { await sendDelay.releaseDue(state, broadcast); } catch (e) { state.lastError = e.message; } }
+
     const closed = verify();
     for (const p of closed) {
       await updateResult(p);
@@ -1862,6 +1882,7 @@ async function tick() {
     const preds = evaluate();
     for (const pred of preds) {
       if (predictionControl.isPaused()) break;
+      if (pred.holdSend) continue; // retard d'envoi : sera envoyée par sendDelay.releaseDue()
       await broadcast(pred);
     }
 
@@ -1901,6 +1922,9 @@ async function tick() {
       // sinon attente du retour de ce costume avant de déclencher (voir
       // suit-streak.js).
       suitStreak.tick(),
+      // stratégie « Dizaine — costume le plus / le moins sorti » : configurations
+      // multiples, comptage par dizaine de jeux (voir dizaine-top.js).
+      dizaineTop.tick(),
       // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
       // IA ou formation), série de N prédictions consécutives de MÊME
       // costume puis attente de la RUPTURE (prochain costume différent) —
@@ -2093,6 +2117,7 @@ async function applyDbConfigs() {
   await afterLoss.restoreFromDb();
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
+  await dizaineTop.restoreFromDb();
   await copyAnnounce.restoreFromDb();
   await suitBreak.restoreFromDb();
   await overlap.restoreFromDb();
@@ -2153,6 +2178,8 @@ async function startLoop() {
   combined.setSender(senderFor);
   suitStreak.restore();
   suitStreak.setSender(senderFor);
+  dizaineTop.restore();
+  dizaineTop.setSender(senderFor);
   copyAnnounce.restore();
   copyAnnounce.setSender(senderFor);
   // « Copie et annonce » tourne sur SA PROPRE minuterie : elle ne dépend ni
@@ -2228,9 +2255,29 @@ async function startLoop() {
   } else {
     initStrategies();
   }
+  // Import AUTOMATIQUE du classeur Excel de configuration placé dans
+  // config-import/ (une seule fois par version du fichier — voir
+  // auto-import.js). Fait AVANT startBot() pour que le token importé soit
+  // utilisé dès ce démarrage, et APRÈS la lecture de la base pour que
+  // l'import prime sur les anciens réglages.
+  try {
+    const r = await require('./auto-import').run({ dataTransfer, db, persist, saveConfigsToDb });
+    if (r.imported) console.log('📥 Import automatique : ' + r.imported + ' — ' + (r.report.applied || []).join(', '));
+    else if (r.error) console.error('⚠️ Import automatique impossible (' + (r.file || '') + ') : ' + r.error);
+    else if (r.skipped) console.log('📥 Import automatique ignoré : ' + r.skipped);
+  } catch (e) { console.error('⚠️ Import automatique : erreur inattendue :', e.message); }
   if (!loopStarted) {
     loopStarted = true;
     setInterval(tick, config.POLL_INTERVAL_MS);
+    // retard d'envoi : contrôle chaque seconde (le tick ne passe que toutes les
+    // POLL_INTERVAL_MS) pour que les « +10 secondes » soient respectées à ~1 s près
+    let releasing = false;
+    setInterval(async () => {
+      if (releasing || ticking || predictionControl.isPaused()) return;
+      if (!state.predictions.some((p) => p.holdSend && p.status === 'en attente')) return;
+      releasing = true;
+      try { await sendDelay.releaseDue(state, broadcast); } catch (e) { state.lastError = e.message; } finally { releasing = false; }
+    }, 1000);
     tick();
   }
   startBot();

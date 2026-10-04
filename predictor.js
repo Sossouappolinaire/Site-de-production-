@@ -12,6 +12,8 @@ const config = require('./config');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const db = require('./db');
+const earlyVerify = require('./early-verify');
+const sendDelay = require('./send-delay');
 
 const BADGES = ['0⃣', '1⃣', '2⃣', '3⃣', '4⃣', '5⃣', '6⃣', '7⃣', '8⃣', '9⃣'];
 const SUITS = strategies.SUITS;
@@ -196,6 +198,9 @@ function setStrategyConfig(key, patch = {}) {
   // interrupteur, effectif seulement pour les stratégies à costume (voir
   // aiSuitOverride() plus bas, appelée depuis evaluate()).
   if (patch.aiAuto !== undefined) next.aiAuto = !!patch.aiAuto;
+  // retard d'envoi (voir send-delay.js)
+  if (patch.delayEnabled !== undefined) next.delayEnabled = key === 'ombre' ? false : !!patch.delayEnabled;
+  if (patch.delaySec !== undefined) next.delaySec = Math.max(0, Math.min(120, parseInt(patch.delaySec, 10) || 0));
   // message de perte + formation VIP (voir loss-notice.js) — case par
   // stratégie, désactivée par défaut (voir strategies.js/defaultsFor).
   if (patch.lossNoticeEnabled !== undefined) next.lossNoticeEnabled = !!patch.lossNoticeEnabled;
@@ -1420,6 +1425,8 @@ function evaluate() {
       shoe: state.shoeSeq || 0,
     };
     if (trigKey) state.triggersDone[trigKey] = true;
+    // retard d'envoi : la prédiction est créée mais retenue (voir send-delay.js)
+    if (sendDelay.shouldHold(def.key, cfg)) sendDelay.mark(pred, cfg);
     state.predictions.unshift(pred);
     out.push(pred);
   }
@@ -1498,6 +1505,7 @@ function verify() {
   const queue = [...state.predictions].sort((a, b) => a.target - b.target);
   for (const p of queue) {
     if (p.status !== 'en attente') continue;
+    if (p.holdSend) continue; // retenue (retard d'envoi) : jamais vérifiée avant son envoi
     let guard = 0;
     if (p.gap == null) p.gap = 0;
     while (p.status === 'en attente' && guard++ <= p.maxR + p.gap + 8) {
@@ -1505,7 +1513,9 @@ function verify() {
       const g = state.games.get(num);
       // Un tour n'est vérifiable que s'il est TERMINÉ **et** complet (cartes
       // du joueur reçues). Sinon il est considéré comme manquant.
-      const usable = !!g && g.finished && g.complete !== false;
+      const usable = (!!g && g.finished && g.complete !== false)
+        // vérification anticipée : costume déjà chez le joueur → validé sans attendre la fin du jeu (early-verify.js)
+        || earlyVerify.hit(g, p.kind, (gg) => matches(p, gg));
       if (!usable) {
         // CORRECTIF MAJEUR « le jeu en live saute » : avant, un tour absent du
         // flux consommait une étape de rattrapage et pouvait clôturer la

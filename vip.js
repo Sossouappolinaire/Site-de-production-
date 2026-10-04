@@ -23,6 +23,7 @@ const db = require('./db');
 const fmt = require('./formats');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
+const earlyVerify = require('./early-verify');
 
 const panel = {
   enabled: true,
@@ -401,7 +402,9 @@ async function verifyPending() {
     while (entry.status === 'en attente' && guard++ <= entry.maxR + entry.gap + 8) {
       const num = entry.target + entry.step + entry.gap;
       const g = state.games.get(num);
-      const usable = !!g && g.finished && g.complete !== false;
+      const usable = (!!g && g.finished && g.complete !== false)
+        // vérification anticipée : costume déjà chez le joueur → validé sans attendre la fin du jeu (early-verify.js)
+        || earlyVerify.hit(g, entry.kind, (gg) => hasSuit(gg, entry.suit));
       if (!usable) {
         if (num + 2 <= maxDone) {
           entry.gap += 1;

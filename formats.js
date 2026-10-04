@@ -6,6 +6,7 @@
 'use strict';
 
 const tg = require('./tg-formats');
+const animator = require('./status-animator');
 
 const FORMAT_COUNT = 101;  // 90-91 = ÉTOILE/ÉCLAIR BACCARA · 92-101 = 10 formats proposés (ChatGPT)
 
@@ -44,7 +45,7 @@ function mapStatus(status) {
  * renderMessage — construit le message Telegram final.
  * @returns {{text: string, parse_mode: (string|null)}}
  */
-function renderMessage(formatId, data = {}, template = null) {
+function renderMessage(formatId, data = {}, template = null, opts = {}) {
   const payload = {
     gameNumber: data.gameNumber != null ? data.gameNumber : data.num,
     suit: normalizeSuit(data.suit),
@@ -64,7 +65,11 @@ function renderMessage(formatId, data = {}, template = null) {
     out = { text: `🎯 #N${payload.gameNumber} ${tg.getSuitEmoji(payload.suit)} +${payload.maxR}`, parse_mode: null };
   }
   const raw = sanitize(out && out.text ? out.text : out);
-  return finalize(raw, out && out.parse_mode);
+  const result = finalize(raw, out && out.parse_mode);
+  // message de prédiction « en cours » : signalé à l'animateur de statut
+  // (status-animator.js) qui l'animera dès son envoi. Aperçus : noAnimate.
+  if (payload.status === null && !(opts && opts.noAnimate)) animator.registerPending(result.text);
+  return result;
 }
 
 const HTML_TAG = /<\/?(b|i|u|s|strong|em|code|pre|a)\b[^>]*>/i;
@@ -97,7 +102,7 @@ function formatPreview(id, opts = {}) {
     maxR: opts.maxR != null ? opts.maxR : 2,
     status: opts.status !== undefined ? opts.status : null,
     rattrapage: opts.rattrapage || 0,
-  });
+  }, null, { noAnimate: true });
   // aperçu lisible : on retire les balises HTML
   return out.text.replace(/<\/?[a-z][^>]*>/gi, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 }

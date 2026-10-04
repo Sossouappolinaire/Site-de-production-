@@ -327,3 +327,37 @@ Le palier gratuit Groq limite le débit (8000 tokens/min) : les erreurs 429 sont
 - L'export Excel ne contient plus aucune donnée issue du jeu en cours : feuilles « Annonces », « Portes » et « Predictions » supprimées ; dans « Panneaux », les champs en direct (prédictions en attente, numéro surveillé, progression de série, bloc de comptage, dernier scan) sont retirés. À l'import, ces champs ne sont jamais écrasés.
 - Un jeu non terminé n'est jamais enregistré en base (`db.saveGame`), et le numéro surveillé par « Chevauchement » n'est plus persisté.
 - Le jeu en live n'existe qu'en mémoire vive, pour l'affichage et les stratégies.
+
+## Import automatique de la configuration (Excel)
+
+Le classeur `.xlsx` placé dans `config-import/` (celui produit par `/exporter`) est importé
+automatiquement à chaque démarrage après déploiement (module `auto-import.js`), une fois par
+version du fichier (empreinte SHA-256 en base). `AUTO_IMPORT=force` réimporte à chaque
+démarrage, `AUTO_IMPORT=off` désactive.
+
+## Animation du statut « En cours »
+
+Tous les formats de prédiction (1 à 101) sont animés tant que le résultat n'est pas connu
+(module `status-animator.js`) : sablier ⏳/⌛ qui se retourne, « En cours » écrit lettre par
+lettre avec un curseur de couleur 🔴🟠🟡🟢🔵🟣. À la vérification, l'animation s'arrête et le
+statut final (ex. ✅ 1️⃣) remplace le message. Réglages : `STATUS_ANIM=off`,
+`STATUS_ANIM_FRAME_MS` (3500 par défaut, écart mini entre deux images d'un même canal),
+`STATUS_ANIM_MAX_MS` (durée maxi, 30 min).
+
+## Vérification anticipée
+
+Dès que le costume prédit est trouvé dans la main du **joueur**, la prédiction est validée
+immédiatement (✅ + rattrapage), sans attendre la fin du jeu (module `early-verify.js`, appliqué
+au moteur principal et aux panneaux Après perte, Combiné, Chevauchement, Série, Rupture,
+Dizaine, VIP et Prédit IA). Si le costume n'est pas trouvé, on attend la fin du jeu ; une perte
+n'est jamais prononcée avant la fin du tour. Parité, nombre de cartes et vérifications sur la
+main du banquier restent vérifiées en fin de jeu. Désactivation : `EARLY_VERIFY=off`.
+
+## Retard d'envoi (par stratégie)
+
+Réglage « ⏱️ Retard d'envoi » sur la page de chaque stratégie (ou `/setstrat <clé> retard on` et
+`/setstrat <clé> delai 10`). Activé, la prédiction est calculée normalement puis retenue : elle
+part quand le jeu situé juste avant la cible est en cours, plus N secondes (10 par défaut).
+Ex. déclencheur au jeu #2, cible #4 : envoi du jeu #4 quand le jeu #3 est en cours + 10 s.
+Si le jeu cible a déjà commencé avant l'envoi, la prédiction est annulée. Désactivé par défaut ;
+`SEND_DELAY=off` désactive la fonction partout.

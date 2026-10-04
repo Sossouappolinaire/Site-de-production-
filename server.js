@@ -43,6 +43,7 @@ const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const dizaineTop = require('./dizaine-top');
 const copyAnnounce = require('./copy-announce');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
@@ -376,6 +377,7 @@ app.get('/api/state', async (req, res) => {
     afterLoss: afterLoss.status(),
     combined: combined.status(),
     suitStreak: suitStreak.status(),
+    dizaineTop: dizaineTop.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
     copyAnnounce: { ...copyAnnounce.status(), channels: configuredChannelList() },
@@ -1760,6 +1762,65 @@ app.delete('/api/suit-streak/trackers/:id', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// « Dizaine — costume le plus / le moins sorti » (voir dizaine-top.js) —
+// nouvelle stratégie du bouton Stratégies (demande admin) : comptage par
+// dizaine de jeux (1-10, 11-20, 21-30…), choix du 1er/2e/3e/4e costume le
+// plus ou le moins sorti, et plusieurs configurations enregistrables
+// (fin de numéro, rattrapages, format, canal propres à chacune).
+// ---------------------------------------------------------------------------
+async function verifyDizaineChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) dizaineTop.setChannelTitle(id, check.chat.title);
+  }
+}
+
+app.get('/api/dizaine-top', (req, res) => res.json(dizaineTop.status()));
+
+app.post('/api/dizaine-top/config', (req, res) => {
+  dizaineTop.configure(req.body || {});
+  res.json(dizaineTop.status());
+});
+
+app.post('/api/dizaine-top/trackers', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyDizaineChannels(dizaineTop.parseChannels(b.channels));
+    const t = dizaineTop.addTracker({
+      name: b.name, mode: b.mode, rank: b.rank, lead: b.lead,
+      channels: b.channels, siteChannelId: b.siteChannelId, format: b.format, maxR: b.maxR,
+    });
+    res.json({ ok: true, tracker: t, dizaineTop: dizaineTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/dizaine-top/trackers/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined) await verifyDizaineChannels(dizaineTop.parseChannels(b.channels));
+    const t = dizaineTop.updateTracker(req.params.id, b);
+    if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, tracker: t, dizaineTop: dizaineTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/dizaine-top/trackers/:id', (req, res) => {
+  dizaineTop.removeTracker(req.params.id);
+  res.json(dizaineTop.status());
+});
+
+app.post('/api/dizaine-top/trackers/:id/test', async (req, res) => {
+  const r = await dizaineTop.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/dizaine-top/scan', async (req, res) => {
+  await dizaineTop.tick();
+  res.json(dizaineTop.status());
+});
+
+// ---------------------------------------------------------------------------
 // « Chevauchement de prédictions » (voir overlap.js) — nouveau bouton
 // (demande admin) : sélection d'UNE source (stratégie, IA, formation, ou un
 // autre panneau), surveillance prédiction par prédiction — dès qu'une 2ᵉ
@@ -2192,7 +2253,7 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
 function configuredChannelList() {
   const rows = new Map();
   const titles = {};
-  for (const mod of [suitStreak, suitBreak, overlap, copyAnnounce]) {
+  for (const mod of [suitStreak, suitBreak, dizaineTop, overlap, copyAnnounce]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {
