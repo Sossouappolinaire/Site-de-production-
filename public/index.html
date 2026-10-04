@@ -517,7 +517,7 @@
         <span class="strategy-stats"><span class="tag">${esc(t.sentCount ?? 0)} envoyée(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`;
       }).join('');
-      return real + combined;
+      return real + dizaineTopButtons() + combined;
     }
     function optionByKeyGlobal(key) {
       return (snapshot.combined?.options || []).find(o => o.key === key) || null;
@@ -840,6 +840,7 @@ Faites-en bon usage !
           ${s.key === 'absenceJoueur' ? absenceEntriesRow('cfg', c.entries || [], snapshot.formatCount) : ''}
           <div class="field"><label>Format du message</label><p class="small">Les 89 formats complets sont accessibles depuis le bouton Formats.</p></div><label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <label class="check" style="margin-top:10px"><input id="cfgAiAuto" type="checkbox" ${c.aiAuto ? 'checked' : ''}> 🤖 Ajustement automatique par l'IA</label>
+          ${s.key !== 'ombre' ? `<label class="check" style="margin-top:10px"><input id="cfgDelay" type="checkbox" ${c.delayEnabled ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfgDelaySec" type="number" min="0" max="120" value="${c.delaySec ?? 10}" style="width:64px"> secondes</label>` : ''}
           <label class="check" style="margin-top:10px"><input id="cfgLossNotice" type="checkbox" ${c.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
           <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé — les deux doivent être cochés à la fois.</p>
           <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine','absenceJoueur','absenceDecalage'].includes(s.key)
@@ -910,7 +911,7 @@ Faites-en bon usage !
     async function refreshStrategyLive(key) { await refresh(); strategyPage(key); }
     function val(id) { return document.getElementById(id)?.value ?? ''; }
     async function saveStrategy(key) {
-      const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
+      const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       if (key === 'absenceJoueur') patch.entries = readAbsenceEntries('cfg');
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
@@ -1666,6 +1667,7 @@ Faites-en bon usage !
       suitStreak: { snap: 'suitStreak', box: 'ssCards', hash: '#/suit-streak', edit: 'editSuitStreakTrackerModal', remove: 'removeSuitStreakTracker' },
       suitBreak: { snap: 'suitBreak', box: 'sbCards', hash: '#/suit-break', edit: 'editSuitBreakTrackerModal', remove: 'removeSuitBreakTracker' },
       overlap: { snap: 'overlap', box: 'ovCards', hash: '#/overlap', edit: 'editOverlapTrackerModal', remove: 'removeOverlapTracker' },
+      dizaineTop: { snap: 'dizaineTop', box: 'dtCards', hash: '#/dizaine-top', edit: 'editDizaineTopModal', remove: 'removeDizaineTop' },
     };
     const trackerSuitKey = (x) => String(x || '').replace(/\uFE0F/g, '');
     function trackerChannelsOf(kind, t) {
@@ -1682,6 +1684,7 @@ Faites-en bon usage !
       const c = snapshot.control || {};
       const chans = trackerChannelsOf(kind, t).map(x => String(x).toLowerCase());
       if (p.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: 'panneau désactivé' };
+      if (kind === 'dizaineTop' && t.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: 'configuration en pause' };
       if (c.paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'prédictions arrêtées' };
       const paused = (c.pausedChannels || []).find(x => chans.includes(String(x.id).toLowerCase()) || (x.username && chans.includes(String(x.username).toLowerCase())));
       if (paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'canal arrêté' };
@@ -1692,6 +1695,19 @@ Faites-en bon usage !
     }
     // Compteurs des 4 coins + texte du centre, selon le type de panneau.
     function trackerCounters(kind, t) {
+      if (kind === 'dizaineTop') {
+        const v = t.view;
+        const byRank = {};
+        (v?.ranking || []).forEach(r => { byRank[trackerSuitKey(r.suit)] = r; });
+        const pr = snapshot.dizaineTop?.progress || { start: 1, end: 10, counted: 0 };
+        return {
+          rankMode: true,
+          get: (suit) => byRank[trackerSuitKey(suit)] || null,
+          center: v
+            ? `dizaine #N${esc(String(v.start))}-#N${esc(String(v.end))}<br><b>${esc(t.label)}</b><br><span class="small">→ prédit #N${esc(String(v.nextTarget))}</span><br><span class="small muted">en cours : ${esc(String(pr.counted))}/10</span>`
+            : `<b>${esc(t.label)}</b><br><span class="small muted">en attente de la 1ʳᵉ dizaine<br>en cours : ${esc(String(pr.counted))}/10</span>`,
+        };
+      }
       if (kind === 'overlap') {
         const sc = t.suitCounts || {};
         const total = Object.values(sc).reduce((a, b) => a + (Number(b) || 0), 0);
@@ -1714,7 +1730,20 @@ Faites-en bon usage !
       const chans = trackerChannelsOf(kind, t);
       const chanText = chans.length ? chans.map(id => esc(trackerChannelLabel(kind, id))).join('<br>') : '—';
       const k = trackerCounters(kind, t);
-      const corner = (suit, align) => `<div style="display:flex;flex-direction:column;align-items:${align === 'left' ? 'flex-start' : 'flex-end'}"><span style="display:block;height:28px;line-height:28px;font-size:24px;font-weight:700">${suit}</span><span class="mono" style="display:block;height:20px;line-height:20px;font-size:14px">${esc(String(k.get(suit)))}/${esc(String(k.total))}</span></div>`;
+      const rankName = (r) => (r === 1 ? '1er' : r + 'e');
+      const corner = (suit, align) => {
+        if (k.rankMode) {
+          const r = k.get(suit);
+          const chosen = r && t.view && r.rank === t.view.chosen;
+          return `<div style="display:flex;flex-direction:column;align-items:${align === 'left' ? 'flex-start' : 'flex-end'}"><span style="display:block;height:28px;line-height:28px;font-size:24px;font-weight:700">${suit}</span><span class="mono" style="display:block;height:20px;line-height:20px;font-size:14px;${chosen ? 'font-weight:700;color:var(--green)' : ''}">${r ? rankName(r.rank) + ' · ' + esc(String(r.count)) + '/10' : '—'}${chosen ? ' ✔' : ''}</span></div>`;
+        }
+        return `<div style="display:flex;flex-direction:column;align-items:${align === 'left' ? 'flex-start' : 'flex-end'}"><span style="display:block;height:28px;line-height:28px;font-size:24px;font-weight:700">${suit}</span><span class="mono" style="display:block;height:20px;line-height:20px;font-size:14px">${esc(String(k.get(suit)))}/${esc(String(k.total))}</span></div>`;
+      };
+      const extraRows = kind === 'dizaineTop'
+        ? `<div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Format de prédiction</span><span class="mono">N° ${esc(String(t.format))}</span></div>
+           <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Fin de numéro · rattrapages</span><span class="mono">+${esc(String(t.lead))} · ${esc(String(t.maxR))}</span></div>
+           <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Score</span><span class="mono">${esc(String(t.wins || 0))} gagné(s) · ${esc(String(t.losses || 0))} perdu(s)</span></div>`
+        : '';
       const preds = (t.lastPreds || []);
       const stLabel = (x) => x.status === 'gagné' ? 'gagné' : (x.status === 'perdu' ? 'perdu' : (x.status === 'annulé' ? 'annulé' : 'attente'));
       const stCls = (x) => x.status === 'gagné' ? 'good' : (x.status === 'perdu' ? 'bad' : (x.status === 'annulé' ? '' : 'warn'));
@@ -1726,6 +1755,7 @@ Faites-en bon usage !
         ${st.hint ? `<p class="small muted" style="margin:2px 0 0">${esc(st.hint)}</p>` : ''}
         <div style="display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-size:14px"><span class="muted">Canal</span><span style="text-align:right">${chanText}</span></div>
         <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Jeu en live</span><span class="mono">${live ? '#N' + esc(String(live.number)) : '—'}</span></div>
+        ${extraRows}
         <div style="display:grid;grid-template-columns:1fr auto 1fr;grid-template-rows:auto auto;column-gap:8px;row-gap:16px;margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;align-items:start">
           <div style="grid-column:1;grid-row:1">${corner('❤️', 'left')}</div>
           <div style="grid-column:2;grid-row:1 / span 2;text-align:center;align-self:center" class="small muted">${k.center}</div>
@@ -1765,6 +1795,116 @@ Faites-en bon usage !
       if (again) again.innerHTML = trackerCardsHtml(kind);
     }
     setInterval(() => { refreshTrackerCards().catch(() => {}); }, 5000);
+
+    // -------------------------------------------------------------------
+    // « Dizaine — costume le plus / le moins sorti » (voir dizaine-top.js)
+    // Même découpage que la stratégie « Comptage par dizaine » (1-10,
+    // 11-20, 21-30…), mais on choisit le 1er/2e/3e/4e costume le PLUS ou
+    // le MOINS sorti, et on enregistre autant de configurations qu'on veut.
+    // -------------------------------------------------------------------
+    function dizaineTopButtons() {
+      const d = snapshot.dizaineTop || {};
+      const list = d.trackers || [];
+      const main = `<button class="strategy-button" onclick="location.hash='#/dizaine-top'">
+        <span class="eyebrow">🔟 ${d.enabled === false ? 'En pause' : 'Active'}</span><b>Dizaine — costume le plus / le moins sorti</b>
+        <span>Comptage par dizaine de jeux (1-10, 11-20…) : crée des configurations avec le 1er, 2e, 3e ou 4e costume le plus ou le moins sorti...</span>
+        <span class="strategy-stats"><span class="tag">${esc(list.length)} configuration(s)</span><span class="tag good">${esc(list.reduce((n, t) => n + (t.wins || 0), 0))} gagné(s)</span><span class="tag bad">${esc(list.reduce((n, t) => n + (t.losses || 0), 0))} perdu(s)</span></span>
+        <em>Ouvrir la configuration →</em></button>`;
+      const each = list.map(t => `<button class="strategy-button" onclick="location.hash='#/dizaine-top'">
+        <span class="eyebrow">🔟 Dizaine${t.enabled ? '' : ' · en pause'}</span><b>${esc(t.name)}</b><span>${esc(t.label)} · prédit à la fin de dizaine +${esc(t.lead)} · ${esc(t.maxR)} rattrapage(s)</span>
+        <span class="strategy-stats"><span class="tag good">${esc(t.wins || 0)} gagné(s)</span><span class="tag bad">${esc(t.losses || 0)} perdu(s)</span></span>
+        <em>Ouvrir la configuration →</em></button>`).join('');
+      return main + each;
+    }
+    function dizaineTopSiteOptions(currentId) {
+      const list = snapshot.dizaineTop?.siteChannels || [];
+      const cur = currentId === null || currentId === undefined ? '' : String(currentId);
+      return `<option value="">— aucun —</option>` + list.map(c => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+    }
+    function dizaineTopForm(prefix, t) {
+      t = t || { mode: 'plus', rank: 1, lead: 4, maxR: 2, format: 1, channels: [], siteChannelId: null, name: '' };
+      const fc = snapshot.dizaineTop?.formatCount || snapshot.formatCount || 101;
+      const rankOpts = [1, 2, 3, 4].map(r => `<option value="${r}" ${Number(t.rank) === r ? 'selected' : ''}>${r === 1 ? '1er' : r + 'e'} costume</option>`).join('');
+      return `<div class="two-col">
+          <div class="field"><label>Choix du costume</label><select id="${prefix}-mode"><option value="plus" ${t.mode !== 'moins' ? 'selected' : ''}>Le plus sorti (gagnant)</option><option value="moins" ${t.mode === 'moins' ? 'selected' : ''}>Le moins sorti</option></select></div>
+          <div class="field"><label>Rang dans le classement</label><select id="${prefix}-rank">${rankOpts}</select></div>
+        </div>
+        <div class="three-col">
+          <div class="field"><label>Fin de numéro (prédit à la fin de dizaine +N)</label><input id="${prefix}-lead" type="number" min="1" max="10" value="${esc(String(t.lead ?? 4))}"></div>
+          <div class="field"><label>Nombre de rattrapages</label><input id="${prefix}-maxR" type="number" min="0" max="9" value="${esc(String(t.maxR ?? 2))}"></div>
+          <div class="field"><label>Format de prédiction (1 → ${esc(String(fc))})</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(fc))}" value="${esc(String(t.format ?? 1))}"></div>
+        </div>
+        <p class="small muted" style="margin:0 0 10px">Exemple avec « fin de numéro 4 » : dizaine #N1 à #N10 → prédiction sur #N14 ; dizaine #N11 à #N20 → #N24. Avec 10 → #N20, #N30… En cas d'égalité entre costumes, ordre fixe ♦️ ❤️ ♣️ ♠️.</p>
+        <div class="two-col">
+          <div class="field"><label>ID ou @nom du canal Telegram</label><input id="${prefix}-channels" value="${esc((t.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+          <div class="field"><label>Canal du site (optionnel)</label><select id="${prefix}-site">${dizaineTopSiteOptions(t.siteChannelId)}</select></div>
+        </div>
+        <div class="field"><label>Nom de cette configuration <span class="small">(optionnel — vide = nom automatique)</span></label><input id="${prefix}-name" value="${esc(t.name || '')}" placeholder="Ex. Dizaine 2e plus sorti fin 4"></div>`;
+    }
+    function readDizaineTopForm(prefix) {
+      const site = val(`${prefix}-site`);
+      return {
+        mode: val(`${prefix}-mode`), rank: val(`${prefix}-rank`), lead: val(`${prefix}-lead`),
+        maxR: val(`${prefix}-maxR`), format: val(`${prefix}-format`),
+        channels: ids(val(`${prefix}-channels`)), siteChannelId: site === '' ? null : site,
+        name: val(`${prefix}-name`),
+      };
+    }
+    function dizaineTopPage() {
+      setNav('strategies');
+      const p = snapshot.dizaineTop || {};
+      const list = p.trackers || [];
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">Dizaine — costume le plus / le moins sorti</h2><p class="small">Le sabot est découpé en dizaines de jeux (1-10, 11-20, 21-30…). À la fin de chaque dizaine, on compte les costumes sur la main du joueur et on les classe 1er, 2e, 3e, 4e. On prédit le costume du rang choisi (du plus sorti ou du moins sorti) sur le jeu « fin de numéro N » de la dizaine suivante. Clique sur « Créer » pour enregistrer une configuration ; tu peux en créer autant que tu veux.</p></div>
+        <div class="toolbar"><button class="button primary" onclick="addDizaineTopModal()">Créer</button><button class="button ghost" onclick="reloadDizaineTop()">Actualiser</button><button class="button ghost" onclick="location.hash='#/strategies'">← Stratégies</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div>
+          <label class="check"><input id="dizaineTopEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''} onchange="saveDizaineTopEnabled()"> Stratégie active</label></div>
+          <div id="dtCards">${trackerCardsHtml('dizaineTop')}</div></section>`;
+    }
+    async function reloadDizaineTop() { await refresh(); dizaineTopPage(); }
+    function addDizaineTopModal() {
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Créer — Dizaine costume le plus / le moins sorti</h3></div></div>
+        ${dizaineTopForm('dtnew', null)}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addDizaineTop()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function addDizaineTop() {
+      try {
+        await api('/api/dizaine-top/trackers', 'POST', readDizaineTopForm('dtnew'));
+        closeModal(); await refresh(); dizaineTopPage();
+        toast('Configuration enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    function editDizaineTopModal(id) {
+      const t = ((snapshot.dizaineTop || {}).trackers || []).find(x => x.id === id);
+      if (!t) return;
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier la configuration</span><h3 style="margin-top:8px">${esc(t.name)}</h3></div></div>
+        ${dizaineTopForm('dt-' + t.id, t)}
+        <label class="check" style="margin-top:8px"><input id="dt-${esc(t.id)}-enabled" type="checkbox" ${t.enabled ? 'checked' : ''}> Configuration active</label>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateDizaineTop('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="testDizaineTop('${esc(t.id)}')">Envoyer un test</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function updateDizaineTop(id) {
+      try {
+        await api(`/api/dizaine-top/trackers/${encodeURIComponent(id)}`, 'PUT', { ...readDizaineTopForm('dt-' + id), enabled: $('#dt-' + id + '-enabled')?.checked });
+        closeModal(); await refresh(); dizaineTopPage(); toast('Configuration mise à jour.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function toggleDizaineTop(id, enabled) {
+      try { await api(`/api/dizaine-top/trackers/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); dizaineTopPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeDizaineTop(id) {
+      if (!confirm('Supprimer cette configuration ?')) return;
+      try { await api(`/api/dizaine-top/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); dizaineTopPage(); toast('Configuration supprimée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function testDizaineTop(id) {
+      try { const r = await api(`/api/dizaine-top/trackers/${encodeURIComponent(id)}/test`, 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || [r.error]).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveDizaineTopEnabled() {
+      try { await api('/api/dizaine-top/config', 'POST', { enabled: $('#dizaineTopEnabled')?.checked }); await refresh(); dizaineTopPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     function suitStreakPage() {
       setNav('suit-streak');
       const p = snapshot.suitStreak || {};
@@ -3453,6 +3593,7 @@ Faites-en bon usage !
         else if (h === '#/after-loss') afterLossPage();
         else if (h === '#/combined') combinedPage();
         else if (h === '#/suit-streak') suitStreakPage();
+        else if (h === '#/dizaine-top') dizaineTopPage();
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
