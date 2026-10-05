@@ -6,6 +6,8 @@
   <title>Baccara Control Room</title>
   <meta name="description" content="Pilotage des stratégies Baccarat, analyse IA et routage Telegram.">
   <meta name="theme-color" content="#080b12">
+  <meta name="boot-id" content="__BOOT_ID__">
+  <script src="/intro.js"></script>
   <style>
     :root {
       --bg: #080b12; --surface: #101622; --surface-2: #151d2b; --line: #243042;
@@ -265,97 +267,11 @@
       .hero, .two-col { grid-template-columns: 1fr; } .stat-grid { grid-template-columns: repeat(2,1fr); }
       .three-col { grid-template-columns: 1fr; } .shell { padding: 0 15px 52px; } .hero { padding-top: 40px; }
     }
-    /* ── Écran de démarrage : livre qui s'ouvre (15 s) ── */
-    #splash {
-      position: fixed; inset: 0; z-index: 999;
-      background: #05070d;
-      display: flex; align-items: center; justify-content: center;
-      cursor: pointer; overflow: hidden;
-    }
-    #splash.leaving { animation: splashOut 700ms ease forwards; }
-    .book-intro { position: relative; width: 100%; height: 100%; overflow: hidden;
-      display: flex; align-items: center; justify-content: center; flex-direction: column;
-      background: radial-gradient(ellipse at center, #1a1030 0%, #0a0714 45%, #05070d 100%); }
-
-    /* phase 1 (0 → 3.5 s) — une étincelle d'IA traverse l'écran et « appelle » le livre */
-    .ai-orb { position: absolute; top: 26%; font-size: 46px; opacity: 0;
-      filter: drop-shadow(0 0 20px rgba(130,190,255,.85)) drop-shadow(0 0 40px rgba(130,90,255,.5));
-      animation: aiCall 3500ms ease both; }
-    .ai-orb .spark { display: inline-block; animation: sparkPulse 900ms ease-in-out infinite; }
-    @keyframes sparkPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.18); } }
-    @keyframes aiCall {
-      0%   { opacity: 0; transform: translate(240px, -30px) scale(.4) rotate(-10deg); }
-      22%  { opacity: 1; transform: translate(90px, -10px) scale(.95) rotate(4deg); }
-      50%  { opacity: 1; transform: translate(0, 0) scale(1.08) rotate(-4deg); }
-      72%  { opacity: 1; transform: translate(0, 0) scale(1) rotate(2deg); }
-      100% { opacity: 0; transform: translate(0, 6px) scale(.7) rotate(0deg); }
-    }
-
-    /* phase 2 (3.2 → 5 s) — le livre fermé apparaît puis s'ouvre */
-    .book-wrap { position: relative; margin-top: 34px; opacity: 0; animation: bookIn 700ms ease 2900ms forwards; }
-    @keyframes bookIn { to { opacity: 1; } }
-    .book { position: relative; width: 300px; height: 200px; perspective: 1800px; }
-    .book-base {
-      position: absolute; inset: 0; border-radius: 6px; background: #241610;
-      box-shadow: 0 30px 70px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.03);
-    }
-    .page {
-      position: absolute; top: 6px; bottom: 6px; width: calc(50% - 8px);
-      background: linear-gradient(180deg,#f7f0e2,#ecdfc7);
-      display: flex; align-items: center; justify-content: center; text-align: center;
-      padding: 16px; box-sizing: border-box;
-    }
-    .page-left { left: 6px; border-radius: 3px 0 0 3px; }
-    .page-right { right: 6px; border-radius: 0 3px 3px 0; }
-    .page-content { opacity: 0; animation: pageTextIn 900ms ease 5100ms forwards; }
-    .page-content .dev-name { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; font-weight: 700; color: #241610; letter-spacing: .01em; }
-    .page-content .dev-role { margin-top: 6px; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: #7a6a52; }
-    @keyframes pageTextIn { to { opacity: 1; } }
-    .cover {
-      position: absolute; top: 0; left: 0; width: 50%; height: 100%;
-      background: linear-gradient(135deg,#7a4a24,#3a2010 70%);
-      border-radius: 6px 0 0 6px; transform-origin: left center; backface-visibility: hidden;
-      box-shadow: 3px 0 14px rgba(0,0,0,.45);
-      display: flex; align-items: center; justify-content: center; z-index: 5;
-      animation: coverOpen 1300ms cubic-bezier(.4,0,.2,1) 3500ms forwards;
-    }
-    .cover-emblem { font-size: 30px; opacity: .85; filter: drop-shadow(0 0 8px rgba(0,0,0,.5)); }
-    @keyframes coverOpen { to { transform: rotateY(-172deg); box-shadow: -3px 0 14px rgba(0,0,0,.3); } }
-    .book-glow {
-      position: absolute; inset: -30px; border-radius: 16px; opacity: 0;
-      background: radial-gradient(ellipse at center, rgba(130,150,255,.35), transparent 70%);
-      animation: glowPulse 1600ms ease 3600ms forwards;
-    }
-    @keyframes glowPulse { 0% { opacity: 0; } 40% { opacity: 1; } 100% { opacity: .45; } }
-
-    .skip-hint { position: absolute; bottom: 26px; left: 0; right: 0; text-align: center; color: #cfd4e2; font-size: 12px;
-      letter-spacing: .04em; opacity: 0; animation: skipHintIn 8000ms ease-in-out both; z-index: 5; }
-    @keyframes skipHintIn { 0%, 55% { opacity: 0; } 100% { opacity: .7; } }
-    @keyframes splashOut { to { opacity: 0; visibility: hidden; pointer-events: none; } }
-    body.no-scroll { overflow: hidden; }
+    /* Écran de démarrage : voir intro.js (personnage + mallette, une fois après chaque redémarrage) */
   </style>
 </head>
 <body class="no-scroll">
-  <div id="splash" onclick="closeSplash()">
-    <div class="book-intro">
-      <div class="ai-orb"><span class="spark">✨</span></div>
-      <div class="book-wrap">
-        <div class="book-glow"></div>
-        <div class="book">
-          <div class="book-base"></div>
-          <div class="page page-left"></div>
-          <div class="page page-right">
-            <div class="page-content">
-              <div class="dev-name">Sossou Kouamé Appolinaire</div>
-              <div class="dev-role">Développeur</div>
-            </div>
-          </div>
-          <div class="cover"><div class="cover-emblem">📖</div></div>
-        </div>
-      </div>
-      <div class="skip-hint">Touchez pour continuer</div>
-    </div>
-  </div>
+  <div id="splash" onclick="closeSplash()"></div>
   <header>
     <div class="topbar">
       <a class="brand" href="#/" style="text-decoration:none">
@@ -392,7 +308,7 @@
   </header>
   <main id="app" class="shell"><div class="loading">Chargement du centre de contrôle...</div></main>
   <script>
-    // écran de démarrage : intro « livre » de 15 secondes (animation CSS),
+    // écran de démarrage : intro « personnage + mallette » (intro.js, ~8 s),
     // puis fermeture (dès que l'intro ET le premier chargement des données
     // sont finis — pour ne jamais révéler un tableau de bord cassé).
     let firstRouteDone = false;
@@ -410,12 +326,13 @@
     (function () {
       const s = document.getElementById('splash');
       if (!s) return;
-      const INTRO_DURATION = 15000; // durée fixe de l'intro « livre » (ms)
+      // l'intro (intro.js) prévient quand elle est terminée ; on ferme dès que
+      // le premier chargement des données est aussi fini.
       function finish() {
         if (firstRouteDone) return closeSplash();
         const wait = setInterval(() => { if (firstRouteDone) { clearInterval(wait); closeSplash(); } }, 120);
       }
-      setTimeout(finish, INTRO_DURATION);
+      window.addEventListener('baccara-intro-done', finish);
       setTimeout(closeSplash, 19000); // filet de sécurité
     })();
 
@@ -1859,7 +1776,28 @@ Faites-en bon usage !
         ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div>
           <label class="check"><input id="dizaineTopEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''} onchange="saveDizaineTopEnabled()"> Stratégie active</label></div>
-          <div id="dtCards">${trackerCardsHtml('dizaineTop')}</div></section>`;
+          <div id="dtCards">${trackerCardsHtml('dizaineTop')}</div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan automatique</span><h2 style="margin-top:7px">📊 Bilan dans les canaux</h2><p class="small">Toutes les ${p.bilanEveryHours || 2} h, envoi dans les canaux des configurations : la meilleure configuration (nom réel du canal), classée 1ʳᵉ avec son taux sur N prédictions, puis le classement. Taux de la journée en cours (fuseau ${esc(p.bilan?.tz || '')}). Dernier envoi : ${p.bilan?.lastSentAt ? new Date(p.bilan.lastSentAt).toLocaleString('fr-FR') : 'aucun'}.</p></div></div>
+          <div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:center">
+            <label class="check"><input id="dtBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveDizaineTopBilan()"> Bilan actif</label>
+            <label class="small">Toutes les <input id="dtBilanEvery" type="number" min="1" max="24" value="${p.bilanEveryHours || 2}" style="width:60px" onchange="saveDizaineTopBilan()"> h</label>
+            <label class="small">Minimum <input id="dtBilanMin" type="number" min="1" max="50" value="${p.bilanMinPreds || 5}" style="width:60px" onchange="saveDizaineTopBilan()"> prédictions pour être classée</label>
+            <button class="button ghost" onclick="previewDizaineTopBilan()">Aperçu</button>
+            <button class="button primary" onclick="sendDizaineTopBilan()">Envoyer le bilan maintenant</button>
+          </div>
+          <pre id="dtBilanPreview" class="small" style="white-space:pre-wrap;margin-top:12px"></pre></section>`;
+    }
+    async function saveDizaineTopBilan() {
+      try { await api('/api/dizaine-top/config', 'POST', { bilanEnabled: $('#dtBilanOn')?.checked, bilanEveryHours: $('#dtBilanEvery')?.value, bilanMinPreds: $('#dtBilanMin')?.value }); await refresh(); dizaineTopPage(); toast('Réglages du bilan enregistrés.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function previewDizaineTopBilan() {
+      try { const r = await api('/api/dizaine-top/bilan/preview'); const box = $('#dtBilanPreview'); if (box) box.textContent = r.text; }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function sendDizaineTopBilan() {
+      try { const r = await api('/api/dizaine-top/bilan/send', 'POST'); toast(`Bilan envoyé dans ${r.sent.length} canal(aux).`); await refresh(); dizaineTopPage(); }
+      catch (e) { toast(e.message, 'error'); }
     }
     async function reloadDizaineTop() { await refresh(); dizaineTopPage(); }
     function addDizaineTopModal() {
