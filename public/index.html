@@ -1629,7 +1629,7 @@ Faites-en bon usage !
       }
       if (kind === 'costumeFaibleTop') {
         const v = t.view;
-        const map = (suit) => (t.rule === 'strategie' ? { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' } : { '❤️': '♠️', '♠️': '❤️', '♦️': '♣️', '♣️': '♦️' })[suit];
+        const map = (suit) => t.suitMap ? t.suitMap[suit] : (t.rule === 'strategie' ? { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' } : { '❤️': '♠️', '♠️': '❤️', '♦️': '♣️', '♣️': '♦️' })[suit];
         return {
           mapMode: true,
           get: (suit) => ({ to: map(suit), hit: !!(v && trackerSuitKey(v.weak) === trackerSuitKey(suit)) }),
@@ -1718,7 +1718,25 @@ Faites-en bon usage !
     function trackerCardsHtml(kind) {
       const trackers = (snapshot[TRACKER_KINDS[kind].snap] || {}).trackers || [];
       if (!trackers.length) return '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>';
-      return `<div class="proposals">${trackers.map(t => trackerCardHtml(kind, t)).join('')}</div>`;
+      // « 4 canaux » : chaque canal s'affiche comme une configuration à part entière
+      const list = kind !== 'costumeFaibleTop' ? trackers : trackers.flatMap(t => {
+        if (!t.slotMode) return [t];
+        const MIR = { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' };
+        const CRS = { '❤️': '♠️', '♠️': '❤️', '♦️': '♣️', '♣️': '♦️' };
+        const roles = t.slotRoles || [];
+        return (t.slots || []).map((sl, i) => {
+          if (sl.channel == null) return null;
+          const baseMap = t.rule === 'strategie' ? MIR : CRS;
+          const fi = [(x) => x, (x) => CRS[x], (x) => MIR[x], (x) => CRS[MIR[x]]][i];
+          const suitMap = {}; for (const w of Object.keys(baseMap)) suitMap[w] = fi(baseMap[w]);
+          const lastSuit = ((t.lastInfo || {}).slotSuits || []).find(x => x.startsWith((i + 1) + ':'));
+          const view = t.view ? { ...t.view, suit: lastSuit ? lastSuit.split(':')[1] : suitMap[t.view.weak] } : null;
+          return { ...t, name: sl.name || `${t.name} · ${roles[i]}`, channels: [sl.channel], slotMode: false, suitMap, view,
+            wins: sl.wins || 0, losses: sl.losses || 0, lastPreds: sl.lastPreds || [],
+            ruleLabel: i === 0 ? t.ruleLabel : `Canal ${i + 1} · ${roles[i]} du canal 1` };
+        }).filter(Boolean);
+      });
+      return `<div class="proposals">${list.map(t => trackerCardHtml(kind, t)).join('')}</div>`;
     }
     // Compatibilité avec les anciens appels.
     function suitStreakCardsHtml() { return trackerCardsHtml('suitStreak'); }
@@ -1927,13 +1945,9 @@ Faites-en bon usage !
           <div class="field"><label>Format de prédiction (1 → ${esc(String(fc))})</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(fc))}" value="${esc(String(t.format ?? 1))}"></div>
         </div>
         <p class="small muted" style="margin:0 0 10px">Le déclencheur est trouvé quand le joueur ET le banquier ont 2 cartes et qu'une couleur (rouge/noir) est minoritaire : le costume faible est celui de cette couleur. Exemple : costume faible ❤️ → prédit ♠️ (règle croisée) ou ♦️ (règle de la stratégie), sur le jeu a+N.</p>
-        <div class="two-col">
-          <div class="field"><label>ID ou @nom du canal Telegram</label><input id="${prefix}-channels" value="${esc((t.channels || []).join(', '))}" placeholder="-1001234567890"></div>
-          <div class="field"><label>Canal du site (optionnel)</label><select id="${prefix}-site">${costumeFaibleTopSiteOptions(t.siteChannelId)}</select></div>
-        </div>
-        <div class="field"><label>Nom de cette configuration <span class="small">(optionnel — vide = nom automatique)</span></label><input id="${prefix}-name" value="${esc(t.name || '')}" placeholder="Ex. Costume faible croisé a+2"></div>
+        <div class="field"><label>Canal du site (optionnel)</label><select id="${prefix}-site">${costumeFaibleTopSiteOptions(t.siteChannelId)}</select></div>
         <div class="panel" style="margin-top:10px"><h4 style="margin:0 0 6px">4 canaux Telegram (ID + nom)</h4>
-          <p class="small muted" style="margin:0 0 10px">Si au moins un canal est renseigné ici, le champ « ID ou @nom du canal » ci-dessus est ignoré. Canal 1 = le costume demandé par la règle ci-dessus · Canal 2 = l'inverse du canal 1 (croisé ❤️↔♠️, ♦️↔♣️) · Canal 3 = le miroir du canal 1 (❤️↔♦️, ♠️↔♣️) · Canal 4 = le costume restant. Un canal laissé vide est simplement ignoré.</p>
+          <p class="small muted" style="margin:0 0 10px">Chaque canal est une stratégie séparée : il reçoit ses propres prédictions et son propre bilan, et le meilleur est envoyé dans le canal des meilleures prédictions. Canal 1 = le costume demandé par la règle ci-dessus · Canal 2 = l'inverse du canal 1 (croisé ❤️↔♠️, ♦️↔♣️) · Canal 3 = le miroir du canal 1 (❤️↔♦️, ♠️↔♣️) · Canal 4 = le costume restant. Un canal laissé vide est simplement ignoré.</p>
           ${[0, 1, 2, 3].map(i => { const sl = ((t.slots || [])[i]) || {}; const roles = ['Costume demandé', 'Inverse (croisé)', 'Miroir', 'Costume restant']; return `<div class="two-col"><div class="field"><label>Canal ${i + 1} — ${roles[i]} · ID ou @nom</label><input id="${prefix}-slot${i}-ch" value="${esc(sl.channel == null ? '' : String(sl.channel))}" placeholder="-1001234567890"></div><div class="field"><label>Nom du canal ${i + 1}</label><input id="${prefix}-slot${i}-name" value="${esc(sl.name || '')}" placeholder="Ex. ${roles[i]}"></div></div>`; }).join('')}
         </div>`;
     }
@@ -1942,8 +1956,7 @@ Faites-en bon usage !
       return {
         rule: val(`${prefix}-rule`), lead: val(`${prefix}-lead`),
         maxR: val(`${prefix}-maxR`), format: val(`${prefix}-format`),
-        channels: ids(val(`${prefix}-channels`)), siteChannelId: site === '' ? null : site,
-        name: val(`${prefix}-name`),
+        siteChannelId: site === '' ? null : site,
         slots: [0, 1, 2, 3].map(i => ({ channel: val(`${prefix}-slot${i}-ch`), name: val(`${prefix}-slot${i}-name`) })),
       };
     }
