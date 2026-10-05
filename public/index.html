@@ -1658,7 +1658,15 @@ Faites-en bon usage !
       const live = snapshot.live;
       const st = trackerStatus(kind, t);
       const chans = trackerChannelsOf(kind, t);
-      const chanText = chans.length ? chans.map(id => esc(trackerChannelLabel(kind, id))).join('<br>') : '—';
+      let chanText = chans.length ? chans.map(id => esc(trackerChannelLabel(kind, id))).join('<br>') : '—';
+      if (kind === 'costumeFaibleTop' && t.slotMode) {
+        const roles = t.slotRoles || [];
+        chanText = (t.slots || []).map((sl, i) => {
+          if (sl.channel == null) return '';
+          const lastSuit = ((t.lastInfo || {}).slotSuits || []).find(x => x.startsWith((i + 1) + ':'));
+          return `<span class=\"small\"><b>${i + 1}</b> · ${esc(sl.name || roles[i] || '')} · ${esc(trackerChannelLabel(kind, sl.channel))}<br><span class=\"muted\">${esc(roles[i] || '')}${lastSuit ? ' → ' + esc(lastSuit.split(':')[1]) : ''} · ${esc(String(sl.wins || 0))}✅ ${esc(String(sl.losses || 0))}❌</span></span>`;
+        }).filter(Boolean).join('<br>') || '—';
+      }
       const k = trackerCounters(kind, t);
       const rankName = (r) => (r === 1 ? '1er' : r + 'e');
       const corner = (suit, align) => {
@@ -1923,7 +1931,11 @@ Faites-en bon usage !
           <div class="field"><label>ID ou @nom du canal Telegram</label><input id="${prefix}-channels" value="${esc((t.channels || []).join(', '))}" placeholder="-1001234567890"></div>
           <div class="field"><label>Canal du site (optionnel)</label><select id="${prefix}-site">${costumeFaibleTopSiteOptions(t.siteChannelId)}</select></div>
         </div>
-        <div class="field"><label>Nom de cette configuration <span class="small">(optionnel — vide = nom automatique)</span></label><input id="${prefix}-name" value="${esc(t.name || '')}" placeholder="Ex. Costume faible croisé a+2"></div>`;
+        <div class="field"><label>Nom de cette configuration <span class="small">(optionnel — vide = nom automatique)</span></label><input id="${prefix}-name" value="${esc(t.name || '')}" placeholder="Ex. Costume faible croisé a+2"></div>
+        <div class="panel" style="margin-top:10px"><h4 style="margin:0 0 6px">4 canaux Telegram (ID + nom)</h4>
+          <p class="small muted" style="margin:0 0 10px">Si au moins un canal est renseigné ici, le champ « ID ou @nom du canal » ci-dessus est ignoré. Canal 1 = le costume demandé par la règle ci-dessus · Canal 2 = l'inverse du canal 1 (croisé ❤️↔♠️, ♦️↔♣️) · Canal 3 = le miroir du canal 1 (❤️↔♦️, ♠️↔♣️) · Canal 4 = le costume restant. Un canal laissé vide est simplement ignoré.</p>
+          ${[0, 1, 2, 3].map(i => { const sl = ((t.slots || [])[i]) || {}; const roles = ['Costume demandé', 'Inverse (croisé)', 'Miroir', 'Costume restant']; return `<div class="two-col"><div class="field"><label>Canal ${i + 1} — ${roles[i]} · ID ou @nom</label><input id="${prefix}-slot${i}-ch" value="${esc(sl.channel == null ? '' : String(sl.channel))}" placeholder="-1001234567890"></div><div class="field"><label>Nom du canal ${i + 1}</label><input id="${prefix}-slot${i}-name" value="${esc(sl.name || '')}" placeholder="Ex. ${roles[i]}"></div></div>`; }).join('')}
+        </div>`;
     }
     function readCostumeFaibleTopForm(prefix) {
       const site = val(`${prefix}-site`);
@@ -1932,6 +1944,7 @@ Faites-en bon usage !
         maxR: val(`${prefix}-maxR`), format: val(`${prefix}-format`),
         channels: ids(val(`${prefix}-channels`)), siteChannelId: site === '' ? null : site,
         name: val(`${prefix}-name`),
+        slots: [0, 1, 2, 3].map(i => ({ channel: val(`${prefix}-slot${i}-ch`), name: val(`${prefix}-slot${i}-name`) })),
       };
     }
     function costumeFaibleTopPage() {
