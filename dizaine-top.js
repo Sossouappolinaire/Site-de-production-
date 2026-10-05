@@ -27,7 +27,7 @@
 //   5. Vérification sur la main du JOUEUR, avec le nombre de rattrapages
 //      configuré ; le message Telegram est édité avec le résultat.
 //
-// BILAN (demande admin) : toutes les 2 h (réglable), un bilan est envoyé dans les
+// BILAN (demande admin) : toutes les heures pile (réglable), un bilan est envoyé dans les
 // canaux des configurations : la meilleure configuration y est désignée par le
 // nom réel de son canal, classée 1ʳᵉ avec son taux de réussite sur N prédictions,
 // suivie du classement des autres. Taux calculé sur la JOURNÉE EN COURS (fuseau
@@ -59,7 +59,7 @@ const panel = {
   lastScanAt: null,
   lastError: null,
   // bilan périodique (voir en-tête)
-  bilan: { enabled: true, everyHours: 2, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
+  bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
 };
 
 let sender = null;
@@ -110,7 +110,7 @@ function sanitizeMaxR(value) {
   return Number.isFinite(n) ? Math.max(0, Math.min(9, n)) : 2;
 }
 
-function sanitizeEvery(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(24, n)) : 2; }
+function sanitizeEvery(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(24, n)) : 1; }
 function sanitizeMinPreds(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 5; }
 
 function configure(patch = {}) {
@@ -208,7 +208,9 @@ function applySaved(saved) {
     panel.bilan = {
       ...panel.bilan,
       enabled: saved.bilan.enabled !== false,
-      everyHours: sanitizeEvery(saved.bilan.everyHours),
+      // migration unique : passage à un bilan toutes les heures pile (demande admin)
+      everyHours: saved.bilan.hourlyMigrated ? sanitizeEvery(saved.bilan.everyHours) : 1,
+      hourlyMigrated: true,
       minPreds: sanitizeMinPreds(saved.bilan.minPreds),
       lastSlot: saved.bilan.lastSlot || null,
       lastSentAt: saved.bilan.lastSentAt || null,
@@ -523,8 +525,17 @@ function dayStats(t, key) {
   return d ? { wins: d.wins, losses: d.losses, total: d.wins + d.losses } : { wins: 0, losses: 0, total: 0 };
 }
 
-const NUM_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+const NUM_EMOJI = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 const pct = (w, n) => (n ? `${((w / n) * 100).toFixed(1).replace('.', ',')} %` : '—');
+
+// Barre de progression (10 cases) ; la couleur suit le taux de réussite.
+function progressBar(rate, size = 10) {
+  const filled = Math.max(0, Math.min(size, Math.round(rate * size)));
+  const on = rate >= 0.8 ? '🟩' : rate >= 0.5 ? '🟨' : '🟥';
+  return on.repeat(filled) + '⬜'.repeat(size - filled);
+}
+// Nom affiché = uniquement le(s) canal(aux), jamais le nom de la stratégie.
+const channelLabel = (r) => (r.names.length ? r.names.join(' + ') : 'Canal sans nom');
 
 function trackerChannelNames(t, siteList) {
   const names = [];
@@ -557,26 +568,29 @@ function buildBilanText(now = Date.now(), forceToday = false) {
   if (!rows.some((r) => r.total > 0)) return null;
   const lines = [];
   lines.push('📊 BILAN — DIZAINE (costume le plus / le moins sorti)');
-  lines.push(closing ? `🕑 Bilan de la journée du ${rd}/${rm}/${ry}` : `🕑 Point de ${hh}h00 · journée du ${rd}/${rm}/${ry} · mis à jour toutes les ${panel.bilan.everyHours} h`);
-  lines.push('');
+  lines.push(closing ? `🕑 Bilan de la journée du ${rd}/${rm}/${ry}` : `🕑 Point de ${hh}h00 · journée du ${rd}/${rm}/${ry}`);
+  lines.push(closing ? '📆 Cumul de toute la journée (00h00 → 24h00)' : `📆 Cumul depuis 00h00 jusqu'à ${hh}h00 · mis à jour toutes les ${panel.bilan.everyHours} h`);
+  lines.push('━━━━━━━━━━━━━━━━━━');
   if (ranked.length) {
     const best = ranked[0];
-    lines.push(`🏆 La meilleure configuration est celle qui envoie dans le canal ${best.names.length ? best.names.map((n) => `« ${n} »`).join(' + ') : `« ${best.t.name} »`}.`);
-    lines.push(`Elle est classée 1ʳᵉ avec un taux de ${pct(best.wins, best.total)} sur ${best.total} prédiction${best.total > 1 ? 's' : ''} (${best.wins} ✅ · ${best.losses} ❌).`);
+    lines.push(`🏆 Meilleur canal : « ${channelLabel(best)} »`);
+    lines.push(`${progressBar(best.rate)} ${pct(best.wins, best.total)}`);
+    lines.push(`📈 ${best.wins} ✅ · ${best.losses} ❌ sur ${best.total} prédiction${best.total > 1 ? 's' : ''}`);
     lines.push('');
     lines.push('📋 Classement');
     ranked.slice(0, 15).forEach((r, i) => {
-      lines.push(`${NUM_EMOJI[i] || `${i + 1}.`} ${r.names.length ? r.names.join(' + ') : r.t.name}`);
-      lines.push(`    ${r.t.name} — ${pct(r.wins, r.total)} · ${r.wins}/${r.total}`);
+      lines.push(`${NUM_EMOJI[i] || `${i + 1}.`} ${channelLabel(r)}`);
+      lines.push(`    ${progressBar(r.rate)} ${pct(r.wins, r.total)} · ${r.wins}/${r.total}`);
     });
   } else {
-    lines.push(`ℹ️ Aucune configuration n'a encore ${min} prédictions vérifiées : pas de classement pour l'instant.`);
+    lines.push(`ℹ️ Aucun canal n'a encore ${min} prédictions vérifiées : pas de classement pour l'instant.`);
   }
   if (pending.length) {
     lines.push('');
     lines.push('⏳ Pas assez de données');
-    pending.slice(0, 10).forEach((r) => lines.push(`• ${r.names.length ? r.names.join(' + ') : r.t.name} — ${r.total}/${min} prédiction${r.total > 1 ? 's' : ''}`));
+    pending.slice(0, 10).forEach((r) => lines.push(`• ${channelLabel(r)} — ${progressBar(r.total / min, 5)} ${r.total}/${min}`));
   }
+  lines.push('━━━━━━━━━━━━━━━━━━');
   return lines.join('\n');
 }
 
@@ -591,20 +605,28 @@ function bilanTargets() {
   return { tg, site };
 }
 
-// complète les noms réels de canaux manquants (getChat) avant l'envoi
+// Rafraîchit TOUJOURS les noms réels des canaux (getChat) juste avant l'envoi :
+// un ancien nom en cache (canal renommé, nom saisi à la main) ne reste plus affiché.
+// Si getChat échoue, on garde le dernier nom connu.
 async function refreshChannelTitles(ids) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot || typeof bot.getChat !== 'function') return;
-  await Promise.all(ids.map(async (id) => {
-    if (panel.channelTitles[String(id)]) return;
-    try { const chat = await bot.getChat(id); if (chat && chat.title) setChannelTitle(id, chat.title); } catch (_) { /* le nom restera l'ID */ }
+  const uniq = [...new Set(ids.map((id) => String(id)))];
+  await Promise.all(uniq.map(async (id) => {
+    try {
+      const chat = await bot.getChat(id);
+      const title = chat && (chat.title || chat.username || chat.first_name);
+      if (title && panel.channelTitles[id] !== String(title).slice(0, 120)) setChannelTitle(id, title);
+    } catch (_) { /* on garde le dernier nom connu (ou l'ID) */ }
   }));
 }
 
 async function sendBilan({ force = false, now = Date.now() } = {}) {
   const { tg, site } = bilanTargets();
   if (!tg.length && !site.length) return { ok: false, error: 'Aucun canal configuré' };
-  await refreshChannelTitles(tg);
+  // tous les canaux des configurations (même désactivées) apparaissent dans le classement
+  const allIds = panel.trackers.flatMap((t) => t.channels || []);
+  await refreshChannelTitles([...tg, ...allIds]);
   const text = buildBilanText(now, force);
   if (!text) return { ok: false, error: "Aucune prédiction vérifiée aujourd'hui : bilan non envoyé" };
   const bot = typeof sender === 'function' ? sender() : null;
@@ -636,6 +658,20 @@ async function bilanTick(now = Date.now()) {
   b.lastSlot = slot; // marqué avant l'envoi : jamais deux fois le même point
   try { await sendBilan({ now }); } catch (e) { panel.lastError = e.message; }
 }
+
+// Envoi À L'HEURE PILE : minuteur dédié (ne dépend pas du rythme du scan).
+// Il se réarme sur chaque début d'heure ; bilanTick() ne l'envoie qu'une fois par point.
+let bilanTimer = null;
+function armBilanTimer() {
+  if (bilanTimer) clearTimeout(bilanTimer);
+  const HOUR = 3600 * 1000;
+  const wait = HOUR - (Date.now() % HOUR) + 300; // +0,3 s : on est sûr d'être dans la nouvelle heure
+  bilanTimer = setTimeout(async () => {
+    try { await bilanTick(); } catch (e) { panel.lastError = e.message; } finally { persist(); armBilanTimer(); }
+  }, wait);
+  if (bilanTimer.unref) bilanTimer.unref();
+}
+armBilanTimer();
 
 async function tick() {
   if (busy || !panel.enabled) return panel;
