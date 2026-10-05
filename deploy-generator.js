@@ -23,7 +23,7 @@ const CORE = [
 // modules optionnels proposés à la sélection
 const OPTIONAL = [
   { id: 'ia', name: 'Analyseur IA + réparation + questions-réponses', files: ['ai-analyzer.js', 'ai-auto.js', 'ai-qa.js', 'ai-repair.js', 'pattern-miner.js', 'strategy-advisor.js'] },
-  { id: 'strategies_plus', name: 'Stratégies avancées (rupture, séries, dizaines, miroir…)', files: ['suit-streak.js', 'dizaine-top.js', 'suit-break.js', 'copy-announce.js', 'cards-count.js', 'mirror-counter.js', 'combined.js', 'cumulative.js', 'after-loss.js', 'prediction-control.js', 'predit.js', 'loss-notice.js', 'overlap.js', 'statistics.js', 'vip.js'] },
+  { id: 'strategies_plus', name: 'Stratégies avancées (rupture, séries, dizaines, miroir…)', files: ['suit-streak.js', 'dizaine-top.js', 'costume-faible-top.js', 'suit-break.js', 'copy-announce.js', 'cards-count.js', 'mirror-counter.js', 'combined.js', 'cumulative.js', 'after-loss.js', 'prediction-control.js', 'predit.js', 'loss-notice.js', 'overlap.js', 'statistics.js', 'vip.js'] },
   { id: 'formation', name: 'Formation et relais de formation', files: ['formation.js', 'formation-relay.js'] },
   { id: 'game21', name: 'Jeu 21', files: ['game21.js', 'game21-strategies.js', 'game21-predict.js'] },
   { id: 'rapports', name: 'Rapports (sabot, comparaison des jours, transfert de données)', files: ['shoe-report.js', 'day-compare.js', 'data-transfer.js'] },

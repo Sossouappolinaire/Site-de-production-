@@ -44,6 +44,7 @@ const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
+const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
@@ -391,6 +392,7 @@ app.get('/api/state', async (req, res) => {
     combined: combined.status(),
     suitStreak: suitStreak.status(),
     dizaineTop: dizaineTop.status(),
+    costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
     copyAnnounce: { ...copyAnnounce.status(), channels: configuredChannelList() },
@@ -1791,9 +1793,13 @@ async function verifyDizaineChannels(list) {
 
 app.get('/api/dizaine-top', (req, res) => res.json(dizaineTop.status()));
 
-app.post('/api/dizaine-top/config', (req, res) => {
-  dizaineTop.configure(req.body || {});
-  res.json(dizaineTop.status());
+app.post('/api/dizaine-top/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.bestChannels !== undefined) await verifyDizaineChannels(dizaineTop.parseChannels(b.bestChannels));
+    dizaineTop.configure(b);
+    res.json(dizaineTop.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.post('/api/dizaine-top/trackers', async (req, res) => {
@@ -1840,6 +1846,68 @@ app.post('/api/dizaine-top/bilan/send', async (req, res) => {
 app.post('/api/dizaine-top/scan', async (req, res) => {
   await dizaineTop.tick();
   res.json(dizaineTop.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Costume faible sur 2 cartes (miroir) » avec configurations
+// (voir costume-faible-top.js) — même fonctionnement que la Dizaine :
+// configurations multiples, bilan, canal des meilleures prédictions.
+// ---------------------------------------------------------------------------
+async function verifyCostumeFaibleChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) costumeFaibleTop.setChannelTitle(id, check.chat.title);
+  }
+}
+
+app.get('/api/costume-faible-top', (req, res) => res.json(costumeFaibleTop.status()));
+app.post('/api/costume-faible-top/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.bestChannels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.bestChannels));
+    costumeFaibleTop.configure(b);
+    res.json(costumeFaibleTop.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/costume-faible-top/trackers', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.channels));
+    const t = costumeFaibleTop.addTracker({
+      name: b.name, rule: b.rule, lead: b.lead,
+      channels: b.channels, siteChannelId: b.siteChannelId, format: b.format, maxR: b.maxR,
+    });
+    res.json({ ok: true, tracker: t, costumeFaibleTop: costumeFaibleTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/costume-faible-top/trackers/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.channels));
+    const t = costumeFaibleTop.updateTracker(req.params.id, b);
+    if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, tracker: t, costumeFaibleTop: costumeFaibleTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/costume-faible-top/trackers/:id', (req, res) => {
+  costumeFaibleTop.removeTracker(req.params.id);
+  res.json(costumeFaibleTop.status());
+});
+app.post('/api/costume-faible-top/trackers/:id/test', async (req, res) => {
+  const r = await costumeFaibleTop.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.get('/api/costume-faible-top/bilan/preview', (req, res) => {
+  res.json({ text: costumeFaibleTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
+});
+app.post('/api/costume-faible-top/bilan/send', async (req, res) => {
+  const r = await costumeFaibleTop.sendBilan({ force: true });
+  res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, costumeFaibleTop: costumeFaibleTop.status() });
+});
+app.post('/api/costume-faible-top/scan', async (req, res) => {
+  await costumeFaibleTop.tick();
+  res.json(costumeFaibleTop.status());
 });
 
 // ---------------------------------------------------------------------------
@@ -2275,7 +2343,7 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
 function configuredChannelList() {
   const rows = new Map();
   const titles = {};
-  for (const mod of [suitStreak, suitBreak, dizaineTop, overlap, copyAnnounce]) {
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, overlap, copyAnnounce]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {

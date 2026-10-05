@@ -20,6 +20,7 @@ const copyAnnounce = require('./copy-announce');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
+const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
@@ -1926,6 +1927,9 @@ async function tick() {
       // stratégie « Dizaine — costume le plus / le moins sorti » : configurations
       // multiples, comptage par dizaine de jeux (voir dizaine-top.js).
       dizaineTop.tick(),
+      // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
+      // multiples (voir costume-faible-top.js).
+      costumeFaibleTop.tick(),
       // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
       // IA ou formation), série de N prédictions consécutives de MÊME
       // costume puis attente de la RUPTURE (prochain costume différent) —
@@ -2119,6 +2123,7 @@ async function applyDbConfigs() {
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
   await dizaineTop.restoreFromDb();
+  await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
   await copyAnnounce.restoreFromDb();
   await suitBreak.restoreFromDb();
@@ -2181,9 +2186,11 @@ async function startLoop() {
   suitStreak.restore();
   suitStreak.setSender(senderFor);
   dizaineTop.restore();
+  costumeFaibleTop.restore();
   midnightReset.restore();
   midnightReset.setSender(senderFor);
   dizaineTop.setSender(senderFor);
+  costumeFaibleTop.setSender(senderFor);
   copyAnnounce.restore();
   copyAnnounce.setSender(senderFor);
   // « Copie et annonce » tourne sur SA PROPRE minuterie : elle ne dépend ni

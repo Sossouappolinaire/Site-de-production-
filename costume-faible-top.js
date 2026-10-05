@@ -1,41 +1,28 @@
-// dizaine-top.js — stratégie « Dizaine — costume le plus / le moins sorti »
-// (demande admin). Même découpage que la stratégie « Comptage par dizaine »
-// (strategies.js/dizaine) : le sabot est coupé en tranches de 10 jeux
-// (#N1-10, #N11-20, #N21-30…), et le comptage se fait sur la main du JOUEUR
-// (comptage « vote » : un costume compte 1 seule fois par main).
+// costume-faible-top.js — stratégie « Costume faible sur 2 cartes (miroir) »
+// avec CONFIGURATIONS (demande admin). Même fonctionnement que
+// « Dizaine — costume le plus / le moins sorti » (dizaine-top.js) : on crée
+// autant de configurations qu'on veut, elles tournent en parallèle, chacune a
+// ses réglages (règle de costume, décalage a+n, rattrapages, format, canal),
+// un bilan périodique classe les canaux et le meilleur canal est relayé dans
+// un canal « meilleures prédictions ».
 //
-// DIFFÉRENCES avec la stratégie « dizaine » :
-//   • on peut choisir le costume le PLUS sorti (1er, 2e, 3e ou 4e du
-//     classement) OU le costume le MOINS sorti (1er, 2e, 3e ou 4e), au lieu
-//     de toujours prendre le plus rare ;
-//   • on crée des CONFIGURATIONS : chaque configuration est enregistrée avec
-//     ses propres réglages (mode, rang, fin de numéro, nombre de
-//     rattrapages, format de prédiction, canal) et on peut en créer autant
-//     qu'on veut — elles tournent toutes en parallèle, indépendamment.
+// DÉCLENCHEUR (identique à la stratégie classique, strategies.js/costumeFaible) :
+//   jeu terminé, joueur 2 cartes ET banquier 2 cartes (mains naturelles). On
+//   regroupe les 4 costumes par couleur (rouge ❤️♦️ / noir ♠️♣️), on prend la
+//   couleur minoritaire, et le costume faible est celui de cette couleur qui est
+//   réellement sorti. Égalité rouge/noir : aucun signal.
 //
-// Règle d'une configuration :
-//   1. À la fin de chaque dizaine (#N10, #N20, #N30…), on compte les 4
-//      costumes sur les 10 jeux qui viennent de se terminer (au moins 6 jeux
-//      lisibles, sinon aucune prédiction pour cette dizaine).
-//   2. On classe les costumes : « plus sorti » = du plus fréquent au moins
-//      fréquent ; « moins sorti » = du plus rare au moins rare. En cas
-//      d'égalité, ordre fixe ♦️ ❤️ ♣️ ♠️ (comme la stratégie « dizaine »).
-//   3. On retient le costume au rang choisi (1er, 2e, 3e ou 4e).
-//   4. La prédiction est envoyée sur le jeu « fin de numéro N » de la
-//      dizaine SUIVANTE : fin de dizaine + N (ex. N = 4 : dizaine #N1-10 →
-//      prédiction sur #N14 ; dizaine #N11-20 → #N24). N = 10 → #N20, #N30…
-//   5. Vérification sur la main du JOUEUR, avec le nombre de rattrapages
-//      configuré ; le message Telegram est édité avec le résultat.
+// RÈGLE DE PRÉDICTION (réglable par configuration) :
+//   • « croise »    : ❤️ → ♠️ et ♠️ → ❤️ ; ♦️ → ♣️ et ♣️ → ♦️
+//   • « strategie » : le costume que la stratégie prédit normalement, c'est-à-dire
+//                     le miroir du costume faible (❤️ ↔ ♦️, ♠️ ↔ ♣️)
 //
-// BILAN (demande admin) : toutes les heures pile (réglable), un bilan est envoyé dans les
-// canaux des configurations : la meilleure configuration y est désignée par le
-// nom réel de son canal, classée 1ʳᵉ avec son taux de réussite sur N prédictions,
-// suivie du classement des autres. Taux calculé sur la JOURNÉE EN COURS (fuseau
-// BILAN_TZ, Africa/Porto-Novo par défaut) ; au point de minuit, bilan de la
-// journée qui vient de se terminer. Une configuration doit avoir au moins 5
-// prédictions vérifiées dans la journée pour être classée. Chaque canal reçoit le
-// bilan complet. Envoi à heure fixe (00h, 02h, 04h…), jamais en double après un
-// redémarrage.
+// Si le déclencheur est trouvé sur le jeu #a, on prédit sur #a+n (n réglable,
+// 1 à 20) sur la main du JOUEUR, avec le nombre de rattrapages configuré.
+//
+// BILAN / MEILLEURES PRÉDICTIONS : mêmes règles que dizaine-top.js (classement
+// de la journée, minimum de prédictions vérifiées, relais de la meilleure
+// configuration vers le canal « meilleures prédictions »).
 'use strict';
 
 const store = require('./store');
@@ -45,8 +32,9 @@ const strategies = require('./strategies');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const earlyVerify = require('./early-verify');
 
-const SUITS = strategies.SUITS; // ['♦️', '❤️', '♣️', '♠️'] — ordre de départage des égalités
-const MIN_READABLE = 6;
+const SUITS = strategies.SUITS;
+// règle « croise » : ❤️↔♠️, ♦️↔♣️
+const CROSS = { '❤️': '♠️', '♠️': '❤️', '♦️': '♣️', '♣️': '♦️' };
 
 const panel = {
   enabled: true,
@@ -95,17 +83,12 @@ function sanitizeSiteChannelId(value) {
   return id ? id : null;
 }
 
-// « plus » = costume le PLUS sorti ; « moins » = costume le MOINS sorti
-function sanitizeMode(value) { return value === 'moins' ? 'moins' : 'plus'; }
-// rang dans le classement : 1 = premier, 2 = deuxième, 3 = troisième, 4 = quatrième
-function sanitizeRank(value) {
-  const n = parseInt(value, 10);
-  return Number.isFinite(n) ? Math.max(1, Math.min(4, n)) : 1;
-}
-// « fin de numéro » : 1 à 10 jeux après la fin de la dizaine (10 → fin 0)
+// règle : « croise » (❤️↔♠️, ♦️↔♣️) ou « strategie » (costume prédit par la stratégie = miroir ❤️↔♦️, ♠️↔♣️)
+function sanitizeRule(value) { return value === 'strategie' ? 'strategie' : 'croise'; }
+// décalage a+n : 1 à 20 jeux après le déclencheur
 function sanitizeLead(value) {
   const n = parseInt(value, 10);
-  return Number.isFinite(n) ? Math.max(1, Math.min(10, n)) : 4;
+  return Number.isFinite(n) ? Math.max(1, Math.min(20, n)) : 2;
 }
 function sanitizeFormat(value) { return fmt.clampFormat(value); }
 function sanitizeMaxR(value) {
@@ -141,13 +124,12 @@ function maxFinishedGameNumber() {
   for (const g of state.games.values()) if (g.finished && g.number > max) max = g.number;
   return max;
 }
-function lastFinishedDecade() { return Math.floor(maxFinishedGameNumber() / 10) * 10; }
 
-function modeLabel(mode, rank) {
-  const nth = rank === 1 ? '1er' : `${rank}e`;
-  return mode === 'moins' ? `${nth} costume le moins sorti` : `${nth} costume le plus sorti`;
+function ruleLabel(rule) {
+  return rule === 'strategie' ? 'costume prédit par la stratégie (❤️↔♦️, ♠️↔♣️)' : 'croisé (❤️↔♠️, ♦️↔♣️)';
 }
-function defaultName(t) { return `Dizaine ${modeLabel(t.mode, t.rank)} (fin ${t.lead % 10})`; }
+function ruleShort(rule) { return rule === 'strategie' ? 'stratégie' : 'croisé'; }
+function defaultName(t) { return `Costume faible ${ruleShort(t.rule)} (a+${t.lead})`; }
 
 // ---------------------------------------------------------------------------
 // Persistance
@@ -161,13 +143,13 @@ function persist() {
     bilan: panel.bilan,
     best: panel.best,
   };
-  try { store.patch({ dizaineTop: saved }); } catch (_) {}
-  if (db.ready) db.setSetting('dizaine_top_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
+  try { store.patch({ costumeFaibleTop: saved }); } catch (_) {}
+  if (db.ready) db.setSetting('costume_faible_top_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
 }
 
 function restore() {
   try {
-    const saved = (store.read() || {}).dizaineTop;
+    const saved = (store.read() || {}).costumeFaibleTop;
     if (saved) applySaved(saved);
   } catch (_) {}
   return config();
@@ -176,7 +158,7 @@ function restore() {
 async function restoreFromDb() {
   if (!db.ready) return config();
   try {
-    const raw = await db.getSetting('dizaine_top_state');
+    const raw = await db.getSetting('costume_faible_top_state');
     if (raw) applySaved(JSON.parse(raw));
     else persist();
   } catch (_) { persist(); }
@@ -186,16 +168,15 @@ async function restoreFromDb() {
 function normalizeTracker(t) {
   const base = {
     id: t.id,
-    mode: sanitizeMode(t.mode),
-    rank: sanitizeRank(t.rank),
+    rule: sanitizeRule(t.rule),
     lead: sanitizeLead(t.lead),
     enabled: t.enabled !== false,
     channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
     siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
     format: sanitizeFormat(t.format),
     maxR: sanitizeMaxR(t.maxR),
-    // dernière dizaine déjà traitée (évite tout renvoi après redémarrage)
-    lastDecade: Number.isFinite(Number(t.lastDecade)) ? Number(t.lastDecade) : 0,
+    // dernier jeu déjà examiné (évite tout renvoi après redémarrage)
+    lastGame: Number.isFinite(Number(t.lastGame)) ? Number(t.lastGame) : 0,
     lastInfo: t.lastInfo || null,
     wins: Number.isFinite(Number(t.wins)) ? Number(t.wins) : 0,
     losses: Number.isFinite(Number(t.losses)) ? Number(t.losses) : 0,
@@ -252,17 +233,16 @@ function applySaved(saved) {
 // ---------------------------------------------------------------------------
 function addTracker(extra = {}) {
   const tracker = normalizeTracker({
-    id: `dt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `cf-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     name: extra.name,
-    mode: extra.mode,
-    rank: extra.rank,
+    rule: extra.rule,
     lead: extra.lead,
     channels: parseChannels(extra.channels),
     siteChannelId: extra.siteChannelId,
     format: extra.format,
     maxR: extra.maxR,
-    // on ne rejoue pas la dizaine déjà terminée au moment de la création
-    lastDecade: lastFinishedDecade(),
+    // on n'examine pas les jeux déjà terminés au moment de la création
+    lastGame: maxFinishedGameNumber(),
     createdAt: Date.now(),
   });
   if (!tracker.channels.length && !tracker.siteChannelId) {
@@ -277,8 +257,7 @@ function updateTracker(id, patch = {}) {
   const tracker = panel.trackers.find((t) => t.id === id);
   if (!tracker) return null;
   const next = { ...tracker };
-  if (patch.mode !== undefined) next.mode = sanitizeMode(patch.mode);
-  if (patch.rank !== undefined) next.rank = sanitizeRank(patch.rank);
+  if (patch.rule !== undefined) next.rule = sanitizeRule(patch.rule);
   if (patch.lead !== undefined) next.lead = sanitizeLead(patch.lead);
   if (patch.enabled !== undefined) next.enabled = !!patch.enabled;
   if (patch.channels !== undefined) next.channels = parseChannels(patch.channels);
@@ -304,33 +283,22 @@ function removeTracker(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Comptage d'une dizaine + choix du costume
+// Déclencheur « costume faible sur 2 cartes » + choix du costume à prédire
 // ---------------------------------------------------------------------------
-function countDecade(end) {
-  const start = end - 9;
-  const counts = { '♦️': 0, '❤️': 0, '♣️': 0, '♠️': 0 };
-  let readable = 0;
-  for (let n = start; n <= end; n++) {
-    const g = state.games.get(n);
-    if (!g || !g.finished) continue;
-    const suits = new Set(strategies.suitsOf(g.playerSuits)); // comptage « vote »
-    if (!suits.size) continue;
-    readable += 1;
-    for (const s of suits) if (counts[s] !== undefined) counts[s] += 1;
-  }
-  return { start, end, counts, readable };
+// Retourne null si le jeu ne déclenche pas, sinon { four, weak, reason }.
+function triggerOf(game) {
+  if (!game || !game.finished) return null;
+  if (game.playerCards !== 2 || game.bankerCards !== 2) return null; // mains naturelles des 2 côtés
+  const four = [...strategies.suitsOf(game.playerSuits), ...strategies.suitsOf(game.bankerSuits)];
+  if (four.length !== 4) return null;
+  const { weak, reason } = strategies.weakSuitOf(four);
+  if (!weak) return null;
+  return { four, weak, reason };
 }
 
-// classement complet des 4 costumes pour un mode donné (égalité : ordre fixe)
-function rankSuits(counts, mode) {
-  return SUITS
-    .map((s, i) => ({ suit: s, count: counts[s], i }))
-    .sort((a, b) => (mode === 'moins' ? (a.count - b.count) : (b.count - a.count)) || (a.i - b.i));
-}
-
-function pickSuit(counts, mode, rank) {
-  const ranking = rankSuits(counts, mode);
-  return ranking[rank - 1] ? ranking[rank - 1].suit : null;
+// costume à prédire selon la règle de la configuration
+function suitFor(weak, rule) {
+  return rule === 'strategie' ? (strategies.MIRROR[weak] || null) : (CROSS[weak] || null);
 }
 
 // ---------------------------------------------------------------------------
@@ -339,27 +307,25 @@ function pickSuit(counts, mode, rank) {
 async function processTracker(tracker) {
   if (!tracker.enabled) return;
   const maxDone = maxFinishedGameNumber();
-  const end = Math.floor(maxDone / 10) * 10;
   // numéros qui repartent à la baisse = nouveau sabot : on repart de zéro
-  if (end < tracker.lastDecade) tracker.lastDecade = 0;
-  if (end < 10 || end <= tracker.lastDecade) return;
-  const endGame = state.games.get(end);
-  if (!endGame || !endGame.finished) {
-    // le jeu de fin de dizaine n'a jamais été reçu terminé : on abandonne
-    // cette dizaine si les jeux suivants sont déjà là.
-    if (maxDone >= end + 3) tracker.lastDecade = end;
-    return;
+  if (maxDone < tracker.lastGame) tracker.lastGame = 0;
+  if (maxDone <= tracker.lastGame) return;
+  const from = tracker.lastGame + 1;
+  tracker.lastGame = maxDone; // marqué avant l'envoi : jamais deux fois le même jeu
+  for (let n = from; n <= maxDone; n++) {
+    const game = state.games.get(n);
+    const trig = triggerOf(game);
+    if (!trig) continue;
+    const suit = suitFor(trig.weak, tracker.rule);
+    if (!suit) continue;
+    const target = n + tracker.lead;
+    tracker.lastInfo = { trigger: n, four: trig.four, weak: trig.weak, suit, target, at: Date.now() };
+    if (target <= maxDone) continue; // cible déjà passée : on n'envoie rien de périmé
+    await send(tracker, {
+      target, suit,
+      detail: `#N${n} joueur ${trig.four.slice(0, 2).join('')} / banquier ${trig.four.slice(2).join('')} → faible ${trig.weak} → ${suit} (+${tracker.lead})`,
+    });
   }
-  const { start, counts, readable } = countDecade(end);
-  tracker.lastDecade = end;
-  if (readable < MIN_READABLE) return; // dizaine trop peu lisible : pas de prédiction
-  const suit = pickSuit(counts, tracker.mode, tracker.rank);
-  if (!suit) return;
-  const target = end + tracker.lead;
-  const detail = SUITS.map((s) => `${s}:${counts[s]}`).join(' ');
-  tracker.lastInfo = { start, end, readable, counts, suit, target, at: Date.now() };
-  if (target <= maxDone) return; // cible déjà passée : on n'envoie rien de périmé
-  await send(tracker, { target, suit, detail: `#N${start}-#N${end} ${detail}` });
 }
 
 function effectiveChannels(tracker) { return tracker.channels || []; }
@@ -435,7 +401,7 @@ async function forwardToBest(tracker, syn) {
   b.sentCount = (b.sentCount || 0) + 1;
   b.lastSentAt = Date.now();
   panel.pendingMessages.push({
-    id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `cb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     trackerId: tracker.id, mirror: true, // relais : ne compte pas deux fois dans les scores
     target: syn.target, suit: syn.suit, strategyName: 'Meilleure prédiction',
     format: b.format, maxR: b.maxR, step: 0, gap: 0, skipped: 0,
@@ -491,7 +457,7 @@ async function send(tracker, syn) {
   panel.history = panel.history.slice(0, 100);
   if (sentMessages.length) {
     panel.pendingMessages.push({
-      id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       trackerId: tracker.id, target: syn.target, suit: syn.suit, strategyName: tracker.name,
       format: tracker.format, maxR: tracker.maxR, step: 0, gap: 0, skipped: 0,
       status: 'en attente', messages: sentMessages, createdAt: Date.now(), resolvedAt: null,
@@ -582,7 +548,7 @@ async function verifyPending() {
 
 // nouveau sabot : on repart de zéro et on annule les prédictions en attente
 setOnShoeReset(() => {
-  for (const t of panel.trackers) { t.lastDecade = 0; }
+  for (const t of panel.trackers) { t.lastGame = 0; }
   for (const entry of panel.pendingMessages) {
     if (entry.status !== 'en attente') continue;
     entry.status = 'annulé';
@@ -657,7 +623,8 @@ function trackerChannelNames(t, siteList) {
 }
 
 // Texte du bilan. reportKey = jour concerné ; label = ligne d'en-tête.
-function buildBilanText(now = Date.now(), forceToday = false) {
+// title = nom du canal destinataire (affiché dans l'en-tête à la place du nom de la stratégie).
+function buildBilanText(now = Date.now(), forceToday = false, title = '') {
   const lp = localParts(now);
   const slotH = Math.floor(lp.h / panel.bilan.everyHours) * panel.bilan.everyHours;
   // au point de minuit (00h) : bilan de la journée qui vient de se terminer
@@ -676,7 +643,7 @@ function buildBilanText(now = Date.now(), forceToday = false) {
   const pending = rows.filter((r) => r.total < min && r.total > 0);
   if (!rows.some((r) => r.total > 0)) return null;
   const lines = [];
-  lines.push('📊 BILAN — DIZAINE (costume le plus / le moins sorti)');
+  lines.push(title ? `📊 BILAN — ${title}` : '📊 BILAN');
   lines.push(closing ? `🕑 Bilan de la journée du ${rd}/${rm}/${ry}` : `🕑 Point de ${hh}h00 · journée du ${rd}/${rm}/${ry}`);
   lines.push(closing ? '📆 Cumul de toute la journée (00h00 → 24h00)' : `📆 Cumul depuis 00h00 jusqu'à ${hh}h00 · mis à jour toutes les ${panel.bilan.everyHours} h`);
   lines.push('━━━━━━━━━━━━━━━━━━');
@@ -743,23 +710,26 @@ async function sendBilan({ force = false, now = Date.now() } = {}) {
   // tous les canaux des configurations (même désactivées) apparaissent dans le classement
   const allIds = panel.trackers.flatMap((t) => t.channels || []);
   await refreshChannelTitles([...tg, ...allIds, ...(panel.best.enabled ? panel.best.channels : [])]);
-  const text = buildBilanText(now, force);
-  if (!text) return { ok: false, error: "Aucune prédiction vérifiée aujourd'hui : bilan non envoyé" };
+  if (!buildBilanText(now, force)) return { ok: false, error: "Aucune prédiction vérifiée aujourd'hui : bilan non envoyé" };
+  // l'en-tête porte le nom du canal qui reçoit le bilan (jamais le nom de la stratégie)
+  const textFor = (title) => buildBilanText(now, force, title);
+  const tgTitle = (id) => panel.channelTitles[String(id)] || String(id);
+  const siteName = (id) => { const sc = siteChannelsView().find((c) => String(c.id) === String(id)); return sc && sc.name ? sc.name : `canal du site ${id}`; };
   const bot = typeof sender === 'function' ? sender() : null;
   const sent = []; const errors = [];
   if (tg.length) {
     if (!bot) errors.push('Aucun token Telegram configuré');
     else {
-      const res = await Promise.all(tg.map((id) => bot.sendMessage(id, text)
+      const res = await Promise.all(tg.map((id) => bot.sendMessage(id, textFor(tgTitle(id)))
         .then((m) => (m && m.skipped ? { skipped: true } : { ok: true, id }))
         .catch((e) => ({ id, error: e.message }))));
       for (const r of res) { if (r.ok) sent.push(String(r.id)); else if (!r.skipped) errors.push(`${r.id} : ${r.error}`); }
     }
   }
-  for (const id of site) { if (addSiteChannelMessage(id, { sender: 'Bilan Dizaine', text })) sent.push(`site:${id}`); }
+  for (const id of site) { if (addSiteChannelMessage(id, { sender: 'Bilan', text: textFor(siteName(id)) })) sent.push(`site:${id}`); }
   panel.bilan.lastSentAt = Date.now();
   panel.bilan.lastResult = { sent: sent.length, errors: errors.slice(0, 3), at: Date.now() };
-  return { ok: sent.length > 0, sent, errors, text };
+  return { ok: sent.length > 0, sent, errors, text: textFor(tg.length ? tgTitle(tg[0]) : siteName(site[0])) };
 }
 
 async function bilanTick(now = Date.now()) {
@@ -818,7 +788,7 @@ async function test(trackerId) {
   const errors = [];
   for (const id of tracker.channels) {
     try {
-      await bot.sendMessage(id, `🔟 DIZAINE — message de test\n${tracker.name}\n\nFormat ${tracker.format} :\n\n${preview}`);
+      await bot.sendMessage(id, `🃏 COSTUME FAIBLE — message de test\n${tracker.name}\n\nFormat ${tracker.format} :\n\n${preview}`);
       sent.push(String(id));
     } catch (e) { errors.push(`${id} : ${e.message}`); }
   }
@@ -840,26 +810,11 @@ function lastPredsFor(trackerId, limit = 3) {
     .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt }));
 }
 
-function progressView() {
-  const maxDone = maxFinishedGameNumber();
-  const start = Math.floor(maxDone / 10) * 10 + 1;
-  let counted = 0;
-  for (let n = start; n <= maxDone; n++) {
-    const g = state.games.get(n);
-    if (g && g.finished) counted += 1;
-  }
-  return { start, end: start + 9, counted };
-}
-
-// classement des 4 costumes sur la DERNIÈRE dizaine terminée, dans l'ordre
-// propre à la configuration (plus sorti → moins sorti, ou l'inverse), avec
-// le rang (1er…4e) de chaque costume — affiché aux 4 coins de la carte.
-function rankingView(tracker) {
-  const end = lastFinishedDecade();
-  if (end < 10) return null;
-  const { start, counts, readable } = countDecade(end);
-  const ranking = rankSuits(counts, tracker.mode).map((x, i) => ({ suit: x.suit, count: x.count, rank: i + 1 }));
-  return { start, end, readable, ranking, chosen: tracker.rank, nextTarget: end + tracker.lead };
+// dernier déclencheur trouvé par la configuration (affiché au centre de la carte)
+function triggerView(tracker) {
+  const li = tracker.lastInfo;
+  if (!li) return null;
+  return { trigger: li.trigger, four: li.four, weak: li.weak, suit: li.suit, target: li.target };
 }
 
 function statusView() {
@@ -868,14 +823,13 @@ function statusView() {
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     channelTitles: panel.channelTitles,
     formatCount: fmt.FORMAT_COUNT,
-    progress: progressView(),
     trackers: panel.trackers.map((t) => ({
-      id: t.id, name: t.name, mode: t.mode, rank: t.rank, lead: t.lead, enabled: t.enabled,
-      label: modeLabel(t.mode, t.rank),
+      id: t.id, name: t.name, rule: t.rule, lead: t.lead, enabled: t.enabled,
+      label: `règle ${ruleShort(t.rule)}`, ruleLabel: ruleLabel(t.rule),
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
       wins: t.wins || 0, losses: t.losses || 0,
-      lastInfo: t.lastInfo || null, lastDecade: t.lastDecade || 0,
-      view: rankingView(t),
+      lastInfo: t.lastInfo || null, lastGame: t.lastGame || 0,
+      view: triggerView(t),
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
       lastPreds: lastPredsFor(t.id, 3),
     })),
@@ -898,7 +852,7 @@ module.exports = {
   addTracker, updateTracker, removeTracker,
   restore, restoreFromDb, parseChannels, setChannelTitle,
   // exposés pour les tests
-  countDecade, rankSuits, pickSuit,
+  triggerOf, suitFor,
   sendBilan, buildBilanText, bilanTick, rollDay, compareQuality, compareRanking,
 };
 

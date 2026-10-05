@@ -96,7 +96,7 @@ async function sendExport(dayKey) {
 // ── 2. effacement des données (jamais les configurations) ─────────────────────
 const ARRAYS = ['history', 'pendingMessages', 'pending', 'sentKeys', 'sentFingerprints', 'predictions'];
 const OBJECTS = ['tally', 'verified', 'tracked'];
-const TRACKER_ZERO = ['wins', 'losses', 'sentCount', 'lastSeenTarget', 'lastRepeatSource', 'lastDecade', 'lossStreak', 'suitStreak', 'remaining'];
+const TRACKER_ZERO = ['wins', 'losses', 'sentCount', 'lastSeenTarget', 'lastRepeatSource', 'lastDecade', 'lastGame', 'lossStreak', 'suitStreak', 'remaining'];
 const TRACKER_NULL = ['lastSentAt', 'lastInfo', 'day', 'prevDay', 'lastSuit', 'armedKind'];
 
 function wipeTracker(t) {
@@ -117,7 +117,7 @@ function wipePanel(panel) {
 }
 
 const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap', 'vip', 'cards-count',
-  'dizaine-top', 'predit', 'formation-relay', 'copy-announce', 'game21-predict', 'statistics'];
+  'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'game21-predict', 'statistics'];
 
 async function wipeData() {
   const report = { memory: [], db: [], errors: [] };

@@ -1156,5 +1156,101 @@
     "sentCount": 1,
     "lastSentAt": 1789498464262,
     "lastScanAt": 1789498464266
+  },
+  "costumeFaibleTop": {
+    "config": {
+      "enabled": true,
+      "bilanEnabled": true,
+      "bilanEveryHours": 1,
+      "bilanMinPreds": 5,
+      "bestEnabled": false,
+      "bestChannels": [],
+      "bestFormat": 1,
+      "bestMaxR": 2
+    },
+    "trackers": [
+      {
+        "id": "cf-1791222705197-zp3t6",
+        "rule": "croise",
+        "lead": 2,
+        "enabled": true,
+        "channels": [
+          -100111
+        ],
+        "siteChannelId": null,
+        "format": 1,
+        "maxR": 2,
+        "lastGame": 0,
+        "lastInfo": null,
+        "wins": 0,
+        "losses": 0,
+        "sentCount": 0,
+        "lastSentAt": null,
+        "createdAt": 1791222705197,
+        "day": {
+          "date": "2026-10-05",
+          "wins": 7,
+          "losses": 2,
+          "rsum": 4
+        },
+        "prevDay": null,
+        "name": "Costume faible croisé (a+2)"
+      },
+      {
+        "id": "cf-1791222705202-g4pva",
+        "rule": "strategie",
+        "lead": 3,
+        "enabled": true,
+        "channels": [
+          -100222
+        ],
+        "siteChannelId": null,
+        "format": 1,
+        "maxR": 2,
+        "lastGame": 0,
+        "lastInfo": null,
+        "wins": 0,
+        "losses": 0,
+        "sentCount": 0,
+        "lastSentAt": null,
+        "createdAt": 1791222705202,
+        "day": {
+          "date": "2026-10-05",
+          "wins": 5,
+          "losses": 3,
+          "rsum": 2
+        },
+        "prevDay": null,
+        "name": "Costume faible stratégie (a+3)"
+      }
+    ],
+    "history": [],
+    "pendingMessages": [],
+    "sentCount": 0,
+    "lastSentAt": null,
+    "lastScanAt": null,
+    "channelTitles": {
+      "-100111": "Canal Alpha",
+      "-100222": "Canal Beta"
+    },
+    "bilan": {
+      "enabled": true,
+      "everyHours": 1,
+      "hourlyMigrated": true,
+      "minPreds": 5,
+      "lastSlot": null,
+      "lastSentAt": null,
+      "lastResult": null
+    },
+    "best": {
+      "enabled": false,
+      "channels": [],
+      "format": 1,
+      "maxR": 2,
+      "currentTrackerId": null,
+      "switchedAt": null,
+      "sentCount": 0,
+      "lastSentAt": null
+    }
   }
 }

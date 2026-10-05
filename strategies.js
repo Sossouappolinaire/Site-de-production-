@@ -1319,7 +1319,7 @@ function catalog() {
 }
 
 module.exports = {
-  LIST, BY_KEY, SUITS, INVERSE, MIRROR, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
+  LIST, BY_KEY, SUITS, INVERSE, MIRROR, weakSuitOf, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
   normParity, triggerAt, triggerIndexOf, lastTriggerAtOrBefore, nextTriggerAfter, triggerSequence, varCounterAt,
   sanitizeAbsenceEntries,
 };
