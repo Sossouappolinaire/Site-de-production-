@@ -77,6 +77,46 @@ function parseChannels(value) {
   return out;
 }
 
+// ---- MODE « 4 CANAUX » ---------------------------------------------------
+// Une configuration peut avoir 4 canaux Telegram (ID + nom), chacun avec son costume :
+//   canal 1 = le costume demandé par la règle de la configuration (base)
+//   canal 2 = l'inverse du canal 1 (croisé : ❤️↔♠️, ♦️↔♣️)
+//   canal 3 = le miroir du canal 1 (❤️↔♦️, ♠️↔♣️)
+//   canal 4 = le costume restant (celui qui n'est dans aucun des 3 autres)
+const SLOT_COUNT = 4;
+const SLOT_ROLES = ['costume demandé', 'inverse (croisé)', 'miroir', 'costume restant'];
+function slotSuit(base, i) {
+  if (!base) return null;
+  if (i === 0) return base;
+  if (i === 1) return CROSS[base] || null;
+  if (i === 2) return strategies.MIRROR[base] || null;
+  const m = strategies.MIRROR[base];
+  return m ? (CROSS[m] || null) : null;
+}
+function sanitizeSlots(value, previous) {
+  const arr = Array.isArray(value) ? value : [];
+  const out = [];
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    const raw = arr[i] || {};
+    const chan = parseChannels(raw.channel == null ? '' : String(raw.channel))[0] || null;
+    const prev = (previous && previous[i]) || {};
+    out.push({
+      channel: chan,
+      name: String(raw.name == null ? '' : raw.name).trim().slice(0, 60),
+      wins: Number.isFinite(Number(raw.wins)) ? Number(raw.wins) : (Number(prev.wins) || 0),
+      losses: Number.isFinite(Number(raw.losses)) ? Number(raw.losses) : (Number(prev.losses) || 0),
+    });
+  }
+  return out;
+}
+function slotMode(t) { return !!(t && Array.isArray(t.slots) && t.slots.some((x) => x && x.channel != null)); }
+function slotChannels(t) { return (t.slots || []).map((x) => x.channel).filter((c) => c != null); }
+function allChannels(t) { return slotMode(t) ? slotChannels(t) : (t.channels || []); }
+function slotName(t, i) {
+  const sl = (t.slots || [])[i] || {};
+  return sl.name || `${t.name} · ${SLOT_ROLES[i]}`;
+}
+
 function sanitizeSiteChannelId(value) {
   if (value === null || value === undefined || value === '') return null;
   const id = String(value).trim();
@@ -173,6 +213,7 @@ function normalizeTracker(t) {
     enabled: t.enabled !== false,
     channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
     siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
+    slots: sanitizeSlots(t.slots),
     format: sanitizeFormat(t.format),
     maxR: sanitizeMaxR(t.maxR),
     // dernier jeu déjà examiné (évite tout renvoi après redémarrage)
@@ -238,6 +279,7 @@ function addTracker(extra = {}) {
     rule: extra.rule,
     lead: extra.lead,
     channels: parseChannels(extra.channels),
+    slots: extra.slots,
     siteChannelId: extra.siteChannelId,
     format: extra.format,
     maxR: extra.maxR,
@@ -245,7 +287,7 @@ function addTracker(extra = {}) {
     lastGame: maxFinishedGameNumber(),
     createdAt: Date.now(),
   });
-  if (!tracker.channels.length && !tracker.siteChannelId) {
+  if (!tracker.channels.length && !tracker.siteChannelId && !slotMode(tracker)) {
     throw new Error('Renseigne au moins un canal (ID Telegram ou canal du site) pour cette configuration.');
   }
   panel.trackers.push(tracker);
@@ -262,13 +304,14 @@ function updateTracker(id, patch = {}) {
   if (patch.enabled !== undefined) next.enabled = !!patch.enabled;
   if (patch.channels !== undefined) next.channels = parseChannels(patch.channels);
   if (patch.siteChannelId !== undefined) next.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
+  if (patch.slots !== undefined) next.slots = sanitizeSlots(patch.slots, tracker.slots);
   if (patch.format !== undefined) next.format = sanitizeFormat(patch.format);
   if (patch.maxR !== undefined) next.maxR = sanitizeMaxR(patch.maxR);
   if (patch.name !== undefined) {
     const clean = String(patch.name || '').trim();
     next.name = clean || defaultName(next);
   }
-  if (!next.channels.length && !next.siteChannelId) {
+  if (!next.channels.length && !next.siteChannelId && !slotMode(next)) {
     throw new Error('Renseigne au moins un canal (ID Telegram ou canal du site) pour cette configuration.');
   }
   Object.assign(tracker, next);
@@ -321,6 +364,22 @@ async function processTracker(tracker) {
     const target = n + tracker.lead;
     tracker.lastInfo = { trigger: n, four: trig.four, weak: trig.weak, suit, target, at: Date.now() };
     if (target <= maxDone) continue; // cible déjà passée : on n'envoie rien de périmé
+    if (slotMode(tracker)) {
+      // mode 4 canaux : chaque canal reçoit son propre costume
+      const parts = [];
+      for (let i = 0; i < SLOT_COUNT; i++) {
+        const sl = tracker.slots[i];
+        const sSuit = slotSuit(suit, i);
+        if (!sl || sl.channel == null || !sSuit) continue;
+        parts.push(`${i + 1}:${sSuit}`);
+        await send(tracker, {
+          target, suit: sSuit, slot: i,
+          detail: `#N${n} joueur ${trig.four.slice(0, 2).join('')} / banquier ${trig.four.slice(2).join('')} → faible ${trig.weak} → canal ${i + 1} (${SLOT_ROLES[i]}) ${sSuit} (+${tracker.lead})`,
+        });
+      }
+      tracker.lastInfo.slotSuits = parts;
+      continue;
+    }
     await send(tracker, {
       target, suit,
       detail: `#N${n} joueur ${trig.four.slice(0, 2).join('')} / banquier ${trig.four.slice(2).join('')} → faible ${trig.weak} → ${suit} (+${tracker.lead})`,
@@ -340,7 +399,7 @@ function messageText(tracker, syn) {
   return fmt.renderMessage(tracker.format, {
     gameNumber: syn.target,
     suit: syn.suit,
-    strategy: tracker.name,
+    strategy: syn.slot !== undefined ? slotName(tracker, syn.slot) : tracker.name,
     maxR: tracker.maxR,
     status: 'en attente',
     rattrapage: 0,
@@ -411,8 +470,10 @@ async function forwardToBest(tracker, syn) {
 }
 
 async function send(tracker, syn) {
-  const targetChannels = effectiveChannels(tracker);
-  if (!targetChannels.length && !tracker.siteChannelId) {
+  const isSlot = syn.slot !== undefined;
+  const targetChannels = isSlot ? [tracker.slots[syn.slot].channel] : effectiveChannels(tracker);
+  const useSite = !!tracker.siteChannelId && (!isSlot || syn.slot === 0);
+  if (!targetChannels.length && !useSite) {
     panel.lastError = `Aucun canal configuré pour « ${tracker.name} »`;
     return false;
   }
@@ -437,7 +498,7 @@ async function send(tracker, syn) {
       }
     }
   }
-  if (tracker.siteChannelId) {
+  if (useSite) {
     if (postToSiteChannel(tracker, out.text)) ok = true;
     else errors.push(`Canal du site introuvable (id ${tracker.siteChannelId})`);
   }
@@ -451,14 +512,16 @@ async function send(tracker, syn) {
   tracker.sentCount = (tracker.sentCount || 0) + 1;
   tracker.lastSentAt = Date.now();
   panel.history.unshift({
-    trackerId: tracker.id, trackerName: tracker.name, target: syn.target, suit: syn.suit,
+    trackerId: tracker.id, trackerName: isSlot ? slotName(tracker, syn.slot) : tracker.name, target: syn.target, suit: syn.suit,
     detail: syn.detail || '', sentAt: Date.now(),
   });
   panel.history = panel.history.slice(0, 100);
   if (sentMessages.length) {
     panel.pendingMessages.push({
       id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      trackerId: tracker.id, target: syn.target, suit: syn.suit, strategyName: tracker.name,
+      trackerId: tracker.id, target: syn.target, suit: syn.suit,
+      strategyName: isSlot ? slotName(tracker, syn.slot) : tracker.name,
+      ...(isSlot ? { slot: syn.slot } : {}),
       format: tracker.format, maxR: tracker.maxR, step: 0, gap: 0, skipped: 0,
       status: 'en attente', messages: sentMessages, createdAt: Date.now(), resolvedAt: null,
     });
@@ -476,7 +539,7 @@ async function send(tracker, syn) {
     }
   }
   // canal des meilleures prédictions : relais si cette configuration est la meilleure du moment
-  try { await forwardToBest(tracker, syn); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
+  try { if (!isSlot || syn.slot === 0) await forwardToBest(tracker, syn); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
   return true;
 }
 
@@ -506,6 +569,18 @@ function bumpScore(trackerId, field, step = 0) {
   if (field === 'wins') t.day.rsum = (t.day.rsum || 0) + (Number(step) || 0);
 }
 
+// score d'une prédiction vérifiée : le compteur du canal (slot) est toujours mis à jour ;
+// le score global de la configuration (bilan / meilleurs) ne compte que le canal 1 (costume demandé).
+function bumpEntry(entry, field, step = 0) {
+  if (entry.slot !== undefined) {
+    const t = panel.trackers.find((x) => x.id === entry.trackerId);
+    const sl = t && t.slots && t.slots[entry.slot];
+    if (sl) sl[field] = (sl[field] || 0) + 1;
+    if (entry.slot !== 0) return;
+  }
+  if (!entry.mirror) bumpScore(entry.trackerId, field, step);
+}
+
 async function verifyPending() {
   const maxDone = maxFinishedGameNumber();
   for (const entry of panel.pendingMessages) {
@@ -529,13 +604,13 @@ async function verifyPending() {
       const won = hasSuit(g, entry.suit); // main du JOUEUR
       if (won) {
         entry.status = 'gagné'; entry.resolvedAt = Date.now();
-        if (!entry.mirror) bumpScore(entry.trackerId, 'wins', entry.step);
+        bumpEntry(entry, 'wins', entry.step);
         editPending(entry, 'gagné');
         break;
       }
       if (entry.step >= entry.maxR) {
         entry.status = 'perdu'; entry.resolvedAt = Date.now();
-        if (!entry.mirror) bumpScore(entry.trackerId, 'losses');
+        bumpEntry(entry, 'losses');
         editPending(entry, 'perdu');
         break;
       }
@@ -614,7 +689,7 @@ const channelLabel = (r) => (r.names.length ? r.names.join(' + ') : 'Canal sans 
 
 function trackerChannelNames(t, siteList) {
   const names = [];
-  for (const id of t.channels || []) names.push(panel.channelTitles[String(id)] || String(id));
+  for (const id of allChannels(t)) names.push(panel.channelTitles[String(id)] || String(id));
   if (t.siteChannelId) {
     const sc = siteList.find((c) => String(c.id) === String(t.siteChannelId));
     names.push(sc && sc.name ? sc.name : `canal du site ${t.siteChannelId}`);
@@ -682,7 +757,7 @@ function bilanTargets() {
   const tg = []; const site = [];
   for (const t of panel.trackers) {
     if (t.enabled === false) continue;
-    for (const id of t.channels || []) if (!tg.some((x) => String(x) === String(id))) tg.push(id);
+    for (const id of allChannels(t)) if (!tg.some((x) => String(x) === String(id))) tg.push(id);
     if (t.siteChannelId && !site.includes(String(t.siteChannelId))) site.push(String(t.siteChannelId));
   }
   return { tg, site };
@@ -708,7 +783,7 @@ async function sendBilan({ force = false, now = Date.now() } = {}) {
   const { tg, site } = bilanTargets();
   if (!tg.length && !site.length) return { ok: false, error: 'Aucun canal configuré' };
   // tous les canaux des configurations (même désactivées) apparaissent dans le classement
-  const allIds = panel.trackers.flatMap((t) => t.channels || []);
+  const allIds = panel.trackers.flatMap((t) => allChannels(t));
   await refreshChannelTitles([...tg, ...allIds, ...(panel.best.enabled ? panel.best.channels : [])]);
   if (!buildBilanText(now, force)) return { ok: false, error: "Aucune prédiction vérifiée aujourd'hui : bilan non envoyé" };
   // l'en-tête porte le nom du canal qui reçoit le bilan (jamais le nom de la stratégie)
@@ -782,13 +857,17 @@ async function test(trackerId) {
   if (!tracker) return { ok: false, error: 'Configuration introuvable' };
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return { ok: false, error: 'Aucun token Telegram configuré' };
-  if (!tracker.channels.length) return { ok: false, error: 'Aucun canal Telegram configuré pour cette configuration' };
+  const chans = allChannels(tracker);
+  if (!chans.length) return { ok: false, error: 'Aucun canal Telegram configuré pour cette configuration' };
   const preview = fmt.formatPreview(tracker.format, { maxR: tracker.maxR });
   const sent = [];
   const errors = [];
-  for (const id of tracker.channels) {
+  const sm = slotMode(tracker);
+  for (let k = 0; k < chans.length; k++) {
+    const id = chans[k];
+    const label = sm ? slotName(tracker, tracker.slots.findIndex((x) => x.channel === id)) : tracker.name;
     try {
-      await bot.sendMessage(id, `🃏 COSTUME FAIBLE — message de test\n${tracker.name}\n\nFormat ${tracker.format} :\n\n${preview}`);
+      await bot.sendMessage(id, `🃏 COSTUME FAIBLE — message de test\n${label}\n\nFormat ${tracker.format} :\n\n${preview}`);
       sent.push(String(id));
     } catch (e) { errors.push(`${id} : ${e.message}`); }
   }
@@ -807,7 +886,7 @@ function lastPredsFor(trackerId, limit = 3) {
     .filter((e) => e.trackerId === trackerId)
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
     .slice(0, limit)
-    .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt }));
+    .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt, slot: e.slot }));
 }
 
 // dernier déclencheur trouvé par la configuration (affiché au centre de la carte)
@@ -827,6 +906,7 @@ function statusView() {
       id: t.id, name: t.name, rule: t.rule, lead: t.lead, enabled: t.enabled,
       label: `règle ${ruleShort(t.rule)}`, ruleLabel: ruleLabel(t.rule),
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
+      slots: t.slots, slotMode: slotMode(t), slotRoles: SLOT_ROLES,
       wins: t.wins || 0, losses: t.losses || 0,
       lastInfo: t.lastInfo || null, lastGame: t.lastGame || 0,
       view: triggerView(t),
@@ -852,7 +932,7 @@ module.exports = {
   addTracker, updateTracker, removeTracker,
   restore, restoreFromDb, parseChannels, setChannelTitle,
   // exposés pour les tests
-  triggerOf, suitFor,
+  triggerOf, suitFor, slotSuit,
   sendBilan, buildBilanText, bilanTick, rollDay, compareQuality, compareRanking,
 };
 

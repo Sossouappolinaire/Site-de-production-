@@ -1874,8 +1874,9 @@ app.post('/api/costume-faible-top/trackers', async (req, res) => {
   try {
     const b = req.body || {};
     await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.channels));
+    await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels((Array.isArray(b.slots) ? b.slots : []).map((x) => (x && x.channel) || '')));
     const t = costumeFaibleTop.addTracker({
-      name: b.name, rule: b.rule, lead: b.lead,
+      name: b.name, rule: b.rule, lead: b.lead, slots: b.slots,
       channels: b.channels, siteChannelId: b.siteChannelId, format: b.format, maxR: b.maxR,
     });
     res.json({ ok: true, tracker: t, costumeFaibleTop: costumeFaibleTop.status() });
@@ -1885,6 +1886,7 @@ app.put('/api/costume-faible-top/trackers/:id', async (req, res) => {
   try {
     const b = req.body || {};
     if (b.channels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.channels));
+    if (Array.isArray(b.slots)) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.slots.map((x) => (x && x.channel) || '')));
     const t = costumeFaibleTop.updateTracker(req.params.id, b);
     if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
     res.json({ ok: true, tracker: t, costumeFaibleTop: costumeFaibleTop.status() });
