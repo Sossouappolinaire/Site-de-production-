@@ -103,6 +103,8 @@ function wipeTracker(t) {
   if (!t || typeof t !== 'object') return;
   for (const k of TRACKER_ZERO) if (k in t && typeof t[k] === 'number') t[k] = 0;
   for (const k of TRACKER_NULL) if (k in t) t[k] = null;
+  // configurations « 4 canaux » : chaque canal a son propre score (les ID et noms restent)
+  if (Array.isArray(t.slots)) t.slots.forEach(wipeTracker);
 }
 
 function wipePanel(panel) {

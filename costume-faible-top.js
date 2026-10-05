@@ -93,6 +93,9 @@ function slotSuit(base, i) {
   const m = strategies.MIRROR[base];
   return m ? (CROSS[m] || null) : null;
 }
+function normDay(d) {
+  return d && d.date ? { date: d.date, wins: Number(d.wins) || 0, losses: Number(d.losses) || 0, rsum: Number(d.rsum) || 0 } : null;
+}
 function sanitizeSlots(value, previous) {
   const arr = Array.isArray(value) ? value : [];
   const out = [];
@@ -105,6 +108,9 @@ function sanitizeSlots(value, previous) {
       name: String(raw.name == null ? '' : raw.name).trim().slice(0, 60),
       wins: Number.isFinite(Number(raw.wins)) ? Number(raw.wins) : (Number(prev.wins) || 0),
       losses: Number.isFinite(Number(raw.losses)) ? Number(raw.losses) : (Number(prev.losses) || 0),
+      // résultats par journée (bilan) propres à ce canal : chaque canal est une stratégie à part
+      day: normDay(raw.day !== undefined ? raw.day : prev.day),
+      prevDay: normDay(raw.prevDay !== undefined ? raw.prevDay : prev.prevDay),
     });
   }
   return out;
@@ -411,10 +417,30 @@ function messageText(tracker, syn) {
 // ---------------------------------------------------------------------------
 // Classement du jour (même règle que le bilan : taux, puis moyenne des rattrapages,
 // puis nombre de prédictions, puis victoires ; minimum de prédictions vérifiées pour être classée).
+// Concurrents : une configuration classique = 1 concurrent ; une configuration « 4 canaux »
+// = 1 concurrent PAR canal (chaque canal est une stratégie séparée, avec son propre score).
+function contestants() {
+  const out = [];
+  for (const t of panel.trackers) {
+    if (slotMode(t)) {
+      t.slots.forEach((sl, i) => {
+        if (sl.channel == null) return;
+        out.push({ key: `${t.id}#${i}`, tracker: t, slot: i, holder: sl });
+      });
+    } else out.push({ key: t.id, tracker: t, slot: undefined, holder: t });
+  }
+  return out;
+}
+function contestantName(c) {
+  if (c.slot === undefined) return c.tracker.name;
+  return slotName(c.tracker, c.slot);
+}
+function contestantByKey(key) { return contestants().find((c) => c.key === key) || null; }
+
 function rankedToday(now = Date.now()) {
   const key = dayKeyOf(now);
-  return panel.trackers
-    .map((t) => { const st = dayStats(t, key); return { t, ...st, rate: st.total ? st.wins / st.total : 0 }; })
+  return contestants()
+    .map((c) => { const st = dayStats(c.holder, key); return { c, t: c.tracker, ...st, rate: st.total ? st.wins / st.total : 0 }; })
     .filter((r) => r.total >= panel.bilan.minPreds)
     .sort(compareRanking);
 }
@@ -427,20 +453,21 @@ function currentBest(now = Date.now()) {
   const ranked = rankedToday(now);
   if (ranked.length) {
     const top = ranked[0];
-    const cur = ranked.find((r) => r.t.id === b.currentTrackerId);
+    const cur = ranked.find((r) => r.c.key === b.currentTrackerId);
     if (!cur || compareQuality(top, cur) < 0) { // égalité parfaite (taux ET moyenne) : on reste sur le meilleur actuel (pas d'aller-retour)
-      b.currentTrackerId = top.t.id;
+      b.currentTrackerId = top.c.key;
       b.switchedAt = Date.now();
     }
   }
-  return panel.trackers.find((t) => t.id === b.currentTrackerId) || null;
+  return contestantByKey(b.currentTrackerId);
 }
 
 async function forwardToBest(tracker, syn) {
   const b = panel.best;
   if (!b.enabled || !b.channels.length) return false;
   const best = currentBest();
-  if (!best || best.id !== tracker.id) return false; // ce n'est pas la meilleure configuration
+  const myKey = syn.slot !== undefined ? `${tracker.id}#${syn.slot}` : tracker.id;
+  if (!best || best.key !== myKey) return false; // ce n'est pas la meilleure stratégie (canal) du moment
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Meilleures prédictions : aucun token Telegram configuré'; return false; }
   const out = fmt.renderMessage(b.format, {
@@ -539,7 +566,7 @@ async function send(tracker, syn) {
     }
   }
   // canal des meilleures prédictions : relais si cette configuration est la meilleure du moment
-  try { if (!isSlot || syn.slot === 0) await forwardToBest(tracker, syn); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
+  try { await forwardToBest(tracker, syn); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
   return true;
 }
 
@@ -569,16 +596,21 @@ function bumpScore(trackerId, field, step = 0) {
   if (field === 'wins') t.day.rsum = (t.day.rsum || 0) + (Number(step) || 0);
 }
 
-// score d'une prédiction vérifiée : le compteur du canal (slot) est toujours mis à jour ;
-// le score global de la configuration (bilan / meilleurs) ne compte que le canal 1 (costume demandé).
+// score d'une prédiction vérifiée. Prédiction d'un canal (slot) : le score va au canal lui-même
+// (chaque canal est une stratégie séparée dans le bilan et pour le choix du meilleur).
 function bumpEntry(entry, field, step = 0) {
+  if (entry.mirror) return; // relais vers le canal des meilleures : jamais compté deux fois
   if (entry.slot !== undefined) {
     const t = panel.trackers.find((x) => x.id === entry.trackerId);
     const sl = t && t.slots && t.slots[entry.slot];
-    if (sl) sl[field] = (sl[field] || 0) + 1;
-    if (entry.slot !== 0) return;
+    if (!sl) return;
+    sl[field] = (sl[field] || 0) + 1;
+    rollDay(sl);
+    sl.day[field] = (sl.day[field] || 0) + 1;
+    if (field === 'wins') sl.day.rsum = (sl.day.rsum || 0) + (Number(step) || 0);
+    return;
   }
-  if (!entry.mirror) bumpScore(entry.trackerId, field, step);
+  bumpScore(entry.trackerId, field, step);
 }
 
 async function verifyPending() {
@@ -709,9 +741,13 @@ function buildBilanText(now = Date.now(), forceToday = false, title = '') {
   const hh = String(slotH).padStart(2, '0');
   const siteList = siteChannelsView();
   const min = panel.bilan.minPreds;
-  const rows = panel.trackers.map((t) => {
-    const st = dayStats(t, reportKey);
-    return { t, ...st, names: trackerChannelNames(t, siteList), rate: st.total ? st.wins / st.total : 0 };
+  const rows = contestants().map((c) => {
+    const st = dayStats(c.holder, reportKey);
+    const t = c.tracker;
+    const names = c.slot === undefined
+      ? trackerChannelNames(t, siteList)
+      : [t.slots[c.slot].name || panel.channelTitles[String(t.slots[c.slot].channel)] || String(t.slots[c.slot].channel)];
+    return { c, t, ...st, names, rate: st.total ? st.wins / st.total : 0 };
   }).filter((r) => r.total > 0 || forceToday);
   const ranked = rows.filter((r) => r.total >= min)
     .sort(compareRanking);
@@ -881,9 +917,9 @@ function setChannelTitle(id, title) {
   persist();
 }
 
-function lastPredsFor(trackerId, limit = 3) {
+function lastPredsFor(trackerId, limit = 3, slot) {
   return panel.pendingMessages
-    .filter((e) => e.trackerId === trackerId)
+    .filter((e) => e.trackerId === trackerId && (slot === undefined || e.slot === slot))
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
     .slice(0, limit)
     .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt, slot: e.slot }));
@@ -906,8 +942,10 @@ function statusView() {
       id: t.id, name: t.name, rule: t.rule, lead: t.lead, enabled: t.enabled,
       label: `règle ${ruleShort(t.rule)}`, ruleLabel: ruleLabel(t.rule),
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
-      slots: t.slots, slotMode: slotMode(t), slotRoles: SLOT_ROLES,
-      wins: t.wins || 0, losses: t.losses || 0,
+      slots: t.slots.map((sl, i) => ({ ...sl, lastPreds: lastPredsFor(t.id, 3, i) })),
+      slotMode: slotMode(t), slotRoles: SLOT_ROLES,
+      wins: slotMode(t) ? t.slots.reduce((a, x) => a + (x.wins || 0), 0) : (t.wins || 0),
+      losses: slotMode(t) ? t.slots.reduce((a, x) => a + (x.losses || 0), 0) : (t.losses || 0),
       lastInfo: t.lastInfo || null, lastGame: t.lastGame || 0,
       view: triggerView(t),
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
@@ -916,7 +954,7 @@ function statusView() {
     bilan: { ...panel.bilan, tz: BILAN_TZ },
     best: {
       ...panel.best,
-      currentName: (panel.trackers.find((t) => t.id === panel.best.currentTrackerId) || {}).name || null,
+      currentName: (() => { const c = contestantByKey(panel.best.currentTrackerId); return c ? contestantName(c) : null; })(),
       channelNames: panel.best.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
     },
     history: panel.history.slice(0, 30),
