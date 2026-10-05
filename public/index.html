@@ -417,6 +417,7 @@
     }
     function strategyButtons() {
       const real = (snapshot.strategies || []).map(s => {
+        if (s.key === 'costumeFaible') return costumeFaibleTopButtons();
         const st = s.stats || {};
         return `<button class="strategy-button" onclick="location.hash='#/strategy/${encodeURIComponent(s.key)}'">
         <span class="eyebrow">${s.config?.enabled ? 'Active' : 'En pause'}</span><b>${esc(s.name)}</b><span>${esc((s.about || '').slice(0, 92))}...</span>
@@ -1585,6 +1586,7 @@ Faites-en bon usage !
       suitBreak: { snap: 'suitBreak', box: 'sbCards', hash: '#/suit-break', edit: 'editSuitBreakTrackerModal', remove: 'removeSuitBreakTracker' },
       overlap: { snap: 'overlap', box: 'ovCards', hash: '#/overlap', edit: 'editOverlapTrackerModal', remove: 'removeOverlapTracker' },
       dizaineTop: { snap: 'dizaineTop', box: 'dtCards', hash: '#/dizaine-top', edit: 'editDizaineTopModal', remove: 'removeDizaineTop' },
+      costumeFaibleTop: { snap: 'costumeFaibleTop', box: 'cfCards', hash: '#/costume-faible-top', edit: 'editCostumeFaibleTopModal', remove: 'removeCostumeFaibleTop' },
     };
     const trackerSuitKey = (x) => String(x || '').replace(/\uFE0F/g, '');
     function trackerChannelsOf(kind, t) {
@@ -1601,7 +1603,7 @@ Faites-en bon usage !
       const c = snapshot.control || {};
       const chans = trackerChannelsOf(kind, t).map(x => String(x).toLowerCase());
       if (p.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: 'panneau désactivé' };
-      if (kind === 'dizaineTop' && t.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: 'configuration en pause' };
+      if ((kind === 'dizaineTop' || kind === 'costumeFaibleTop') && t.enabled === false) return { cls: 'bad', label: '⏹️ Stop', hint: 'configuration en pause' };
       if (c.paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'prédictions arrêtées' };
       const paused = (c.pausedChannels || []).find(x => chans.includes(String(x.id).toLowerCase()) || (x.username && chans.includes(String(x.username).toLowerCase())));
       if (paused) return { cls: 'bad', label: '⏹️ Stop', hint: 'canal arrêté' };
@@ -1623,6 +1625,17 @@ Faites-en bon usage !
           center: v
             ? `dizaine #N${esc(String(v.start))}-#N${esc(String(v.end))}<br><b>${esc(t.label)}</b><br><span class="small">→ prédit #N${esc(String(v.nextTarget))}</span><br><span class="small muted">en cours : ${esc(String(pr.counted))}/10</span>`
             : `<b>${esc(t.label)}</b><br><span class="small muted">en attente de la 1ʳᵉ dizaine<br>en cours : ${esc(String(pr.counted))}/10</span>`,
+        };
+      }
+      if (kind === 'costumeFaibleTop') {
+        const v = t.view;
+        const map = (suit) => (t.rule === 'strategie' ? { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' } : { '❤️': '♠️', '♠️': '❤️', '♦️': '♣️', '♣️': '♦️' })[suit];
+        return {
+          mapMode: true,
+          get: (suit) => ({ to: map(suit), hit: !!(v && trackerSuitKey(v.weak) === trackerSuitKey(suit)) }),
+          center: v
+            ? `dernier déclencheur #N${esc(String(v.trigger))}<br><span class=\"small\">joueur ${esc(v.four.slice(0, 2).join(''))} / banquier ${esc(v.four.slice(2).join(''))}</span><br><b>faible ${esc(v.weak)} → ${esc(v.suit)}</b><br><span class=\"small\">prédit #N${esc(String(v.target))} (+${esc(String(t.lead))})</span>`
+            : `<b>${esc(t.label)}</b><br><span class=\"small muted\">en attente d'un déclencheur<br>(joueur 2 cartes + banquier 2 cartes)</span>`,
         };
       }
       if (kind === 'overlap') {
@@ -1649,6 +1662,10 @@ Faites-en bon usage !
       const k = trackerCounters(kind, t);
       const rankName = (r) => (r === 1 ? '1er' : r + 'e');
       const corner = (suit, align) => {
+        if (k.mapMode) {
+          const m = k.get(suit);
+          return `<div style=\"display:flex;flex-direction:column;align-items:${align === 'left' ? 'flex-start' : 'flex-end'}\"><span style=\"display:block;height:28px;line-height:28px;font-size:24px;font-weight:700\">${suit}</span><span class=\"mono\" style=\"display:block;height:20px;line-height:20px;font-size:14px;${m.hit ? 'font-weight:700;color:var(--green)' : ''}\">faible → ${m.to}${m.hit ? ' ✔' : ''}</span></div>`;
+        }
         if (k.rankMode) {
           const r = k.get(suit);
           const chosen = r && t.view && r.rank === t.view.chosen;
@@ -1656,7 +1673,12 @@ Faites-en bon usage !
         }
         return `<div style="display:flex;flex-direction:column;align-items:${align === 'left' ? 'flex-start' : 'flex-end'}"><span style="display:block;height:28px;line-height:28px;font-size:24px;font-weight:700">${suit}</span><span class="mono" style="display:block;height:20px;line-height:20px;font-size:14px">${esc(String(k.get(suit)))}/${esc(String(k.total))}</span></div>`;
       };
-      const extraRows = kind === 'dizaineTop'
+      const extraRows = kind === 'costumeFaibleTop'
+        ? `<div style=\"display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px\"><span class=\"muted\">Règle</span><span style=\"text-align:right\">${esc(t.ruleLabel)}</span></div>
+           <div style=\"display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px\"><span class=\"muted\">Format de prédiction</span><span class=\"mono\">N° ${esc(String(t.format))}</span></div>
+           <div style=\"display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px\"><span class=\"muted\">Décalage · rattrapages</span><span class=\"mono\">a+${esc(String(t.lead))} · ${esc(String(t.maxR))}</span></div>
+           <div style=\"display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px\"><span class=\"muted\">Score</span><span class=\"mono\">${esc(String(t.wins || 0))} gagné(s) · ${esc(String(t.losses || 0))} perdu(s)</span></div>`
+        : kind === 'dizaineTop'
         ? `<div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Format de prédiction</span><span class="mono">N° ${esc(String(t.format))}</span></div>
            <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Fin de numéro · rattrapages</span><span class="mono">+${esc(String(t.lead))} · ${esc(String(t.maxR))}</span></div>
            <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Score</span><span class="mono">${esc(String(t.wins || 0))} gagné(s) · ${esc(String(t.losses || 0))} perdu(s)</span></div>`
@@ -1777,6 +1799,14 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div>
           <label class="check"><input id="dizaineTopEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''} onchange="saveDizaineTopEnabled()"> Stratégie active</label></div>
           <div id="dtCards">${trackerCardsHtml('dizaineTop')}</div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Meilleures prédictions</span><h2 style="margin-top:7px">🎯 Canal des meilleures prédictions</h2><p class="small">À configurer une seule fois : le bot envoie dans ce canal les prédictions de la meilleure configuration du jour (classement du bilan). Si une autre devient meilleure, il bascule et envoie alors celles de la nouvelle. Le bilan renvoie vers ce canal avec le taux du meilleur canal. ${p.best?.currentName ? `Meilleure actuelle : ${esc(p.best.currentName)}.` : 'Pas encore de meilleure (minimum de prédictions non atteint).'} Envoyées : ${p.best?.sentCount || 0}.</p></div>
+          <label class="check"><input id="dtBestOn" type="checkbox" ${p.best?.enabled ? 'checked' : ''}> Actif</label></div>
+          <div class="three-col">
+            <div class="field"><label>ID ou @nom du canal</label><input id="dtBestChannels" value="${esc((p.best?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.dizaineTop?.formatCount || snapshot.formatCount || 101))})</label><input id="dtBestFormat" type="number" min="1" max="${esc(String(snapshot.dizaineTop?.formatCount || snapshot.formatCount || 101))}" value="${esc(String(p.best?.format ?? 1))}"></div>
+            <div class="field"><label>Nombre de rattrapages</label><input id="dtBestMaxR" type="number" min="0" max="9" value="${esc(String(p.best?.maxR ?? 2))}"></div>
+          </div>
+          <div class="toolbar"><button class="button primary" onclick="saveDizaineTopBest()">Enregistrer le canal des meilleures prédictions</button></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan automatique</span><h2 style="margin-top:7px">📊 Bilan dans les canaux</h2><p class="small">Toutes les ${p.bilanEveryHours || 1} h, envoi dans les canaux des configurations : la meilleure configuration (nom réel du canal), classée 1ʳᵉ avec son taux sur N prédictions, puis le classement. Bilans cumulés depuis 00h00 (fuseau ${esc(p.bilan?.tz || '')}). Dernier envoi : ${p.bilan?.lastSentAt ? new Date(p.bilan.lastSentAt).toLocaleString('fr-FR') : 'aucun'}.</p></div></div>
           <div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:center">
             <label class="check"><input id="dtBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveDizaineTopBilan()"> Bilan actif</label>
@@ -1786,6 +1816,12 @@ Faites-en bon usage !
             <button class="button primary" onclick="sendDizaineTopBilan()">Envoyer le bilan maintenant</button>
           </div>
           <pre id="dtBilanPreview" class="small" style="white-space:pre-wrap;margin-top:12px"></pre></section>`;
+    }
+    async function saveDizaineTopBest() {
+      try {
+        await api('/api/dizaine-top/config', 'POST', { bestEnabled: $('#dtBestOn')?.checked, bestChannels: ids(val('dtBestChannels')), bestFormat: val('dtBestFormat'), bestMaxR: val('dtBestMaxR') });
+        await refresh(); dizaineTopPage(); toast('Canal des meilleures prédictions enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
     }
     async function saveDizaineTopBilan() {
       try { await api('/api/dizaine-top/config', 'POST', { bilanEnabled: $('#dtBilanOn')?.checked, bilanEveryHours: $('#dtBilanEvery')?.value, bilanMinPreds: $('#dtBilanMin')?.value }); await refresh(); dizaineTopPage(); toast('Réglages du bilan enregistrés.'); }
@@ -1841,6 +1877,148 @@ Faites-en bon usage !
     }
     async function saveDizaineTopEnabled() {
       try { await api('/api/dizaine-top/config', 'POST', { enabled: $('#dizaineTopEnabled')?.checked }); await refresh(); dizaineTopPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // -------------------------------------------------------------------
+    // « Costume faible sur 2 cartes (miroir) » — configurations
+    // (voir costume-faible-top.js). Même fonctionnement que la Dizaine :
+    // plusieurs configurations, canal des meilleures prédictions, bilan.
+    // -------------------------------------------------------------------
+    function costumeFaibleTopButtons() {
+      const d = snapshot.costumeFaibleTop || {};
+      const list = d.trackers || [];
+      const main = `<button class="strategy-button" onclick="location.hash='#/costume-faible-top'">
+        <span class="eyebrow">🃏 ${d.enabled === false ? 'En pause' : 'Active'}</span><b>Costume faible sur 2 cartes (miroir)</b>
+        <span>Joueur 2 cartes + banquier 2 cartes : détecte le costume faible, puis crée des configurations (❤️↔♠️, ♦️↔♣️ ou costume prédit par la stratégie) à a+n...</span>
+        <span class="strategy-stats"><span class="tag">${esc(list.length)} configuration(s)</span><span class="tag good">${esc(list.reduce((n, t) => n + (t.wins || 0), 0))} gagné(s)</span><span class="tag bad">${esc(list.reduce((n, t) => n + (t.losses || 0), 0))} perdu(s)</span></span>
+        <em>Ouvrir la configuration →</em></button>`;
+      const each = list.map(t => `<button class="strategy-button" onclick="location.hash='#/costume-faible-top'">
+        <span class="eyebrow">🃏 Costume faible${t.enabled ? '' : ' · en pause'}</span><b>${esc(t.name)}</b><span>${esc(t.ruleLabel)} · prédit à a+${esc(t.lead)} · ${esc(t.maxR)} rattrapage(s)</span>
+        <span class="strategy-stats"><span class="tag good">${esc(t.wins || 0)} gagné(s)</span><span class="tag bad">${esc(t.losses || 0)} perdu(s)</span></span>
+        <em>Ouvrir la configuration →</em></button>`).join('');
+      return main + each;
+    }
+    function costumeFaibleTopSiteOptions(currentId) {
+      const list = snapshot.costumeFaibleTop?.siteChannels || [];
+      const cur = currentId === null || currentId === undefined ? '' : String(currentId);
+      return `<option value="">— aucun —</option>` + list.map(c => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+    }
+    function costumeFaibleTopForm(prefix, t) {
+      t = t || { rule: 'croise', lead: 2, maxR: 2, format: 1, channels: [], siteChannelId: null, name: '' };
+      const fc = snapshot.costumeFaibleTop?.formatCount || snapshot.formatCount || 101;
+      return `<div class="two-col">
+          <div class="field"><label>Si le déclencheur est trouvé, prédire</label><select id="${prefix}-rule">
+            <option value="croise" ${t.rule !== 'strategie' ? 'selected' : ''}>❤️ → ♠️ et ♠️ → ❤️ · ♦️ → ♣️ et ♣️ → ♦️</option>
+            <option value="strategie" ${t.rule === 'strategie' ? 'selected' : ''}>Le costume prédit par la stratégie (❤️↔♦️, ♠️↔♣️)</option>
+          </select></div>
+          <div class="field"><label>Décalage : prédit à a+N (jeu du déclencheur + N)</label><input id="${prefix}-lead" type="number" min="1" max="20" value="${esc(String(t.lead ?? 2))}"></div>
+        </div>
+        <div class="two-col">
+          <div class="field"><label>Nombre de rattrapages</label><input id="${prefix}-maxR" type="number" min="0" max="9" value="${esc(String(t.maxR ?? 2))}"></div>
+          <div class="field"><label>Format de prédiction (1 → ${esc(String(fc))})</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(fc))}" value="${esc(String(t.format ?? 1))}"></div>
+        </div>
+        <p class="small muted" style="margin:0 0 10px">Le déclencheur est trouvé quand le joueur ET le banquier ont 2 cartes et qu'une couleur (rouge/noir) est minoritaire : le costume faible est celui de cette couleur. Exemple : costume faible ❤️ → prédit ♠️ (règle croisée) ou ♦️ (règle de la stratégie), sur le jeu a+N.</p>
+        <div class="two-col">
+          <div class="field"><label>ID ou @nom du canal Telegram</label><input id="${prefix}-channels" value="${esc((t.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+          <div class="field"><label>Canal du site (optionnel)</label><select id="${prefix}-site">${costumeFaibleTopSiteOptions(t.siteChannelId)}</select></div>
+        </div>
+        <div class="field"><label>Nom de cette configuration <span class="small">(optionnel — vide = nom automatique)</span></label><input id="${prefix}-name" value="${esc(t.name || '')}" placeholder="Ex. Costume faible croisé a+2"></div>`;
+    }
+    function readCostumeFaibleTopForm(prefix) {
+      const site = val(`${prefix}-site`);
+      return {
+        rule: val(`${prefix}-rule`), lead: val(`${prefix}-lead`),
+        maxR: val(`${prefix}-maxR`), format: val(`${prefix}-format`),
+        channels: ids(val(`${prefix}-channels`)), siteChannelId: site === '' ? null : site,
+        name: val(`${prefix}-name`),
+      };
+    }
+    function costumeFaibleTopPage() {
+      setNav('strategies');
+      const p = snapshot.costumeFaibleTop || {};
+      const list = p.trackers || [];
+      const fc = esc(String(p.formatCount || snapshot.formatCount || 101));
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">Costume faible sur 2 cartes (miroir)</h2><p class="small">Quand le joueur ET le banquier ont 2 cartes, on regroupe les 4 costumes par couleur (rouge ❤️♦️ / noir ♠️♣️) et on repère le costume faible. Si le déclencheur est trouvé sur le jeu a, on prédit sur a+N : ❤️ → ♠️ (et inversement), ♦️ → ♣️ (et inversement), ou le costume prédit par la stratégie. Clique sur « Créer » pour enregistrer une configuration ; tu peux en créer autant que tu veux.</p></div>
+        <div class="toolbar"><button class="button primary" onclick="addCostumeFaibleTopModal()">Créer</button><button class="button ghost" onclick="reloadCostumeFaibleTop()">Actualiser</button><button class="button ghost" onclick="location.hash='#/strategies'">← Stratégies</button><button class="button ghost" onclick="location.hash='#/strategy/costumeFaible'">Réglages classiques</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div>
+          <label class="check"><input id="costumeFaibleTopEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''} onchange="saveCostumeFaibleTopEnabled()"> Stratégie active</label></div>
+          <div id="cfCards">${trackerCardsHtml('costumeFaibleTop')}</div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Meilleures prédictions</span><h2 style="margin-top:7px">🎯 Canal des meilleures prédictions</h2><p class="small">À configurer une seule fois : le bot envoie dans ce canal les prédictions de la meilleure configuration du jour (classement du bilan). Si une autre devient meilleure, il bascule et envoie alors celles de la nouvelle. Le bilan renvoie vers ce canal avec le taux du meilleur canal. ${p.best?.currentName ? `Meilleure actuelle : ${esc(p.best.currentName)}.` : 'Pas encore de meilleure (minimum de prédictions non atteint).'} Envoyées : ${p.best?.sentCount || 0}.</p></div>
+          <label class="check"><input id="cfBestOn" type="checkbox" ${p.best?.enabled ? 'checked' : ''}> Actif</label></div>
+          <div class="three-col">
+            <div class="field"><label>ID ou @nom du canal</label><input id="cfBestChannels" value="${esc((p.best?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Format de prédiction (1 → ${fc})</label><input id="cfBestFormat" type="number" min="1" max="${fc}" value="${esc(String(p.best?.format ?? 1))}"></div>
+            <div class="field"><label>Nombre de rattrapages</label><input id="cfBestMaxR" type="number" min="0" max="9" value="${esc(String(p.best?.maxR ?? 2))}"></div>
+          </div>
+          <div class="toolbar"><button class="button primary" onclick="saveCostumeFaibleTopBest()">Enregistrer le canal des meilleures prédictions</button></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan automatique</span><h2 style="margin-top:7px">📊 Bilan dans les canaux</h2><p class="small">Toutes les ${p.bilanEveryHours || 1} h, envoi dans les canaux des configurations : la meilleure configuration (nom réel du canal), classée 1ʳᵉ avec son taux sur N prédictions, puis le classement. Bilans cumulés depuis 00h00 (fuseau ${esc(p.bilan?.tz || '')}). Dernier envoi : ${p.bilan?.lastSentAt ? new Date(p.bilan.lastSentAt).toLocaleString('fr-FR') : 'aucun'}.</p></div></div>
+          <div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:center">
+            <label class="check"><input id="cfBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveCostumeFaibleTopBilan()"> Bilan actif</label>
+            <label class="small">Toutes les <input id="cfBilanEvery" type="number" min="1" max="24" value="${p.bilanEveryHours || 1}" style="width:60px" onchange="saveCostumeFaibleTopBilan()"> h</label>
+            <label class="small">Minimum <input id="cfBilanMin" type="number" min="1" max="50" value="${p.bilanMinPreds || 5}" style="width:60px" onchange="saveCostumeFaibleTopBilan()"> prédictions pour être classée</label>
+            <button class="button ghost" onclick="previewCostumeFaibleTopBilan()">Aperçu</button>
+            <button class="button primary" onclick="sendCostumeFaibleTopBilan()">Envoyer le bilan maintenant</button>
+          </div>
+          <pre id="cfBilanPreview" class="small" style="white-space:pre-wrap;margin-top:12px"></pre></section>`;
+    }
+    async function saveCostumeFaibleTopBest() {
+      try {
+        await api('/api/costume-faible-top/config', 'POST', { bestEnabled: $('#cfBestOn')?.checked, bestChannels: ids(val('cfBestChannels')), bestFormat: val('cfBestFormat'), bestMaxR: val('cfBestMaxR') });
+        await refresh(); costumeFaibleTopPage(); toast('Canal des meilleures prédictions enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveCostumeFaibleTopBilan() {
+      try { await api('/api/costume-faible-top/config', 'POST', { bilanEnabled: $('#cfBilanOn')?.checked, bilanEveryHours: $('#cfBilanEvery')?.value, bilanMinPreds: $('#cfBilanMin')?.value }); await refresh(); costumeFaibleTopPage(); toast('Réglages du bilan enregistrés.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function previewCostumeFaibleTopBilan() {
+      try { const r = await api('/api/costume-faible-top/bilan/preview'); const box = $('#cfBilanPreview'); if (box) box.textContent = r.text; }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function sendCostumeFaibleTopBilan() {
+      try { const r = await api('/api/costume-faible-top/bilan/send', 'POST'); toast(`Bilan envoyé dans ${r.sent.length} canal(aux).`); await refresh(); costumeFaibleTopPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function reloadCostumeFaibleTop() { await refresh(); costumeFaibleTopPage(); }
+    function addCostumeFaibleTopModal() {
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Créer — Costume faible sur 2 cartes (miroir)</h3></div></div>
+        ${costumeFaibleTopForm('cfnew', null)}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addCostumeFaibleTop()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function addCostumeFaibleTop() {
+      try {
+        await api('/api/costume-faible-top/trackers', 'POST', readCostumeFaibleTopForm('cfnew'));
+        closeModal(); await refresh(); costumeFaibleTopPage();
+        toast('Configuration enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    function editCostumeFaibleTopModal(id) {
+      const t = ((snapshot.costumeFaibleTop || {}).trackers || []).find(x => x.id === id);
+      if (!t) return;
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier la configuration</span><h3 style="margin-top:8px">${esc(t.name)}</h3></div></div>
+        ${costumeFaibleTopForm('cf-' + t.id, t)}
+        <label class="check" style="margin-top:8px"><input id="cf-${esc(t.id)}-enabled" type="checkbox" ${t.enabled ? 'checked' : ''}> Configuration active</label>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateCostumeFaibleTop('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="testCostumeFaibleTop('${esc(t.id)}')">Envoyer un test</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function updateCostumeFaibleTop(id) {
+      try {
+        await api(`/api/costume-faible-top/trackers/${encodeURIComponent(id)}`, 'PUT', { ...readCostumeFaibleTopForm('cf-' + id), enabled: $('#cf-' + id + '-enabled')?.checked });
+        closeModal(); await refresh(); costumeFaibleTopPage(); toast('Configuration mise à jour.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeCostumeFaibleTop(id) {
+      if (!confirm('Supprimer cette configuration ?')) return;
+      try { await api(`/api/costume-faible-top/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); costumeFaibleTopPage(); toast('Configuration supprimée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function testCostumeFaibleTop(id) {
+      try { const r = await api(`/api/costume-faible-top/trackers/${encodeURIComponent(id)}/test`, 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || [r.error]).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveCostumeFaibleTopEnabled() {
+      try { await api('/api/costume-faible-top/config', 'POST', { enabled: $('#costumeFaibleTopEnabled')?.checked }); await refresh(); costumeFaibleTopPage(); }
       catch (e) { toast(e.message, 'error'); }
     }
     function suitStreakPage() {
@@ -3532,6 +3710,7 @@ Faites-en bon usage !
         else if (h === '#/combined') combinedPage();
         else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/dizaine-top') dizaineTopPage();
+        else if (h === '#/costume-faible-top') costumeFaibleTopPage();
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
