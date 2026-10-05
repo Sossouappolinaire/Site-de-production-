@@ -1103,6 +1103,10 @@ function registerGames(games) {
   // ancien : toutes les cibles calculées semblent déjà jouées et AUCUNE
   // prédiction ne sort jamais.
   const ordered = [...games].sort((a, b) => a.number - b.number);
+  // « nouveau départ » de minuit (midnight-reset.js) : les jeux DÉJÀ terminés que le
+  // flux renvoie à nouveau sont simplement mémorisés, sans redéclencher les
+  // stratégies (sinon des prédictions déjà envoyées avant minuit repartiraient).
+  const baseline = state.baselineNext === true && ordered.length > 0;
   for (const g of ordered) {
     const prev = state.games.get(g.number);
     // CORRECTIF « vérifications ratées » : le flux 1xbet renvoie parfois un
@@ -1114,8 +1118,9 @@ function registerGames(games) {
     if (prev && prev.finished && prev.complete && !(g.finished && g.complete)) continue;
     if (prev && prev.complete && !g.complete) continue;
     state.games.set(g.number, g);
-    if (g.finished && (!prev || !prev.finished)) onFinished(g);
+    if (g.finished && (!prev || !prev.finished) && !baseline) onFinished(g);
   }
+  if (baseline) state.baselineNext = false;
   if (state.games.size > 600) {
     const keys = [...state.games.keys()].sort((a, b) => a - b);
     for (const k of keys.slice(0, state.games.size - 600)) state.games.delete(k);

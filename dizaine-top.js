@@ -26,6 +26,16 @@
 //      prédiction sur #N14 ; dizaine #N11-20 → #N24). N = 10 → #N20, #N30…
 //   5. Vérification sur la main du JOUEUR, avec le nombre de rattrapages
 //      configuré ; le message Telegram est édité avec le résultat.
+//
+// BILAN (demande admin) : toutes les 2 h (réglable), un bilan est envoyé dans les
+// canaux des configurations : la meilleure configuration y est désignée par le
+// nom réel de son canal, classée 1ʳᵉ avec son taux de réussite sur N prédictions,
+// suivie du classement des autres. Taux calculé sur la JOURNÉE EN COURS (fuseau
+// BILAN_TZ, Africa/Porto-Novo par défaut) ; au point de minuit, bilan de la
+// journée qui vient de se terminer. Une configuration doit avoir au moins 5
+// prédictions vérifiées dans la journée pour être classée. Chaque canal reçoit le
+// bilan complet. Envoi à heure fixe (00h, 02h, 04h…), jamais en double après un
+// redémarrage.
 'use strict';
 
 const store = require('./store');
@@ -48,6 +58,8 @@ const panel = {
   lastSentAt: null,
   lastScanAt: null,
   lastError: null,
+  // bilan périodique (voir en-tête)
+  bilan: { enabled: true, everyHours: 2, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
 };
 
 let sender = null;
@@ -98,12 +110,23 @@ function sanitizeMaxR(value) {
   return Number.isFinite(n) ? Math.max(0, Math.min(9, n)) : 2;
 }
 
+function sanitizeEvery(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(24, n)) : 2; }
+function sanitizeMinPreds(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 5; }
+
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
+  if (patch.bilanEnabled !== undefined) panel.bilan.enabled = !!patch.bilanEnabled;
+  if (patch.bilanEveryHours !== undefined) panel.bilan.everyHours = sanitizeEvery(patch.bilanEveryHours);
+  if (patch.bilanMinPreds !== undefined) panel.bilan.minPreds = sanitizeMinPreds(patch.bilanMinPreds);
   persist();
   return config();
 }
-function config() { return { enabled: panel.enabled }; }
+function config() {
+  return {
+    enabled: panel.enabled,
+    bilanEnabled: panel.bilan.enabled, bilanEveryHours: panel.bilan.everyHours, bilanMinPreds: panel.bilan.minPreds,
+  };
+}
 
 function maxFinishedGameNumber() {
   let max = 0;
@@ -127,6 +150,7 @@ function persist() {
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
     channelTitles: panel.channelTitles,
+    bilan: panel.bilan,
   };
   try { store.patch({ dizaineTop: saved }); } catch (_) {}
   if (db.ready) db.setSetting('dizaine_top_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
@@ -169,6 +193,9 @@ function normalizeTracker(t) {
     sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
     lastSentAt: t.lastSentAt || null,
     createdAt: t.createdAt || Date.now(),
+    // résultats par journée (bilan) : jour en cours + veille
+    day: t.day && t.day.date ? { date: t.day.date, wins: Number(t.day.wins) || 0, losses: Number(t.day.losses) || 0 } : null,
+    prevDay: t.prevDay && t.prevDay.date ? { date: t.prevDay.date, wins: Number(t.prevDay.wins) || 0, losses: Number(t.prevDay.losses) || 0 } : null,
   };
   base.name = (t.name && String(t.name).trim()) || defaultName(base);
   return base;
@@ -177,6 +204,16 @@ function normalizeTracker(t) {
 function applySaved(saved) {
   if (saved.channelTitles && typeof saved.channelTitles === 'object') panel.channelTitles = { ...saved.channelTitles };
   if (saved.config) panel.enabled = saved.config.enabled !== false;
+  if (saved.bilan && typeof saved.bilan === 'object') {
+    panel.bilan = {
+      ...panel.bilan,
+      enabled: saved.bilan.enabled !== false,
+      everyHours: sanitizeEvery(saved.bilan.everyHours),
+      minPreds: sanitizeMinPreds(saved.bilan.minPreds),
+      lastSlot: saved.bilan.lastSlot || null,
+      lastSentAt: saved.bilan.lastSentAt || null,
+    };
+  }
   if (Array.isArray(saved.trackers)) panel.trackers = saved.trackers.filter((t) => t && t.id).map(normalizeTracker);
   // l'historique et les messages en attente ne sont jamais rejoués au démarrage
   panel.history = [];
@@ -405,7 +442,10 @@ function editPending(entry, statusFr) {
 
 function bumpScore(trackerId, field) {
   const t = panel.trackers.find((x) => x.id === trackerId);
-  if (t) t[field] = (t[field] || 0) + 1;
+  if (!t) return;
+  t[field] = (t[field] || 0) + 1;
+  rollDay(t); // compteur de la journée (bilan)
+  t.day[field] = (t.day[field] || 0) + 1;
 }
 
 async function verifyPending() {
@@ -457,12 +497,153 @@ setOnShoeReset(() => {
   persist();
 });
 
+// ---------------------------------------------------------------------------
+// BILAN périodique
+// ---------------------------------------------------------------------------
+const BILAN_TZ = process.env.BILAN_TZ || 'Africa/Porto-Novo';
+
+function localParts(ms) {
+  const f = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: BILAN_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(ms));
+  const o = {};
+  for (const x of f) o[x.type] = x.value;
+  return { y: o.year, m: o.month, d: o.day, h: Number(o.hour) };
+}
+const dayKeyOf = (ms) => { const p = localParts(ms); return `${p.y}-${p.m}-${p.d}`; };
+
+// bascule de journée : le jour écoulé devient « veille », un nouveau jour démarre
+function rollDay(t, now = Date.now()) {
+  const key = dayKeyOf(now);
+  if (!t.day) t.day = { date: key, wins: 0, losses: 0 };
+  else if (t.day.date !== key) { t.prevDay = t.day; t.day = { date: key, wins: 0, losses: 0 }; }
+}
+function dayStats(t, key) {
+  const d = [t.day, t.prevDay].find((x) => x && x.date === key);
+  return d ? { wins: d.wins, losses: d.losses, total: d.wins + d.losses } : { wins: 0, losses: 0, total: 0 };
+}
+
+const NUM_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+const pct = (w, n) => (n ? `${((w / n) * 100).toFixed(1).replace('.', ',')} %` : '—');
+
+function trackerChannelNames(t, siteList) {
+  const names = [];
+  for (const id of t.channels || []) names.push(panel.channelTitles[String(id)] || String(id));
+  if (t.siteChannelId) {
+    const sc = siteList.find((c) => String(c.id) === String(t.siteChannelId));
+    names.push(sc && sc.name ? sc.name : `canal du site ${t.siteChannelId}`);
+  }
+  return names;
+}
+
+// Texte du bilan. reportKey = jour concerné ; label = ligne d'en-tête.
+function buildBilanText(now = Date.now(), forceToday = false) {
+  const lp = localParts(now);
+  const slotH = Math.floor(lp.h / panel.bilan.everyHours) * panel.bilan.everyHours;
+  // au point de minuit (00h) : bilan de la journée qui vient de se terminer
+  const closing = !forceToday && slotH === 0;
+  const reportKey = dayKeyOf(closing ? now - 30 * 60 * 1000 : now);
+  const [ry, rm, rd] = reportKey.split('-');
+  const hh = String(slotH).padStart(2, '0');
+  const siteList = siteChannelsView();
+  const min = panel.bilan.minPreds;
+  const rows = panel.trackers.map((t) => {
+    const st = dayStats(t, reportKey);
+    return { t, ...st, names: trackerChannelNames(t, siteList), rate: st.total ? st.wins / st.total : 0 };
+  }).filter((r) => r.total > 0 || forceToday);
+  const ranked = rows.filter((r) => r.total >= min)
+    .sort((a, b) => b.rate - a.rate || b.total - a.total || b.wins - a.wins);
+  const pending = rows.filter((r) => r.total < min && r.total > 0);
+  if (!rows.some((r) => r.total > 0)) return null;
+  const lines = [];
+  lines.push('📊 BILAN — DIZAINE (costume le plus / le moins sorti)');
+  lines.push(closing ? `🕑 Bilan de la journée du ${rd}/${rm}/${ry}` : `🕑 Point de ${hh}h00 · journée du ${rd}/${rm}/${ry} · mis à jour toutes les ${panel.bilan.everyHours} h`);
+  lines.push('');
+  if (ranked.length) {
+    const best = ranked[0];
+    lines.push(`🏆 La meilleure configuration est celle qui envoie dans le canal ${best.names.length ? best.names.map((n) => `« ${n} »`).join(' + ') : `« ${best.t.name} »`}.`);
+    lines.push(`Elle est classée 1ʳᵉ avec un taux de ${pct(best.wins, best.total)} sur ${best.total} prédiction${best.total > 1 ? 's' : ''} (${best.wins} ✅ · ${best.losses} ❌).`);
+    lines.push('');
+    lines.push('📋 Classement');
+    ranked.slice(0, 15).forEach((r, i) => {
+      lines.push(`${NUM_EMOJI[i] || `${i + 1}.`} ${r.names.length ? r.names.join(' + ') : r.t.name}`);
+      lines.push(`    ${r.t.name} — ${pct(r.wins, r.total)} · ${r.wins}/${r.total}`);
+    });
+  } else {
+    lines.push(`ℹ️ Aucune configuration n'a encore ${min} prédictions vérifiées : pas de classement pour l'instant.`);
+  }
+  if (pending.length) {
+    lines.push('');
+    lines.push('⏳ Pas assez de données');
+    pending.slice(0, 10).forEach((r) => lines.push(`• ${r.names.length ? r.names.join(' + ') : r.t.name} — ${r.total}/${min} prédiction${r.total > 1 ? 's' : ''}`));
+  }
+  return lines.join('\n');
+}
+
+// canaux destinataires : tous ceux des configurations actives (dédoublonnés)
+function bilanTargets() {
+  const tg = []; const site = [];
+  for (const t of panel.trackers) {
+    if (t.enabled === false) continue;
+    for (const id of t.channels || []) if (!tg.some((x) => String(x) === String(id))) tg.push(id);
+    if (t.siteChannelId && !site.includes(String(t.siteChannelId))) site.push(String(t.siteChannelId));
+  }
+  return { tg, site };
+}
+
+// complète les noms réels de canaux manquants (getChat) avant l'envoi
+async function refreshChannelTitles(ids) {
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot || typeof bot.getChat !== 'function') return;
+  await Promise.all(ids.map(async (id) => {
+    if (panel.channelTitles[String(id)]) return;
+    try { const chat = await bot.getChat(id); if (chat && chat.title) setChannelTitle(id, chat.title); } catch (_) { /* le nom restera l'ID */ }
+  }));
+}
+
+async function sendBilan({ force = false, now = Date.now() } = {}) {
+  const { tg, site } = bilanTargets();
+  if (!tg.length && !site.length) return { ok: false, error: 'Aucun canal configuré' };
+  await refreshChannelTitles(tg);
+  const text = buildBilanText(now, force);
+  if (!text) return { ok: false, error: "Aucune prédiction vérifiée aujourd'hui : bilan non envoyé" };
+  const bot = typeof sender === 'function' ? sender() : null;
+  const sent = []; const errors = [];
+  if (tg.length) {
+    if (!bot) errors.push('Aucun token Telegram configuré');
+    else {
+      const res = await Promise.all(tg.map((id) => bot.sendMessage(id, text)
+        .then((m) => (m && m.skipped ? { skipped: true } : { ok: true, id }))
+        .catch((e) => ({ id, error: e.message }))));
+      for (const r of res) { if (r.ok) sent.push(String(r.id)); else if (!r.skipped) errors.push(`${r.id} : ${r.error}`); }
+    }
+  }
+  for (const id of site) { if (addSiteChannelMessage(id, { sender: 'Bilan Dizaine', text })) sent.push(`site:${id}`); }
+  panel.bilan.lastSentAt = Date.now();
+  panel.bilan.lastResult = { sent: sent.length, errors: errors.slice(0, 3), at: Date.now() };
+  return { ok: sent.length > 0, sent, errors, text };
+}
+
+async function bilanTick(now = Date.now()) {
+  for (const t of panel.trackers) rollDay(t, now);
+  const b = panel.bilan;
+  if (!b.enabled) return;
+  const lp = localParts(now);
+  const slotH = Math.floor(lp.h / b.everyHours) * b.everyHours;
+  const slot = `${lp.y}-${lp.m}-${lp.d}T${String(slotH).padStart(2, '0')}`;
+  if (b.lastSlot === null) { b.lastSlot = slot; return; } // première activation : on attend le prochain point
+  if (b.lastSlot === slot) return;
+  b.lastSlot = slot; // marqué avant l'envoi : jamais deux fois le même point
+  try { await sendBilan({ now }); } catch (e) { panel.lastError = e.message; }
+}
+
 async function tick() {
   if (busy || !panel.enabled) return panel;
   busy = true;
   try {
     for (const tracker of panel.trackers) await processTracker(tracker);
     await verifyPending();
+    await bilanTick();
     panel.lastScanAt = Date.now();
   } catch (e) {
     panel.lastError = e.message;
@@ -546,6 +727,7 @@ function statusView() {
       sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
       lastPreds: lastPredsFor(t.id, 3),
     })),
+    bilan: { ...panel.bilan, tz: BILAN_TZ },
     history: panel.history.slice(0, 30),
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
@@ -560,4 +742,8 @@ module.exports = {
   restore, restoreFromDb, parseChannels, setChannelTitle,
   // exposés pour les tests
   countDecade, rankSuits, pickSuit,
+  sendBilan, buildBilanText, bilanTick, rollDay,
 };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

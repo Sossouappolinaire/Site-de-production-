@@ -169,7 +169,7 @@ app.post('/api/auth/mail-config', async (req, res) => {
 // remettre l'ancien verrou (conservé juste au-dessus en commentaire dans
 // l'historique du fichier) à la place du middleware ci-dessous.
 // ---------------------------------------------------------------------------
-const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico']);
+const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/intro.js']);
 function isPublicPath(p) {
   if (PUBLIC_EXACT.has(p)) return true;
   if (p.startsWith('/api/auth/')) return true;
@@ -182,6 +182,19 @@ app.use((req, res, next) => {
     if (!req.session.identifier) req.session.identifier = 'Visiteur';
   }
   next();
+});
+
+// Identifiant de démarrage : change à chaque redémarrage / redéploiement. Injecté
+// dans index.html et login.html (<meta name="boot-id">) pour que l'intro animée
+// (public/intro.js) ne soit jouée qu'UNE fois après chaque redémarrage.
+const BOOT_ID = String(Date.now());
+app.get(['/', '/index.html', '/login.html'], (req, res, next) => {
+  const file = path.join(__dirname, 'public', req.path === '/login.html' ? 'login.html' : 'index.html');
+  require('fs').readFile(file, 'utf8', (err, html) => {
+    if (err) return next();
+    res.set('Cache-Control', 'no-store');
+    res.type('html').send(html.replace('content="__BOOT_ID__"', `content="${BOOT_ID}"`));
+  });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1813,6 +1826,15 @@ app.delete('/api/dizaine-top/trackers/:id', (req, res) => {
 app.post('/api/dizaine-top/trackers/:id/test', async (req, res) => {
   const r = await dizaineTop.test(req.params.id);
   res.status(r.ok ? 200 : 400).json(r);
+});
+
+// bilan : aperçu du texte (sans envoi) et envoi immédiat (test)
+app.get('/api/dizaine-top/bilan/preview', (req, res) => {
+  res.json({ text: dizaineTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
+});
+app.post('/api/dizaine-top/bilan/send', async (req, res) => {
+  const r = await dizaineTop.sendBilan({ force: true });
+  res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, dizaineTop: dizaineTop.status() });
 });
 
 app.post('/api/dizaine-top/scan', async (req, res) => {

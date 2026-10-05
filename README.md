@@ -361,3 +361,33 @@ part quand le jeu situé juste avant la cible est en cours, plus N secondes (10 
 Ex. déclencheur au jeu #2, cible #4 : envoi du jeu #4 quand le jeu #3 est en cours + 10 s.
 Si le jeu cible a déjà commencé avant l'envoi, la prédiction est annulée. Désactivé par défaut ;
 `SEND_DELAY=off` désactive la fonction partout.
+
+## Intro de démarrage (personnage + mallette)
+
+L'ancienne intro « livre » est remplacée par un personnage qui entre en marchant, ramasse sa
+mallette et repart (`public/intro.js`, pages d'accueil et de connexion). Elle n'est jouée
+qu'une fois après chaque redémarrage / redéploiement du serveur : le serveur injecte un
+identifiant de démarrage (`BOOT_ID`) et le navigateur mémorise le dernier vu. Ensuite les pages
+s'ouvrent directement, sans intro. Toucher l'écran passe l'intro.
+
+## Bilan « Dizaine — costume le plus / le moins sorti »
+
+Toutes les 2 h (réglable, 1 à 24 h), à heure fixe (00h, 02h, 04h…), un bilan est envoyé dans les
+canaux des configurations actives (Telegram + canaux du site) : la meilleure configuration est
+désignée par le nom réel de son canal, classée 1ʳᵉ avec son taux sur N prédictions, suivie du
+classement. Taux de la journée en cours (fuseau `BILAN_TZ`, `Africa/Porto-Novo` par défaut) ; au
+point de minuit, bilan de la journée écoulée. Minimum 5 prédictions vérifiées dans la journée pour
+être classée (réglable). Chaque canal reçoit le bilan complet. Réglages, aperçu et envoi immédiat
+sur la page de la stratégie.
+
+## Nouveau départ de 00h00 (heure d'Abidjan)
+
+Chaque jour à 00h00 pile (`RESET_TZ`, `Africa/Abidjan` par défaut ; `MIDNIGHT_RESET=off` pour
+désactiver), `midnight-reset.js` : 1) envoie l'export Excel complet de la configuration (comme
+`/exporter`) dans le chat privé de l'administrateur (`ADMIN_ID`) ; 2) efface les DONNÉES : jeux
+stockés, prédictions, compteurs, historiques, messages en attente et bilans de chaque panneau,
+registres anti-doublon, filtres « double perte », annonces de position, analyses cumulées du jour
+(mémoire + tables `games`, `predictions`, `after_loss_sent`, `announcements`, `gates`,
+`cumulative_analyses`) ; 3) confirme à l'administrateur. AUCUNE configuration n'est touchée.
+Si le serveur dormait à 00h00, l'opération a lieu à son réveil (30 premières minutes). Un seul
+passage par jour. Les jeux déjà terminés renvoyés ensuite par le flux ne redéclenchent rien.

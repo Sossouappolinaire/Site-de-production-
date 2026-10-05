@@ -17,7 +17,7 @@ const CORE = [
   'package.json', 'render.yaml', 'README.md',
   'bootstrap.js', 'server.js', 'config.js', 'database-url.js', 'session-store.js',
   'store.js', 'db.js', 'auth.js', 'api.js', 'bot.js', 'predictor.js', 'strategies.js',
-  'formats.js', 'tg-formats.js', 'deploy-generator.js', 'auto-import.js', 'status-animator.js', 'early-verify.js', 'send-delay.js', 'config-import',
+  'formats.js', 'tg-formats.js', 'deploy-generator.js', 'auto-import.js', 'status-animator.js', 'early-verify.js', 'send-delay.js', 'midnight-reset.js', 'config-import',
 ];
 
 // modules optionnels proposés à la sélection

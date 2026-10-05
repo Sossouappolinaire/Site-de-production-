@@ -517,3 +517,6 @@ module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
   restore, restoreFromDb, parseChannels, options,
 };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

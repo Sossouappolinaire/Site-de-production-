@@ -13,6 +13,7 @@ const aiQa = require('./ai-qa');
 const fmt = require('./formats');
 const statusAnimator = require('./status-animator');
 const sendDelay = require('./send-delay');
+const midnightReset = require('./midnight-reset');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const copyAnnounce = require('./copy-announce');
@@ -2118,6 +2119,7 @@ async function applyDbConfigs() {
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
   await dizaineTop.restoreFromDb();
+  await midnightReset.restoreFromDb();
   await copyAnnounce.restoreFromDb();
   await suitBreak.restoreFromDb();
   await overlap.restoreFromDb();
@@ -2179,6 +2181,8 @@ async function startLoop() {
   suitStreak.restore();
   suitStreak.setSender(senderFor);
   dizaineTop.restore();
+  midnightReset.restore();
+  midnightReset.setSender(senderFor);
   dizaineTop.setSender(senderFor);
   copyAnnounce.restore();
   copyAnnounce.setSender(senderFor);
@@ -2233,11 +2237,11 @@ async function startLoop() {
   });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
-  setOnShoeReset((reason, seq) => sendShoeReport(reason, seq));
+  setOnShoeReset((reason, seq) => (state.wiping ? false : sendShoeReport(reason, seq)));
   // bilan complet (toutes stratégies + IA) — envoyé quand les numéros
   // reviennent à 1 ET que le sabot qui vient de se terminer représente une
   // vraie journée (voir sendBilanIfDayOver ci-dessus pour le seuil).
-  setOnShoeReset((reason, seq, previousMax) => sendBilanIfDayOver(reason, seq, previousMax));
+  setOnShoeReset((reason, seq, previousMax) => (state.wiping ? undefined : sendBilanIfDayOver(reason, seq, previousMax)));
   setOnGateChange((key, g) => { if (db.ready) db.saveGate(key, g); });
   setOnAnnouncementSave((entry) => { if (db.ready) db.saveAnnouncement(entry); });
   setOnAnnouncementDelete((id) => { if (db.ready) db.deleteAnnouncement(id); });
@@ -2278,6 +2282,9 @@ async function startLoop() {
       releasing = true;
       try { await sendDelay.releaseDue(state, broadcast); } catch (e) { state.lastError = e.message; } finally { releasing = false; }
     }, 1000);
+    // « nouveau départ » de 00h00 (heure d'Abidjan) : export dans le chat privé puis
+    // effacement des données, configurations conservées (voir midnight-reset.js)
+    setInterval(() => { midnightReset.check().catch((e) => { state.lastError = e.message; }); }, 1000);
     tick();
   }
   startBot();

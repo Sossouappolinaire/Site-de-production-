@@ -975,3 +975,6 @@ function status() {
 }
 
 module.exports = { panel, predictionText, status, config, configure, restore, restoreFromDb, setSender, tick, mirror, test, parseChannels, sendBilans, globalBilanText, strategiesView };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

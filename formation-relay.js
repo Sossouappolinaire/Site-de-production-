@@ -958,3 +958,6 @@ function status() {
 }
 
 module.exports = { panel, setSender, restore, configure, setStrategy, refreshAnalysis, effectiveFormat, effectiveMaxR, sendLesson, lessonText, lessonOf, lessonTitleOf, tick, status, options, parseChannels, formationTrusted };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

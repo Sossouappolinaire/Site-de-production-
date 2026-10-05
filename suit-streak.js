@@ -781,3 +781,6 @@ module.exports = {
   options, addTracker, updateTracker, removeTracker,
   restore, restoreFromDb, parseChannels, pendingFor, setChannelTitle,
 };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

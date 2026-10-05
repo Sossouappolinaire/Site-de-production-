@@ -2355,3 +2355,6 @@ module.exports = {
   TRIGGER_KEYS, TRIGGER_LABELS, pendingFor, tallyView, findConfigConflicts,
   CATEGORIES, verifiedFor,
 };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

@@ -526,3 +526,6 @@ module.exports = {
   options, addRule, updateRule, removeRule, parseChannels,
   restore, restoreFromDb, setChannelTitle,
 };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;
