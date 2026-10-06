@@ -53,6 +53,7 @@ const panel = {
   trackers: [],
   pendingMessages: [],
   channelTitles: {},
+  channelLinks: {},
   history: [],
   sentCount: 0,
   lastSentAt: null,
@@ -62,7 +63,7 @@ const panel = {
   bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
   // canal des MEILLEURES prédictions (voir en-tête) : configuré une fois, il reçoit les
   // prédictions de la configuration actuellement en tête du classement du jour.
-  best: { enabled: false, channels: [], format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null },
+  best: { enabled: false, channels: [], link: '', welcome: true, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null },
 };
 
 let sender = null;
@@ -123,6 +124,8 @@ function configure(patch = {}) {
   if (patch.bilanMinPreds !== undefined) panel.bilan.minPreds = sanitizeMinPreds(patch.bilanMinPreds);
   if (patch.bestEnabled !== undefined) panel.best.enabled = !!patch.bestEnabled;
   if (patch.bestChannels !== undefined) panel.best.channels = parseChannels(patch.bestChannels);
+  if (patch.bestLink !== undefined) panel.best.link = sanitizeLink(patch.bestLink);
+  if (patch.bestWelcome !== undefined) panel.best.welcome = !!patch.bestWelcome;
   if (patch.bestFormat !== undefined) panel.best.format = sanitizeFormat(patch.bestFormat);
   if (patch.bestMaxR !== undefined) panel.best.maxR = sanitizeMaxR(patch.bestMaxR);
   persist();
@@ -158,6 +161,7 @@ function persist() {
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
     channelTitles: panel.channelTitles,
+    channelLinks: panel.channelLinks,
     bilan: panel.bilan,
     best: panel.best,
   };
@@ -212,6 +216,7 @@ function normalizeTracker(t) {
 
 function applySaved(saved) {
   if (saved.channelTitles && typeof saved.channelTitles === 'object') panel.channelTitles = { ...saved.channelTitles };
+  if (saved.channelLinks && typeof saved.channelLinks === 'object') panel.channelLinks = { ...saved.channelLinks };
   if (saved.config) panel.enabled = saved.config.enabled !== false;
   if (saved.bilan && typeof saved.bilan === 'object') {
     panel.bilan = {
@@ -230,6 +235,10 @@ function applySaved(saved) {
       ...panel.best,
       enabled: !!saved.best.enabled,
       channels: parseChannels(saved.best.channels || []),
+      link: sanitizeLink(saved.best.link),
+      welcome: saved.best.welcome !== false,
+      wins: Number(saved.best.wins) || 0,
+      losses: Number(saved.best.losses) || 0,
       format: sanitizeFormat(saved.best.format),
       maxR: sanitizeMaxR(saved.best.maxR),
       currentTrackerId: saved.best.currentTrackerId || null,
@@ -397,6 +406,85 @@ function rankedToday(now = Date.now()) {
 // Meilleure configuration du moment. Si une autre devient STRICTEMENT meilleure,
 // on bascule sur elle (ses prédictions sont envoyées à partir de la suivante).
 // Tant que personne n'est classé (début de journée), on garde le dernier meilleur connu.
+// lien saisi à la main : https://t.me/..., t.me/..., telegram.me/... ou @nom (vide = aucun)
+function sanitizeLink(value) {
+  let v = String(value == null ? '' : value).trim().slice(0, 200);
+  if (!v) return '';
+  if (v.startsWith('@')) return `https://t.me/${v.slice(1)}`;
+  if (/^(t\.me|telegram\.me)\//i.test(v)) v = `https://${v}`;
+  return /^https?:\/\/(t\.me|telegram\.me)\/\S+$/i.test(v) ? v : '';
+}
+function channelLinkOf(id) {
+  const key = String(id == null ? '' : id).trim();
+  if (panel.channelLinks[key]) return panel.channelLinks[key];
+  if (key.startsWith('@')) return `https://t.me/${key.slice(1)}`;
+  return null;
+}
+
+let adminIdFn = null;
+function setAdminId(fn) { adminIdFn = typeof fn === 'function' ? fn : null; }
+function trackerRealName(t) { return trackerChannelNames(t, siteChannelsView()).join(' + ') || t.name; }
+
+// Alerte envoyée UNIQUEMENT au chat privé de l'administrateur (jamais dans un canal)
+function notifyBestChange(prevId, top, ranked) {
+  try {
+    const b = panel.best;
+    const adminId = adminIdFn ? adminIdFn() : null;
+    const bot = typeof sender === 'function' ? sender() : null;
+    if (!b.enabled || !b.channels.length || !adminId || !bot) return;
+    const line = (r) => `${trackerRealName(r.t)} — ${pct(r.wins, r.total)} (${r.wins}/${r.total}) · moy. ${avgRattrapage(r)}`;
+    const prevRow = prevId ? ranked.find((r) => r.t.id === prevId) : null;
+    const prevT = prevId ? panel.trackers.find((t) => t.id === prevId) : null;
+    const dest = b.channels.map((id) => panel.channelTitles[String(id)] || String(id)).join(' + ');
+    const text = prevT
+      ? `🔄 Nouveau meilleur canal\n\n🏆 ${line(top)}\n↩️ Remplace : ${prevRow ? line(prevRow) : trackerRealName(prevT)}\n\n📣 Ses prédictions partent maintenant dans « ${dest} »`
+      : `🏆 Meilleur canal désigné\n\n${line(top)}\n\n📣 Ses prédictions partent dans « ${dest} »`;
+    Promise.resolve(bot.sendMessage(adminId, text)).catch(() => {});
+  } catch (_) { /* une alerte ratée ne doit jamais bloquer les prédictions */ }
+}
+
+// ---- BIENVENUE dans le canal des meilleures prédictions ------------------
+function bestRecap(title) {
+  const w = panel.best.wins || 0; const l = panel.best.losses || 0; const total = w + l;
+  const rate = total ? ((w / total) * 100).toFixed(2) : '0.00';
+  return `📊 ${title}\n• 🎮 All games : ${total}\n• ✅ Won : ${w}\n• ❌ Lost : ${l}\n• ${rate}%`;
+}
+function welcomeText(fullName, title) {
+  return `👋 ${fullName}, bienvenue dans le canal : ${title}\n\n${bestRecap(title)}`;
+}
+const welcomeSeen = new Map();
+function isBestChat(chat) {
+  return panel.best.channels.some((id) => String(id) === String(chat.id)
+    || (String(id).startsWith('@') && chat.username && String(id).slice(1).toLowerCase() === String(chat.username).toLowerCase()));
+}
+let lastMember = null; // diagnostic : dernier événement « membre » reçu de Telegram (non sauvegardé)
+async function handleMemberUpdate(u) {
+  if (u && u.chat && u.new_chat_member) {
+    lastMember = {
+      at: Date.now(), chat: u.chat.title || String(u.chat.id),
+      from: (u.old_chat_member || {}).status || '?', to: u.new_chat_member.status,
+      isBest: isBestChat(u.chat),
+    };
+  }
+  const b = panel.best;
+  if (!b.enabled || !b.welcome || !b.channels.length || !u || !u.chat || !u.new_chat_member) return false;
+  const nm = u.new_chat_member; const old = u.old_chat_member || {};
+  const joined = ['member', 'administrator', 'creator'].includes(nm.status) && ['left', 'kicked'].includes(old.status);
+  if (!joined || !nm.user || nm.user.is_bot || !isBestChat(u.chat)) return false;
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return false;
+  const k = `${u.chat.id}:${nm.user.id}`;
+  const now = Date.now();
+  if (welcomeSeen.has(k) && now - welcomeSeen.get(k) < 10 * 60 * 1000) return false; // pas de double message
+  welcomeSeen.set(k, now);
+  if (welcomeSeen.size > 500) for (const [kk, t] of welcomeSeen) if (now - t > 10 * 60 * 1000) welcomeSeen.delete(kk);
+  const title = u.chat.title || panel.channelTitles[String(u.chat.id)] || String(u.chat.id);
+  if (u.chat.title) setChannelTitle(u.chat.id, u.chat.title);
+  const fullName = [nm.user.first_name, nm.user.last_name].filter(Boolean).join(' ').trim() || nm.user.username || 'Nouveau membre';
+  try { await bot.sendMessage(u.chat.id, welcomeText(fullName, title)); return true; }
+  catch (e) { panel.lastError = `Bienvenue ${u.chat.id} : ${e.message}`; return false; }
+}
+
 function currentBest(now = Date.now()) {
   const b = panel.best;
   const ranked = rankedToday(now);
@@ -404,8 +492,10 @@ function currentBest(now = Date.now()) {
     const top = ranked[0];
     const cur = ranked.find((r) => r.t.id === b.currentTrackerId);
     if (!cur || compareQuality(top, cur) < 0) { // égalité parfaite (taux ET moyenne) : on reste sur le meilleur actuel (pas d'aller-retour)
+      const prevId = b.currentTrackerId;
       b.currentTrackerId = top.t.id;
       b.switchedAt = Date.now();
+      if (prevId !== top.t.id) notifyBestChange(prevId, top, ranked);
     }
   }
   return panel.trackers.find((t) => t.id === b.currentTrackerId) || null;
@@ -436,7 +526,7 @@ async function forwardToBest(tracker, syn) {
   b.lastSentAt = Date.now();
   panel.pendingMessages.push({
     id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    trackerId: tracker.id, mirror: true, // relais : ne compte pas deux fois dans les scores
+    trackerId: tracker.id, mirror: true, best: true, // relais : ne compte pas deux fois dans les scores des configurations
     target: syn.target, suit: syn.suit, strategyName: 'Meilleure prédiction',
     format: b.format, maxR: b.maxR, step: 0, gap: 0, skipped: 0,
     status: 'en attente', messages: sentMessages, createdAt: Date.now(), resolvedAt: null,
@@ -531,6 +621,16 @@ function editPending(entry, statusFr) {
 
 // step = rattrapage auquel la victoire a eu lieu (0 = ✅0️⃣, 1 = ✅1️⃣…) : sert au départage
 // des configurations à taux égal (moyenne des rattrapages, voir compareQuality).
+// relais vers le canal des meilleures : jamais compté dans les scores des configurations,
+// mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
+function bumpEntry(entry, field, step = 0) {
+  if (entry.mirror) {
+    if (entry.best) { panel.best[field] = (panel.best[field] || 0) + 1; persist(); }
+    return;
+  }
+  bumpScore(entry.trackerId, field, step);
+}
+
 function bumpScore(trackerId, field, step = 0) {
   const t = panel.trackers.find((x) => x.id === trackerId);
   if (!t) return;
@@ -563,13 +663,13 @@ async function verifyPending() {
       const won = hasSuit(g, entry.suit); // main du JOUEUR
       if (won) {
         entry.status = 'gagné'; entry.resolvedAt = Date.now();
-        if (!entry.mirror) bumpScore(entry.trackerId, 'wins', entry.step);
+        bumpEntry(entry, 'wins', entry.step);
         editPending(entry, 'gagné');
         break;
       }
       if (entry.step >= entry.maxR) {
         entry.status = 'perdu'; entry.resolvedAt = Date.now();
-        if (!entry.mirror) bumpScore(entry.trackerId, 'losses');
+        bumpEntry(entry, 'losses');
         editPending(entry, 'perdu');
         break;
       }
@@ -687,9 +787,13 @@ function buildBilanText(now = Date.now(), forceToday = false) {
     lines.push(`📈 ${best.wins} ✅ · ${best.losses} ❌ sur ${best.total} prédiction${best.total > 1 ? 's' : ''}`);
     lines.push(`🎯 Rattrapage moyen : ${avgRattrapage(best)}`);
     if (panel.best.enabled && panel.best.channels.length) {
-      const dest = panel.best.channels.map((id) => panel.channelTitles[String(id)] || String(id)).join(' + ');
       lines.push('');
-      lines.push(`🎯 Pour les meilleures prédictions, veuillez voir le canal « ${dest} »`);
+      lines.push('🎯 Meilleures prédictions envoyées actuellement dans :');
+      for (const id of panel.best.channels) {
+        const nm = panel.channelTitles[String(id)] || String(id);
+        const lk = (panel.best.link && String(id) === String(panel.best.channels[0])) ? panel.best.link : channelLinkOf(id);
+        lines.push(`    📣 « ${nm} »${lk ? `\n    🔗 ${lk}` : ''}`);
+      }
       lines.push(`    Taux du meilleur canal : ${pct(best.wins, best.total)} (${best.wins}/${best.total})`);
     }
     lines.push('');
@@ -733,6 +837,9 @@ async function refreshChannelTitles(ids) {
       const chat = await bot.getChat(id);
       const title = chat && (chat.title || chat.username || chat.first_name);
       if (title && panel.channelTitles[id] !== String(title).slice(0, 120)) setChannelTitle(id, title);
+      // lien : canal public (@nom) sinon lien d'invitation déjà connu de Telegram (jamais d'en créer un)
+      const link = chat && (chat.username ? `https://t.me/${chat.username}` : (chat.invite_link || null));
+      if (link && panel.channelLinks[id] !== link) { panel.channelLinks[id] = link; persist(); }
     } catch (_) { /* on garde le dernier nom connu (ou l'ID) */ }
   }));
 }
@@ -884,7 +991,9 @@ function statusView() {
       ...panel.best,
       currentName: (panel.trackers.find((t) => t.id === panel.best.currentTrackerId) || {}).name || null,
       channelNames: panel.best.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
+      channelLinks: panel.best.channels.map((id, k) => (k === 0 && panel.best.link) ? panel.best.link : channelLinkOf(id)),
     },
+    lastMember,
     history: panel.history.slice(0, 30),
     sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt,
@@ -906,3 +1015,6 @@ module.exports = {
 module.exports.persist = persist;
 module.exports.send = send;
 module.exports.currentBest = currentBest;
+module.exports.setAdminId = setAdminId;
+module.exports.handleMemberUpdate = handleMemberUpdate;
+module.exports.welcomeText = welcomeText;

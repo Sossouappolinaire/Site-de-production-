@@ -396,6 +396,11 @@ function wire(b) {
     const status = u.new_chat_member && u.new_chat_member.status;
     if (['administrator', 'member', 'creator'].includes(status)) rememberChannel(u.chat);
   });
+  // Nouveau membre dans le canal des meilleures prédictions : message de bienvenue + récapitulatif
+  b.on('chat_member', (u) => {
+    Promise.resolve(costumeFaibleTop.handleMemberUpdate(u)).catch(() => {});
+    Promise.resolve(dizaineTop.handleMemberUpdate(u)).catch(() => {});
+  });
 
   // ---------------------------------------------------------------------
   // Commandes envoyées DANS un canal (channel_post) — CORRECTIF : avant,
@@ -2190,7 +2195,9 @@ async function startLoop() {
   midnightReset.restore();
   midnightReset.setSender(senderFor);
   dizaineTop.setSender(senderFor);
+  dizaineTop.setAdminId(() => state.adminId);
   costumeFaibleTop.setSender(senderFor);
+  costumeFaibleTop.setAdminId(() => state.adminId);
   copyAnnounce.restore();
   copyAnnounce.setSender(senderFor);
   // « Copie et annonce » tourne sur SA PROPRE minuterie : elle ne dépend ni
