@@ -1838,6 +1838,10 @@ app.post('/api/dizaine-top/trackers/:id/test', async (req, res) => {
 app.get('/api/dizaine-top/bilan/preview', (req, res) => {
   res.json({ text: dizaineTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
 });
+app.post('/api/dizaine-top/welcome/test', async (req, res) => {
+  const r = await dizaineTop.testWelcome();
+  res.status(r.ok ? 200 : 400).json(r);
+});
 app.post('/api/dizaine-top/bilan/send', async (req, res) => {
   const r = await dizaineTop.sendBilan({ force: true });
   res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, dizaineTop: dizaineTop.status() });
@@ -1902,6 +1906,10 @@ app.post('/api/costume-faible-top/trackers/:id/test', async (req, res) => {
 });
 app.get('/api/costume-faible-top/bilan/preview', (req, res) => {
   res.json({ text: costumeFaibleTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
+});
+app.post('/api/costume-faible-top/welcome/test', async (req, res) => {
+  const r = await costumeFaibleTop.testWelcome();
+  res.status(r.ok ? 200 : 400).json(r);
 });
 app.post('/api/costume-faible-top/bilan/send', async (req, res) => {
   const r = await costumeFaibleTop.sendBilan({ force: true });

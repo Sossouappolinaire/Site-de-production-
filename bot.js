@@ -398,6 +398,7 @@ function wire(b) {
   });
   // Nouveau membre dans le canal des meilleures prédictions : message de bienvenue + récapitulatif
   b.on('chat_member', (u) => {
+    try { console.log(`[chat_member] ${u.chat && (u.chat.title || u.chat.id)} : ${(u.old_chat_member || {}).status} → ${(u.new_chat_member || {}).status} (${u.new_chat_member && u.new_chat_member.user && u.new_chat_member.user.id})`); } catch (_) { /* journal seulement */ }
     Promise.resolve(costumeFaibleTop.handleMemberUpdate(u)).catch(() => {});
     Promise.resolve(dizaineTop.handleMemberUpdate(u)).catch(() => {});
   });

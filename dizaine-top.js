@@ -63,7 +63,7 @@ const panel = {
   bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
   // canal des MEILLEURES prédictions (voir en-tête) : configuré une fois, il reçoit les
   // prédictions de la configuration actuellement en tête du classement du jour.
-  best: { enabled: false, channels: [], link: '', welcome: true, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null },
+  best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null },
 };
 
 let sender = null;
@@ -126,6 +126,8 @@ function configure(patch = {}) {
   if (patch.bestChannels !== undefined) panel.best.channels = parseChannels(patch.bestChannels);
   if (patch.bestLink !== undefined) panel.best.link = sanitizeLink(patch.bestLink);
   if (patch.bestWelcome !== undefined) panel.best.welcome = !!patch.bestWelcome;
+  if (patch.bestRecap !== undefined) panel.best.recap = !!patch.bestRecap;
+  if (patch.bestRecapMin !== undefined) panel.best.recapMin = sanitizeRecapMin(patch.bestRecapMin);
   if (patch.bestFormat !== undefined) panel.best.format = sanitizeFormat(patch.bestFormat);
   if (patch.bestMaxR !== undefined) panel.best.maxR = sanitizeMaxR(patch.bestMaxR);
   persist();
@@ -207,8 +209,8 @@ function normalizeTracker(t) {
     lastSentAt: t.lastSentAt || null,
     createdAt: t.createdAt || Date.now(),
     // résultats par journée (bilan) : jour en cours + veille
-    day: t.day && t.day.date ? { date: t.day.date, wins: Number(t.day.wins) || 0, losses: Number(t.day.losses) || 0, rsum: Number(t.day.rsum) || 0 } : null,
-    prevDay: t.prevDay && t.prevDay.date ? { date: t.prevDay.date, wins: Number(t.prevDay.wins) || 0, losses: Number(t.prevDay.losses) || 0, rsum: Number(t.prevDay.rsum) || 0 } : null,
+    day: t.day && t.day.date ? { date: t.day.date, wins: Number(t.day.wins) || 0, losses: Number(t.day.losses) || 0, rsum: Number(t.day.rsum) || 0, d0: Number(t.day.d0) || 0, streak: Number(t.day.streak) || 0, rmax: Number(t.day.rmax) || 0, lrun: Number(t.day.lrun) || 0, lmax: Number(t.day.lmax) || 0, smax: Number(t.day.smax) || 0 } : null,
+    prevDay: t.prevDay && t.prevDay.date ? { date: t.prevDay.date, wins: Number(t.prevDay.wins) || 0, losses: Number(t.prevDay.losses) || 0, rsum: Number(t.prevDay.rsum) || 0, d0: Number(t.prevDay.d0) || 0, streak: Number(t.prevDay.streak) || 0, rmax: Number(t.prevDay.rmax) || 0, lrun: Number(t.prevDay.lrun) || 0, lmax: Number(t.prevDay.lmax) || 0, smax: Number(t.prevDay.smax) || 0 } : null,
   };
   base.name = (t.name && String(t.name).trim()) || defaultName(base);
   return base;
@@ -237,6 +239,9 @@ function applySaved(saved) {
       channels: parseChannels(saved.best.channels || []),
       link: sanitizeLink(saved.best.link),
       welcome: saved.best.welcome !== false,
+      recap: saved.best.recap !== false,
+      recapMin: sanitizeRecapMin(saved.best.recapMin == null ? 125 : saved.best.recapMin),
+      lastRecapAt: Number(saved.best.lastRecapAt) || null,
       wins: Number(saved.best.wins) || 0,
       losses: Number(saved.best.losses) || 0,
       format: sanitizeFormat(saved.best.format),
@@ -426,7 +431,7 @@ function setAdminId(fn) { adminIdFn = typeof fn === 'function' ? fn : null; }
 function trackerRealName(t) { return trackerChannelNames(t, siteChannelsView()).join(' + ') || t.name; }
 
 // Alerte envoyée UNIQUEMENT au chat privé de l'administrateur (jamais dans un canal)
-function notifyBestChange(prevId, top, ranked) {
+function notifyBestChange(prevId, top, ranked, reason) {
   try {
     const b = panel.best;
     const adminId = adminIdFn ? adminIdFn() : null;
@@ -437,7 +442,7 @@ function notifyBestChange(prevId, top, ranked) {
     const prevT = prevId ? panel.trackers.find((t) => t.id === prevId) : null;
     const dest = b.channels.map((id) => panel.channelTitles[String(id)] || String(id)).join(' + ');
     const text = prevT
-      ? `🔄 Nouveau meilleur canal\n\n🏆 ${line(top)}\n↩️ Remplace : ${prevRow ? line(prevRow) : trackerRealName(prevT)}\n\n📣 Ses prédictions partent maintenant dans « ${dest} »`
+      ? `🔄 Nouveau meilleur canal${reason ? `\n⚠️ Cause : ${reason}` : ''}\n\n🏆 ${line(top)}\n↩️ Remplace : ${prevRow ? line(prevRow) : trackerRealName(prevT)}\n\n📣 Ses prédictions partent maintenant dans « ${dest} »`
       : `🏆 Meilleur canal désigné\n\n${line(top)}\n\n📣 Ses prédictions partent dans « ${dest} »`;
     Promise.resolve(bot.sendMessage(adminId, text)).catch(() => {});
   } catch (_) { /* une alerte ratée ne doit jamais bloquer les prédictions */ }
@@ -447,8 +452,29 @@ function notifyBestChange(prevId, top, ranked) {
 function bestRecap(title) {
   const w = panel.best.wins || 0; const l = panel.best.losses || 0; const total = w + l;
   const rate = total ? ((w / total) * 100).toFixed(2) : '0.00';
-  return `📊 ${title}\n• 🎮 All games : ${total}\n• ✅ Won : ${w}\n• ❌ Lost : ${l}\n• ${rate}%`;
+  return `📊 ${title} :\n• 🎮 All games : ${total}\n• ✅ Won : ${w}\n• ❌ Lost : ${l}\n• ${rate}%`;
 }
+// ---- RÉCAPITULATIF PÉRIODIQUE dans le canal des meilleures prédictions -----
+function sanitizeRecapMin(v) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(5, Math.min(1440, n)) : 125;
+}
+async function maybeSendRecap(now = Date.now()) {
+  const b = panel.best;
+  if (!b.enabled || !b.recap || !b.channels.length) return;
+  if (!b.lastRecapAt) { b.lastRecapAt = now; return; } // le compteur démarre : 1er récapitulatif après l'intervalle
+  if (now - b.lastRecapAt < sanitizeRecapMin(b.recapMin) * 60000) return;
+  b.lastRecapAt = now;
+  if (((b.wins || 0) + (b.losses || 0)) === 0) return; // rien à récapituler
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return;
+  for (const id of b.channels) {
+    const title = panel.channelTitles[String(id)] || String(id);
+    try { await bot.sendMessage(id, bestRecap(title)); }
+    catch (e) { panel.lastError = `Récapitulatif ${id} : ${e.message}`; }
+  }
+}
+
 function welcomeText(fullName, title) {
   return `👋 ${fullName}, bienvenue dans le canal : ${title}\n\n${bestRecap(title)}`;
 }
@@ -485,7 +511,29 @@ async function handleMemberUpdate(u) {
   catch (e) { panel.lastError = `Bienvenue ${u.chat.id} : ${e.message}`; return false; }
 }
 
-function currentBest(now = Date.now()) {
+
+// Test de la bienvenue : vérifie les droits du bot dans le canal des meilleures et y poste un message d'essai
+async function testWelcome() {
+  const b = panel.best;
+  if (!b.channels.length) return { ok: false, error: 'Aucun canal des meilleures prédictions configuré' };
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return { ok: false, error: 'Aucun token Telegram configuré' };
+  const out = { ok: false, channel: String(b.channels[0]) };
+  try {
+    const me = await bot.getMe();
+    const chat = await bot.getChat(b.channels[0]);
+    out.chatType = chat.type;
+    const mem = await bot.getChatMember(chat.id, me.id);
+    out.botStatus = mem.status; out.canPost = mem.can_post_messages; out.canInvite = mem.can_invite_users;
+    const title = chat.title || panel.channelTitles[String(chat.id)] || String(chat.id);
+    const m = await bot.sendMessage(chat.id, `🧪 TEST — ${welcomeText('Prénom Nom', title)}`);
+    if (m && m.skipped) out.error = 'Envoi ignoré : les prédictions de ce canal sont en pause (/stop)';
+    else out.ok = true;
+  } catch (e) { out.error = e.message; }
+  return out;
+}
+
+function currentBest(now = Date.now(), reason) {
   const b = panel.best;
   const ranked = rankedToday(now);
   if (ranked.length) {
@@ -495,7 +543,7 @@ function currentBest(now = Date.now()) {
       const prevId = b.currentTrackerId;
       b.currentTrackerId = top.t.id;
       b.switchedAt = Date.now();
-      if (prevId !== top.t.id) notifyBestChange(prevId, top, ranked);
+      if (prevId !== top.t.id) notifyBestChange(prevId, top, ranked, reason);
     }
   }
   return panel.trackers.find((t) => t.id === b.currentTrackerId) || null;
@@ -629,6 +677,16 @@ function bumpEntry(entry, field, step = 0) {
     return;
   }
   bumpScore(entry.trackerId, field, step);
+  if (field === 'losses') recalcAfterLoss(entry);
+}
+
+// Perte du meilleur actuel : classement recalculé tout de suite, en silence (rien n'est posté dans le canal des
+// meilleures ; seule l'alerte privée à l'admin part si le meilleur change). Si l'ancien meilleur reste premier,
+// il continue d'envoyer ; sinon c'est la prochaine prédiction du nouveau meilleur qui part.
+function recalcAfterLoss(entry) {
+  try {
+    if (panel.best.currentTrackerId === entry.trackerId) currentBest(Date.now(), `perte du meilleur sur #N${entry.target}`);
+  } catch (_) { /* jamais bloquant */ }
 }
 
 function bumpScore(trackerId, field, step = 0) {
@@ -637,7 +695,12 @@ function bumpScore(trackerId, field, step = 0) {
   t[field] = (t[field] || 0) + 1;
   rollDay(t); // compteur de la journée (bilan)
   t.day[field] = (t.day[field] || 0) + 1;
-  if (field === 'wins') t.day.rsum = (t.day.rsum || 0) + (Number(step) || 0);
+  if (field === 'wins') {
+    t.day.rsum = (t.day.rsum || 0) + (Number(step) || 0);
+    if (!Number(step)) t.day.d0 = (t.day.d0 || 0) + 1; // victoire du premier coup
+    t.day.streak = (t.day.streak || 0) + 1;
+  } else if (field === 'losses') t.day.streak = 0;
+  trackDayResult(t.day, field, step);
 }
 
 async function verifyPending() {
@@ -709,28 +772,71 @@ const dayKeyOf = (ms) => { const p = localParts(ms); return `${p.y}-${p.m}-${p.d
 // bascule de journée : le jour écoulé devient « veille », un nouveau jour démarre
 function rollDay(t, now = Date.now()) {
   const key = dayKeyOf(now);
-  if (!t.day) t.day = { date: key, wins: 0, losses: 0, rsum: 0 };
-  else if (t.day.date !== key) { t.prevDay = t.day; t.day = { date: key, wins: 0, losses: 0, rsum: 0 }; }
+  if (!t.day) t.day = { date: key, wins: 0, losses: 0, rsum: 0, d0: 0, streak: 0, rmax: 0, lrun: 0, lmax: 0, smax: 0 };
+  else if (t.day.date !== key) { t.prevDay = t.day; t.day = { date: key, wins: 0, losses: 0, rsum: 0, d0: 0, streak: 0, rmax: 0, lrun: 0, lmax: 0, smax: 0 }; }
 }
 function dayStats(t, key) {
   const d = [t.day, t.prevDay].find((x) => x && x.date === key);
-  return d ? { wins: d.wins, losses: d.losses, total: d.wins + d.losses, rsum: d.rsum || 0 } : { wins: 0, losses: 0, total: 0, rsum: 0 };
+  return d
+    ? { wins: d.wins, losses: d.losses, total: d.wins + d.losses, rsum: d.rsum || 0, d0: d.d0 || 0, streak: d.streak || 0, rmax: d.rmax || 0, lmax: d.lmax || 0, smax: d.smax || 0 }
+    : { wins: 0, losses: 0, total: 0, rsum: 0, d0: 0, streak: 0, rmax: 0, lmax: 0, smax: 0 };
+}
+
+// Suivi par journée des critères de départage « fins » (remis à zéro avec la journée) :
+//   rmax = pire rattrapage d'une victoire (✅2️⃣ > ✅1️⃣ > ✅0️⃣), lrun/lmax = série de pertes en cours / pire série,
+//   smax = meilleure série de victoires. Appelé APRÈS la mise à jour de day.streak.
+function trackDayResult(d, field, step = 0) {
+  if (!d) return;
+  if (field === 'wins') {
+    d.rmax = Math.max(d.rmax || 0, Number(step) || 0);
+    d.lrun = 0;
+    d.smax = Math.max(d.smax || 0, d.streak || 0);
+  } else if (field === 'losses') {
+    d.lrun = (d.lrun || 0) + 1;
+    d.lmax = Math.max(d.lmax || 0, d.lrun);
+  }
 }
 
 // Qualité d'une configuration : 1) taux de réussite, 2) à taux égal, MOYENNE DES RATTRAPAGES
 // des victoires (✅0️⃣ = 0, ✅1️⃣ = 1…) : la plus petite moyenne est la meilleure.
 // Comparaisons par produits en croix (exactes, sans erreur d'arrondi).
+// 3) 1ers coups, 4) série en cours, 5) pire rattrapage, 6) pire série de pertes, 7) meilleure série de victoires.
 // Retour : < 0 si a est meilleure que b, > 0 si b est meilleure, 0 si égalité parfaite.
 function compareQuality(a, b) {
   const rate = (a.wins * b.total) - (b.wins * a.total); // > 0 : a a un meilleur taux
   if (a.total && b.total && rate !== 0) return rate > 0 ? -1 : 1;
   if (!a.wins || !b.wins) return 0; // pas de victoire : pas de moyenne à comparer
   const avg = (a.rsum * b.wins) - (b.rsum * a.wins); // < 0 : a a une plus petite moyenne
-  return avg < 0 ? -1 : avg > 0 ? 1 : 0;
+  if (avg !== 0) return avg < 0 ? -1 : 1;
+  // 3) à taux ET moyenne égaux : plus de victoires DU PREMIER COUP (rapportées au nombre de prédictions)
+  const d0 = ((a.d0 || 0) * b.total) - ((b.d0 || 0) * a.total);
+  if (d0 !== 0) return d0 > 0 ? -1 : 1;
+  // 4) encore égaux : la plus longue série de victoires EN COURS (meilleure forme du moment)
+  const st = (a.streak || 0) - (b.streak || 0);
+  if (st !== 0) return st > 0 ? -1 : 1;
+  // 5) encore égaux : le pire rattrapage de la journée (celle qui n'a jamais eu besoin d'un rattrapage plus lourd)
+  const rm = (a.rmax || 0) - (b.rmax || 0);
+  if (rm !== 0) return rm < 0 ? -1 : 1;
+  // 6) encore égaux : la plus petite pire série de pertes (la plus régulière)
+  const lm = (a.lmax || 0) - (b.lmax || 0);
+  if (lm !== 0) return lm < 0 ? -1 : 1;
+  // 7) encore égaux : la meilleure série de victoires de la journée
+  const sm = (a.smax || 0) - (b.smax || 0);
+  return sm > 0 ? -1 : sm < 0 ? 1 : 0;
 }
 // Classement complet : qualité, puis plus de prédictions, puis plus de victoires.
+// Égalité TOTALE sur tous les critères : le meilleur actuel garde la 1re place (cohérent avec currentBest),
+// sinon ordre stable par identifiant : il n'y a plus jamais deux « premiers ».
+const rowKey = (r) => String(r.c ? r.c.key : r.t.id);
+function holderFirst(a, b) {
+  const cur = String(panel.best.currentTrackerId || '');
+  const ka = rowKey(a); const kb = rowKey(b);
+  if (ka === cur && kb !== cur) return -1;
+  if (kb === cur && ka !== cur) return 1;
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+}
 function compareRanking(a, b) {
-  return compareQuality(a, b) || (b.total - a.total) || (b.wins - a.wins);
+  return compareQuality(a, b) || (b.total - a.total) || (b.wins - a.wins) || holderFirst(a, b);
 }
 const avgRattrapage = (r) => (r.wins ? (r.rsum / r.wins).toFixed(2).replace('.', ',') : '—');
 
@@ -800,7 +906,7 @@ function buildBilanText(now = Date.now(), forceToday = false) {
     lines.push('📋 Classement');
     ranked.slice(0, 15).forEach((r, i) => {
       lines.push(`${NUM_EMOJI[i] || `${i + 1}.`} ${channelLabel(r)}`);
-      lines.push(`    ${progressBar(r.rate)} ${pct(r.wins, r.total)} · ${r.wins}/${r.total} · moy. ${avgRattrapage(r)}`);
+      lines.push(`    ${progressBar(r.rate)} ${pct(r.wins, r.total)} · ${r.wins}/${r.total} · moy. ${avgRattrapage(r)} · 1er coup ${r.d0 || 0}`);
     });
   } else {
     lines.push(`ℹ️ Aucun canal n'a encore ${min} prédictions vérifiées : pas de classement pour l'instant.`);
@@ -903,6 +1009,7 @@ async function tick() {
     for (const tracker of panel.trackers) await processTracker(tracker);
     await verifyPending();
     await bilanTick();
+    await maybeSendRecap();
     panel.lastScanAt = Date.now();
   } catch (e) {
     panel.lastError = e.message;
@@ -1018,3 +1125,5 @@ module.exports.currentBest = currentBest;
 module.exports.setAdminId = setAdminId;
 module.exports.handleMemberUpdate = handleMemberUpdate;
 module.exports.welcomeText = welcomeText;
+module.exports.testWelcome = testWelcome;
+module.exports.bumpEntry = bumpEntry;
