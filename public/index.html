@@ -1827,7 +1827,8 @@ Faites-en bon usage !
           <div id="dtCards">${trackerCardsHtml('dizaineTop')}</div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Meilleures prédictions</span><h2 style="margin-top:7px">🎯 Canal des meilleures prédictions</h2><p class="small">À configurer une seule fois : le bot envoie dans ce canal les prédictions de la meilleure configuration du jour (classement du bilan). Si une autre devient meilleure, il bascule et envoie alors celles de la nouvelle. Le bilan renvoie vers ce canal avec le taux du meilleur canal. ${p.best?.currentName ? `Meilleure actuelle : ${esc(p.best.currentName)}.` : 'Pas encore de meilleure (minimum de prédictions non atteint).'} Envoyées : ${p.best?.sentCount || 0}.</p></div>
           <label class="check"><input id="dtBestOn" type="checkbox" ${p.best?.enabled ? 'checked' : ''}> Actif</label>
-          <label class="check"><input id="dtBestWelcome" type="checkbox" ${p.best?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label></div>
+          <label class="check"><input id="dtBestWelcome" type="checkbox" ${p.best?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label>
+          <label class="check"><input id="dtBestRecap" type="checkbox" ${p.best?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="dtBestRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.best?.recapMin ?? 125))}"> min</label></div>
           <div class="three-col">
             <div class="field"><label>ID ou @nom du canal</label><input id="dtBestChannels" value="${esc((p.best?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="field"><label>Lien du canal <span class="small">(affiché dans le bilan)</span></label><input id="dtBestLink" value="${esc(p.best?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
@@ -1835,7 +1836,7 @@ Faites-en bon usage !
             <div class="field"><label>Nombre de rattrapages</label><input id="dtBestMaxR" type="number" min="0" max="9" value="${esc(String(p.best?.maxR ?? 2))}"></div>
           </div>
           <p class="small muted">Dernier événement « membre » reçu de Telegram : ${p.lastMember ? esc(`${new Date(p.lastMember.at).toLocaleString('fr-FR')} · ${p.lastMember.chat} · ${p.lastMember.from} → ${p.lastMember.to}${p.lastMember.isBest ? '' : ' (autre canal)'}`) : 'aucun pour l\'instant — rejoins le canal avec un autre compte pour tester'}</p>
-          <div class="toolbar"><button class="button primary" onclick="saveDizaineTopBest()">Enregistrer le canal des meilleures prédictions</button></div></section>
+          <div class="toolbar"><button class="button primary" onclick="saveDizaineTopBest()">Enregistrer le canal des meilleures prédictions</button><button class="button ghost" onclick="testDizaineTopWelcome()">Tester la bienvenue</button></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan automatique</span><h2 style="margin-top:7px">📊 Bilan dans les canaux</h2><p class="small">Toutes les ${p.bilanEveryHours || 1} h, envoi dans les canaux des configurations : la meilleure configuration (nom réel du canal), classée 1ʳᵉ avec son taux sur N prédictions, puis le classement. Bilans cumulés depuis 00h00 (fuseau ${esc(p.bilan?.tz || '')}). Dernier envoi : ${p.bilan?.lastSentAt ? new Date(p.bilan.lastSentAt).toLocaleString('fr-FR') : 'aucun'}.</p></div></div>
           <div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:center">
             <label class="check"><input id="dtBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveDizaineTopBilan()"> Bilan actif</label>
@@ -1846,9 +1847,16 @@ Faites-en bon usage !
           </div>
           <pre id="dtBilanPreview" class="small" style="white-space:pre-wrap;margin-top:12px"></pre></section>`;
     }
+    async function testDizaineTopWelcome() {
+      try {
+        const r = await api('/api/dizaine-top/welcome/test', 'POST');
+        const adm = r.botStatus === 'administrator' || r.botStatus === 'creator';
+        toast(`Message d'essai posté dans le canal. Bot : ${r.botStatus}${adm ? '' : ' — il doit être ADMINISTRATEUR du canal pour voir les arrivées'}${r.canInvite === false ? ' · droit « Inviter des utilisateurs » manquant' : ''}.`);
+      } catch (e) { toast(e.message, 'error'); }
+    }
     async function saveDizaineTopBest() {
       try {
-        await api('/api/dizaine-top/config', 'POST', { bestEnabled: $('#dtBestOn')?.checked, bestWelcome: $('#dtBestWelcome')?.checked, bestChannels: ids(val('dtBestChannels')), bestLink: val('dtBestLink'), bestFormat: val('dtBestFormat'), bestMaxR: val('dtBestMaxR') });
+        await api('/api/dizaine-top/config', 'POST', { bestEnabled: $('#dtBestOn')?.checked, bestWelcome: $('#dtBestWelcome')?.checked, bestRecap: $('#dtBestRecap')?.checked, bestRecapMin: val('dtBestRecapMin'), bestChannels: ids(val('dtBestChannels')), bestLink: val('dtBestLink'), bestFormat: val('dtBestFormat'), bestMaxR: val('dtBestMaxR') });
         await refresh(); dizaineTopPage(); toast('Canal des meilleures prédictions enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -1976,7 +1984,8 @@ Faites-en bon usage !
           <div id="cfCards">${trackerCardsHtml('costumeFaibleTop')}</div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Meilleures prédictions</span><h2 style="margin-top:7px">🎯 Canal des meilleures prédictions</h2><p class="small">À configurer une seule fois : le bot envoie dans ce canal les prédictions de la meilleure configuration du jour (classement du bilan). Si une autre devient meilleure, il bascule et envoie alors celles de la nouvelle. Le bilan renvoie vers ce canal avec le taux du meilleur canal. ${p.best?.currentName ? `Meilleure actuelle : ${esc(p.best.currentName)}.` : 'Pas encore de meilleure (minimum de prédictions non atteint).'} Envoyées : ${p.best?.sentCount || 0}.</p></div>
           <label class="check"><input id="cfBestOn" type="checkbox" ${p.best?.enabled ? 'checked' : ''}> Actif</label>
-          <label class="check"><input id="cfBestWelcome" type="checkbox" ${p.best?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label></div>
+          <label class="check"><input id="cfBestWelcome" type="checkbox" ${p.best?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label>
+          <label class="check"><input id="cfBestRecap" type="checkbox" ${p.best?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="cfBestRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.best?.recapMin ?? 125))}"> min</label></div>
           <div class="three-col">
             <div class="field"><label>ID ou @nom du canal</label><input id="cfBestChannels" value="${esc((p.best?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="field"><label>Lien du canal <span class="small">(affiché dans le bilan)</span></label><input id="cfBestLink" value="${esc(p.best?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
@@ -1984,7 +1993,7 @@ Faites-en bon usage !
             <div class="field"><label>Nombre de rattrapages</label><input id="cfBestMaxR" type="number" min="0" max="9" value="${esc(String(p.best?.maxR ?? 2))}"></div>
           </div>
           <p class="small muted">Dernier événement « membre » reçu de Telegram : ${p.lastMember ? esc(`${new Date(p.lastMember.at).toLocaleString('fr-FR')} · ${p.lastMember.chat} · ${p.lastMember.from} → ${p.lastMember.to}${p.lastMember.isBest ? '' : ' (autre canal)'}`) : 'aucun pour l\'instant — rejoins le canal avec un autre compte pour tester'}</p>
-          <div class="toolbar"><button class="button primary" onclick="saveCostumeFaibleTopBest()">Enregistrer le canal des meilleures prédictions</button></div></section>
+          <div class="toolbar"><button class="button primary" onclick="saveCostumeFaibleTopBest()">Enregistrer le canal des meilleures prédictions</button><button class="button ghost" onclick="testCostumeFaibleTopWelcome()">Tester la bienvenue</button></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan automatique</span><h2 style="margin-top:7px">📊 Bilan dans les canaux</h2><p class="small">Toutes les ${p.bilanEveryHours || 1} h, envoi dans les canaux des configurations : la meilleure configuration (nom réel du canal), classée 1ʳᵉ avec son taux sur N prédictions, puis le classement. Bilans cumulés depuis 00h00 (fuseau ${esc(p.bilan?.tz || '')}). Dernier envoi : ${p.bilan?.lastSentAt ? new Date(p.bilan.lastSentAt).toLocaleString('fr-FR') : 'aucun'}.</p></div></div>
           <div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:center">
             <label class="check"><input id="cfBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveCostumeFaibleTopBilan()"> Bilan actif</label>
@@ -1995,9 +2004,16 @@ Faites-en bon usage !
           </div>
           <pre id="cfBilanPreview" class="small" style="white-space:pre-wrap;margin-top:12px"></pre></section>`;
     }
+    async function testCostumeFaibleTopWelcome() {
+      try {
+        const r = await api('/api/costume-faible-top/welcome/test', 'POST');
+        const adm = r.botStatus === 'administrator' || r.botStatus === 'creator';
+        toast(`Message d'essai posté dans le canal. Bot : ${r.botStatus}${adm ? '' : ' — il doit être ADMINISTRATEUR du canal pour voir les arrivées'}${r.canInvite === false ? ' · droit « Inviter des utilisateurs » manquant' : ''}.`);
+      } catch (e) { toast(e.message, 'error'); }
+    }
     async function saveCostumeFaibleTopBest() {
       try {
-        await api('/api/costume-faible-top/config', 'POST', { bestEnabled: $('#cfBestOn')?.checked, bestWelcome: $('#cfBestWelcome')?.checked, bestChannels: ids(val('cfBestChannels')), bestLink: val('cfBestLink'), bestFormat: val('cfBestFormat'), bestMaxR: val('cfBestMaxR') });
+        await api('/api/costume-faible-top/config', 'POST', { bestEnabled: $('#cfBestOn')?.checked, bestWelcome: $('#cfBestWelcome')?.checked, bestRecap: $('#cfBestRecap')?.checked, bestRecapMin: val('cfBestRecapMin'), bestChannels: ids(val('cfBestChannels')), bestLink: val('cfBestLink'), bestFormat: val('cfBestFormat'), bestMaxR: val('cfBestMaxR') });
         await refresh(); costumeFaibleTopPage(); toast('Canal des meilleures prédictions enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
