@@ -30,6 +30,7 @@ const db = require('./db');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
+const sendDelay = require('./send-delay');
 const earlyVerify = require('./early-verify');
 
 const SUITS = strategies.SUITS;
@@ -51,7 +52,7 @@ const panel = {
   bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
   // canal des MEILLEURES prédictions (voir en-tête) : configuré une fois, il reçoit les
   // prédictions de la configuration actuellement en tête du classement du jour.
-  best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null },
+  best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 10 },
 };
 
 let sender = null;
@@ -157,6 +158,8 @@ function configure(patch = {}) {
   if (patch.bestWelcome !== undefined) panel.best.welcome = !!patch.bestWelcome;
   if (patch.bestRecap !== undefined) panel.best.recap = !!patch.bestRecap;
   if (patch.bestRecapMin !== undefined) panel.best.recapMin = sanitizeRecapMin(patch.bestRecapMin);
+  if (patch.bestDelayEnabled !== undefined) panel.best.delayEnabled = !!patch.bestDelayEnabled;
+  if (patch.bestDelaySec !== undefined) panel.best.delaySec = sanitizeDelaySec(patch.bestDelaySec);
   if (patch.bestFormat !== undefined) panel.best.format = sanitizeFormat(patch.bestFormat);
   if (patch.bestMaxR !== undefined) panel.best.maxR = sanitizeMaxR(patch.bestMaxR);
   persist();
@@ -278,6 +281,11 @@ function applySaved(saved) {
       switchedAt: saved.best.switchedAt || null,
       sentCount: Number(saved.best.sentCount) || 0,
       lastSentAt: saved.best.lastSentAt || null,
+      delayEnabled: saved.best.delayEnabled !== false,
+      delaySec: sanitizeDelaySec(saved.best.delaySec),
+      day: saved.best.day || undefined,
+      lastSuit: saved.best.lastSuit || null,
+      lastTarget: Number.isFinite(Number(saved.best.lastTarget)) && saved.best.lastTarget !== null ? Number(saved.best.lastTarget) : null,
     };
   }
   if (Array.isArray(saved.trackers)) panel.trackers = saved.trackers.filter((t) => t && t.id).map(normalizeTracker);
@@ -393,7 +401,7 @@ async function processTracker(tracker) {
         if (!sl || sl.channel == null || !sSuit) continue;
         parts.push(`${i + 1}:${sSuit}`);
         await send(tracker, {
-          target, suit: sSuit, slot: i,
+          target, suit: sSuit, slot: i, trigger: n,
           detail: `#N${n} joueur ${trig.four.slice(0, 2).join('')} / banquier ${trig.four.slice(2).join('')} → faible ${trig.weak} → canal ${i + 1} (${SLOT_ROLES[i]}) ${sSuit} (+${tracker.lead})`,
         });
       }
@@ -401,7 +409,7 @@ async function processTracker(tracker) {
       continue;
     }
     await send(tracker, {
-      target, suit,
+      target, suit, trigger: n,
       detail: `#N${n} joueur ${trig.four.slice(0, 2).join('')} / banquier ${trig.four.slice(2).join('')} → faible ${trig.weak} → ${suit} (+${tracker.lead})`,
     });
   }
@@ -623,6 +631,86 @@ function findOriginalEntry(tracker, syn) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// RÈGLE « COSTUME DÉJÀ SORTI » (canal des meilleures)
+// Avant d'envoyer, on regarde si le costume prédit est déjà sorti dans les 2 jeux qui précèdent la cible :
+//   • le jeu déclencheur (toutes ses cartes : joueur + banquier) ;
+//   • le jeu juste avant la cible, sur ses 2 premières cartes de chaque côté — vues pendant le retard d'envoi.
+// Sorti dans LES DEUX → prédiction ignorée (rien n'est posté, rien n'est compté dans le récapitulatif).
+// Sorti dans un seul (ou aucun) → elle part. Sans objet si le déclencheur est déjà le jeu juste avant la cible (+1).
+// ---------------------------------------------------------------------------
+function suitInGame(game, want, firstN) {
+  if (!game || !want) return false;
+  const cut = (arr) => strategies.suitsOf(arr).slice(0, firstN || 99);
+  return [...cut(game.playerSuits), ...cut(game.bankerSuits)].includes(want);
+}
+function seenRuleFor(syn) {
+  const trig = Number(syn.trigger); const target = Number(syn.target);
+  const want = strategies.suitsOf([syn.suit])[0] || null;
+  const prevGame = target - 1;
+  const on = !!want && Number.isFinite(trig) && Number.isFinite(target) && prevGame > trig;
+  return { on, want, trig, prevGame, seenA: on ? suitInGame(state.games.get(trig), want) : false };
+}
+function seenBothNow(rule) {
+  return rule.on && rule.seenA && suitInGame(state.games.get(rule.prevGame), rule.want, 2);
+}
+
+// ---------------------------------------------------------------------------
+// RETARD D'ENVOI vers le canal des meilleures (même principe que send-delay.js)
+// La prédiction du meilleur n'est pas postée tout de suite : elle attend que le jeu situé juste AVANT la cible soit
+// en cours (ou terminé), puis `delaySec` secondes (10 par défaut). Si le jeu cible est déjà lancé / terminé, ou si le
+// meilleur a changé entre-temps, elle est abandonnée (jamais d'annonce périmée). Réglable dans le panneau.
+// ---------------------------------------------------------------------------
+function sanitizeDelaySec(v) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(120, n)) : 10;
+}
+const bestHeld = [];
+let bestHeldTimer = null;
+let bestReleasing = false;
+function bestDelayOn() { return panel.best.delayEnabled !== false && sendDelay.enabled(); }
+const heldKey = (h) => (h.syn.slot !== undefined ? `${h.tracker.id}#${h.syn.slot}` : h.tracker.id);
+
+function cancelHeld(h) {
+  const b = panel.best;
+  // l'anti-doublon ne doit pas se souvenir d'une prédiction que le canal n'a jamais reçue
+  if (b.lastTarget === h.target) { b.lastSuit = h.prevSuit || null; b.lastTarget = h.prevTarget == null ? null : h.prevTarget; }
+}
+async function releaseBestHeld(now = Date.now()) {
+  if (bestReleasing || !bestHeld.length) return;
+  bestReleasing = true;
+  try {
+    const { done, dealing } = sendDelay.progress(state.games);
+    for (let i = 0; i < bestHeld.length;) {
+      const h = bestHeld[i];
+      if (!panel.best.enabled || String(panel.best.currentTrackerId) !== heldKey(h)) { bestHeld.splice(i, 1); cancelHeld(h); continue; } // plus le meilleur
+      if (Number.isFinite(h.target) && (done >= h.target || dealing >= h.target)) { bestHeld.splice(i, 1); cancelHeld(h); continue; } // jeu cible déjà lancé
+      if (seenBothNow(h.rule)) { bestHeld.splice(i, 1); cancelHeld(h); panel.best.skippedSeen = (panel.best.skippedSeen || 0) + 1; continue; } // déjà sorti aux 2 jeux : ignorée
+      const prevOn = !Number.isFinite(h.target) || dealing >= h.target - 1 || done >= h.target - 1;
+      if (!prevOn) { i++; continue; }
+      if (!h.armedAt) h.armedAt = now;
+      if (now - h.armedAt < h.sec * 1000) { i++; continue; }
+      bestHeld.splice(i, 1);
+      let ok = false;
+      try { ok = await postToBest(h.tracker, h.syn, h.orig); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
+      if (!ok) cancelHeld(h);
+    }
+  } finally {
+    bestReleasing = false;
+    if (!bestHeld.length && bestHeldTimer) { clearInterval(bestHeldTimer); bestHeldTimer = null; }
+  }
+}
+function holdBest(tracker, syn, orig) {
+  const b = panel.best;
+  if (orig) orig.bestRelayed = true; // marquée tout de suite : jamais retenue ni envoyée deux fois
+  const target = Number(syn.target);
+  bestHeld.push({ rule: seenRuleFor(syn), tracker, syn, orig, target, armedAt: null, sec: sanitizeDelaySec(b.delaySec), prevSuit: b.lastSuit || null, prevTarget: b.lastTarget == null ? null : b.lastTarget });
+  b.lastSuit = String(syn.suit); // pour l'anti-doublon dès maintenant
+  if (Number.isFinite(target)) b.lastTarget = target;
+  if (!bestHeldTimer) { bestHeldTimer = setInterval(() => { releaseBestHeld().catch(() => {}); }, 1000); if (bestHeldTimer.unref) bestHeldTimer.unref(); }
+  releaseBestHeld().catch(() => {}); // la condition peut déjà être remplie : départ du compte à rebours tout de suite
+}
+
 // Envoi réel dans le canal des meilleures (relais). Retourne true seulement si Telegram a VRAIMENT posté le message
 // (canal en /stop ou erreur → false → rien n'est compté dans le récapitulatif).
 async function postToBest(tracker, syn, orig) {
@@ -673,7 +761,10 @@ function relayNewBest(c) {
     }
     if (!orig) return;
     // départ IMMÉDIAT : la prédiction est choisie et marquée « relayée » tout de suite (avant tout await)
-    postToBest(c.tracker, { target: orig.target, suit: orig.suit, ...(c.slot !== undefined ? { slot: c.slot } : {}) }, orig)
+    const synR = { target: orig.target, suit: orig.suit, trigger: orig.trigger, ...(c.slot !== undefined ? { slot: c.slot } : {}) };
+    if (bestDelayOn()) { holdBest(c.tracker, synR, orig); return; }
+    if (seenBothNow(seenRuleFor(synR))) { panel.best.skippedSeen = (panel.best.skippedSeen || 0) + 1; return; }
+    postToBest(c.tracker, synR, orig)
       .catch((e) => { panel.lastError = `Meilleures prédictions : ${e.message}`; });
   } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
 }
@@ -695,6 +786,8 @@ async function forwardToBest(tracker, syn) {
   const near = Number.isFinite(tNum) && Number.isFinite(b.lastTarget) && Math.abs(tNum - b.lastTarget) < 2;
   if (Number.isFinite(tNum)) b.lastTarget = tNum; // dernier numéro prédit par le meilleur (envoyé ou ignoré)
   if (sameSuit && near) { b.skippedSame = (b.skippedSame || 0) + 1; return false; }
+  if (bestDelayOn()) { holdBest(tracker, syn, orig); return true; }
+  if (seenBothNow(seenRuleFor(syn))) { panel.best.skippedSeen = (panel.best.skippedSeen || 0) + 1; return false; }
   return postToBest(tracker, syn, orig);
 }
 
@@ -748,7 +841,7 @@ async function send(tracker, syn) {
   if (sentMessages.length) {
     panel.pendingMessages.push({
       id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      trackerId: tracker.id, target: syn.target, suit: syn.suit,
+      trackerId: tracker.id, target: syn.target, suit: syn.suit, trigger: syn.trigger,
       strategyName: isSlot ? slotName(tracker, syn.slot) : tracker.name,
       ...(isSlot ? { slot: syn.slot } : {}),
       format: tracker.format, maxR: tracker.maxR, step: 0, gap: 0, skipped: 0,
