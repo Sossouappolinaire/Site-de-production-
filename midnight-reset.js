@@ -97,7 +97,7 @@ async function sendExport(dayKey) {
 const ARRAYS = ['history', 'pendingMessages', 'pending', 'sentKeys', 'sentFingerprints', 'predictions'];
 const OBJECTS = ['tally', 'verified', 'tracked'];
 const TRACKER_ZERO = ['wins', 'losses', 'sentCount', 'lastSeenTarget', 'lastRepeatSource', 'lastDecade', 'lastGame', 'lossStreak', 'suitStreak', 'remaining'];
-const TRACKER_NULL = ['lastSentAt', 'lastInfo', 'day', 'prevDay', 'lastSuit', 'armedKind'];
+const TRACKER_NULL = ['lastSentAt', 'lastInfo', 'day', 'prevDay', 'seg', 'lastSuit', 'armedKind'];
 
 function wipeTracker(t) {
   if (!t || typeof t !== 'object') return;
@@ -114,6 +114,7 @@ function wipePanel(panel) {
   panel.sentCount = 0;
   panel.lastSentAt = null;
   panel.lastError = null;
+  if (panel.bilan && typeof panel.bilan === 'object' && 'segSince' in panel.bilan) panel.bilan.segSince = null; // compteur du bilan
   if (Array.isArray(panel.trackers)) panel.trackers.forEach(wipeTracker);
   else if (panel.trackers && typeof panel.trackers === 'object') Object.values(panel.trackers).forEach(wipeTracker);
 }

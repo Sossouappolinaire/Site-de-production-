@@ -44,6 +44,7 @@ const fmt = require('./formats');
 const strategies = require('./strategies');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const earlyVerify = require('./early-verify');
+const sendDelay = require('./send-delay');
 
 const SUITS = strategies.SUITS; // ['♦️', '❤️', '♣️', '♠️'] — ordre de départage des égalités
 const MIN_READABLE = 6;
@@ -63,7 +64,7 @@ const panel = {
   bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
   // canal des MEILLEURES prédictions (voir en-tête) : configuré une fois, il reçoit les
   // prédictions de la configuration actuellement en tête du classement du jour.
-  best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null },
+  best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 0 },
 };
 
 let sender = null;
@@ -128,6 +129,8 @@ function configure(patch = {}) {
   if (patch.bestWelcome !== undefined) panel.best.welcome = !!patch.bestWelcome;
   if (patch.bestRecap !== undefined) panel.best.recap = !!patch.bestRecap;
   if (patch.bestRecapMin !== undefined) panel.best.recapMin = sanitizeRecapMin(patch.bestRecapMin);
+  if (patch.bestDelayEnabled !== undefined) panel.best.delayEnabled = !!patch.bestDelayEnabled;
+  if (patch.bestDelaySec !== undefined) panel.best.delaySec = sanitizeDelaySec(patch.bestDelaySec);
   if (patch.bestFormat !== undefined) panel.best.format = sanitizeFormat(patch.bestFormat);
   if (patch.bestMaxR !== undefined) panel.best.maxR = sanitizeMaxR(patch.bestMaxR);
   persist();
@@ -210,6 +213,7 @@ function normalizeTracker(t) {
     createdAt: t.createdAt || Date.now(),
     // résultats par journée (bilan) : jour en cours + veille
     day: t.day && t.day.date ? { date: t.day.date, wins: Number(t.day.wins) || 0, losses: Number(t.day.losses) || 0, rsum: Number(t.day.rsum) || 0, d0: Number(t.day.d0) || 0, streak: Number(t.day.streak) || 0, rmax: Number(t.day.rmax) || 0, lrun: Number(t.day.lrun) || 0, lmax: Number(t.day.lmax) || 0, smax: Number(t.day.smax) || 0 } : null,
+    seg: normSeg(t.seg),
     prevDay: t.prevDay && t.prevDay.date ? { date: t.prevDay.date, wins: Number(t.prevDay.wins) || 0, losses: Number(t.prevDay.losses) || 0, rsum: Number(t.prevDay.rsum) || 0, d0: Number(t.prevDay.d0) || 0, streak: Number(t.prevDay.streak) || 0, rmax: Number(t.prevDay.rmax) || 0, lrun: Number(t.prevDay.lrun) || 0, lmax: Number(t.prevDay.lmax) || 0, smax: Number(t.prevDay.smax) || 0 } : null,
   };
   base.name = (t.name && String(t.name).trim()) || defaultName(base);
@@ -230,6 +234,7 @@ function applySaved(saved) {
       minPreds: sanitizeMinPreds(saved.bilan.minPreds),
       lastSlot: saved.bilan.lastSlot || null,
       lastSentAt: saved.bilan.lastSentAt || null,
+      segSince: Number(saved.bilan.segSince) || null,
     };
   }
   if (saved.best && typeof saved.best === 'object') {
@@ -250,6 +255,11 @@ function applySaved(saved) {
       switchedAt: saved.best.switchedAt || null,
       sentCount: Number(saved.best.sentCount) || 0,
       lastSentAt: saved.best.lastSentAt || null,
+      delayEnabled: saved.best.delayEnabled !== false,
+      delaySec: sanitizeDelaySec(saved.best.delaySec),
+      day: saved.best.day || undefined,
+      lastSuit: saved.best.lastSuit || null,
+      lastTarget: Number.isFinite(Number(saved.best.lastTarget)) && saved.best.lastTarget !== null ? Number(saved.best.lastTarget) : null,
     };
   }
   if (Array.isArray(saved.trackers)) panel.trackers = saved.trackers.filter((t) => t && t.id).map(normalizeTracker);
@@ -578,6 +588,62 @@ function findOriginalEntry(tracker, syn) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// ENVOI vers le canal des meilleures : attente du jeu suivant
+// Dès qu'une configuration est désignée meilleure (ou que le meilleur produit une prédiction), on N'envoie PAS tout de
+// suite : la prédiction est retenue jusqu'à ce que le jeu situé juste AVANT la cible démarre (cartes en distribution ou
+// jeu terminé), puis elle part automatiquement (`delaySec` = 0 s par défaut ; aucun retard de 10 s). Si le jeu cible est
+// déjà lancé / terminé, ou si le meilleur a changé entre-temps, elle est abandonnée (jamais d'annonce périmée).
+// ---------------------------------------------------------------------------
+function sanitizeDelaySec(v) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(120, n)) : 0;
+}
+const bestHeld = [];
+let bestHeldTimer = null;
+let bestReleasing = false;
+function bestDelayOn() { return panel.best.delayEnabled !== false && sendDelay.enabled(); }
+
+function cancelHeld(h) {
+  const b = panel.best;
+  // l'anti-doublon ne doit pas se souvenir d'une prédiction que le canal n'a jamais reçue
+  if (b.lastTarget === h.target) { b.lastSuit = h.prevSuit || null; b.lastTarget = h.prevTarget == null ? null : h.prevTarget; }
+  if (h.orig) h.orig.bestRelayed = false;
+}
+async function releaseBestHeld(now = Date.now()) {
+  if (bestReleasing || !bestHeld.length) return;
+  bestReleasing = true;
+  try {
+    const { done, dealing } = sendDelay.progress(state.games);
+    for (let i = 0; i < bestHeld.length;) {
+      const h = bestHeld[i];
+      if (!panel.best.enabled || String(panel.best.currentTrackerId) !== String(h.tracker.id)) { bestHeld.splice(i, 1); cancelHeld(h); continue; } // plus le meilleur
+      if (Number.isFinite(h.target) && (done >= h.target || dealing >= h.target)) { bestHeld.splice(i, 1); cancelHeld(h); continue; } // jeu cible déjà lancé
+      const prevOn = !Number.isFinite(h.target) || dealing >= h.target - 1 || done >= h.target - 1;
+      if (!prevOn) { i++; continue; }
+      if (!h.armedAt) h.armedAt = now;
+      if (now - h.armedAt < h.sec * 1000) { i++; continue; }
+      bestHeld.splice(i, 1);
+      let ok = false;
+      try { ok = await postToBest(h.tracker, h.syn, h.orig); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
+      if (!ok) cancelHeld(h);
+    }
+  } finally {
+    bestReleasing = false;
+    if (!bestHeld.length && bestHeldTimer) { clearInterval(bestHeldTimer); bestHeldTimer = null; }
+  }
+}
+function holdBest(tracker, syn, orig) {
+  const b = panel.best;
+  if (orig) orig.bestRelayed = true; // marquée tout de suite : jamais retenue ni envoyée deux fois
+  const target = Number(syn.target);
+  bestHeld.push({ tracker, syn, orig, target, armedAt: null, sec: sanitizeDelaySec(b.delaySec), prevSuit: b.lastSuit || null, prevTarget: b.lastTarget == null ? null : b.lastTarget });
+  b.lastSuit = String(syn.suit); // pour l'anti-doublon dès maintenant
+  if (Number.isFinite(target)) b.lastTarget = target;
+  if (!bestHeldTimer) { bestHeldTimer = setInterval(() => { releaseBestHeld().catch(() => {}); }, 1000); if (bestHeldTimer.unref) bestHeldTimer.unref(); }
+  releaseBestHeld().catch(() => {}); // la condition peut déjà être remplie : envoi aussitôt
+}
+
 // Envoi réel dans le canal des meilleures (relais). Retourne true seulement si Telegram a VRAIMENT posté le message
 // (canal en /stop ou erreur → false → rien n'est compté dans le récapitulatif).
 async function postToBest(tracker, syn, orig) {
@@ -627,8 +693,10 @@ function relayNewBest(tracker) {
       if (!e.mirror && e.trackerId === tracker.id && e.status === 'en attente' && !e.step && !e.bestRelayed && bestDayKey(e.createdAt) === today) { orig = e; break; }
     }
     if (!orig) return;
-    // départ IMMÉDIAT : la prédiction est choisie et marquée « relayée » tout de suite (avant tout await)
-    postToBest(tracker, { target: orig.target, suit: orig.suit }, orig)
+    // la prédiction est choisie et marquée « relayée » tout de suite (avant tout await) ; l'envoi attend le jeu suivant
+    const synR = { target: orig.target, suit: orig.suit };
+    if (bestDelayOn()) { holdBest(tracker, synR, orig); return; } // attend le démarrage du jeu suivant, puis envoi automatique
+    postToBest(tracker, synR, orig)
       .catch((e) => { panel.lastError = `Meilleures prédictions : ${e.message}`; });
   } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
 }
@@ -649,6 +717,7 @@ async function forwardToBest(tracker, syn) {
   const near = Number.isFinite(tNum) && Number.isFinite(b.lastTarget) && Math.abs(tNum - b.lastTarget) < 2;
   if (Number.isFinite(tNum)) b.lastTarget = tNum; // dernier numéro prédit par le meilleur (envoyé ou ignoré)
   if (sameSuit && near) { b.skippedSame = (b.skippedSame || 0) + 1; return false; }
+  if (bestDelayOn()) { holdBest(tracker, syn, orig); return true; }
   return postToBest(tracker, syn, orig);
 }
 
@@ -779,6 +848,7 @@ function bumpScore(trackerId, field, step = 0) {
     t.day.streak = (t.day.streak || 0) + 1;
   } else if (field === 'losses') t.day.streak = 0;
   trackDayResult(t.day, field, step);
+  bumpSeg(t, field, step); // compteur du bilan (remis à zéro à chaque envoi)
 }
 
 async function verifyPending() {
@@ -875,6 +945,71 @@ function trackDayResult(d, field, step = 0) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// COMPTEUR DU BILAN (« segment ») : repart de ZÉRO à chaque bilan réellement envoyé.
+// Il est distinct du compteur de la journée (day) qui sert au classement du jour et au choix
+// des meilleures prédictions : ce dernier n'est PAS touché par l'envoi du bilan.
+// À l'envoi, le segment est « gelé » (le texte de tous les canaux est calculé dessus) et un
+// segment neuf démarre aussitôt : les résultats qui arrivent pendant l'envoi comptent déjà
+// pour le bilan suivant. Si rien n'a pu être envoyé, le segment gelé est remis en place.
+// ---------------------------------------------------------------------------
+function emptySeg() { return { date: null, wins: 0, losses: 0, rsum: 0, d0: 0, streak: 0, rmax: 0, lrun: 0, lmax: 0, smax: 0 }; }
+function normSeg(d) {
+  return d && typeof d === 'object'
+    ? { date: null, wins: Number(d.wins) || 0, losses: Number(d.losses) || 0, rsum: Number(d.rsum) || 0, d0: Number(d.d0) || 0, streak: Number(d.streak) || 0, rmax: Number(d.rmax) || 0, lrun: Number(d.lrun) || 0, lmax: Number(d.lmax) || 0, smax: Number(d.smax) || 0 }
+    : null;
+}
+function segOf(h) { if (!h.seg) h.seg = emptySeg(); return h.seg; }
+function bumpSeg(h, field, step = 0) {
+  const s = segOf(h);
+  s[field] = (s[field] || 0) + 1;
+  if (field === 'wins') {
+    s.rsum = (s.rsum || 0) + (Number(step) || 0);
+    if (!Number(step)) s.d0 = (s.d0 || 0) + 1; // victoire du premier coup
+    s.streak = (s.streak || 0) + 1;
+  } else if (field === 'losses') s.streak = 0;
+  trackDayResult(s, field, step);
+}
+function segStatsOf(d) {
+  d = d || emptySeg();
+  return { wins: d.wins, losses: d.losses, total: d.wins + d.losses, rsum: d.rsum || 0, d0: d.d0 || 0, streak: d.streak || 0, rmax: d.rmax || 0, lmax: d.lmax || 0, smax: d.smax || 0 };
+}
+// fusion de deux segments (utilisée seulement si l'envoi du bilan a échoué partout)
+function mergeSeg(a, b) {
+  a = a || emptySeg(); b = b || emptySeg();
+  const hasB = (b.wins + b.losses) > 0;
+  return {
+    date: null,
+    wins: a.wins + b.wins, losses: a.losses + b.losses, rsum: (a.rsum || 0) + (b.rsum || 0), d0: (a.d0 || 0) + (b.d0 || 0),
+    streak: hasB ? b.streak : a.streak, lrun: hasB ? b.lrun : a.lrun,
+    rmax: Math.max(a.rmax || 0, b.rmax || 0), lmax: Math.max(a.lmax || 0, b.lmax || 0), smax: Math.max(a.smax || 0, b.smax || 0),
+  };
+}
+function freezeSeg() {
+  const frozen = { since: panel.bilan.segSince || null, map: new Map() };
+  for (const { key, holder } of segHolders()) { frozen.map.set(key, holder.seg || emptySeg()); holder.seg = emptySeg(); }
+  panel.bilan.segSince = Date.now();
+  return frozen;
+}
+function restoreSeg(frozen) {
+  for (const { key, holder } of segHolders()) {
+    const f = frozen.map.get(key);
+    if (f) holder.seg = mergeSeg(f, holder.seg);
+  }
+  panel.bilan.segSince = frozen.since;
+}
+// libellé « depuis quand » du compteur (heure locale du bilan ; avec la date si ce n'est pas aujourd'hui)
+function sinceLabel(ms, now = Date.now()) {
+  if (!ms) return 'le début';
+  const parts = new Intl.DateTimeFormat('fr-FR', { timeZone: BILAN_TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(ms));
+  const o = {}; for (const x of parts) o[x.type] = x.value;
+  const hm = `${o.hour}h${o.minute}`;
+  if (dayKeyOf(ms) === dayKeyOf(now)) return hm;
+  const [, mm, dd] = dayKeyOf(ms).split('-');
+  return `${dd}/${mm} ${hm}`;
+}
+function segHolders() { return panel.trackers.map((t) => ({ key: t.id, holder: t })); }
+
 // Qualité d'une configuration : 1) taux de réussite, 2) à taux égal, MOYENNE DES RATTRAPAGES
 // des victoires (✅0️⃣ = 0, ✅1️⃣ = 1…) : la plus petite moyenne est la meilleure.
 // Comparaisons par produits en croix (exactes, sans erreur d'arrondi).
@@ -941,7 +1076,7 @@ function trackerChannelNames(t, siteList) {
 }
 
 // Texte du bilan. reportKey = jour concerné ; label = ligne d'en-tête.
-function buildBilanText(now = Date.now(), forceToday = false) {
+function buildBilanText(now = Date.now(), forceToday = false, frozen = null) {
   const lp = localParts(now);
   const slotH = Math.floor(lp.h / panel.bilan.everyHours) * panel.bilan.everyHours;
   // au point de minuit (00h) : bilan de la journée qui vient de se terminer
@@ -952,7 +1087,7 @@ function buildBilanText(now = Date.now(), forceToday = false) {
   const siteList = siteChannelsView();
   const min = panel.bilan.minPreds;
   const rows = panel.trackers.map((t) => {
-    const st = dayStats(t, reportKey);
+    const st = segStatsOf(frozen ? frozen.map.get(t.id) : segOf(t));
     return { t, ...st, names: trackerChannelNames(t, siteList), rate: st.total ? st.wins / st.total : 0 };
   }).filter((r) => r.total > 0 || forceToday);
   const ranked = rows.filter((r) => r.total >= min)
@@ -961,8 +1096,9 @@ function buildBilanText(now = Date.now(), forceToday = false) {
   if (!rows.some((r) => r.total > 0)) return null;
   const lines = [];
   lines.push('📊 BILAN — DIZAINE (costume le plus / le moins sorti)');
-  lines.push(closing ? `🕑 Bilan de la journée du ${rd}/${rm}/${ry}` : `🕑 Point de ${hh}h00 · journée du ${rd}/${rm}/${ry}`);
-  lines.push(closing ? '📆 Cumul de toute la journée (00h00 → 24h00)' : `📆 Cumul depuis 00h00 jusqu'à ${hh}h00 · mis à jour toutes les ${panel.bilan.everyHours} h`);
+  const endLbl = forceToday ? sinceLabel(now, now) : `${hh}h00`; // envoi manuel : heure réelle
+  lines.push(`🕑 Point de ${endLbl} · ${rd}/${rm}/${ry}`);
+  lines.push(`📆 Compté depuis le dernier bilan (${sinceLabel(frozen ? frozen.since : panel.bilan.segSince, now)} → ${endLbl}) · remis à zéro après chaque envoi`);
   lines.push('━━━━━━━━━━━━━━━━━━');
   if (ranked.length) {
     const best = ranked[0];
@@ -1034,8 +1170,11 @@ async function sendBilan({ force = false, now = Date.now() } = {}) {
   // tous les canaux des configurations (même désactivées) apparaissent dans le classement
   const allIds = panel.trackers.flatMap((t) => t.channels || []);
   await refreshChannelTitles([...tg, ...allIds, ...(panel.best.enabled ? panel.best.channels : [])]);
-  const text = buildBilanText(now, force);
-  if (!text) return { ok: false, error: "Aucune prédiction vérifiée aujourd'hui : bilan non envoyé" };
+  if (!buildBilanText(now, force)) return { ok: false, error: "Aucune prédiction vérifiée depuis le dernier bilan : bilan non envoyé" };
+  // le compteur est gelé pour tout l'envoi, puis repart à zéro (voir freezeSeg)
+  const frozen = freezeSeg(); let committed = false;
+  try {
+  const text = buildBilanText(now, force, frozen);
   const bot = typeof sender === 'function' ? sender() : null;
   const sent = []; const errors = [];
   if (tg.length) {
@@ -1050,7 +1189,10 @@ async function sendBilan({ force = false, now = Date.now() } = {}) {
   for (const id of site) { if (addSiteChannelMessage(id, { sender: 'Bilan Dizaine', text })) sent.push(`site:${id}`); }
   panel.bilan.lastSentAt = Date.now();
   panel.bilan.lastResult = { sent: sent.length, errors: errors.slice(0, 3), at: Date.now() };
+  committed = sent.length > 0; // envoyé quelque part : le nouveau bilan reste à zéro
+  if (committed) { try { persist(); } catch (_) { /* sauvegarde best-effort */ } }
   return { ok: sent.length > 0, sent, errors, text };
+  } finally { if (!committed) restoreSeg(frozen); }
 }
 
 async function bilanTick(now = Date.now()) {
