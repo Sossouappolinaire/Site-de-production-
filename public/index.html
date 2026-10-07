@@ -758,7 +758,7 @@ Faites-en bon usage !
           ${s.key === 'absenceJoueur' ? absenceEntriesRow('cfg', c.entries || [], snapshot.formatCount) : ''}
           <div class="field"><label>Format du message</label><p class="small">Les 89 formats complets sont accessibles depuis le bouton Formats.</p></div><label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <label class="check" style="margin-top:10px"><input id="cfgAiAuto" type="checkbox" ${c.aiAuto ? 'checked' : ''}> 🤖 Ajustement automatique par l'IA</label>
-          ${s.key !== 'ombre' ? `<label class="check" style="margin-top:10px"><input id="cfgDelay" type="checkbox" ${c.delayEnabled ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfgDelaySec" type="number" min="0" max="120" value="${c.delaySec ?? 10}" style="width:64px"> secondes</label>` : ''}
+          ${s.key !== 'ombre' ? `<label class="check" style="margin-top:10px"><input id="cfgDelay" type="checkbox" ${c.delayEnabled ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfgDelaySec" type="number" min="0" max="120" value="${c.delaySec ?? 0}" style="width:64px"> secondes</label>` : ''}
           <label class="check" style="margin-top:10px"><input id="cfgLossNotice" type="checkbox" ${c.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
           <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé — les deux doivent être cochés à la fois.</p>
           <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine','absenceJoueur','absenceDecalage'].includes(s.key)
@@ -1828,7 +1828,8 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Meilleures prédictions</span><h2 style="margin-top:7px">🎯 Canal des meilleures prédictions</h2><p class="small">À configurer une seule fois : le bot envoie dans ce canal les prédictions de la meilleure configuration du jour (classement du bilan). Si une autre devient meilleure, il bascule et envoie alors celles de la nouvelle. Le bilan renvoie vers ce canal avec le taux du meilleur canal. ${p.best?.currentName ? `Meilleure actuelle : ${esc(p.best.currentName)}.` : 'Pas encore de meilleure (minimum de prédictions non atteint).'} Envoyées : ${p.best?.sentCount || 0}.</p></div>
           <label class="check"><input id="dtBestOn" type="checkbox" ${p.best?.enabled ? 'checked' : ''}> Actif</label>
           <label class="check"><input id="dtBestWelcome" type="checkbox" ${p.best?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label>
-          <label class="check"><input id="dtBestRecap" type="checkbox" ${p.best?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="dtBestRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.best?.recapMin ?? 125))}"> min</label></div>
+          <label class="check"><input id="dtBestRecap" type="checkbox" ${p.best?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="dtBestRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.best?.recapMin ?? 125))}"> min</label>
+          <label class="check"><input id="dtBestDelay" type="checkbox" ${p.best?.delayEnabled !== false ? 'checked' : ''}> ⏱️ Attendre que le jeu avant la cible démarre, puis envoyer après <input id="dtBestDelaySec" type="number" min="0" max="120" style="width:70px" value="${esc(String(p.best?.delaySec ?? 0))}"> s</label></div>
           <div class="three-col">
             <div class="field"><label>ID ou @nom du canal</label><input id="dtBestChannels" value="${esc((p.best?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="field"><label>Lien du canal <span class="small">(affiché dans le bilan)</span></label><input id="dtBestLink" value="${esc(p.best?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
@@ -1856,7 +1857,7 @@ Faites-en bon usage !
     }
     async function saveDizaineTopBest() {
       try {
-        await api('/api/dizaine-top/config', 'POST', { bestEnabled: $('#dtBestOn')?.checked, bestWelcome: $('#dtBestWelcome')?.checked, bestRecap: $('#dtBestRecap')?.checked, bestRecapMin: val('dtBestRecapMin'), bestChannels: ids(val('dtBestChannels')), bestLink: val('dtBestLink'), bestFormat: val('dtBestFormat'), bestMaxR: val('dtBestMaxR') });
+        await api('/api/dizaine-top/config', 'POST', { bestEnabled: $('#dtBestOn')?.checked, bestWelcome: $('#dtBestWelcome')?.checked, bestRecap: $('#dtBestRecap')?.checked, bestRecapMin: val('dtBestRecapMin'), bestDelayEnabled: $('#dtBestDelay')?.checked, bestDelaySec: val('dtBestDelaySec'), bestChannels: ids(val('dtBestChannels')), bestLink: val('dtBestLink'), bestFormat: val('dtBestFormat'), bestMaxR: val('dtBestMaxR') });
         await refresh(); dizaineTopPage(); toast('Canal des meilleures prédictions enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -1986,7 +1987,7 @@ Faites-en bon usage !
           <label class="check"><input id="cfBestOn" type="checkbox" ${p.best?.enabled ? 'checked' : ''}> Actif</label>
           <label class="check"><input id="cfBestWelcome" type="checkbox" ${p.best?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label>
           <label class="check"><input id="cfBestRecap" type="checkbox" ${p.best?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="cfBestRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.best?.recapMin ?? 125))}"> min</label>
-          <label class="check"><input id="cfBestDelay" type="checkbox" ${p.best?.delayEnabled !== false ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfBestDelaySec" type="number" min="0" max="120" style="width:70px" value="${esc(String(p.best?.delaySec ?? 10))}"> s avant d'envoyer</label></div>
+          <label class="check"><input id="cfBestDelay" type="checkbox" ${p.best?.delayEnabled !== false ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfBestDelaySec" type="number" min="0" max="120" style="width:70px" value="${esc(String(p.best?.delaySec ?? 0))}"> s avant d'envoyer</label></div>
           <div class="three-col">
             <div class="field"><label>ID ou @nom du canal</label><input id="cfBestChannels" value="${esc((p.best?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="field"><label>Lien du canal <span class="small">(affiché dans le bilan)</span></label><input id="cfBestLink" value="${esc(p.best?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
