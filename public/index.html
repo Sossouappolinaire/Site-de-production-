@@ -1985,7 +1985,8 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Meilleures prédictions</span><h2 style="margin-top:7px">🎯 Canal des meilleures prédictions</h2><p class="small">À configurer une seule fois : le bot envoie dans ce canal les prédictions de la meilleure configuration du jour (classement du bilan). Si une autre devient meilleure, il bascule et envoie alors celles de la nouvelle. Le bilan renvoie vers ce canal avec le taux du meilleur canal. ${p.best?.currentName ? `Meilleure actuelle : ${esc(p.best.currentName)}.` : 'Pas encore de meilleure (minimum de prédictions non atteint).'} Envoyées : ${p.best?.sentCount || 0}.</p></div>
           <label class="check"><input id="cfBestOn" type="checkbox" ${p.best?.enabled ? 'checked' : ''}> Actif</label>
           <label class="check"><input id="cfBestWelcome" type="checkbox" ${p.best?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label>
-          <label class="check"><input id="cfBestRecap" type="checkbox" ${p.best?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="cfBestRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.best?.recapMin ?? 125))}"> min</label></div>
+          <label class="check"><input id="cfBestRecap" type="checkbox" ${p.best?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="cfBestRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.best?.recapMin ?? 125))}"> min</label>
+          <label class="check"><input id="cfBestDelay" type="checkbox" ${p.best?.delayEnabled !== false ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfBestDelaySec" type="number" min="0" max="120" style="width:70px" value="${esc(String(p.best?.delaySec ?? 10))}"> s avant d'envoyer</label></div>
           <div class="three-col">
             <div class="field"><label>ID ou @nom du canal</label><input id="cfBestChannels" value="${esc((p.best?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="field"><label>Lien du canal <span class="small">(affiché dans le bilan)</span></label><input id="cfBestLink" value="${esc(p.best?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
@@ -2013,7 +2014,7 @@ Faites-en bon usage !
     }
     async function saveCostumeFaibleTopBest() {
       try {
-        await api('/api/costume-faible-top/config', 'POST', { bestEnabled: $('#cfBestOn')?.checked, bestWelcome: $('#cfBestWelcome')?.checked, bestRecap: $('#cfBestRecap')?.checked, bestRecapMin: val('cfBestRecapMin'), bestChannels: ids(val('cfBestChannels')), bestLink: val('cfBestLink'), bestFormat: val('cfBestFormat'), bestMaxR: val('cfBestMaxR') });
+        await api('/api/costume-faible-top/config', 'POST', { bestEnabled: $('#cfBestOn')?.checked, bestWelcome: $('#cfBestWelcome')?.checked, bestRecap: $('#cfBestRecap')?.checked, bestRecapMin: val('cfBestRecapMin'), bestDelayEnabled: $('#cfBestDelay')?.checked, bestDelaySec: val('cfBestDelaySec'), bestChannels: ids(val('cfBestChannels')), bestLink: val('cfBestLink'), bestFormat: val('cfBestFormat'), bestMaxR: val('cfBestMaxR') });
         await refresh(); costumeFaibleTopPage(); toast('Canal des meilleures prédictions enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
