@@ -1302,7 +1302,7 @@ function defaultsFor(key) {
     // n'est envoyée qu'une fois le jeu situé juste avant la cible en cours, plus
     // `delaySec` secondes. Désactivé par défaut.
     delayEnabled: false,
-    delaySec: 10,
+    delaySec: 0,
     // message de perte + formation VIP (voir loss-notice.js) — CASE PAR
     // STRATÉGIE, désactivée par défaut (demande admin) : rien n'est envoyé
     // pour une stratégie tant que l'admin ne l'a pas explicitement activée

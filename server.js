@@ -1797,6 +1797,7 @@ app.post('/api/dizaine-top/config', async (req, res) => {
   try {
     const b = req.body || {};
     if (b.bestChannels !== undefined) await verifyDizaineChannels(dizaineTop.parseChannels(b.bestChannels));
+    if (b.weakChannels !== undefined) await verifyDizaineChannels(dizaineTop.parseChannels(b.weakChannels));
     dizaineTop.configure(b);
     res.json(dizaineTop.status());
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1835,11 +1836,16 @@ app.post('/api/dizaine-top/trackers/:id/test', async (req, res) => {
 });
 
 // bilan : aperçu du texte (sans envoi) et envoi immédiat (test)
+app.get('/api/dizaine-top/bilan/chart.png', (req, res) => {
+  const c = dizaineTop.buildBilanChart(req.query.kind === 'weak' ? 'weak' : 'best');
+  if (!c) return res.status(404).send("Aucune prédiction vérifiée à tracer.");
+  res.type('png').send(c.png);
+});
 app.get('/api/dizaine-top/bilan/preview', (req, res) => {
   res.json({ text: dizaineTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
 });
 app.post('/api/dizaine-top/welcome/test', async (req, res) => {
-  const r = await dizaineTop.testWelcome();
+  const r = await (req.body && req.body.kind === 'weak' ? dizaineTop.testWeakWelcome() : dizaineTop.testWelcome());
   res.status(r.ok ? 200 : 400).json(r);
 });
 app.post('/api/dizaine-top/bilan/send', async (req, res) => {
@@ -1870,6 +1876,7 @@ app.post('/api/costume-faible-top/config', async (req, res) => {
   try {
     const b = req.body || {};
     if (b.bestChannels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.bestChannels));
+    if (b.weakChannels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.weakChannels));
     costumeFaibleTop.configure(b);
     res.json(costumeFaibleTop.status());
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1904,11 +1911,16 @@ app.post('/api/costume-faible-top/trackers/:id/test', async (req, res) => {
   const r = await costumeFaibleTop.test(req.params.id);
   res.status(r.ok ? 200 : 400).json(r);
 });
+app.get('/api/costume-faible-top/bilan/chart.png', (req, res) => {
+  const c = costumeFaibleTop.buildBilanChart(req.query.kind === 'weak' ? 'weak' : 'best');
+  if (!c) return res.status(404).send("Aucune prédiction vérifiée à tracer.");
+  res.type('png').send(c.png);
+});
 app.get('/api/costume-faible-top/bilan/preview', (req, res) => {
   res.json({ text: costumeFaibleTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
 });
 app.post('/api/costume-faible-top/welcome/test', async (req, res) => {
-  const r = await costumeFaibleTop.testWelcome();
+  const r = await (req.body && req.body.kind === 'weak' ? costumeFaibleTop.testWeakWelcome() : costumeFaibleTop.testWelcome());
   res.status(r.ok ? 200 : 400).json(r);
 });
 app.post('/api/costume-faible-top/bilan/send', async (req, res) => {

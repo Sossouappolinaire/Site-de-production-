@@ -45,6 +45,7 @@ const strategies = require('./strategies');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const earlyVerify = require('./early-verify');
 const sendDelay = require('./send-delay');
+const bilanChart = require('./bilan-chart');
 
 const SUITS = strategies.SUITS; // ['♦️', '❤️', '♣️', '♠️'] — ordre de départage des égalités
 const MIN_READABLE = 6;
@@ -61,10 +62,11 @@ const panel = {
   lastScanAt: null,
   lastError: null,
   // bilan périodique (voir en-tête)
-  bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
+  bilan: { enabled: true, chart: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
   // canal des MEILLEURES prédictions (voir en-tête) : configuré une fois, il reçoit les
   // prédictions de la configuration actuellement en tête du classement du jour.
   best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 0 },
+  weak: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, rank: 4, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 0 },
 };
 
 let sender = null;
@@ -121,6 +123,7 @@ function sanitizeMinPreds(v) { const n = parseInt(v, 10); return Number.isFinite
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.bilanEnabled !== undefined) panel.bilan.enabled = !!patch.bilanEnabled;
+  if (patch.bilanChart !== undefined) panel.bilan.chart = !!patch.bilanChart;
   if (patch.bilanEveryHours !== undefined) panel.bilan.everyHours = sanitizeEvery(patch.bilanEveryHours);
   if (patch.bilanMinPreds !== undefined) panel.bilan.minPreds = sanitizeMinPreds(patch.bilanMinPreds);
   if (patch.bestEnabled !== undefined) panel.best.enabled = !!patch.bestEnabled;
@@ -133,14 +136,26 @@ function configure(patch = {}) {
   if (patch.bestDelaySec !== undefined) panel.best.delaySec = sanitizeDelaySec(patch.bestDelaySec);
   if (patch.bestFormat !== undefined) panel.best.format = sanitizeFormat(patch.bestFormat);
   if (patch.bestMaxR !== undefined) panel.best.maxR = sanitizeMaxR(patch.bestMaxR);
+  if (patch.weakEnabled !== undefined) panel.weak.enabled = !!patch.weakEnabled;
+  if (patch.weakChannels !== undefined) panel.weak.channels = parseChannels(patch.weakChannels);
+  if (patch.weakLink !== undefined) panel.weak.link = sanitizeLink(patch.weakLink);
+  if (patch.weakWelcome !== undefined) panel.weak.welcome = !!patch.weakWelcome;
+  if (patch.weakRecap !== undefined) panel.weak.recap = !!patch.weakRecap;
+  if (patch.weakRecapMin !== undefined) panel.weak.recapMin = sanitizeRecapMin(patch.weakRecapMin);
+  if (patch.weakDelayEnabled !== undefined) panel.weak.delayEnabled = !!patch.weakDelayEnabled;
+  if (patch.weakDelaySec !== undefined) panel.weak.delaySec = sanitizeDelaySec(patch.weakDelaySec);
+  if (patch.weakFormat !== undefined) panel.weak.format = sanitizeFormat(patch.weakFormat);
+  if (patch.weakMaxR !== undefined) panel.weak.maxR = sanitizeMaxR(patch.weakMaxR);
+  if (patch.weakRank !== undefined) panel.weak.rank = sanitizeWeakRank(patch.weakRank);
   persist();
   return config();
 }
 function config() {
   return {
     enabled: panel.enabled,
-    bilanEnabled: panel.bilan.enabled, bilanEveryHours: panel.bilan.everyHours, bilanMinPreds: panel.bilan.minPreds,
+    bilanEnabled: panel.bilan.enabled, bilanChart: panel.bilan.chart !== false, bilanEveryHours: panel.bilan.everyHours, bilanMinPreds: panel.bilan.minPreds,
     bestEnabled: panel.best.enabled, bestChannels: panel.best.channels, bestFormat: panel.best.format, bestMaxR: panel.best.maxR,
+    weakEnabled: panel.weak.enabled, weakChannels: panel.weak.channels, weakFormat: panel.weak.format, weakMaxR: panel.weak.maxR, weakRank: panel.weak.rank,
   };
 }
 
@@ -169,6 +184,7 @@ function persist() {
     channelLinks: panel.channelLinks,
     bilan: panel.bilan,
     best: panel.best,
+    weak: panel.weak,
   };
   try { store.patch({ dizaineTop: saved }); } catch (_) {}
   if (db.ready) db.setSetting('dizaine_top_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
@@ -228,6 +244,7 @@ function applySaved(saved) {
     panel.bilan = {
       ...panel.bilan,
       enabled: saved.bilan.enabled !== false,
+      chart: saved.bilan.chart !== false,
       // migration unique : passage à un bilan toutes les heures pile (demande admin)
       everyHours: saved.bilan.hourlyMigrated ? sanitizeEvery(saved.bilan.everyHours) : 1,
       hourlyMigrated: true,
@@ -258,8 +275,36 @@ function applySaved(saved) {
       delayEnabled: saved.best.delayEnabled !== false,
       delaySec: sanitizeDelaySec(saved.best.delaySec),
       day: saved.best.day || undefined,
+      log: Array.isArray(saved.best.log) ? saved.best.log.slice(-300) : [],
       lastSuit: saved.best.lastSuit || null,
       lastTarget: Number.isFinite(Number(saved.best.lastTarget)) && saved.best.lastTarget !== null ? Number(saved.best.lastTarget) : null,
+    };
+  }
+  if (saved.weak && typeof saved.weak === 'object') {
+    panel.weak = {
+      ...panel.weak,
+      enabled: !!saved.weak.enabled,
+      rank: sanitizeWeakRank(saved.weak.rank),
+      channels: parseChannels(saved.weak.channels || []),
+      link: sanitizeLink(saved.weak.link),
+      welcome: saved.weak.welcome !== false,
+      recap: saved.weak.recap !== false,
+      recapMin: sanitizeRecapMin(saved.weak.recapMin == null ? 125 : saved.weak.recapMin),
+      lastRecapAt: Number(saved.weak.lastRecapAt) || null,
+      wins: Number(saved.weak.wins) || 0,
+      losses: Number(saved.weak.losses) || 0,
+      format: sanitizeFormat(saved.weak.format),
+      maxR: sanitizeMaxR(saved.weak.maxR),
+      currentTrackerId: saved.weak.currentTrackerId || null,
+      switchedAt: saved.weak.switchedAt || null,
+      sentCount: Number(saved.weak.sentCount) || 0,
+      lastSentAt: saved.weak.lastSentAt || null,
+      delayEnabled: saved.weak.delayEnabled !== false,
+      delaySec: sanitizeDelaySec(saved.weak.delaySec),
+      day: saved.weak.day || undefined,
+      log: Array.isArray(saved.weak.log) ? saved.weak.log.slice(-300) : [],
+      lastSuit: saved.weak.lastSuit || null,
+      lastTarget: Number.isFinite(Number(saved.weak.lastTarget)) && saved.weak.lastTarget !== null ? Number(saved.weak.lastTarget) : null,
     };
   }
   if (Array.isArray(saved.trackers)) panel.trackers = saved.trackers.filter((t) => t && t.id).map(normalizeTracker);
@@ -575,7 +620,7 @@ function rollBestDay(now = Date.now()) {
   if (b.day === key) return false;
   const stale = b.day ? true : !!(b.lastSentAt && bestDayKey(b.lastSentAt) !== key);
   b.day = key;
-  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; }
+  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; b.log = []; }
   persist();
   return stale;
 }
@@ -721,6 +766,241 @@ async function forwardToBest(tracker, syn) {
   return postToBest(tracker, syn, orig);
 }
 
+
+// ---------------------------------------------------------------------------
+// CANAL DU PLUS FAIBLE (demande admin) : même principe que le canal des meilleures, mais il relaie les
+// prédictions de la stratégie classée au 4ᵉ rang (réglable) du classement du jour — « le plus fiable » à
+// contre-courant. Si moins de 4 sont classées, c'est la dernière classée (au moins 2 classées requises).
+// Jamais la même stratégie que le canal des meilleures.
+// ---------------------------------------------------------------------------
+function sanitizeWeakRank(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(2, Math.min(10, n)) : 4; }
+function welcomeTextWeak(fullName, title) {
+  return `👋 ${fullName}, bienvenue dans le canal : ${title}\n\n${weakRecap(title)}`;
+}
+const weakHeld = [];
+let weakHeldTimer = null;
+let weakReleasing = false;
+function notifyWeakChange(prevId, top, ranked, reason) {
+  try {
+    const b = panel.weak;
+    const adminId = adminIdFn ? adminIdFn() : null;
+    const bot = typeof sender === 'function' ? sender() : null;
+    if (!b.enabled || !b.channels.length || !adminId || !bot) return;
+    const line = (r) => `${trackerRealName(r.t)} — ${pct(r.wins, r.total)} (${r.wins}/${r.total}) · moy. ${avgRattrapage(r)}`;
+    const prevRow = prevId ? ranked.find((r) => r.t.id === prevId) : null;
+    const prevT = prevId ? panel.trackers.find((t) => t.id === prevId) : null;
+    const dest = b.channels.map((id) => panel.channelTitles[String(id)] || String(id)).join(' + ');
+    const text = prevT
+      ? `🔄 Nouveau canal du plus faible${reason ? `\n⚠️ Cause : ${reason}` : ''}\n\n📉 ${line(top)}\n↩️ Remplace : ${prevRow ? line(prevRow) : trackerRealName(prevT)}\n\n📣 Ses prédictions partent maintenant dans « ${dest} »`
+      : `📉 Canal du plus faible désigné\n\n${line(top)}\n\n📣 Ses prédictions partent dans « ${dest} »`;
+    Promise.resolve(bot.sendMessage(adminId, text)).catch(() => {});
+  } catch (_) { /* une alerte ratée ne doit jamais bloquer les prédictions */ }
+}
+function weakRecap(title) {
+  rollWeakDay(); // 00h00 Abidjan : tout repart à zéro
+  const w = panel.weak.wins || 0; const l = panel.weak.losses || 0; const total = w + l;
+  const rate = total ? ((w / total) * 100).toFixed(2) : '0.00';
+  return `📊 ${title} :\n• 🎮 All games : ${total}\n• ✅ Won : ${w}\n• ❌ Lost : ${l}\n• ${rate}%`;
+}
+async function maybeSendRecapWeak(now = Date.now()) {
+  const b = panel.weak;
+  if (!b.enabled || !b.recap || !b.channels.length) return;
+  if (!b.lastRecapAt) { b.lastRecapAt = now; return; } // le compteur démarre : 1er récapitulatif après l'intervalle
+  if (now - b.lastRecapAt < sanitizeRecapMin(b.recapMin) * 60000) return;
+  b.lastRecapAt = now;
+  if (((b.wins || 0) + (b.losses || 0)) === 0) return; // rien à récapituler
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return;
+  for (const id of b.channels) {
+    const title = panel.channelTitles[String(id)] || String(id);
+    try { await bot.sendMessage(id, weakRecap(title)); }
+    catch (e) { panel.lastError = `Récapitulatif ${id} : ${e.message}`; }
+  }
+}
+function isWeakChat(chat) {
+  return panel.weak.channels.some((id) => String(id) === String(chat.id)
+    || (String(id).startsWith('@') && chat.username && String(id).slice(1).toLowerCase() === String(chat.username).toLowerCase()));
+}
+function rollWeakDay(now = Date.now()) {
+  const b = panel.weak;
+  const key = bestDayKey(now);
+  if (b.day === key) return false;
+  const stale = b.day ? true : !!(b.lastSentAt && bestDayKey(b.lastSentAt) !== key);
+  b.day = key;
+  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; b.log = []; }
+  persist();
+  return stale;
+}
+function cancelHeldWeak(h) {
+  const b = panel.weak;
+  // l'anti-doublon ne doit pas se souvenir d'une prédiction que le canal n'a jamais reçue
+  if (b.lastTarget === h.target) { b.lastSuit = h.prevSuit || null; b.lastTarget = h.prevTarget == null ? null : h.prevTarget; }
+  if (h.orig) h.orig.weakRelayed = false;
+}
+async function releaseWeakHeld(now = Date.now()) {
+  if (weakReleasing || !weakHeld.length) return;
+  weakReleasing = true;
+  try {
+    const { done, dealing } = sendDelay.progress(state.games);
+    for (let i = 0; i < weakHeld.length;) {
+      const h = weakHeld[i];
+      if (!panel.weak.enabled || String(panel.weak.currentTrackerId) !== String(h.tracker.id)) { weakHeld.splice(i, 1); cancelHeldWeak(h); continue; } // plus le meilleur
+      if (Number.isFinite(h.target) && (done >= h.target || dealing >= h.target)) { weakHeld.splice(i, 1); cancelHeldWeak(h); continue; } // jeu cible déjà lancé
+      const prevOn = !Number.isFinite(h.target) || dealing >= h.target - 1 || done >= h.target - 1;
+      if (!prevOn) { i++; continue; }
+      if (!h.armedAt) h.armedAt = now;
+      if (now - h.armedAt < h.sec * 1000) { i++; continue; }
+      weakHeld.splice(i, 1);
+      let ok = false;
+      try { ok = await postToWeak(h.tracker, h.syn, h.orig); } catch (e) { panel.lastError = `Plus faible : ${e.message}`; }
+      if (!ok) cancelHeldWeak(h);
+    }
+  } finally {
+    weakReleasing = false;
+    if (!weakHeld.length && weakHeldTimer) { clearInterval(weakHeldTimer); weakHeldTimer = null; }
+  }
+}
+function holdWeak(tracker, syn, orig) {
+  const b = panel.weak;
+  if (orig) orig.weakRelayed = true; // marquée tout de suite : jamais retenue ni envoyée deux fois
+  const target = Number(syn.target);
+  weakHeld.push({ tracker, syn, orig, target, armedAt: null, sec: sanitizeDelaySec(b.delaySec), prevSuit: b.lastSuit || null, prevTarget: b.lastTarget == null ? null : b.lastTarget });
+  b.lastSuit = String(syn.suit); // pour l'anti-doublon dès maintenant
+  if (Number.isFinite(target)) b.lastTarget = target;
+  if (!weakHeldTimer) { weakHeldTimer = setInterval(() => { releaseWeakHeld().catch(() => {}); }, 1000); if (weakHeldTimer.unref) weakHeldTimer.unref(); }
+  releaseWeakHeld().catch(() => {}); // la condition peut déjà être remplie : envoi aussitôt
+}
+async function postToWeak(tracker, syn, orig) {
+  const b = panel.weak;
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) { panel.lastError = 'Plus faible : aucun token Telegram configuré'; return false; }
+  if (orig) orig.weakRelayed = true; // marqué TOUT DE SUITE (avant l'envoi) : jamais deux envois de la même prédiction
+  const out = fmt.renderMessage(b.format, {
+    gameNumber: syn.target, suit: syn.suit, strategy: 'Prédiction du plus faible',
+    maxR: b.maxR, status: 'en attente', rattrapage: 0,
+  }, null);
+  const sentMessages = [];
+  const res = await Promise.all(b.channels.map((id) =>
+    bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
+      .then((m) => (m && m.skipped ? { skipped: true } : { ok: true, id, messageId: m.message_id }))
+      .catch((e) => ({ id, error: e.message }))));
+  for (const r of res) {
+    if (r.ok) sentMessages.push({ chatId: r.id, messageId: r.messageId });
+    else if (!r.skipped) panel.lastError = `Plus faible ${r.id} : ${r.error}`;
+  }
+  if (!sentMessages.length) { if (orig) orig.weakRelayed = false; return false; }
+  b.sentCount = (b.sentCount || 0) + 1;
+  b.lastSentAt = Date.now();
+  b.lastSuit = String(syn.suit); // mémoire du dernier costume envoyé (anti-doublon)
+  if (Number.isFinite(Number(syn.target))) b.lastTarget = Number(syn.target);
+  panel.pendingMessages.push({
+    id: `w-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    trackerId: tracker.id, mirror: true, weak: true, // relais : ne compte pas deux fois dans les scores
+    target: syn.target, suit: syn.suit, strategyName: 'Prédiction du plus faible',
+    format: b.format, maxR: b.maxR, step: 0, gap: 0, skipped: 0,
+    status: 'en attente', messages: sentMessages, createdAt: Date.now(), resolvedAt: null,
+  });
+  persist();
+  return true;
+}
+function relayNewWeak(tracker) {
+  try {
+    const b = panel.weak;
+    if (!b.enabled || !b.channels.length) return;
+    const today = bestDayKey();
+    let orig = null;
+    for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
+      const e = panel.pendingMessages[i];
+      if (!e.mirror && e.trackerId === tracker.id && e.status === 'en attente' && !e.step && !e.weakRelayed && bestDayKey(e.createdAt) === today) { orig = e; break; }
+    }
+    if (!orig) return;
+    // la prédiction est choisie et marquée « relayée » tout de suite (avant tout await) ; l'envoi attend le jeu suivant
+    const synR = { target: orig.target, suit: orig.suit };
+    if (weakDelayOn()) { holdWeak(tracker, synR, orig); return; } // attend le démarrage du jeu suivant, puis envoi automatique
+    postToWeak(tracker, synR, orig)
+      .catch((e) => { panel.lastError = `Plus faible : ${e.message}`; });
+  } catch (e) { panel.lastError = `Plus faible : ${e.message}`; }
+}
+async function forwardToWeak(tracker, syn) {
+  const b = panel.weak;
+  if (!b.enabled || !b.channels.length) return false;
+  rollWeakDay();
+  const best = currentWeak();
+  if (best && String(panel.best.currentTrackerId) === String(best.id)) return false; // jamais la meilleure
+  if (!best || best.id !== tracker.id) return false; // ce n'est pas la meilleure configuration
+  const orig = findOriginalEntry(tracker, syn);
+  if (orig && orig.weakRelayed) return false; // déjà relayée (par le changement de meilleur)
+  // même costume que la précédente ET numéros qui se suivent (écart < 2) : ignorée. Écart d'au moins 2 : envoyée.
+  const tNum = Number(syn.target);
+  const sameSuit = !!b.lastSuit && String(b.lastSuit) === String(syn.suit);
+  const near = Number.isFinite(tNum) && Number.isFinite(b.lastTarget) && Math.abs(tNum - b.lastTarget) < 2;
+  if (Number.isFinite(tNum)) b.lastTarget = tNum; // dernier numéro prédit par le meilleur (envoyé ou ignoré)
+  if (sameSuit && near) { b.skippedSame = (b.skippedSame || 0) + 1; return false; }
+  if (weakDelayOn()) { holdWeak(tracker, syn, orig); return true; }
+  return postToWeak(tracker, syn, orig);
+}
+async function handleWeakMemberUpdate(u) {
+  const b = panel.weak;
+  if (!b.enabled || !b.welcome || !b.channels.length || !u || !u.chat || !u.new_chat_member) return false;
+  const nm = u.new_chat_member; const old = u.old_chat_member || {};
+  const joined = ['member', 'administrator', 'creator'].includes(nm.status) && ['left', 'kicked'].includes(old.status);
+  if (!joined || !nm.user || nm.user.is_bot || !isWeakChat(u.chat)) return false;
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return false;
+  const k = `${u.chat.id}:${nm.user.id}`;
+  const now = Date.now();
+  if (welcomeSeen.has(k) && now - welcomeSeen.get(k) < 10 * 60 * 1000) return false; // pas de double message
+  welcomeSeen.set(k, now);
+  if (welcomeSeen.size > 500) for (const [kk, t] of welcomeSeen) if (now - t > 10 * 60 * 1000) welcomeSeen.delete(kk);
+  const title = u.chat.title || panel.channelTitles[String(u.chat.id)] || String(u.chat.id);
+  if (u.chat.title) setChannelTitle(u.chat.id, u.chat.title);
+  const fullName = [nm.user.first_name, nm.user.last_name].filter(Boolean).join(' ').trim() || nm.user.username || 'Nouveau membre';
+  try { await bot.sendMessage(u.chat.id, welcomeTextWeak(fullName, title)); return true; }
+  catch (e) { panel.lastError = `Bienvenue ${u.chat.id} : ${e.message}`; return false; }
+}
+async function testWeakWelcome() {
+  const b = panel.weak;
+  if (!b.channels.length) return { ok: false, error: 'Aucun canal du plus faible configuré' };
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return { ok: false, error: 'Aucun token Telegram configuré' };
+  const out = { ok: false, channel: String(b.channels[0]) };
+  try {
+    const me = await bot.getMe();
+    const chat = await bot.getChat(b.channels[0]);
+    out.chatType = chat.type;
+    const mem = await bot.getChatMember(chat.id, me.id);
+    out.botStatus = mem.status; out.canPost = mem.can_post_messages; out.canInvite = mem.can_invite_users;
+    const title = chat.title || panel.channelTitles[String(chat.id)] || String(chat.id);
+    const m = await bot.sendMessage(chat.id, `🧪 TEST — ${welcomeTextWeak('Prénom Nom', title)}`);
+    if (m && m.skipped) out.error = 'Envoi ignoré : les prédictions de ce canal sont en pause (/stop)';
+    else out.ok = true;
+  } catch (e) { out.error = e.message; }
+  return out;
+}
+function weakDelayOn() { return panel.weak.delayEnabled !== false && sendDelay.enabled(); }
+function currentWeak(now = Date.now(), reason) {
+  const w = panel.weak;
+  const ranked = rankedToday(now);
+  if (ranked.length >= 2) {
+    const pick = ranked[Math.min(sanitizeWeakRank(w.rank) - 1, ranked.length - 1)];
+    const cur = ranked.find((r) => r.t.id === w.currentTrackerId);
+    const clash = !!w.currentTrackerId && String(w.currentTrackerId) === String(panel.best.currentTrackerId);
+    if (!cur || clash || compareQuality(pick, cur) !== 0) {
+      const prevId = w.currentTrackerId;
+      if (prevId !== pick.t.id) { w.currentTrackerId = pick.t.id; w.switchedAt = Date.now(); notifyWeakChange(prevId, pick, ranked, reason); w.lastSuit = null; w.lastTarget = null; relayNewWeak(pick.t); }
+    }
+  }
+  return panel.trackers.find((t) => t.id === w.currentTrackerId) || null;
+}
+const handleBestMemberUpdate = handleMemberUpdate;
+async function handleMemberUpdateAll(u) {
+  let a = false; let b = false;
+  try { a = await handleBestMemberUpdate(u); } catch (_) { /* ignoré */ }
+  try { b = await handleWeakMemberUpdate(u); } catch (_) { /* ignoré */ }
+  return a || b;
+}
+
+
 async function send(tracker, syn) {
   const targetChannels = effectiveChannels(tracker);
   if (!targetChannels.length && !tracker.siteChannelId) {
@@ -788,6 +1068,7 @@ async function send(tracker, syn) {
   }
   // canal des meilleures prédictions : relais si cette configuration est la meilleure du moment
   try { await forwardToBest(tracker, syn); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
+  try { await forwardToWeak(tracker, syn); } catch (e) { panel.lastError = `Plus faible : ${e.message}`; }
   return true;
 }
 
@@ -810,11 +1091,22 @@ function editPending(entry, statusFr) {
 // des configurations à taux égal (moyenne des rattrapages, voir compareQuality).
 // relais vers le canal des meilleures : jamais compté dans les scores des configurations,
 // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
+// journal des résultats des prédictions envoyées dans le canal des meilleures / du plus faible (courbe cumulée du bilan)
+function pushResultLog(b, entry, field) {
+  if (!Array.isArray(b.log)) b.log = [];
+  b.log.push({ target: entry.target, suit: entry.suit, status: field === 'wins' ? 'gagné' : 'perdu', step: Number(entry.step) || 0, maxR: Number(entry.maxR) || 0, resolvedAt: Date.now() });
+  if (b.log.length > 300) b.log = b.log.slice(-300);
+}
+
 function bumpEntry(entry, field, step = 0) {
   if (entry.mirror) {
     if (entry.best) {
       rollBestDay();
-      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.best.day) { panel.best[field] = (panel.best[field] || 0) + 1; persist(); }
+      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.best.day) { panel.best[field] = (panel.best[field] || 0) + 1; pushResultLog(panel.best, entry, field); persist(); }
+    }
+    if (entry.weak) {
+      rollWeakDay();
+      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.weak.day) { panel.weak[field] = (panel.weak[field] || 0) + 1; pushResultLog(panel.weak, entry, field); persist(); }
     }
     return;
   }
@@ -829,6 +1121,7 @@ function bumpEntry(entry, field, step = 0) {
 // s'il change, la prédiction en cours du nouveau meilleur part aussitôt dans le canal des meilleures.
 function recalcBest(entry) {
   try { currentBest(Date.now(), `résultat sur #N${entry.target}`); } catch (_) { /* jamais bloquant */ }
+  try { currentWeak(Date.now(), `résultat sur #N${entry.target}`); } catch (_) { /* jamais bloquant */ }
 }
 function recalcAfterLoss(entry) {
   try {
@@ -905,7 +1198,7 @@ setOnShoeReset(() => {
 // ---------------------------------------------------------------------------
 // BILAN périodique
 // ---------------------------------------------------------------------------
-const BILAN_TZ = process.env.BILAN_TZ || 'Africa/Porto-Novo';
+const BILAN_TZ = process.env.RESET_TZ || 'Africa/Abidjan'; // journée du bilan : 00h00 heure d'Abidjan (comme le nouveau départ)
 
 function localParts(ms) {
   const f = new Intl.DateTimeFormat('fr-FR', {
@@ -1087,7 +1380,7 @@ function buildBilanText(now = Date.now(), forceToday = false, frozen = null) {
   const siteList = siteChannelsView();
   const min = panel.bilan.minPreds;
   const rows = panel.trackers.map((t) => {
-    const st = segStatsOf(frozen ? frozen.map.get(t.id) : segOf(t));
+    const st = dayStats(t, reportKey); // cumul de la journée : remis à zéro uniquement à 00h00 (Abidjan)
     return { t, ...st, names: trackerChannelNames(t, siteList), rate: st.total ? st.wins / st.total : 0 };
   }).filter((r) => r.total > 0 || forceToday);
   const ranked = rows.filter((r) => r.total >= min)
@@ -1098,7 +1391,7 @@ function buildBilanText(now = Date.now(), forceToday = false, frozen = null) {
   lines.push('📊 BILAN — DIZAINE (costume le plus / le moins sorti)');
   const endLbl = forceToday ? sinceLabel(now, now) : `${hh}h00`; // envoi manuel : heure réelle
   lines.push(`🕑 Point de ${endLbl} · ${rd}/${rm}/${ry}`);
-  lines.push(`📆 Compté depuis le dernier bilan (${sinceLabel(frozen ? frozen.since : panel.bilan.segSince, now)} → ${endLbl}) · remis à zéro après chaque envoi`);
+  lines.push(`📆 Cumul depuis 00h00 (heure d'Abidjan) · remis à zéro uniquement à 00h00`);
   lines.push('━━━━━━━━━━━━━━━━━━');
   if (ranked.length) {
     const best = ranked[0];
@@ -1164,17 +1457,48 @@ async function refreshChannelTitles(ids) {
   }));
 }
 
+// COURBE CUMULÉE des prédictions envoyées dans le canal des meilleures (kind = 'best') ou du plus faible ('weak'),
+// depuis 00h00 (heure d'Abidjan) : une seule ligne, descente tracée en rouge.
+function buildBilanChart(kind = 'best') {
+  if (panel.bilan.chart === false) return null;
+  const b = kind === 'weak' ? panel.weak : panel.best;
+  const log = (Array.isArray(b.log) ? b.log : []).filter((e) => e && e.resolvedAt);
+  if (!log.length) return null;
+  const day = bestDayKey(log[log.length - 1].resolvedAt); // journée de la dernière prédiction (bilan de minuit compris)
+  const entries = log.filter((e) => bestDayKey(e.resolvedAt) === day).sort((x, y) => x.resolvedAt - y.resolvedAt);
+  return bilanChart.buildCumulative({ title: kind === 'weak' ? 'Courbe cumulée — canal du plus faible' : 'Courbe cumulée — canal des meilleures', entries });
+}
+// envoi après chaque bilan : la courbe du meilleur dans le canal des meilleures, celle du plus faible dans le canal du plus faible
+async function sendBilanCharts(bot, errors) {
+  if (!bot || typeof bot.sendPhoto !== 'function' || panel.bilan.chart === false) return 0;
+  let paused = () => false;
+  try { paused = require('./prediction-control').isChannelPaused; } catch (_) { /* pas de pause connue */ }
+  let n = 0;
+  for (const kind of ['best', 'weak']) {
+    const b = panel[kind];
+    if (!b.enabled || !b.channels.length) continue;
+    let ch = null;
+    try { ch = buildBilanChart(kind); } catch (e) { errors.push(`courbe ${kind} : ${e.message}`); }
+    if (!ch) continue;
+    for (const id of b.channels) {
+      if (paused(id)) continue; // /stop : rien n'est publié
+      try { await bot.sendPhoto(id, ch.png, { caption: ch.caption }, { filename: `courbe-${kind}.png`, contentType: 'image/png' }); n++; }
+      catch (e) { errors.push(`courbe ${id} : ${e.message}`); }
+    }
+  }
+  return n;
+}
+
 async function sendBilan({ force = false, now = Date.now() } = {}) {
   const { tg, site } = bilanTargets();
   if (!tg.length && !site.length) return { ok: false, error: 'Aucun canal configuré' };
   // tous les canaux des configurations (même désactivées) apparaissent dans le classement
   const allIds = panel.trackers.flatMap((t) => t.channels || []);
-  await refreshChannelTitles([...tg, ...allIds, ...(panel.best.enabled ? panel.best.channels : [])]);
-  if (!buildBilanText(now, force)) return { ok: false, error: "Aucune prédiction vérifiée depuis le dernier bilan : bilan non envoyé" };
-  // le compteur est gelé pour tout l'envoi, puis repart à zéro (voir freezeSeg)
-  const frozen = freezeSeg(); let committed = false;
+  await refreshChannelTitles([...tg, ...allIds, ...(panel.best.enabled ? panel.best.channels : []), ...(panel.weak.enabled ? panel.weak.channels : [])]);
+  if (!buildBilanText(now, force)) return { ok: false, error: "Aucune prédiction vérifiée aujourd'hui : bilan non envoyé" };
+  // le cumul de la journée n'est jamais remis à zéro par l'envoi (seulement à 00h00)
   try {
-  const text = buildBilanText(now, force, frozen);
+  const text = buildBilanText(now, force);
   const bot = typeof sender === 'function' ? sender() : null;
   const sent = []; const errors = [];
   if (tg.length) {
@@ -1186,13 +1510,13 @@ async function sendBilan({ force = false, now = Date.now() } = {}) {
       for (const r of res) { if (r.ok) sent.push(String(r.id)); else if (!r.skipped) errors.push(`${r.id} : ${r.error}`); }
     }
   }
+  try { await sendBilanCharts(bot, errors); } catch (e) { errors.push(`courbe : ${e.message}`); }
   for (const id of site) { if (addSiteChannelMessage(id, { sender: 'Bilan Dizaine', text })) sent.push(`site:${id}`); }
   panel.bilan.lastSentAt = Date.now();
   panel.bilan.lastResult = { sent: sent.length, errors: errors.slice(0, 3), at: Date.now() };
-  committed = sent.length > 0; // envoyé quelque part : le nouveau bilan reste à zéro
-  if (committed) { try { persist(); } catch (_) { /* sauvegarde best-effort */ } }
+  try { persist(); } catch (_) { /* sauvegarde best-effort */ }
   return { ok: sent.length > 0, sent, errors, text };
-  } finally { if (!committed) restoreSeg(frozen); }
+  } finally { /* rien à restaurer */ }
 }
 
 async function bilanTick(now = Date.now()) {
@@ -1226,11 +1550,12 @@ async function tick() {
   if (busy || !panel.enabled) return panel;
   busy = true;
   try {
-    rollBestDay();
+    rollBestDay(); rollWeakDay();
     for (const tracker of panel.trackers) await processTracker(tracker);
     await verifyPending();
     await bilanTick();
     await maybeSendRecap();
+    await maybeSendRecapWeak();
     panel.lastScanAt = Date.now();
   } catch (e) {
     panel.lastError = e.message;
@@ -1321,6 +1646,12 @@ function statusView() {
       channelNames: panel.best.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
       channelLinks: panel.best.channels.map((id, k) => (k === 0 && panel.best.link) ? panel.best.link : channelLinkOf(id)),
     },
+    weak: {
+      ...panel.weak,
+      currentName: (panel.trackers.find((t) => t.id === panel.weak.currentTrackerId) || {}).name || null,
+      channelNames: panel.weak.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
+      channelLinks: panel.weak.channels.map((id, k) => (k === 0 && panel.weak.link) ? panel.weak.link : channelLinkOf(id)),
+    },
     lastMember,
     history: panel.history.slice(0, 30),
     sentCount: panel.sentCount,
@@ -1336,7 +1667,7 @@ module.exports = {
   restore, restoreFromDb, parseChannels, setChannelTitle,
   // exposés pour les tests
   countDecade, rankSuits, pickSuit,
-  sendBilan, buildBilanText, bilanTick, rollDay, compareQuality, compareRanking,
+  sendBilan, buildBilanText, buildBilanChart, bilanTick, rollDay, compareQuality, compareRanking,
 };
 
 // exposé pour l'effacement de minuit (midnight-reset.js)
@@ -1344,7 +1675,9 @@ module.exports.persist = persist;
 module.exports.send = send;
 module.exports.currentBest = currentBest;
 module.exports.setAdminId = setAdminId;
-module.exports.handleMemberUpdate = handleMemberUpdate;
+module.exports.handleMemberUpdate = handleMemberUpdateAll;
+module.exports.testWeakWelcome = testWeakWelcome;
+module.exports.currentWeak = currentWeak;
 module.exports.welcomeText = welcomeText;
 module.exports.testWelcome = testWelcome;
 module.exports.bumpEntry = bumpEntry;

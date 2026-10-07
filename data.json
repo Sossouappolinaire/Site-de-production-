@@ -1161,96 +1161,3472 @@
     "config": {
       "enabled": true,
       "bilanEnabled": true,
+      "bilanChart": true,
       "bilanEveryHours": 1,
-      "bilanMinPreds": 5,
-      "bestEnabled": false,
-      "bestChannels": [],
+      "bilanMinPreds": 1,
+      "bestEnabled": true,
+      "bestChannels": [
+        -100
+      ],
       "bestFormat": 1,
-      "bestMaxR": 2
+      "bestMaxR": 2,
+      "weakEnabled": true,
+      "weakChannels": [
+        -200
+      ],
+      "weakFormat": 1,
+      "weakMaxR": 2,
+      "weakRank": 4
     },
     "trackers": [
       {
-        "id": "cf-1791222705197-zp3t6",
+        "id": "t1",
+        "name": "T1",
         "rule": "croise",
         "lead": 2,
         "enabled": true,
-        "channels": [
-          -100111
-        ],
-        "siteChannelId": null,
+        "channels": [],
         "format": 1,
         "maxR": 2,
-        "lastGame": 0,
-        "lastInfo": null,
-        "wins": 0,
-        "losses": 0,
-        "sentCount": 0,
-        "lastSentAt": null,
-        "createdAt": 1791222705197,
-        "day": {
-          "date": "2026-10-05",
-          "wins": 7,
-          "losses": 2,
-          "rsum": 4
-        },
-        "prevDay": null,
-        "name": "Costume faible croisé (a+2)"
-      },
-      {
-        "id": "cf-1791222705202-g4pva",
-        "rule": "strategie",
-        "lead": 3,
-        "enabled": true,
-        "channels": [
-          -100222
+        "slots": [
+          {
+            "channel": -1,
+            "name": "C-1",
+            "wins": 9,
+            "losses": 1,
+            "day": {
+              "date": "2026-10-07",
+              "wins": 9,
+              "losses": 1,
+              "rsum": 0,
+              "d0": 9,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            },
+            "prevDay": null,
+            "seg": {
+              "date": null,
+              "wins": 0,
+              "losses": 0,
+              "rsum": 0,
+              "d0": 0,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            }
+          },
+          {
+            "channel": -2,
+            "name": "C-2",
+            "wins": 7,
+            "losses": 3,
+            "day": {
+              "date": "2026-10-07",
+              "wins": 7,
+              "losses": 3,
+              "rsum": 0,
+              "d0": 7,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            },
+            "prevDay": null,
+            "seg": {
+              "date": null,
+              "wins": 0,
+              "losses": 0,
+              "rsum": 0,
+              "d0": 0,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            }
+          },
+          {
+            "channel": -3,
+            "name": "C-3",
+            "wins": 5,
+            "losses": 5,
+            "day": {
+              "date": "2026-10-07",
+              "wins": 5,
+              "losses": 5,
+              "rsum": 0,
+              "d0": 5,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            },
+            "prevDay": null,
+            "seg": {
+              "date": null,
+              "wins": 0,
+              "losses": 0,
+              "rsum": 0,
+              "d0": 0,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            }
+          },
+          {
+            "channel": -4,
+            "name": "C-4",
+            "wins": 2,
+            "losses": 8,
+            "day": {
+              "date": "2026-10-07",
+              "wins": 2,
+              "losses": 8,
+              "rsum": 0,
+              "d0": 2,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            },
+            "prevDay": null,
+            "seg": {
+              "date": null,
+              "wins": 0,
+              "losses": 0,
+              "rsum": 0,
+              "d0": 0,
+              "streak": 0,
+              "rmax": 0,
+              "lrun": 0,
+              "lmax": 0,
+              "smax": 0
+            }
+          }
         ],
-        "siteChannelId": null,
-        "format": 1,
-        "maxR": 2,
         "lastGame": 0,
-        "lastInfo": null,
-        "wins": 0,
-        "losses": 0,
-        "sentCount": 0,
-        "lastSentAt": null,
-        "createdAt": 1791222705202,
-        "day": {
-          "date": "2026-10-05",
-          "wins": 5,
-          "losses": 3,
-          "rsum": 2
-        },
-        "prevDay": null,
-        "name": "Costume faible stratégie (a+3)"
+        "sentCount": 24,
+        "lastSentAt": 1791403456303
       }
     ],
-    "history": [],
-    "pendingMessages": [],
-    "sentCount": 0,
-    "lastSentAt": null,
+    "history": [
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 109,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403456303
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 106,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403456300
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 103,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403456297
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 100,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403456293
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 97,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403456290
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 94,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403456287
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 91,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403456284
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 88,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403456281
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 85,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403456278
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 82,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403456274
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 79,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403456271
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 76,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403456269
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 73,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403456267
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 70,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403456264
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 67,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403456262
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 64,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403456259
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 61,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403456257
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 58,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403456254
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 55,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403456252
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 52,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403456250
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 49,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403456248
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 46,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403456245
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-4",
+        "target": 43,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403456243
+      },
+      {
+        "trackerId": "t1",
+        "trackerName": "C-1",
+        "target": 40,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403456235
+      }
+    ],
+    "pendingMessages": [
+      {
+        "id": "cp-1791403456235-t3wxo",
+        "trackerId": "t1",
+        "target": 40,
+        "suit": "♠️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456235,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456239-55c32",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 40,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456239,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456243-4z6cn",
+        "trackerId": "t1",
+        "target": 43,
+        "suit": "♣️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456243,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456243-138hc",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 43,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456243,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456245-0mh6a",
+        "trackerId": "t1",
+        "target": 46,
+        "suit": "♦️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456245,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456245-22z17",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 46,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456245,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456248-ony02",
+        "trackerId": "t1",
+        "target": 49,
+        "suit": "❤️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456248,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456248-ppc1t",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 49,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456248,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456250-8qzso",
+        "trackerId": "t1",
+        "target": 52,
+        "suit": "♠️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456250,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456251-subme",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 52,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456251,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456252-x3r48",
+        "trackerId": "t1",
+        "target": 55,
+        "suit": "♣️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456252,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456253-byfv9",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 55,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456253,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456254-1sqkk",
+        "trackerId": "t1",
+        "target": 58,
+        "suit": "♦️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456254,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456255-c6kah",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 58,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456255,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456257-6gwcq",
+        "trackerId": "t1",
+        "target": 61,
+        "suit": "❤️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456257,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456257-cc0xa",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 61,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456257,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456259-e7t25",
+        "trackerId": "t1",
+        "target": 64,
+        "suit": "♠️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456259,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456260-qkeh4",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 64,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456260,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456262-koeuz",
+        "trackerId": "t1",
+        "target": 67,
+        "suit": "♣️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456262,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456262-bjxxa",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 67,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456262,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456264-dy0rq",
+        "trackerId": "t1",
+        "target": 70,
+        "suit": "♦️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456264,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456265-ax4vj",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 70,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456265,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456267-16vi3",
+        "trackerId": "t1",
+        "target": 73,
+        "suit": "❤️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456267,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456267-n4s1v",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 73,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456267,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456269-6yoyd",
+        "trackerId": "t1",
+        "target": 76,
+        "suit": "♠️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456269,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456269-b081q",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 76,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456269,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456271-ncdlz",
+        "trackerId": "t1",
+        "target": 79,
+        "suit": "♣️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456271,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456272-rmcc3",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 79,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456272,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456274-q1bk2",
+        "trackerId": "t1",
+        "target": 82,
+        "suit": "♦️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456274,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456274-3ghvu",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 82,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456274,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456278-vfqgz",
+        "trackerId": "t1",
+        "target": 85,
+        "suit": "❤️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456278,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456279-hdy3w",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 85,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456279,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456281-rhen4",
+        "trackerId": "t1",
+        "target": 88,
+        "suit": "♠️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456281,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456281-p10rn",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 88,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456281,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456284-emr2s",
+        "trackerId": "t1",
+        "target": 91,
+        "suit": "♣️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456284,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456285-ajii9",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 91,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456285,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456287-34ltu",
+        "trackerId": "t1",
+        "target": 94,
+        "suit": "♦️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456287,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456287-msdvd",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 94,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456287,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456290-82vo3",
+        "trackerId": "t1",
+        "target": 97,
+        "suit": "❤️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456290,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456291-h3g9l",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 97,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456291,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456293-w58tb",
+        "trackerId": "t1",
+        "target": 100,
+        "suit": "♠️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456293,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456294-yu8r8",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 100,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456294,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456297-tx1ub",
+        "trackerId": "t1",
+        "target": 103,
+        "suit": "♣️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456297,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456298-eohdk",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 103,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456298,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456300-ztqxp",
+        "trackerId": "t1",
+        "target": 106,
+        "suit": "♦️",
+        "strategyName": "C-1",
+        "slot": 0,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456300,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "cb-1791403456300-zhlfk",
+        "trackerId": "t1",
+        "mirror": true,
+        "best": true,
+        "target": 106,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456300,
+        "resolvedAt": null
+      },
+      {
+        "id": "cp-1791403456303-jviwt",
+        "trackerId": "t1",
+        "target": 109,
+        "suit": "❤️",
+        "strategyName": "C-4",
+        "slot": 3,
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456303,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "cw-1791403456304-9rpoj",
+        "trackerId": "t1",
+        "mirror": true,
+        "weak": true,
+        "target": 109,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403456304,
+        "resolvedAt": null
+      }
+    ],
+    "sentCount": 24,
+    "lastSentAt": 1791403456303,
     "lastScanAt": null,
     "channelTitles": {
-      "-100111": "Canal Alpha",
-      "-100222": "Canal Beta"
+      "-1": "T",
+      "-2": "T",
+      "-3": "T",
+      "-4": "T",
+      "-100": "T",
+      "-200": "T"
     },
+    "channelLinks": {},
     "bilan": {
       "enabled": true,
+      "chart": true,
       "everyHours": 1,
       "hourlyMigrated": true,
-      "minPreds": 5,
+      "minPreds": 1,
       "lastSlot": null,
-      "lastSentAt": null,
-      "lastResult": null
+      "lastSentAt": 1791403456530,
+      "lastResult": {
+        "sent": 4,
+        "errors": [],
+        "at": 1791403456530
+      },
+      "segSince": 1791403456377
     },
     "best": {
-      "enabled": false,
-      "channels": [],
+      "enabled": true,
+      "channels": [
+        -100
+      ],
+      "link": "",
+      "welcome": true,
+      "recap": true,
+      "recapMin": 125,
+      "lastRecapAt": null,
+      "wins": 8,
+      "losses": 4,
       "format": 1,
       "maxR": 2,
-      "currentTrackerId": null,
-      "switchedAt": null,
-      "sentCount": 0,
-      "lastSentAt": null
+      "currentTrackerId": "t1#0",
+      "switchedAt": 1791403456231,
+      "sentCount": 12,
+      "lastSentAt": 1791403456300,
+      "delayEnabled": false,
+      "delaySec": 0,
+      "delayZeroed": true,
+      "lastSuit": "♦️",
+      "lastTarget": 106,
+      "day": "2026-10-07",
+      "log": [
+        {
+          "target": 40,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456307
+        },
+        {
+          "target": 46,
+          "suit": "♦️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456313
+        },
+        {
+          "target": 52,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403456318
+        },
+        {
+          "target": 58,
+          "suit": "♦️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456323
+        },
+        {
+          "target": 64,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456329
+        },
+        {
+          "target": 70,
+          "suit": "♦️",
+          "status": "gagné",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456334
+        },
+        {
+          "target": 76,
+          "suit": "♠️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456339
+        },
+        {
+          "target": 82,
+          "suit": "♦️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456343
+        },
+        {
+          "target": 88,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456347
+        },
+        {
+          "target": 94,
+          "suit": "♦️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403456351
+        },
+        {
+          "target": 100,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456355
+        },
+        {
+          "target": 106,
+          "suit": "♦️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456358
+        }
+      ]
+    },
+    "weak": {
+      "enabled": true,
+      "channels": [
+        -200
+      ],
+      "link": "",
+      "welcome": true,
+      "recap": true,
+      "recapMin": 125,
+      "lastRecapAt": null,
+      "wins": 8,
+      "losses": 4,
+      "format": 1,
+      "maxR": 2,
+      "rank": 4,
+      "currentTrackerId": "t1#3",
+      "switchedAt": 1791403456231,
+      "sentCount": 12,
+      "lastSentAt": 1791403456304,
+      "delayEnabled": false,
+      "delaySec": 0,
+      "delayZeroed": true,
+      "lastSuit": "❤️",
+      "lastTarget": 109,
+      "day": "2026-10-07",
+      "log": [
+        {
+          "target": 43,
+          "suit": "♣️",
+          "status": "gagné",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456309
+        },
+        {
+          "target": 49,
+          "suit": "❤️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456315
+        },
+        {
+          "target": 55,
+          "suit": "♣️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456320
+        },
+        {
+          "target": 61,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456326
+        },
+        {
+          "target": 67,
+          "suit": "♣️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403456331
+        },
+        {
+          "target": 73,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456336
+        },
+        {
+          "target": 79,
+          "suit": "♣️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456341
+        },
+        {
+          "target": 85,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456345
+        },
+        {
+          "target": 91,
+          "suit": "♣️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456349
+        },
+        {
+          "target": 97,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403456353
+        },
+        {
+          "target": 103,
+          "suit": "♣️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403456356
+        },
+        {
+          "target": 109,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403456360
+        }
+      ]
+    }
+  },
+  "dizaineTop": {
+    "config": {
+      "enabled": true,
+      "bilanEnabled": true,
+      "bilanChart": true,
+      "bilanEveryHours": 1,
+      "bilanMinPreds": 1,
+      "bestEnabled": true,
+      "bestChannels": [
+        -100
+      ],
+      "bestFormat": 1,
+      "bestMaxR": 2,
+      "weakEnabled": true,
+      "weakChannels": [
+        -200
+      ],
+      "weakFormat": 1,
+      "weakMaxR": 2,
+      "weakRank": 4
+    },
+    "trackers": [
+      {
+        "id": "d0",
+        "name": "D0",
+        "mode": "plus",
+        "rank": 1,
+        "lead": 4,
+        "enabled": true,
+        "channels": [
+          -1
+        ],
+        "format": 1,
+        "maxR": 2,
+        "wins": 9,
+        "losses": 1,
+        "day": {
+          "date": "2026-10-07",
+          "wins": 9,
+          "losses": 1,
+          "rsum": 0,
+          "d0": 9,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        },
+        "prevDay": null,
+        "seg": {
+          "date": null,
+          "wins": 9,
+          "losses": 1,
+          "rsum": 0,
+          "d0": 9,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        },
+        "sentCount": 12,
+        "lastSentAt": 1791403455932
+      },
+      {
+        "id": "d1",
+        "name": "D1",
+        "mode": "plus",
+        "rank": 1,
+        "lead": 4,
+        "enabled": true,
+        "channels": [
+          -2
+        ],
+        "format": 1,
+        "maxR": 2,
+        "wins": 7,
+        "losses": 3,
+        "day": {
+          "date": "2026-10-07",
+          "wins": 7,
+          "losses": 3,
+          "rsum": 0,
+          "d0": 7,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        },
+        "prevDay": null,
+        "seg": {
+          "date": null,
+          "wins": 7,
+          "losses": 3,
+          "rsum": 0,
+          "d0": 7,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        }
+      },
+      {
+        "id": "d2",
+        "name": "D2",
+        "mode": "plus",
+        "rank": 1,
+        "lead": 4,
+        "enabled": true,
+        "channels": [
+          -3
+        ],
+        "format": 1,
+        "maxR": 2,
+        "wins": 5,
+        "losses": 5,
+        "day": {
+          "date": "2026-10-07",
+          "wins": 5,
+          "losses": 5,
+          "rsum": 0,
+          "d0": 5,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        },
+        "prevDay": null,
+        "seg": {
+          "date": null,
+          "wins": 5,
+          "losses": 5,
+          "rsum": 0,
+          "d0": 5,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        }
+      },
+      {
+        "id": "d3",
+        "name": "D3",
+        "mode": "plus",
+        "rank": 1,
+        "lead": 4,
+        "enabled": true,
+        "channels": [
+          -4
+        ],
+        "format": 1,
+        "maxR": 2,
+        "wins": 2,
+        "losses": 8,
+        "day": {
+          "date": "2026-10-07",
+          "wins": 2,
+          "losses": 8,
+          "rsum": 0,
+          "d0": 2,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        },
+        "prevDay": null,
+        "seg": {
+          "date": null,
+          "wins": 2,
+          "losses": 8,
+          "rsum": 0,
+          "d0": 2,
+          "streak": 0,
+          "rmax": 0,
+          "lrun": 0,
+          "lmax": 0,
+          "smax": 0
+        },
+        "sentCount": 12,
+        "lastSentAt": 1791403455934
+      }
+    ],
+    "history": [
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 109,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403455934
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 106,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403455932
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 103,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403455930
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 100,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403455929
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 97,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403455927
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 94,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403455924
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 91,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403455922
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 88,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403455921
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 85,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403455919
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 82,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403455917
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 79,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403455915
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 76,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403455914
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 73,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403455912
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 70,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403455910
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 67,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403455909
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 64,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403455907
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 61,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403455904
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 58,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403455902
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 55,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403455901
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 52,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403455899
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 49,
+        "suit": "❤️",
+        "detail": "",
+        "sentAt": 1791403455898
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 46,
+        "suit": "♦️",
+        "detail": "",
+        "sentAt": 1791403455896
+      },
+      {
+        "trackerId": "d3",
+        "trackerName": "D3",
+        "target": 43,
+        "suit": "♣️",
+        "detail": "",
+        "sentAt": 1791403455894
+      },
+      {
+        "trackerId": "d0",
+        "trackerName": "D0",
+        "target": 40,
+        "suit": "♠️",
+        "detail": "",
+        "sentAt": 1791403455887
+      }
+    ],
+    "pendingMessages": [
+      {
+        "id": "p-1791403455887-yd9ob",
+        "trackerId": "d0",
+        "target": 40,
+        "suit": "♠️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455887,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455891-ed1uj",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 40,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455891,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455894-tvsdr",
+        "trackerId": "d3",
+        "target": 43,
+        "suit": "♣️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455894,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455895-3odcm",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 43,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455895,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455896-njd3p",
+        "trackerId": "d0",
+        "target": 46,
+        "suit": "♦️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455896,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455896-2svv0",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 46,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455896,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455898-fneob",
+        "trackerId": "d3",
+        "target": 49,
+        "suit": "❤️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455898,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455898-4cwlt",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 49,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455898,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455899-7g14f",
+        "trackerId": "d0",
+        "target": 52,
+        "suit": "♠️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455899,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455900-unmk6",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 52,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455900,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455901-z6iw4",
+        "trackerId": "d3",
+        "target": 55,
+        "suit": "♣️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455901,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455901-qc7yd",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 55,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455901,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455902-en8qp",
+        "trackerId": "d0",
+        "target": 58,
+        "suit": "♦️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455902,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455903-hqgis",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 58,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455903,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455904-88gxe",
+        "trackerId": "d3",
+        "target": 61,
+        "suit": "❤️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455904,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455905-iddiw",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 61,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455905,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455907-2zc1t",
+        "trackerId": "d0",
+        "target": 64,
+        "suit": "♠️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455907,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455907-6be1j",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 64,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455907,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455909-fpwau",
+        "trackerId": "d3",
+        "target": 67,
+        "suit": "♣️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455909,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455909-o5l3v",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 67,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455909,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455910-u6juu",
+        "trackerId": "d0",
+        "target": 70,
+        "suit": "♦️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455910,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455911-vjbh9",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 70,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455911,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455912-bcyzo",
+        "trackerId": "d3",
+        "target": 73,
+        "suit": "❤️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455912,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455912-90mup",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 73,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455912,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455914-evv6s",
+        "trackerId": "d0",
+        "target": 76,
+        "suit": "♠️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455914,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455914-oscc2",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 76,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455914,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455915-ndh6i",
+        "trackerId": "d3",
+        "target": 79,
+        "suit": "♣️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455915,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455916-sokgi",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 79,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455916,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455917-r3s49",
+        "trackerId": "d0",
+        "target": 82,
+        "suit": "♦️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455917,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455918-ygx2v",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 82,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455918,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455919-ub2j0",
+        "trackerId": "d3",
+        "target": 85,
+        "suit": "❤️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455919,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455919-0p4x6",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 85,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455919,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455921-dbuoi",
+        "trackerId": "d0",
+        "target": 88,
+        "suit": "♠️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455921,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455921-golyd",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 88,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455921,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455922-3t7ge",
+        "trackerId": "d3",
+        "target": 91,
+        "suit": "♣️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455922,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455923-99cvw",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 91,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455923,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455924-qvjqo",
+        "trackerId": "d0",
+        "target": 94,
+        "suit": "♦️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455924,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455925-d0a2m",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 94,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455925,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455927-09g2s",
+        "trackerId": "d3",
+        "target": 97,
+        "suit": "❤️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455927,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455927-z9at3",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 97,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455927,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455929-wp4cu",
+        "trackerId": "d0",
+        "target": 100,
+        "suit": "♠️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455929,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455929-5cxqg",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 100,
+        "suit": "♠️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455929,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455930-a0d52",
+        "trackerId": "d3",
+        "target": 103,
+        "suit": "♣️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455930,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455931-i419h",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 103,
+        "suit": "♣️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455931,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455932-tpe2d",
+        "trackerId": "d0",
+        "target": 106,
+        "suit": "♦️",
+        "strategyName": "D0",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -1,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455932,
+        "resolvedAt": null,
+        "bestRelayed": true
+      },
+      {
+        "id": "b-1791403455932-kaxgd",
+        "trackerId": "d0",
+        "mirror": true,
+        "best": true,
+        "target": 106,
+        "suit": "♦️",
+        "strategyName": "Meilleure prédiction",
+        "format": 1,
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455932,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1791403455934-ey9pm",
+        "trackerId": "d3",
+        "target": 109,
+        "suit": "❤️",
+        "strategyName": "D3",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -4,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455934,
+        "resolvedAt": null,
+        "weakRelayed": true
+      },
+      {
+        "id": "w-1791403455935-eiigp",
+        "trackerId": "d3",
+        "mirror": true,
+        "weak": true,
+        "target": 109,
+        "suit": "❤️",
+        "strategyName": "Prédiction du plus faible",
+        "format": 1,
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -200,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791403455935,
+        "resolvedAt": null
+      }
+    ],
+    "sentCount": 24,
+    "lastSentAt": 1791403455934,
+    "lastScanAt": null,
+    "channelTitles": {
+      "-1": "T",
+      "-2": "T",
+      "-3": "T",
+      "-4": "T",
+      "-100": "T",
+      "-200": "T"
+    },
+    "channelLinks": {},
+    "bilan": {
+      "enabled": true,
+      "chart": true,
+      "everyHours": 1,
+      "hourlyMigrated": true,
+      "minPreds": 1,
+      "lastSlot": null,
+      "lastSentAt": 1791403456172,
+      "lastResult": {
+        "sent": 4,
+        "errors": [],
+        "at": 1791403456172
+      }
+    },
+    "best": {
+      "enabled": true,
+      "channels": [
+        -100
+      ],
+      "link": "",
+      "welcome": true,
+      "recap": true,
+      "recapMin": 125,
+      "lastRecapAt": null,
+      "wins": 8,
+      "losses": 4,
+      "format": 1,
+      "maxR": 2,
+      "currentTrackerId": "d0",
+      "switchedAt": 1791403455882,
+      "sentCount": 12,
+      "lastSentAt": 1791403455932,
+      "delayEnabled": false,
+      "delaySec": 0,
+      "lastSuit": "♦️",
+      "lastTarget": 106,
+      "day": "2026-10-07",
+      "log": [
+        {
+          "target": 40,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455937
+        },
+        {
+          "target": 46,
+          "suit": "♦️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455940
+        },
+        {
+          "target": 52,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403455944
+        },
+        {
+          "target": 58,
+          "suit": "♦️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455947
+        },
+        {
+          "target": 64,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455950
+        },
+        {
+          "target": 70,
+          "suit": "♦️",
+          "status": "gagné",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455954
+        },
+        {
+          "target": 76,
+          "suit": "♠️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455957
+        },
+        {
+          "target": 82,
+          "suit": "♦️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455960
+        },
+        {
+          "target": 88,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455964
+        },
+        {
+          "target": 94,
+          "suit": "♦️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403455967
+        },
+        {
+          "target": 100,
+          "suit": "♠️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455971
+        },
+        {
+          "target": 106,
+          "suit": "♦️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455975
+        }
+      ]
+    },
+    "weak": {
+      "enabled": true,
+      "channels": [
+        -200
+      ],
+      "link": "",
+      "welcome": true,
+      "recap": true,
+      "recapMin": 125,
+      "lastRecapAt": null,
+      "wins": 8,
+      "losses": 4,
+      "format": 1,
+      "maxR": 2,
+      "rank": 4,
+      "currentTrackerId": "d3",
+      "switchedAt": 1791403455882,
+      "sentCount": 12,
+      "lastSentAt": 1791403455935,
+      "delayEnabled": false,
+      "delaySec": 0,
+      "lastSuit": "❤️",
+      "lastTarget": 109,
+      "day": "2026-10-07",
+      "log": [
+        {
+          "target": 43,
+          "suit": "♣️",
+          "status": "gagné",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455939
+        },
+        {
+          "target": 49,
+          "suit": "❤️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455942
+        },
+        {
+          "target": 55,
+          "suit": "♣️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455945
+        },
+        {
+          "target": 61,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455948
+        },
+        {
+          "target": 67,
+          "suit": "♣️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403455952
+        },
+        {
+          "target": 73,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455955
+        },
+        {
+          "target": 79,
+          "suit": "♣️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455959
+        },
+        {
+          "target": 85,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455962
+        },
+        {
+          "target": 91,
+          "suit": "♣️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455965
+        },
+        {
+          "target": 97,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 1,
+          "maxR": 2,
+          "resolvedAt": 1791403455969
+        },
+        {
+          "target": 103,
+          "suit": "♣️",
+          "status": "perdu",
+          "step": 2,
+          "maxR": 2,
+          "resolvedAt": 1791403455973
+        },
+        {
+          "target": 109,
+          "suit": "❤️",
+          "status": "gagné",
+          "step": 0,
+          "maxR": 2,
+          "resolvedAt": 1791403455977
+        }
+      ]
     }
   }
 }

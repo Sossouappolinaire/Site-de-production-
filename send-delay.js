@@ -1,14 +1,14 @@
 // send-delay.js — RETARD D'ENVOI des prédictions (demande admin).
 //
-// Réglage par stratégie (delayEnabled, delaySec — 10 s par défaut). Quand il est
+// Réglage par stratégie (delayEnabled, delaySec — 0 s par défaut). Quand il est
 // activé, la prédiction est calculée comme d'habitude (déclencheur, cible, costume)
 // mais elle n'est PAS envoyée tout de suite : elle reste « retenue » jusqu'à ce que
-// le jeu situé juste AVANT la cible soit en cours, puis on attend encore `delaySec`
-// secondes avant de l'envoyer.
+// le jeu situé juste AVANT la cible soit en cours, puis elle part (délai supplémentaire
+// `delaySec` : 0 s par défaut — les 10 s ont été retirées ; réglable de 0 à 120 s).
 //
 // Exemple : déclencheur sur le jeu #2, cible #4 (+2). Avec le retard activé, on
-// attend que le jeu #3 soit en cours (cartes en distribution ou jeu terminé), puis
-// 10 secondes, et seulement alors la prédiction du jeu #4 part.
+// attend que le jeu #3 soit en cours (cartes en distribution ou jeu terminé), et
+// la prédiction du jeu #4 part aussitôt.
 //
 // Sécurités :
 //   • si le jeu cible est déjà en cours / terminé avant l'envoi, la prédiction est
@@ -25,7 +25,7 @@ function enabled() { return !/^(off|0|false)$/i.test(String(process.env.SEND_DEL
 
 function delaySecOf(cfg) {
   const n = parseInt(cfg && cfg.delaySec, 10);
-  return Number.isFinite(n) ? Math.max(0, Math.min(120, n)) : 10;
+  return Number.isFinite(n) ? Math.max(0, Math.min(120, n)) : 0;
 }
 
 function shouldHold(key, cfg) {
@@ -72,7 +72,7 @@ async function releaseDue(state, broadcast, now = Date.now()) {
     const prevOn = dealing >= target - 1 || done >= target - 1;
     if (!prevOn) continue;
     if (!p.holdArmedAt) p.holdArmedAt = now;
-    if (now - p.holdArmedAt < (p.holdSec != null ? p.holdSec : 10) * 1000) continue;
+    if (now - p.holdArmedAt < (p.holdSec != null ? p.holdSec : 0) * 1000) continue;
     p.holdSend = false;
     p.sentAt = now;
     try { await broadcast(p); sent.push(p); } catch (_) { /* l'échec d'envoi est journalisé par broadcast */ }
