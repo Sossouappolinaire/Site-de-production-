@@ -1838,15 +1838,43 @@ Faites-en bon usage !
           </div>
           <p class="small muted">Dernier événement « membre » reçu de Telegram : ${p.lastMember ? esc(`${new Date(p.lastMember.at).toLocaleString('fr-FR')} · ${p.lastMember.chat} · ${p.lastMember.from} → ${p.lastMember.to}${p.lastMember.isBest ? '' : ' (autre canal)'}`) : 'aucun pour l\'instant — rejoins le canal avec un autre compte pour tester'}</p>
           <div class="toolbar"><button class="button primary" onclick="saveDizaineTopBest()">Enregistrer le canal des meilleures prédictions</button><button class="button ghost" onclick="testDizaineTopWelcome()">Tester la bienvenue</button></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Plus faible</span><h2 style="margin-top:7px">📉 Canal du plus faible (4ᵉ du classement)</h2><p class="small">À configurer une seule fois, comme le canal des meilleures : le bot envoie dans ce canal les prédictions de la stratégie classée au rang choisi (4ᵉ par défaut = « le plus fiable ») du classement du jour. Si le classement change, il bascule sur la nouvelle. Il faut au moins 2 stratégies classées ; s'il y en a moins de 4, c'est la dernière classée. Ce n'est jamais la même que celle du canal des meilleures. ${p.weak?.currentName ? `Actuelle : ${esc(p.weak.currentName)}.` : 'Pas encore désignée (minimum de prédictions non atteint).'} Envoyées : ${p.weak?.sentCount || 0}.</p></div>
+          <label class="check"><input id="dtWeakOn" type="checkbox" ${p.weak?.enabled ? 'checked' : ''}> Actif</label>
+          <label class="check"><input id="dtWeakWelcome" type="checkbox" ${p.weak?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label>
+          <label class="check"><input id="dtWeakRecap" type="checkbox" ${p.weak?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="dtWeakRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.weak?.recapMin ?? 125))}"> min</label>
+          <label class="check"><input id="dtWeakDelay" type="checkbox" ${p.weak?.delayEnabled !== false ? 'checked' : ''}> ⏱️ Attendre que le jeu avant la cible démarre, puis envoyer après <input id="dtWeakDelaySec" type="number" min="0" max="120" style="width:70px" value="${esc(String(p.weak?.delaySec ?? 0))}"> s</label></div>
+          <div class="three-col">
+            <div class="field"><label>ID ou @nom du canal</label><input id="dtWeakChannels" value="${esc((p.weak?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Lien du canal</label><input id="dtWeakLink" value="${esc(p.weak?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
+            <div class="field"><label>Rang envoyé (2 → 10, 4 = 4ᵉ meilleur)</label><input id="dtWeakRank" type="number" min="2" max="10" value="${esc(String(p.weak?.rank ?? 4))}"></div>
+            <div class="field"><label>Format de prédiction (1 → ${snapshot.dizaineTop?.formatCount || snapshot.formatCount || 101})</label><input id="dtWeakFormat" type="number" min="1" max="${snapshot.dizaineTop?.formatCount || snapshot.formatCount || 101}" value="${esc(String(p.weak?.format ?? 1))}"></div>
+            <div class="field"><label>Nombre de rattrapages</label><input id="dtWeakMaxR" type="number" min="0" max="9" value="${esc(String(p.weak?.maxR ?? 2))}"></div>
+          </div>
+          <div class="toolbar"><button class="button primary" onclick="saveDizaineTopWeak()">Enregistrer le canal du plus faible</button><button class="button ghost" onclick="testDizaineTopWeakWelcome()">Tester la bienvenue</button></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan automatique</span><h2 style="margin-top:7px">📊 Bilan dans les canaux</h2><p class="small">Toutes les ${p.bilanEveryHours || 1} h, envoi dans les canaux des configurations : la meilleure configuration (nom réel du canal), classée 1ʳᵉ avec son taux sur N prédictions, puis le classement. Bilans cumulés depuis 00h00 (fuseau ${esc(p.bilan?.tz || '')}). Dernier envoi : ${p.bilan?.lastSentAt ? new Date(p.bilan.lastSentAt).toLocaleString('fr-FR') : 'aucun'}.</p></div></div>
           <div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:center">
             <label class="check"><input id="dtBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveDizaineTopBilan()"> Bilan actif</label>
             <label class="small">Toutes les <input id="dtBilanEvery" type="number" min="1" max="24" value="${p.bilanEveryHours || 1}" style="width:60px" onchange="saveDizaineTopBilan()"> h</label>
             <label class="small">Minimum <input id="dtBilanMin" type="number" min="1" max="50" value="${p.bilanMinPreds || 5}" style="width:60px" onchange="saveDizaineTopBilan()"> prédictions pour être classée</label>
+            <label class="check"><input id="dtBilanChart" type="checkbox" ${p.bilanChart !== false ? 'checked' : ''} onchange="saveDizaineTopBilan()"> Courbe cumulée envoyée dans le canal des meilleures et du plus faible après chaque bilan</label>
+            <button class="button ghost" onclick="window.open('/api/dizaine-top/bilan/chart.png?kind=best','_blank')">Aperçu courbe du meilleur</button><button class="button ghost" onclick="window.open('/api/dizaine-top/bilan/chart.png?kind=weak','_blank')">Aperçu courbe du plus faible</button>
             <button class="button ghost" onclick="previewDizaineTopBilan()">Aperçu</button>
             <button class="button primary" onclick="sendDizaineTopBilan()">Envoyer le bilan maintenant</button>
           </div>
           <pre id="dtBilanPreview" class="small" style="white-space:pre-wrap;margin-top:12px"></pre></section>`;
+    }
+    async function testDizaineTopWeakWelcome() {
+      try {
+        const r = await api('/api/dizaine-top/welcome/test', 'POST', { kind: 'weak' });
+        const adm = r.botStatus === 'administrator' || r.botStatus === 'creator';
+        toast(`Message d'essai posté dans le canal. Bot : ${r.botStatus}${adm ? '' : ' — il doit être ADMINISTRATEUR du canal pour voir les arrivées'}.`);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveDizaineTopWeak() {
+      try {
+        await api('/api/dizaine-top/config', 'POST', { weakEnabled: $('#dtWeakOn')?.checked, weakWelcome: $('#dtWeakWelcome')?.checked, weakRecap: $('#dtWeakRecap')?.checked, weakRecapMin: val('dtWeakRecapMin'), weakDelayEnabled: $('#dtWeakDelay')?.checked, weakDelaySec: val('dtWeakDelaySec'), weakChannels: ids(val('dtWeakChannels')), weakLink: val('dtWeakLink'), weakRank: val('dtWeakRank'), weakFormat: val('dtWeakFormat'), weakMaxR: val('dtWeakMaxR') });
+        await refresh(); dizaineTopPage(); toast('Canal du plus faible enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
     }
     async function testDizaineTopWelcome() {
       try {
@@ -1862,7 +1890,7 @@ Faites-en bon usage !
       } catch (e) { toast(e.message, 'error'); }
     }
     async function saveDizaineTopBilan() {
-      try { await api('/api/dizaine-top/config', 'POST', { bilanEnabled: $('#dtBilanOn')?.checked, bilanEveryHours: $('#dtBilanEvery')?.value, bilanMinPreds: $('#dtBilanMin')?.value }); await refresh(); dizaineTopPage(); toast('Réglages du bilan enregistrés.'); }
+      try { await api('/api/dizaine-top/config', 'POST', { bilanEnabled: $('#dtBilanOn')?.checked, bilanChart: $('#dtBilanChart')?.checked, bilanEveryHours: $('#dtBilanEvery')?.value, bilanMinPreds: $('#dtBilanMin')?.value }); await refresh(); dizaineTopPage(); toast('Réglages du bilan enregistrés.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function previewDizaineTopBilan() {
@@ -1996,15 +2024,43 @@ Faites-en bon usage !
           </div>
           <p class="small muted">Dernier événement « membre » reçu de Telegram : ${p.lastMember ? esc(`${new Date(p.lastMember.at).toLocaleString('fr-FR')} · ${p.lastMember.chat} · ${p.lastMember.from} → ${p.lastMember.to}${p.lastMember.isBest ? '' : ' (autre canal)'}`) : 'aucun pour l\'instant — rejoins le canal avec un autre compte pour tester'}</p>
           <div class="toolbar"><button class="button primary" onclick="saveCostumeFaibleTopBest()">Enregistrer le canal des meilleures prédictions</button><button class="button ghost" onclick="testCostumeFaibleTopWelcome()">Tester la bienvenue</button></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Plus faible</span><h2 style="margin-top:7px">📉 Canal du plus faible (4ᵉ du classement)</h2><p class="small">À configurer une seule fois, comme le canal des meilleures : le bot envoie dans ce canal les prédictions de la stratégie classée au rang choisi (4ᵉ par défaut = « le plus fiable ») du classement du jour. Si le classement change, il bascule sur la nouvelle. Il faut au moins 2 stratégies classées ; s'il y en a moins de 4, c'est la dernière classée. Ce n'est jamais la même que celle du canal des meilleures. ${p.weak?.currentName ? `Actuelle : ${esc(p.weak.currentName)}.` : 'Pas encore désignée (minimum de prédictions non atteint).'} Envoyées : ${p.weak?.sentCount || 0}.</p></div>
+          <label class="check"><input id="cfWeakOn" type="checkbox" ${p.weak?.enabled ? 'checked' : ''}> Actif</label>
+          <label class="check"><input id="cfWeakWelcome" type="checkbox" ${p.weak?.welcome !== false ? 'checked' : ''}> Message de bienvenue aux nouveaux membres</label>
+          <label class="check"><input id="cfWeakRecap" type="checkbox" ${p.weak?.recap !== false ? 'checked' : ''}> Récapitulatif automatique toutes les <input id="cfWeakRecapMin" type="number" min="5" max="1440" style="width:70px" value="${esc(String(p.weak?.recapMin ?? 125))}"> min</label>
+          <label class="check"><input id="cfWeakDelay" type="checkbox" ${p.weak?.delayEnabled !== false ? 'checked' : ''}> ⏱️ Attendre que le jeu avant la cible démarre, puis envoyer après <input id="cfWeakDelaySec" type="number" min="0" max="120" style="width:70px" value="${esc(String(p.weak?.delaySec ?? 0))}"> s</label></div>
+          <div class="three-col">
+            <div class="field"><label>ID ou @nom du canal</label><input id="cfWeakChannels" value="${esc((p.weak?.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Lien du canal</label><input id="cfWeakLink" value="${esc(p.weak?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
+            <div class="field"><label>Rang envoyé (2 → 10, 4 = 4ᵉ meilleur)</label><input id="cfWeakRank" type="number" min="2" max="10" value="${esc(String(p.weak?.rank ?? 4))}"></div>
+            <div class="field"><label>Format de prédiction (1 → ${fc})</label><input id="cfWeakFormat" type="number" min="1" max="${fc}" value="${esc(String(p.weak?.format ?? 1))}"></div>
+            <div class="field"><label>Nombre de rattrapages</label><input id="cfWeakMaxR" type="number" min="0" max="9" value="${esc(String(p.weak?.maxR ?? 2))}"></div>
+          </div>
+          <div class="toolbar"><button class="button primary" onclick="saveCostumeFaibleTopWeak()">Enregistrer le canal du plus faible</button><button class="button ghost" onclick="testCostumeFaibleTopWeakWelcome()">Tester la bienvenue</button></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan automatique</span><h2 style="margin-top:7px">📊 Bilan dans les canaux</h2><p class="small">Toutes les ${p.bilanEveryHours || 1} h, envoi dans les canaux des configurations : la meilleure configuration (nom réel du canal), classée 1ʳᵉ avec son taux sur N prédictions, puis le classement. Bilans cumulés depuis 00h00 (fuseau ${esc(p.bilan?.tz || '')}). Dernier envoi : ${p.bilan?.lastSentAt ? new Date(p.bilan.lastSentAt).toLocaleString('fr-FR') : 'aucun'}.</p></div></div>
           <div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:center">
             <label class="check"><input id="cfBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveCostumeFaibleTopBilan()"> Bilan actif</label>
             <label class="small">Toutes les <input id="cfBilanEvery" type="number" min="1" max="24" value="${p.bilanEveryHours || 1}" style="width:60px" onchange="saveCostumeFaibleTopBilan()"> h</label>
             <label class="small">Minimum <input id="cfBilanMin" type="number" min="1" max="50" value="${p.bilanMinPreds || 5}" style="width:60px" onchange="saveCostumeFaibleTopBilan()"> prédictions pour être classée</label>
+            <label class="check"><input id="cfBilanChart" type="checkbox" ${p.bilanChart !== false ? 'checked' : ''} onchange="saveCostumeFaibleTopBilan()"> Courbe cumulée envoyée dans le canal des meilleures et du plus faible après chaque bilan</label>
+            <button class="button ghost" onclick="window.open('/api/costume-faible-top/bilan/chart.png?kind=best','_blank')">Aperçu courbe du meilleur</button><button class="button ghost" onclick="window.open('/api/costume-faible-top/bilan/chart.png?kind=weak','_blank')">Aperçu courbe du plus faible</button>
             <button class="button ghost" onclick="previewCostumeFaibleTopBilan()">Aperçu</button>
             <button class="button primary" onclick="sendCostumeFaibleTopBilan()">Envoyer le bilan maintenant</button>
           </div>
           <pre id="cfBilanPreview" class="small" style="white-space:pre-wrap;margin-top:12px"></pre></section>`;
+    }
+    async function testCostumeFaibleTopWeakWelcome() {
+      try {
+        const r = await api('/api/costume-faible-top/welcome/test', 'POST', { kind: 'weak' });
+        const adm = r.botStatus === 'administrator' || r.botStatus === 'creator';
+        toast(`Message d'essai posté dans le canal. Bot : ${r.botStatus}${adm ? '' : ' — il doit être ADMINISTRATEUR du canal pour voir les arrivées'}.`);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveCostumeFaibleTopWeak() {
+      try {
+        await api('/api/costume-faible-top/config', 'POST', { weakEnabled: $('#cfWeakOn')?.checked, weakWelcome: $('#cfWeakWelcome')?.checked, weakRecap: $('#cfWeakRecap')?.checked, weakRecapMin: val('cfWeakRecapMin'), weakDelayEnabled: $('#cfWeakDelay')?.checked, weakDelaySec: val('cfWeakDelaySec'), weakChannels: ids(val('cfWeakChannels')), weakLink: val('cfWeakLink'), weakRank: val('cfWeakRank'), weakFormat: val('cfWeakFormat'), weakMaxR: val('cfWeakMaxR') });
+        await refresh(); costumeFaibleTopPage(); toast('Canal du plus faible enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
     }
     async function testCostumeFaibleTopWelcome() {
       try {
@@ -2020,7 +2076,7 @@ Faites-en bon usage !
       } catch (e) { toast(e.message, 'error'); }
     }
     async function saveCostumeFaibleTopBilan() {
-      try { await api('/api/costume-faible-top/config', 'POST', { bilanEnabled: $('#cfBilanOn')?.checked, bilanEveryHours: $('#cfBilanEvery')?.value, bilanMinPreds: $('#cfBilanMin')?.value }); await refresh(); costumeFaibleTopPage(); toast('Réglages du bilan enregistrés.'); }
+      try { await api('/api/costume-faible-top/config', 'POST', { bilanEnabled: $('#cfBilanOn')?.checked, bilanChart: $('#cfBilanChart')?.checked, bilanEveryHours: $('#cfBilanEvery')?.value, bilanMinPreds: $('#cfBilanMin')?.value }); await refresh(); costumeFaibleTopPage(); toast('Réglages du bilan enregistrés.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function previewCostumeFaibleTopBilan() {
