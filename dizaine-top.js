@@ -409,7 +409,7 @@ function rankedToday(now = Date.now()) {
 }
 
 // Meilleure configuration du moment. Si une autre devient STRICTEMENT meilleure,
-// on bascule sur elle (ses prédictions sont envoyées à partir de la suivante).
+// on bascule sur elle (sa prédiction en cours part tout de suite dans le canal des meilleures).
 // Tant que personne n'est classé (début de journée), on garde le dernier meilleur connu.
 // lien saisi à la main : https://t.me/..., t.me/..., telegram.me/... ou @nom (vide = aucun)
 function sanitizeLink(value) {
@@ -450,6 +450,7 @@ function notifyBestChange(prevId, top, ranked, reason) {
 
 // ---- BIENVENUE dans le canal des meilleures prédictions ------------------
 function bestRecap(title) {
+  rollBestDay(); // 00h00 Abidjan : tout repart à zéro
   const w = panel.best.wins || 0; const l = panel.best.losses || 0; const total = w + l;
   const rate = total ? ((w / total) * 100).toFixed(2) : '0.00';
   return `📊 ${title} :\n• 🎮 All games : ${total}\n• ✅ Won : ${w}\n• ❌ Lost : ${l}\n• ${rate}%`;
@@ -543,19 +544,47 @@ function currentBest(now = Date.now(), reason) {
       const prevId = b.currentTrackerId;
       b.currentTrackerId = top.t.id;
       b.switchedAt = Date.now();
-      if (prevId !== top.t.id) notifyBestChange(prevId, top, ranked, reason);
+      if (prevId !== top.t.id) { notifyBestChange(prevId, top, ranked, reason); b.lastSuit = null; b.lastTarget = null; relayNewBest(top.t); }
     }
   }
   return panel.trackers.find((t) => t.id === b.currentTrackerId) || null;
 }
 
-async function forwardToBest(tracker, syn) {
+// ---------------------------------------------------------------------------
+// CANAL DES MEILLEURES : journée 00h00 (heure d'Abidjan), anti-doublon de costume, relais au changement
+// ---------------------------------------------------------------------------
+const BEST_TZ = process.env.RESET_TZ || 'Africa/Abidjan';
+function bestDayKey(ms = Date.now()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: BEST_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+}
+// Après 00h00 (Abidjan) : le récapitulatif (All games / Won / Lost) repart de zéro et le dernier costume est oublié.
+// Au tout premier passage on ne remet à zéro que si le dernier envoi date d'un jour précédent.
+function rollBestDay(now = Date.now()) {
   const b = panel.best;
-  if (!b.enabled || !b.channels.length) return false;
-  const best = currentBest();
-  if (!best || best.id !== tracker.id) return false; // ce n'est pas la meilleure configuration
+  const key = bestDayKey(now);
+  if (b.day === key) return false;
+  const stale = b.day ? true : !!(b.lastSentAt && bestDayKey(b.lastSentAt) !== key);
+  b.day = key;
+  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; }
+  persist();
+  return stale;
+}
+// prédiction d'origine (celle du canal de la configuration) qui correspond à syn : sert à ne jamais relayer deux fois la même
+function findOriginalEntry(tracker, syn) {
+  for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
+    const e = panel.pendingMessages[i];
+    if (!e.mirror && e.trackerId === tracker.id && e.target === syn.target && String(e.suit) === String(syn.suit)) return e;
+  }
+  return null;
+}
+
+// Envoi réel dans le canal des meilleures (relais). Retourne true seulement si Telegram a VRAIMENT posté le message
+// (canal en /stop ou erreur → false → rien n'est compté dans le récapitulatif).
+async function postToBest(tracker, syn, orig) {
+  const b = panel.best;
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Meilleures prédictions : aucun token Telegram configuré'; return false; }
+  if (orig) orig.bestRelayed = true; // marqué TOUT DE SUITE (avant l'envoi) : jamais deux envois de la même prédiction
   const out = fmt.renderMessage(b.format, {
     gameNumber: syn.target, suit: syn.suit, strategy: 'Meilleure prédiction',
     maxR: b.maxR, status: 'en attente', rattrapage: 0,
@@ -569,17 +598,58 @@ async function forwardToBest(tracker, syn) {
     if (r.ok) sentMessages.push({ chatId: r.id, messageId: r.messageId });
     else if (!r.skipped) panel.lastError = `Meilleures prédictions ${r.id} : ${r.error}`;
   }
-  if (!sentMessages.length) return false;
+  if (!sentMessages.length) { if (orig) orig.bestRelayed = false; return false; }
   b.sentCount = (b.sentCount || 0) + 1;
   b.lastSentAt = Date.now();
+  b.lastSuit = String(syn.suit); // mémoire du dernier costume envoyé (anti-doublon)
+  if (Number.isFinite(Number(syn.target))) b.lastTarget = Number(syn.target);
   panel.pendingMessages.push({
     id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    trackerId: tracker.id, mirror: true, best: true, // relais : ne compte pas deux fois dans les scores des configurations
+    trackerId: tracker.id, mirror: true, best: true, // relais : ne compte pas deux fois dans les scores
     target: syn.target, suit: syn.suit, strategyName: 'Meilleure prédiction',
     format: b.format, maxR: b.maxR, step: 0, gap: 0, skipped: 0,
     status: 'en attente', messages: sentMessages, createdAt: Date.now(), resolvedAt: null,
   });
+  persist();
   return true;
+}
+
+// Quand le meilleur CHANGE : sa prédiction en cours (en attente, pas encore en rattrapage) part tout de suite dans le canal
+// des meilleures, sans attendre sa prochaine prédiction.
+function relayNewBest(tracker) {
+  try {
+    const b = panel.best;
+    if (!b.enabled || !b.channels.length) return;
+    const today = bestDayKey();
+    let orig = null;
+    for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
+      const e = panel.pendingMessages[i];
+      if (!e.mirror && e.trackerId === tracker.id && e.status === 'en attente' && !e.step && !e.bestRelayed && bestDayKey(e.createdAt) === today) { orig = e; break; }
+    }
+    if (!orig) return;
+    // départ IMMÉDIAT : la prédiction est choisie et marquée « relayée » tout de suite (avant tout await)
+    postToBest(tracker, { target: orig.target, suit: orig.suit }, orig)
+      .catch((e) => { panel.lastError = `Meilleures prédictions : ${e.message}`; });
+  } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
+}
+
+// Prédiction d'une configuration : relayée dans le canal des meilleures SEULEMENT si c'est la meilleure du moment
+// ET si son costume est différent de la dernière prédiction envoyée dans ce canal (même costume = ignoré).
+async function forwardToBest(tracker, syn) {
+  const b = panel.best;
+  if (!b.enabled || !b.channels.length) return false;
+  rollBestDay();
+  const best = currentBest();
+  if (!best || best.id !== tracker.id) return false; // ce n'est pas la meilleure configuration
+  const orig = findOriginalEntry(tracker, syn);
+  if (orig && orig.bestRelayed) return false; // déjà relayée (par le changement de meilleur)
+  // même costume que la précédente ET numéros qui se suivent (écart < 2) : ignorée. Écart d'au moins 2 : envoyée.
+  const tNum = Number(syn.target);
+  const sameSuit = !!b.lastSuit && String(b.lastSuit) === String(syn.suit);
+  const near = Number.isFinite(tNum) && Number.isFinite(b.lastTarget) && Math.abs(tNum - b.lastTarget) < 2;
+  if (Number.isFinite(tNum)) b.lastTarget = tNum; // dernier numéro prédit par le meilleur (envoyé ou ignoré)
+  if (sameSuit && near) { b.skippedSame = (b.skippedSame || 0) + 1; return false; }
+  return postToBest(tracker, syn, orig);
 }
 
 async function send(tracker, syn) {
@@ -673,16 +743,24 @@ function editPending(entry, statusFr) {
 // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
 function bumpEntry(entry, field, step = 0) {
   if (entry.mirror) {
-    if (entry.best) { panel.best[field] = (panel.best[field] || 0) + 1; persist(); }
+    if (entry.best) {
+      rollBestDay();
+      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.best.day) { panel.best[field] = (panel.best[field] || 0) + 1; persist(); }
+    }
     return;
   }
   bumpScore(entry.trackerId, field, step);
-  if (field === 'losses') recalcAfterLoss(entry);
+  recalcBest(entry);
 }
 
 // Perte du meilleur actuel : classement recalculé tout de suite, en silence (rien n'est posté dans le canal des
 // meilleures ; seule l'alerte privée à l'admin part si le meilleur change). Si l'ancien meilleur reste premier,
 // il continue d'envoyer ; sinon c'est la prochaine prédiction du nouveau meilleur qui part.
+// Après CHAQUE résultat (victoire ou perte, de n'importe quelle configuration) : le meilleur est recalculé tout de suite ;
+// s'il change, la prédiction en cours du nouveau meilleur part aussitôt dans le canal des meilleures.
+function recalcBest(entry) {
+  try { currentBest(Date.now(), `résultat sur #N${entry.target}`); } catch (_) { /* jamais bloquant */ }
+}
 function recalcAfterLoss(entry) {
   try {
     if (panel.best.currentTrackerId === entry.trackerId) currentBest(Date.now(), `perte du meilleur sur #N${entry.target}`);
@@ -1006,6 +1084,7 @@ async function tick() {
   if (busy || !panel.enabled) return panel;
   busy = true;
   try {
+    rollBestDay();
     for (const tracker of panel.trackers) await processTracker(tracker);
     await verifyPending();
     await bilanTick();
