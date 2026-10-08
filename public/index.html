@@ -435,7 +435,7 @@
         <span class="strategy-stats"><span class="tag">${esc(t.sentCount ?? 0)} envoyée(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`;
       }).join('');
-      return real + dizaineTopButtons() + combined;
+      return real + dizaineTopButtons() + bestWeakButtons() + combined;
     }
     function optionByKeyGlobal(key) {
       return (snapshot.combined?.options || []).find(o => o.key === key) || null;
@@ -1781,6 +1781,110 @@ Faites-en bon usage !
         <em>Ouvrir la configuration →</em></button>`).join('');
       return main + each;
     }
+    // -------------------------------------------------------------------
+    // « Meilleur + plus faible » (voir best-weak-top.js) : un seul message qui propose DEUX costumes
+    // (celui de la meilleure configuration + celui du plus faible), avec leur pourcentage ; après vérification,
+    // seul le costume sorti reste dans le message.
+    // -------------------------------------------------------------------
+    function bestWeakButtons() {
+      const d = snapshot.bestWeakTop || {};
+      const list = d.configs || [];
+      const main = `<button class="strategy-button" onclick="location.hash='#/best-weak'">
+        <span class="eyebrow">🎯 Meilleur + plus faible</span><b>Message à deux costumes : le meilleur et le plus faible</b>
+        <span>Choisis la stratégie (Dizaine ou Costume faible), le canal et les rattrapages : le bot envoie le costume du meilleur et celui du plus faible avec leur pourcentage, puis ne garde que celui qui sort.</span>
+        <span class="strategy-stats"><span class="tag">${esc(list.length)} configuration(s)</span><span class="tag">${esc(d.sentCount || 0)} envoyée(s)</span></span>
+        <em>Ouvrir la configuration →</em></button>`;
+      const each = list.map(c => `<button class="strategy-button" onclick="location.hash='#/best-weak'">
+        <span class="eyebrow">🎯 Meilleur + plus faible${c.enabled ? '' : ' · en pause'}</span><b>${esc(c.strategyLabel)}</b><span>Canal : ${esc((c.channelNames || []).join(', '))} · ${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s)</span>
+        <span class="strategy-stats"><span class="tag good">${esc(c.wins || 0)} gagné(s)</span><span class="tag bad">${esc(c.losses || 0)} perdu(s)</span></span>
+        <em>Ouvrir la configuration →</em></button>`).join('');
+      return main + each;
+    }
+    function bestWeakRanksHtml(prefix, ranks) {
+      const labels = (snapshot.bestWeakTop || {}).rankLabels || { 1: 'Le meilleur', 2: 'Le 2ᵉ meilleur', 3: 'Le 3ᵉ meilleur', 4: 'Le plus faible (4ᵉ)' };
+      const on = Array.isArray(ranks) && ranks.length ? ranks : [1, 4];
+      return `<div class="field"><label>Costumes à proposer (coche au moins 2, jusqu'à 4)</label>
+        ${[1, 2, 3, 4].map(r => `<label class="check" style="display:block;margin:4px 0"><input id="${prefix}Rank${r}" type="checkbox" ${on.includes(r) ? 'checked' : ''}> ${esc(labels[r])}</label>`).join('')}</div>`;
+    }
+    function readBestWeakRanks(prefix) {
+      const r = [1, 2, 3, 4].filter(n => document.getElementById(`${prefix}Rank${n}`)?.checked);
+      if (r.length < 2) throw new Error('Coche au moins 2 costumes.');
+      return r;
+    }
+    function bestWeakPage() {
+      setNav('strategies');
+      const p = snapshot.bestWeakTop || {};
+      const list = p.configs || [];
+      const cards = list.length ? list.map(c => `<div class="card" style="margin-bottom:12px"><div class="section-head"><div><span class="eyebrow">${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">Canal : ${esc((c.channelNames || []).join(', '))}</h3>
+          <p class="small">Costumes : <b>${esc(c.ranksLabel || '')}</b> · ${esc(c.maxR)} rattrapage(s) · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)</p></div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`).join('')
+        : '<p class="small">Aucune configuration pour le moment. Clique sur « Créer ».</p>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">🎯 Meilleur + plus faible</h2>
+        <p class="small">Tu choisis les costumes à proposer (au moins 2, jusqu'à 4) : le <b>meilleur</b>, le <b>2ᵉ</b>, le <b>3ᵉ</b> et le <b>plus faible</b> (4ᵉ du classement). Pour chaque jeu où tous ceux que tu as cochés prédisent le même numéro, un seul message est envoyé avec leurs costumes et leur pourcentage instantané. Dès qu'un costume sort, le message est modifié : seul le costume sorti reste (ex. « ⚜️ #464 | ♦️ | ✅0️⃣ »). Si aucun ne sort après les rattrapages : ❌. Si les choisis ne prédisent pas le même numéro de jeu, rien n'est envoyé.</p>
+        <div class="toolbar"><button class="button primary" onclick="addBestWeakModal()">Créer</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button><button class="button ghost" onclick="location.hash='#/strategies'">← Stratégies</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
+    }
+    async function reloadBestWeak() { await refresh(); bestWeakPage(); }
+    // étape 1 : choisir la stratégie qui envoie dans les canaux ; étape 2 : ID du canal + rattrapages
+    function addBestWeakModal() {
+      const labels = (snapshot.bestWeakTop || {}).strategies || {};
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration · étape 1/2</span><h3 style="margin-top:8px">Quelle stratégie envoie dans les canaux ?</h3></div></div>
+        <p class="small">Le bot utilisera le meilleur et le plus faible de la stratégie choisie.</p>
+        <div style="display:grid;gap:10px;margin-top:10px">
+          <button class="button primary" onclick="bestWeakStep2('dizaine')">${esc(labels.dizaine || 'Dizaine')}</button>
+          <button class="button primary" onclick="bestWeakStep2('costumeFaible')">${esc(labels.costumeFaible || 'Costume faible')}</button></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    function bestWeakStep2(strategy) {
+      const labels = (snapshot.bestWeakTop || {}).strategies || {};
+      closeModal();
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration · étape 2/2</span><h3 style="margin-top:8px">${esc(labels[strategy] || strategy)}</h3></div></div>
+        <div class="field"><label>ID du canal où envoyer</label><input id="bwNewChannels" placeholder="-1001234567890 ou @nomducanal"></div>
+        <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwNewMaxR" type="number" min="0" max="9" value="2"></div>
+        ${bestWeakRanksHtml('bwNew', [1, 4])}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addBestWeak('${esc(strategy)}')">Enregistrer</button><button class="button small ghost" onclick="closeModal();addBestWeakModal()">← Retour</button></div>`);
+    }
+    async function addBestWeak(strategy) {
+      try {
+        await api('/api/best-weak/configs', 'POST', { strategy, channels: ids(val('bwNewChannels')), maxR: val('bwNewMaxR'), ranks: readBestWeakRanks('bwNew') });
+        closeModal(); await refresh(); bestWeakPage(); toast('Configuration enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    function editBestWeakModal(id) {
+      const c = ((snapshot.bestWeakTop || {}).configs || []).find(x => x.id === id);
+      if (!c) return;
+      const labels = (snapshot.bestWeakTop || {}).strategies || {};
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier la configuration</span><h3 style="margin-top:8px">${esc(c.strategyLabel)}</h3></div></div>
+        <div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>
+        <div class="field"><label>ID du canal où envoyer</label><input id="bwEditChannels" value="${esc((c.channels || []).join(', '))}"></div>
+        <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwEditMaxR" type="number" min="0" max="9" value="${esc(String(c.maxR))}"></div>
+        ${bestWeakRanksHtml('bwEdit', c.ranks)}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateBestWeak('${esc(id)}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function updateBestWeak(id) {
+      try {
+        await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { strategy: val('bwEditStrategy'), channels: ids(val('bwEditChannels')), maxR: val('bwEditMaxR'), ranks: readBestWeakRanks('bwEdit') });
+        closeModal(); await refresh(); bestWeakPage(); toast('Configuration mise à jour.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function toggleBestWeak(id, enabled) {
+      try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); bestWeakPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function testBestWeak(id) {
+      try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}/test`, 'POST'); toast('Message de test envoyé dans le canal.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeBestWeak(id) {
+      if (!confirm('Supprimer cette configuration ?')) return;
+      try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); bestWeakPage(); toast('Configuration supprimée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     function dizaineTopSiteOptions(currentId) {
       const list = snapshot.dizaineTop?.siteChannels || [];
       const cur = currentId === null || currentId === undefined ? '' : String(currentId);
@@ -1856,8 +1960,6 @@ Faites-en bon usage !
             <label class="check"><input id="dtBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveDizaineTopBilan()"> Bilan actif</label>
             <label class="small">Toutes les <input id="dtBilanEvery" type="number" min="1" max="24" value="${p.bilanEveryHours || 1}" style="width:60px" onchange="saveDizaineTopBilan()"> h</label>
             <label class="small">Minimum <input id="dtBilanMin" type="number" min="1" max="50" value="${p.bilanMinPreds || 5}" style="width:60px" onchange="saveDizaineTopBilan()"> prédictions pour être classée</label>
-            <label class="check"><input id="dtBilanChart" type="checkbox" ${p.bilanChart !== false ? 'checked' : ''} onchange="saveDizaineTopBilan()"> Courbe cumulée envoyée dans le canal des meilleures et du plus faible après chaque bilan</label>
-            <button class="button ghost" onclick="window.open('/api/dizaine-top/bilan/chart.png?kind=best','_blank')">Aperçu courbe du meilleur</button><button class="button ghost" onclick="window.open('/api/dizaine-top/bilan/chart.png?kind=weak','_blank')">Aperçu courbe du plus faible</button>
             <button class="button ghost" onclick="previewDizaineTopBilan()">Aperçu</button>
             <button class="button primary" onclick="sendDizaineTopBilan()">Envoyer le bilan maintenant</button>
           </div>
@@ -1890,7 +1992,7 @@ Faites-en bon usage !
       } catch (e) { toast(e.message, 'error'); }
     }
     async function saveDizaineTopBilan() {
-      try { await api('/api/dizaine-top/config', 'POST', { bilanEnabled: $('#dtBilanOn')?.checked, bilanChart: $('#dtBilanChart')?.checked, bilanEveryHours: $('#dtBilanEvery')?.value, bilanMinPreds: $('#dtBilanMin')?.value }); await refresh(); dizaineTopPage(); toast('Réglages du bilan enregistrés.'); }
+      try { await api('/api/dizaine-top/config', 'POST', { bilanEnabled: $('#dtBilanOn')?.checked, bilanEveryHours: $('#dtBilanEvery')?.value, bilanMinPreds: $('#dtBilanMin')?.value }); await refresh(); dizaineTopPage(); toast('Réglages du bilan enregistrés.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function previewDizaineTopBilan() {
@@ -2042,8 +2144,6 @@ Faites-en bon usage !
             <label class="check"><input id="cfBilanOn" type="checkbox" ${p.bilanEnabled !== false ? 'checked' : ''} onchange="saveCostumeFaibleTopBilan()"> Bilan actif</label>
             <label class="small">Toutes les <input id="cfBilanEvery" type="number" min="1" max="24" value="${p.bilanEveryHours || 1}" style="width:60px" onchange="saveCostumeFaibleTopBilan()"> h</label>
             <label class="small">Minimum <input id="cfBilanMin" type="number" min="1" max="50" value="${p.bilanMinPreds || 5}" style="width:60px" onchange="saveCostumeFaibleTopBilan()"> prédictions pour être classée</label>
-            <label class="check"><input id="cfBilanChart" type="checkbox" ${p.bilanChart !== false ? 'checked' : ''} onchange="saveCostumeFaibleTopBilan()"> Courbe cumulée envoyée dans le canal des meilleures et du plus faible après chaque bilan</label>
-            <button class="button ghost" onclick="window.open('/api/costume-faible-top/bilan/chart.png?kind=best','_blank')">Aperçu courbe du meilleur</button><button class="button ghost" onclick="window.open('/api/costume-faible-top/bilan/chart.png?kind=weak','_blank')">Aperçu courbe du plus faible</button>
             <button class="button ghost" onclick="previewCostumeFaibleTopBilan()">Aperçu</button>
             <button class="button primary" onclick="sendCostumeFaibleTopBilan()">Envoyer le bilan maintenant</button>
           </div>
@@ -2076,7 +2176,7 @@ Faites-en bon usage !
       } catch (e) { toast(e.message, 'error'); }
     }
     async function saveCostumeFaibleTopBilan() {
-      try { await api('/api/costume-faible-top/config', 'POST', { bilanEnabled: $('#cfBilanOn')?.checked, bilanChart: $('#cfBilanChart')?.checked, bilanEveryHours: $('#cfBilanEvery')?.value, bilanMinPreds: $('#cfBilanMin')?.value }); await refresh(); costumeFaibleTopPage(); toast('Réglages du bilan enregistrés.'); }
+      try { await api('/api/costume-faible-top/config', 'POST', { bilanEnabled: $('#cfBilanOn')?.checked, bilanEveryHours: $('#cfBilanEvery')?.value, bilanMinPreds: $('#cfBilanMin')?.value }); await refresh(); costumeFaibleTopPage(); toast('Réglages du bilan enregistrés.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function previewCostumeFaibleTopBilan() {
@@ -3816,6 +3916,7 @@ Faites-en bon usage !
         else if (h === '#/combined') combinedPage();
         else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/dizaine-top') dizaineTopPage();
+        else if (h === '#/best-weak') bestWeakPage();
         else if (h === '#/costume-faible-top') costumeFaibleTopPage();
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/overlap') overlapPage();
