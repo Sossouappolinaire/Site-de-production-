@@ -620,3 +620,6 @@ module.exports = {
   restore, restoreFromDb, parseChannels, resetCounting, categoryOf, pickStart, lowestCategory,
   CATEGORIES, DEFAULT_BLOCK, offsetsFor, blockSize,
 };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

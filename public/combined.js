@@ -31,6 +31,7 @@ const fmt = require('./formats');
 const { state, hasSuit, setOnShoeReset } = require('./predictor');
 const predit = require('./predit');
 const formationRelay = require('./formation-relay');
+const earlyVerify = require('./early-verify');
 
 const LEVEL_KEYS = ['r1', 'r2', 'r3', 'perdue'];
 const LEVEL_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage 3', perdue: 'Perdue' };
@@ -98,15 +99,18 @@ function afterLossOptions() {
   } catch (_) { return []; }
 }
 
-// CORRECTIF (demande admin) : la liste à cocher doit rester simple — chaque
-// source « Formation » affiche juste « Formation — <nom de la stratégie> »,
-// SANS détail de canal. C'est bien la formation de cette stratégie (donc
-// toutes les prédictions qu'elle envoie, quel que soit son canal) qui est
-// suivie une fois sélectionnée — le canal n'a pas à apparaître ici.
+// CORRECTIF (demande admin) : la liste à cocher doit rester simple — les
+// formations sont regroupées ENSEMBLE sous l'en-tête « Formations » du menu
+// déroulant, chaque entrée affichant SEULEMENT le nom de la stratégie (pas
+// de préfixe « Formation — » répété sur chacune, l'en-tête du groupe suffit
+// à l'indiquer), SANS détail de canal. C'est bien la formation de cette
+// stratégie (donc toutes les prédictions qu'elle envoie, quel que soit son
+// canal) qui est suivie une fois sélectionnée — le canal n'a pas à
+// apparaître ici.
 function formationOptions() {
   return [
-    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: `Formation — ${s.name}`, group: 'Formations' })),
-    { key: 'formation:ia', name: 'Formation — Prédit IA', group: 'Formations' },
+    ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: s.name, group: 'Formations' })),
+    { key: 'formation:ia', name: 'Prédit IA', group: 'Formations' },
   ];
 }
 
@@ -240,29 +244,25 @@ function applySaved(saved) {
       rules: sanitizeRules(t.rules),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       format: t.format ? fmt.clampFormat(t.format) : null,
-      streakKind: t.streakKind || null,
-      armed: !!t.armed,
-      armedKind: t.armedKind || null,
-      streakCount: Number.isFinite(Number(t.streakCount)) ? Number(t.streakCount) : 0,
-      lastSeenTarget: Number.isFinite(Number(t.lastSeenTarget)) ? Number(t.lastSeenTarget) : 0,
+      // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
+      // armed/streakKind/streakCount/lastSeenTarget ne sont plus rejoués
+      // tels quels depuis data.json — on repart toujours de zéro, recalé
+      // sur la dernière prédiction déjà connue (jamais rejouée). Même
+      // principe que suit-break.js et formation-relay.js.
+      streakKind: null,
+      armed: false,
+      armedKind: null,
+      streakCount: 0,
+      lastSeenTarget: currentMaxTarget(t.key),
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
       lastSentAt: t.lastSentAt || null,
       createdAt: t.createdAt || Date.now(),
     }));
   }
-  if (Array.isArray(saved.history)) panel.history = saved.history.slice(0, 100);
-  if (Array.isArray(saved.pendingMessages)) {
-    const keep = [];
-    let resolvedCount = 0;
-    for (let i = saved.pendingMessages.length - 1; i >= 0; i--) {
-      const e = saved.pendingMessages[i];
-      if (e.status === 'en attente' || resolvedCount < 200) {
-        keep.unshift(e);
-        if (e.status !== 'en attente') resolvedCount += 1;
-      }
-    }
-    panel.pendingMessages = keep;
-  }
+  // l'historique affiché et les messages en attente ne sont jamais rejoués
+  // au démarrage — ils ne doivent refléter que ce qui se passe APRÈS.
+  panel.history = [];
+  panel.pendingMessages = [];
   if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
   panel.lastSentAt = saved.lastSentAt || null;
   panel.lastScanAt = saved.lastScanAt || null;
@@ -459,14 +459,17 @@ async function send(tracker, syn) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return false; }
   const out = messageText(tracker, syn);
-  const sentMessages = [];
-  const errors = [];
-  for (const id of targetChannels) {
-    try {
-      const m = await bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {});
-      sentMessages.push({ chatId: id, messageId: m.message_id });
-    } catch (e) { errors.push(`${id} : ${e.message}`); }
-  }
+  // CORRECTIF (envoi en retard) : envoi en PARALLÈLE à tous les canaux au
+  // lieu d'un for...await séquentiel — avec plusieurs canaux, chaque envoi
+  // attendait le précédent avant de partir, retardant d'autant le message
+  // par rapport à la stratégie source qu'il doit copier.
+  const results = await Promise.all(targetChannels.map((id) =>
+    bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
+      .then((m) => ({ ok: true, id, messageId: m.message_id }))
+      .catch((e) => ({ ok: false, id, error: e.message }))
+  ));
+  const sentMessages = results.filter((r) => r.ok).map((r) => ({ chatId: r.id, messageId: r.messageId }));
+  const errors = results.filter((r) => !r.ok).map((r) => `${r.id} : ${r.error}`);
   if (!sentMessages.length) { panel.lastError = errors[0] || 'Envoi impossible'; return false; }
   panel.sentCount = (panel.sentCount || 0) + 1;
   panel.lastSentAt = Date.now();
@@ -529,7 +532,9 @@ async function verifyPending() {
     while (entry.status === 'en attente' && guard++ <= entry.maxR + entry.gap + 8) {
       const num = entry.target + entry.step + entry.gap;
       const g = state.games.get(num);
-      const usable = !!g && g.finished && g.complete !== false;
+      const usable = (!!g && g.finished && g.complete !== false)
+        // vérification anticipée : costume déjà chez le joueur → validé sans attendre la fin du jeu (early-verify.js)
+        || earlyVerify.hit(g, entry.kind, (gg) => hasSuit(gg, entry.suit));
       if (!usable) {
         if (num + 2 <= maxDone) {
           entry.gap += 1;
@@ -563,7 +568,10 @@ async function tick() {
   if (busy || !panel.enabled) return panel;
   busy = true;
   try {
-    for (const tracker of panel.trackers) await processTracker(tracker);
+    // CORRECTIF (envoi en retard) : trackers traités en PARALLÈLE — un
+    // for...await séquentiel forçait chaque tracker à attendre l'envoi
+    // Telegram complet du précédent avant même d'être évalué.
+    await Promise.all(panel.trackers.map((tracker) => processTracker(tracker)));
     await verifyPending();
     panel.lastScanAt = Date.now();
   } catch (e) {
@@ -613,3 +621,6 @@ module.exports = {
   options, addTracker, addTrackers, updateTracker, removeTracker,
   restore, restoreFromDb, parseChannels, pendingFor,
 };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

@@ -1,9 +1,29 @@
 // server.js — tableau de bord web (Render) + API JSON. Protégé par identifiant/mot de passe.
+
+// CORRECTIF « redémarrages en boucle sans explication » (demande admin) :
+// sans ces gestionnaires, la moindre erreur non interceptée QUELQUE PART
+// dans le code (promesse oubliée sans .catch, appel Telegram en échec, etc.)
+// tuait instantanément tout le process Node — Render le relançait aussitôt,
+// sans qu'aucune trace de la vraie cause n'apparaisse dans les logs. C'est
+// ce qui produisait les doublons de prédictions (rupture, après une perte...)
+// à chaque redémarrage. On loggue désormais l'erreur complète AVANT de
+// quitter, pour pouvoir enfin identifier et corriger la cause exacte.
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH] unhandledRejection —', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH] uncaughtException —', err && err.stack ? err.stack : err);
+  // on laisse le process continuer plutôt que de le tuer : mieux vaut un
+  // module en erreur ponctuelle qu'un redémarrage complet qui rejoue tout.
+});
+
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
 const { Pool } = require('pg');
 const pgSessionStore = require('connect-pg-simple')(session);
+const hybridStore = require('./session-store');
+const { databaseUrl } = require('./database-url');
 const config = require('./config');
 const api = require('./api');
 const db = require('./db');
@@ -23,18 +43,23 @@ const predit = require('./predit');
 const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const dizaineTop = require('./dizaine-top');
+const bestWeakTop = require('./best-weak-top');
+const costumeFaibleTop = require('./costume-faible-top');
+const copyAnnounce = require('./copy-announce');
+const suitBreak = require('./suit-break');
+const overlap = require('./overlap');
+const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
-const shop = require('./shop');
-const paiement = require('./paiement');
 const mirrorCounter = require('./mirror-counter');
-const sebpay = require('./sebpay');
 const lossNotice = require('./loss-notice');
 const game21 = require('./game21');
 const game21Strategies = require('./game21-strategies');
 const game21Predict = require('./game21-predict');
+const predictionControl = require('./prediction-control');
 const {
   state, stats, predictionMessage, recentGames, SUITS,
   setStrategyConfig, resetStrategy, initStrategies, parityRuntime,
@@ -42,36 +67,34 @@ const {
   predictionsPanel, strategyChannels, unlockGate, sweepAutoUnlock, dizaineCounterView,
   announcementsFor, siteChannelsView, addSiteChannel, removeSiteChannel, addSiteChannelMessage, siteChannelFeed,
 } = require('./predictor');
-const { startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
+const { startLoop, startBot, botStatus, disconnectBot, activate, deactivate, persist, sendBilan, flushBilans, dropSender, announceConfig, announceMainBot, resolveChat, testSend, saveConfigsToDb, applyDbConfigs, setMainChannel } = require('./bot');
 
 const app = express();
 app.set('trust proxy', 1); // Render est derrière un proxy HTTPS : nécessaire pour les cookies "secure"
-// `verify` conserve le corps BRUT de chaque requête (req.rawBody) EN PLUS du
-// JSON parsé habituel (req.body, inchangé partout ailleurs) — nécessaire
-// pour vérifier la signature HMAC du webhook SebPay (voir sebpay.js —
-// verifyWebhookSignature exige le texte brut, un JSON.parse+stringify ne
-// redonnerait pas exactement les mêmes octets que ceux signés par SebPay).
-app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
+app.use(express.json());
 
 // ---------------------------------------------------------------------------
 // Sessions stockées en base Postgres (table "user_sessions", créée toute
 // seule au démarrage) — sans ça (store par défaut = mémoire du process),
 // tout le monde est déconnecté à chaque redémarrage/redéploiement Render.
 // ---------------------------------------------------------------------------
+const SESSION_DB_URL = databaseUrl() || config.DATABASE_URL;
 const sessionPool = new Pool({
-  connectionString: config.DATABASE_URL,
-  ssl: /localhost|127\.0\.0\.1/.test(config.DATABASE_URL) ? false : { rejectUnauthorized: false },
+  connectionString: SESSION_DB_URL,
+  ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
   max: 4,
 });
 sessionPool.on('error', (e) => console.error('Pool de sessions (pg) :', e.message));
 
 app.use(session({
-  store: new pgSessionStore({
+  // base de données quand elle répond, mémoire du process en repli : ainsi la
+  // connexion de secours de l'administrateur marche même base éteinte.
+  store: hybridStore(new pgSessionStore({
     pool: sessionPool,
     tableName: 'user_sessions',
     createTableIfMissing: true,
     pruneSessionInterval: 60 * 60, // purge des sessions expirées toutes les heures
-  }),
+  })),
   name: 'baccara.sid',
   secret: process.env.SESSION_SECRET || 'baccara-bot-changeme-secret',
   resave: false,
@@ -139,58 +162,41 @@ app.post('/api/auth/mail-config', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
-// --- verrou d'accès : tout le reste du site exige une session valide ------
-const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/succes.html', '/pay-sebpay.html']);
-const PUBLIC_PAIEMENT_PATTERNS = [
-  /^\/api\/paiement\/webhook$/,
-  /^\/api\/paiement\/statut\/[^/]+$/,
-  /^\/api\/paiement\/copie\/[^/]+$/,
-  // consultées par succes.html — navigateur de l'acheteur, JAMAIS connecté
-  // au site (session admin/utilisateur) : ces routes doivent rester
-  // publiques, comme statut/copie ci-dessus, sinon le bouton « Voir mon
-  // code » échoue systématiquement avec "Authentification requise."
-  /^\/api\/paiement\/actif$/,
-  /^\/api\/paiement\/chercher\/[^/]+$/,
-  /^\/api\/paiement\/confirmer$/,
-  // consultées par pay-sebpay.html (navigateur de l'acheteur, jamais
-  // connecté) et par le webhook SebPay lui-même (serveur-à-serveur, protégé
-  // par sa propre signature HMAC — voir sebpay.verifyWebhookSignature —
-  // jamais par une session admin).
-  /^\/api\/sebpay\/info\/[^/]+$/,
-  /^\/api\/sebpay\/operators$/,
-  /^\/api\/sebpay\/collect\/[^/]+$/,
-  /^\/api\/sebpay\/webhook$/,
-];
+// ---------------------------------------------------------------------------
+// Accès public (demande admin, 30/09/2026) : plus de mot de passe, plus de
+// compte à créer — tout le monde qui arrive sur le site a exactement les
+// mêmes droits que l'administrateur (lecture ET écriture partout). Le
+// système de comptes (auth.js, /api/auth/*, panneau « Utilisateurs ») reste
+// en place et fonctionnel si besoin de le réactiver un jour : il suffit de
+// remettre l'ancien verrou (conservé juste au-dessus en commentaire dans
+// l'historique du fichier) à la place du middleware ci-dessous.
+// ---------------------------------------------------------------------------
+const PUBLIC_EXACT = new Set(['/health', '/login.html', '/favicon.ico', '/intro.js']);
 function isPublicPath(p) {
   if (PUBLIC_EXACT.has(p)) return true;
   if (p.startsWith('/api/auth/')) return true;
-  // webhook FusionPay (appel serveur-à-serveur) et consultation du statut
-  // depuis succes.html (navigateur de l'acheteur, jamais connecté au site) —
-  // protégés par leur propre clé/référence, pas par une session admin.
-  if (PUBLIC_PAIEMENT_PATTERNS.some((re) => re.test(p))) return true;
   return false;
 }
-app.use(async (req, res, next) => {
-  if (isPublicPath(req.path)) return next();
-  if (req.session && req.session.userId) {
-    // vérifie, sur chaque requête, qu'un compte « user » n'a pas dépassé le
-    // temps accordé par l'administrateur (coupure immédiate, même en pleine
-    // session) — l'admin, lui, n'est jamais concerné par cette vérification.
-    if (req.session.role !== 'admin') {
-      const access = await auth.checkAccess(req.session.userId);
-      if (!access.ok) {
-        return req.session.destroy(() => {
-          if (req.path.startsWith('/api/')) {
-            return res.status(401).json({ error: access.error, blocked: !!access.blocked, telegram: access.telegram || null });
-          }
-          return res.redirect(`/login.html?blocked=1&telegram=${encodeURIComponent(access.telegram || auth.TELEGRAM_CONTACT)}`);
-        });
-      }
-    }
-    return next();
+app.use((req, res, next) => {
+  if (req.session) {
+    req.session.role = 'admin';
+    if (!req.session.userId) req.session.userId = 'public';
+    if (!req.session.identifier) req.session.identifier = 'Visiteur';
   }
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Authentification requise.' });
-  return res.redirect('/login.html');
+  next();
+});
+
+// Identifiant de démarrage : change à chaque redémarrage / redéploiement. Injecté
+// dans index.html et login.html (<meta name="boot-id">) pour que l'intro animée
+// (public/intro.js) ne soit jouée qu'UNE fois après chaque redémarrage.
+const BOOT_ID = String(Date.now());
+app.get(['/', '/index.html', '/login.html'], (req, res, next) => {
+  const file = path.join(__dirname, 'public', req.path === '/login.html' ? 'login.html' : 'index.html');
+  require('fs').readFile(file, 'utf8', (err, html) => {
+    if (err) return next();
+    res.set('Cache-Control', 'no-store');
+    res.type('html').send(html.replace('content="__BOOT_ID__"', `content="${BOOT_ID}"`));
+  });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -273,6 +279,57 @@ app.post('/api/users/:id/reject', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
+// « Chevauchement de prédictions » (voir overlap.js) — pour aider l'admin à
+// retrouver une source par le NOM/ID du canal Telegram où elle publie déjà
+// (ex. l'admin connaît le canal « bo » mais pas forcément la clé interne de
+// la stratégie qui y envoie), on résout ici, pour chaque option disponible
+// dans overlap.options(), le(s) canal(aux) Telegram où cette source publie
+// ACTUELLEMENT — pour affichage uniquement dans le sélecteur du tableau de
+// bord (ça ne change rien au fonctionnement du panneau lui-même).
+async function overlapSourceChannelHints() {
+  const hints = {};
+  const bot = botStatus();
+  async function addHint(key, ids) {
+    if (!key || !Array.isArray(ids) || !ids.length) return;
+    const names = [];
+    for (const id of ids.slice(0, 3)) {
+      if (bot.tokenSet) {
+        const check = await resolveChat(id);
+        names.push(check.ok ? (check.chat.title || String(id)) : String(id));
+      } else {
+        names.push(String(id));
+      }
+    }
+    if (names.length) hints[key] = names;
+  }
+  // stratégies existantes : canal publié (celui du bouton « Envoyer »).
+  for (const def of strategies.LIST) {
+    await addHint(def.key, strategyChannels(def.key, 'published'));
+  }
+  // IA « Prédit » : canal propre du panneau.
+  await addHint('ia', predit.panel.channels);
+  // Formations : canal propre par stratégie, sinon canal par défaut du panneau.
+  const frStatus = formationRelay.status();
+  const frDefault = Array.isArray(frStatus.channels) ? frStatus.channels : [];
+  for (const s of (frStatus.strategies || [])) {
+    await addHint(`formation:${s.key}`, (Array.isArray(s.channels) && s.channels.length) ? s.channels : frDefault);
+  }
+  // panneaux « frères » (chaque tracker peut avoir son propre canal, sinon
+  // celui du panneau) : après-perte, combinée, répétition, rupture.
+  async function addPanelHints(mod, prefix) {
+    const st = mod.status();
+    const defaultChannels = Array.isArray(st.channels) ? st.channels : [];
+    for (const t of (mod.panel.trackers || [])) {
+      await addHint(`${prefix}:${t.id}`, (Array.isArray(t.channels) && t.channels.length) ? t.channels : defaultChannels);
+    }
+  }
+  await addPanelHints(afterLoss, 'after');
+  await addPanelHints(combined, 'combo');
+  await addPanelHints(suitStreak, 'streak');
+  await addPanelHints(suitBreak, 'break');
+  return hints;
+}
+
 app.get('/api/state', async (req, res) => {
   const aiCreatedKeys = new Set(aiRepair.status().createdStrategyKeys || []);
   res.json({
@@ -292,7 +349,6 @@ app.get('/api/state', async (req, res) => {
     lastFinished: state.lastFinished,
     error: state.lastError,
     bot: botStatus(),
-    shopBot: shopBotStatus(),
     db: db.status(),
     apiUrl: api.endpoints()[0],
     champId: config.CHAMP_ID,
@@ -336,6 +392,14 @@ app.get('/api/state', async (req, res) => {
     afterLoss: afterLoss.status(),
     combined: combined.status(),
     suitStreak: suitStreak.status(),
+    dizaineTop: dizaineTop.status(),
+    bestWeakTop: bestWeakTop.status(),
+    costumeFaibleTop: costumeFaibleTop.status(),
+    control: predictionControl.status(),
+    suitBreak: suitBreak.status(),
+    copyAnnounce: { ...copyAnnounce.status(), channels: configuredChannelList() },
+    overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
+    statistics: statistics.status(),
     cardsCount: cardsCount.status(),
     vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
@@ -489,28 +553,6 @@ app.post('/api/bot/admin', (req, res) => {
   state.adminId = id;
   persist();
   res.json({ ok: true, bot: botStatus() });
-});
-
-// --- bot de la boutique (token séparé, exclusivement dédié à shop.js) ------
-app.get('/api/shop/bot', (req, res) => res.json(shopBotStatus()));
-
-app.post('/api/shop/bot/token', async (req, res) => {
-  const token = (req.body.token || '').trim();
-  if (!/^\d+:[\w-]{20,}$/.test(token)) return res.status(400).json({ error: 'Token Telegram invalide' });
-  const r = await startShopBot(token);
-  res.status(r.ok ? 200 : 400).json({ ...r, bot: shopBotStatus() });
-});
-
-app.post('/api/shop/bot/restart', async (req, res) => {
-  const r = await startShopBot();
-  res.json({ ...r, bot: shopBotStatus() });
-});
-
-// Déconnexion volontaire du bot boutique — même principe que
-// DELETE /api/bot/token ci-dessus, côté token séparé de la boutique.
-app.delete('/api/shop/bot/token', async (req, res) => {
-  const r = await disconnectShopBot();
-  res.json({ ...r, bot: shopBotStatus() });
 });
 
 // --- base de données --------------------------------------------------------
@@ -833,385 +875,6 @@ app.post('/api/mirror-counter/test', async (req, res) => {
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
-});
-
-// ---------------------------------------------------------------------------
-// Boutique — publication de stratégies vendues avec code de paiement.
-// Lecture accessible à tout compte connecté (GET), écriture réservée à
-// l'administrateur (voir le middleware générique plus haut : USER_WRITE_*).
-// ---------------------------------------------------------------------------
-app.get('/api/shop', (req, res) => {
-  res.json({
-    items: shop.listAll(),
-    sources: {
-      strategies: strategies.LIST.map((d) => ({ key: d.key, name: d.name, about: d.about, rate: (stats(d.key) || {}).rate ?? null })),
-      ia: aiAuto.listStrategies(),
-    },
-    pricing: shop.getPricingSettings(),
-  });
-});
-
-// Modifie le tarif d'une méthode/palier de vente : 'strategy' (catalogue),
-// 'ia_100' (déclencheurs IA à 100% de réussite) ou 'ia_93' (93 à 99,99%).
-// Appliqué à tous les articles déjà publiés du palier concerné (avec le
-// montant en francs recalculé automatiquement) ET retenu comme nouveau
-// défaut pour les prochaines publications (voir shop.setMethodPrice).
-app.post('/api/shop/pricing', (req, res) => {
-  try {
-    const { method, price } = req.body || {};
-    const result = shop.setMethodPrice(method, price);
-    res.json({ ok: true, ...result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Change le taux de change € -> F CFA utilisé pour calculer automatiquement
-// le montant en francs des liens de paiement Money Fusion. Appliqué à tous
-// les articles déjà publiés (montant recalculé) ET retenu comme nouveau
-// défaut pour les prochaines publications (voir shop.setExchangeRate).
-app.post('/api/shop/exchange-rate', (req, res) => {
-  try {
-    const { rate } = req.body || {};
-    const result = shop.setExchangeRate(rate);
-    res.json({ ok: true, ...result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Change le taux de change $ -> F CFA utilisé pour le bouton « Soutien »
-// (dons libres, distincts des ventes de stratégies).
-app.post('/api/shop/support-rate', (req, res) => {
-  try {
-    const { rate } = req.body || {};
-    const result = shop.setSupportRate(rate);
-    res.json({ ok: true, ...result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Colle le lien de paiement Money Fusion d'UNE catégorie ('strategy',
-// 'ia_100' ou 'ia_93') — lien complet copié tel quel depuis Money Fusion
-// (ex. https://payin.moneyfusion.net/payment/{id}/{prix}/{nom}), utilisé
-// ensuite pour TOUS les articles de cette catégorie.
-app.post('/api/shop/pay-link', (req, res) => {
-  try {
-    const { method, url } = req.body || {};
-    const result = shop.setPayLink(method, url);
-    res.json({ ok: true, pricing: result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Choix admin du fournisseur de paiement ACTIF pour tout le catalogue —
-// 'fusion' (lien fixe collé par catégorie) ou 'sebpay' (API Mobile Money,
-// voir sebpay.js/paiement.js) — voir panneau Boutique → Paiement.
-app.post('/api/shop/payment-provider', (req, res) => {
-  try {
-    const provider = shop.setPaymentProvider(req.body && req.body.provider);
-    res.json({ ok: true, provider, pricing: shop.getPricingSettings() });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Enregistre les clés API SebPay (X-Public-Key/X-Secret-Key) + pays/devise
-// par défaut — la clé secrète n'est JAMAIS renvoyée en clair ensuite (voir
-// shop.getPricingSettings — seulement `sebpaySecretKeySet: true/false`).
-app.post('/api/shop/sebpay-keys', (req, res) => {
-  try {
-    const { publicKey, secretKey, country, currency } = req.body || {};
-    const result = shop.setSebpayKeys({ publicKey, secretKey, country, currency });
-    res.json({ ok: true, publicKey: result.publicKey, secretKeySet: !!result.secretKey, country: result.country, currency: result.currency });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-// Message de perte + rappel formation VIP, envoyé automatiquement dans le
-// canal dès qu'une prédiction (stratégie existante, « Prédit IA », ou relais
-// « après perte ») se solde par une perte (voir loss-notice.js, bot.js —
-// updateResult, predit.js — update, after-loss.js — editPending).
-app.get('/api/loss-notice', (req, res) => {
-  res.json({ ok: true, settings: lossNotice.getSettings() });
-});
-app.post('/api/loss-notice', (req, res) => {
-  try {
-    const { enabled, message, vipText, vipLink } = req.body || {};
-    const result = lossNotice.setSettings({ enabled, message, vipText, vipLink });
-    res.json({ ok: true, settings: result });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-app.post('/api/shop', async (req, res) => {
-  try {
-    const { source, sourceKey, details, example, rate, realName, price, payAmountLocal } = req.body || {};
-    const priceNum = Number.isFinite(price) ? price : null;
-    const payAmountNum = Number.isFinite(payAmountLocal) ? payAmountLocal : null;
-    let item;
-    if (source === 'strategy' && sourceKey) {
-      item = await shop.publishFromStrategy(sourceKey, { details, example, price: priceNum, payAmountLocal: payAmountNum });
-    } else if (source === 'ia' && sourceKey) {
-      const aiItem = aiAuto.listStrategies().find((s) => s.id === sourceKey || s.key === sourceKey);
-      if (!aiItem) return res.status(404).json({ error: "Stratégie IA introuvable (peut-être expirée après 1h)." });
-      item = await shop.publishFromAiStrategy(aiItem, { details, example, price: priceNum, payAmountLocal: payAmountNum });
-    } else {
-      item = await shop.createItem({ source: 'custom', realName, details, example, rate: Number.isFinite(rate) ? rate : null, price: priceNum, payAmountLocal: payAmountNum });
-    }
-    res.json({ ok: true, item });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post('/api/shop/:id', (req, res) => {
-  const item = shop.updateItem(req.params.id, req.body || {});
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-app.delete('/api/shop/:id', (req, res) => {
-  const ok = shop.deleteItem(req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true });
-});
-
-app.post('/api/shop/:id/code', (req, res) => {
-  const item = shop.regenerateCode(req.params.id);
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-app.post('/api/shop/:id/rename', async (req, res) => {
-  const item = await shop.renameItem(req.params.id);
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-app.post('/api/shop/:id/refresh-rate', (req, res) => {
-  const item = shop.refreshRateFromStrategy(req.params.id);
-  if (!item) return res.status(404).json({ error: 'Article introuvable.' });
-  res.json({ ok: true, item });
-});
-
-// ---------------------------------------------------------------------------
-// Paiement en ligne (Money Fusion) — voir paiement.js. Lien fixe, rien à
-// configurer côté admin. Confirmation AUTOMATIQUE : dès que le navigateur
-// du client charge succes.html (atteint, côté Money Fusion, uniquement
-// après un paiement réellement validé), le paiement est marqué payé et le
-// code affiché sur succes.html — voir paiement.markPaidOnArrival.
-// ---------------------------------------------------------------------------
-app.get('/api/paiement/config', (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  res.json(paiement.getConfig());
-});
-
-// Marque un paiement en attente comme annulé/échoué (ex. nettoyage manuel
-// d'une réservation abandonnée) sans envoyer de code.
-app.post('/api/paiement/cancel/:ref', (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const r = paiement.cancelPayment(req.params.ref);
-  if (!r.ok) return res.status(404).json(r);
-  res.json(r);
-});
-
-// Historique des transactions (lecture seule, pour info admin) — plus
-// besoin d'y confirmer quoi que ce soit, tout est automatique.
-app.get('/api/paiement/pending', (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const list = paiement.listPending().map((r) => {
-    const item = shop.getItem(r.itemId);
-    return { ...r, aiName: item ? item.aiName : null };
-  });
-  res.json({ items: list });
-});
-
-// Consultée par la page succes.html (navigateur de l'acheteur, jamais
-// connecté au site) pour afficher le code. succes.html n'est atteinte,
-// côté Money Fusion, qu'après un paiement réellement validé (URL de succès
-// configurée sur le compte Money Fusion) — ce premier appel confirme donc
-// automatiquement le paiement (voir paiement.markPaidOnArrival) et affiche
-// le code pendant les 3 minutes ; la stratégie est débloquée uniquement
-// après saisie manuelle du code dans Telegram.
-app.get('/api/paiement/statut/:ref', async (req, res) => {
-  const record = await paiement.markPaidOnArrival(req.params.ref);
-  if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
-  const item = record.itemId ? shop.getItem(record.itemId) : null;
-  res.json({
-    status: record.status,
-    kind: record.kind || 'item',
-    code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),
-    aiName: item ? item.aiName : null,
-    amount: record.amount,
-    amountUsd: record.amountUsd ?? null,
-    buyerName: record.buyerName || null,
-    userId: record.userId || null,
-    expiresAt: record.expiresAt || null,
-  });
-});
-
-// Consultée par succes.html dès que le client clique sur « 📋 Copier » :
-// le code reste valide 30 secondes pour laisser le temps de le renvoyer
-// dans Telegram, puis il est remplacé automatiquement.
-app.post('/api/paiement/copie/:ref', async (req, res) => {
-  const record = await paiement.expireAfterCopy(req.params.ref);
-  if (!record) return res.status(404).json({ error: 'Paiement introuvable.' });
-  res.json({ ok: true, status: record.status });
-});
-
-// Réservation active EN CE MOMENT — consultée par succes.html à l'arrivée
-// sans ref (lien de succès Money Fusion fixe) pour retrouver automatiquement
-// le client qui vient de payer, sans rien lui faire saisir (voir
-// paiement.currentActiveRecord — s'appuie sur le verrou global d'achat).
-app.get('/api/paiement/actif', (req, res) => {
-  const record = paiement.currentActiveRecord();
-  if (!record) return res.status(404).json({ ok: false, error: 'Aucun paiement en cours actuellement.' });
-  res.json({ ok: true, ref: record.ref, uid: record.userId || null, buyerName: record.buyerName || null });
-});
-
-// Recherche du ref actif pour un ID Telegram — consultée par succes.html
-// quand la page est atteinte SANS ref dans l'URL (lien de succès Money
-// Fusion fixe). Ne marque rien comme payé : ne fait que reconstruire le
-// lien classique ?ref=...&uid=...&fn=...&ln=..., que le navigateur ouvre
-// ensuite lui-même (voir public/succes.html — lookupByUserId).
-app.get('/api/paiement/chercher/:userId', (req, res) => {
-  const record = paiement.findActiveRecordByUserId(req.params.userId);
-  if (!record) return res.status(404).json({ ok: false, error: "Aucun paiement en cours trouvé pour cet ID Telegram. Lance d'abord un paiement depuis le bot Telegram." });
-  res.json({ ok: true, ref: record.ref, buyerName: record.buyerName || null });
-});
-
-// Consultée par succes.html quand le client colle son ID Telegram et tape
-// « Je viens de payer » (le lien de paiement étant désormais fixe, Money
-// Fusion ne peut plus transmettre de référence dans l'URL de retour) — voir
-// paiement.confirmByUserId.
-app.post('/api/paiement/confirmer', async (req, res) => {
-  const userId = req.body && req.body.userId ? String(req.body.userId).trim() : '';
-  if (!userId) return res.status(400).json({ ok: false, error: 'ID Telegram manquant.' });
-  const r = await paiement.confirmByUserId(userId);
-  if (!r.ok) return res.status(404).json(r);
-  const record = r.record;
-  const item = record.itemId ? shop.getItem(record.itemId) : null;
-  res.json({
-    ok: true,
-    ref: record.ref,
-    status: record.status,
-    kind: record.kind || 'item',
-    code: record.status === 'failed' || record.kind === 'support' ? null : (record.code || null),
-    aiName: item ? item.aiName : null,
-    amount: record.amount,
-    amountUsd: record.amountUsd ?? null,
-    buyerName: record.buyerName || null,
-    userId: record.userId || null,
-    expiresAt: record.expiresAt || null,
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SebPay — second fournisseur de paiement Mobile Money au choix de l'admin
-// (voir shop.getPaymentProvider/setPaymentProvider, sebpay.js). Contrairement
-// à Money Fusion (lien fixe collé par l'admin), le client donne son
-// numéro/opérateur sur notre propre page public/pay-sebpay.html, qui appelle
-// ces routes. Toutes publiques (le client n'est jamais connecté au site) —
-// la sécurité tient à la référence `ref` (générée aléatoirement côté
-// serveur, voir paiement.shortRef) et à la vérification de signature sur le
-// webhook plus bas.
-// ---------------------------------------------------------------------------
-
-// Consultée par pay-sebpay.html au chargement : montant à payer, devise et
-// nom de la stratégie, pour affichage — ne révèle jamais les clés API.
-app.get('/api/sebpay/info/:ref', (req, res) => {
-  const record = paiement.getRecord(req.params.ref);
-  if (!record || record.provider !== 'sebpay') return res.status(404).json({ ok: false, error: 'Paiement introuvable.' });
-  if (record.status !== 'pending') return res.status(410).json({ ok: false, error: 'Ce paiement n\'est plus actif.' });
-  const item = record.itemId ? shop.getItem(record.itemId) : null;
-  const keys = shop.getSebpayKeys();
-  res.json({
-    ok: true,
-    amount: record.amount,
-    currency: keys.currency,
-    country: keys.country,
-    itemName: item ? item.aiName : (record.kind === 'support' ? 'Soutien' : null),
-    buyerName: record.buyerName || null,
-    userId: record.userId || null,
-  });
-});
-
-// Liste des opérateurs Mobile Money disponibles (avec `otp_required` par
-// opérateur, voir https://new.sebpay.bj/fr/docs/otp) — relayée depuis notre
-// serveur pour ne jamais exposer les clés API au navigateur du client.
-app.get('/api/sebpay/operators', async (req, res) => {
-  const keys = shop.getSebpayKeys();
-  const r = await sebpay.getOperators(req.query.country || keys.country);
-  if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
-  res.json({ ok: true, operators: r.data });
-});
-
-// Lance (ou finalise, si otpCode fourni) l'encaissement SebPay pour cette
-// réservation. Deux passages possibles côté opérateurs qui l'exigent (voir
-// docs OTP) : 1) sans otpCode → si l'opérateur choisi l'exige, on répond
-// needsOtp + le code USSD à composer, SANS appeler /collections ; 2) avec
-// otpCode → on appelle réellement /collections.
-app.post('/api/sebpay/collect/:ref', async (req, res) => {
-  const record = paiement.getRecord(req.params.ref);
-  if (!record || record.provider !== 'sebpay') return res.status(404).json({ ok: false, error: 'Paiement introuvable.' });
-  if (record.status !== 'pending') return res.status(410).json({ ok: false, error: 'Ce paiement n\'est plus actif.' });
-  const phone = String((req.body && req.body.phone) || '').trim();
-  const operator = String((req.body && req.body.operator) || '').trim();
-  const otpCode = req.body && req.body.otpCode ? String(req.body.otpCode).trim() : null;
-  if (!phone || !operator) return res.status(400).json({ ok: false, error: 'Numéro de téléphone et opérateur requis.' });
-
-  const keys = shop.getSebpayKeys();
-  if (!otpCode) {
-    const ops = await sebpay.getOperators(keys.country);
-    if (ops.ok) {
-      const list = Array.isArray(ops.data) ? ops.data : (ops.data && ops.data.operators) || [];
-      const found = list.find((o) => o.slug === operator || o.code === operator);
-      if (found && found.otp_required) {
-        return res.json({ ok: true, needsOtp: true, ussdCode: found.ussd_code || null });
-      }
-    }
-  }
-
-  const callbackUrl = `${config.PUBLIC_URL}/api/sebpay/webhook`;
-  const r = await sebpay.createCollection({
-    amount: record.amount,
-    currency: keys.currency,
-    phone,
-    operator,
-    country: keys.country,
-    externalReference: record.ref,
-    callbackUrl,
-    otpCode,
-  });
-  if (!r.ok) return res.status(502).json({ ok: false, error: r.error });
-  paiement.attachSebpayTransaction(record.ref, {
-    transactionId: r.data.transaction_id,
-    phone,
-    operator,
-    providerLink: r.data.provider_link || null,
-  });
-  res.json({ ok: true, transactionId: r.data.transaction_id, providerLink: r.data.provider_link || null, status: r.data.status || 'pending' });
-});
-
-// Webhook SebPay — appelé par SebPay (jamais par le navigateur du client)
-// dès qu'un paiement change de statut. Signature HMAC-SHA256 obligatoire
-// (en-tête X-SebPay-Signature, voir sebpay.verifyWebhookSignature) sur le
-// corps BRUT (req.rawBody, voir express.json({verify}) plus haut) : un
-// webhook sans signature valide n'est JAMAIS traité, quoi qu'il prétende.
-// Répond 200 en moins de 5s comme l'exige la doc, même en cas d'erreur de
-// traitement (pour éviter un déluge de réémissions), sauf signature invalide
-// (401, volontairement, pour que ça reste visible dans les logs SebPay).
-app.post('/api/sebpay/webhook', async (req, res) => {
-  const signature = req.get('X-SebPay-Signature');
-  const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
-  if (!sebpay.verifyWebhookSignature(raw, signature)) {
-    console.error('Webhook SebPay : signature invalide, ignoré.');
-    return res.status(401).json({ ok: false, error: 'Signature invalide.' });
-  }
-  try {
-    const body = req.body || {};
-    const ref = body.external_reference;
-    if (!ref) return res.status(200).json({ ok: true }); // rien à faire, mais on répond 200 (idempotence)
-    if (body.status === 'approved') {
-      await paiement.confirmSebpayPayment(ref);
-    } else if (body.status === 'rejected') {
-      paiement.failSebpayPayment(ref);
-    }
-    // statut intermédiaire (pending) : rien à faire, SebPay renverra un
-    // webhook final plus tard.
-  } catch (e) {
-    console.error('Webhook SebPay (traitement) :', e.message);
-  }
-  res.status(200).json({ ok: true });
 });
 
 app.get('/api/strategies/:key', (req, res) => {
@@ -1840,6 +1503,8 @@ app.post('/api/after-loss/trackers', async (req, res) => {
       // nom donné à la configuration : elle apparaît ensuite sous ce nom dans
       // les listes de stratégies existantes des autres panneaux.
       name: req.body && req.body.name,
+      // catégorie de configuration choisie dans le panneau (1, 2 ou 3)
+      category: req.body && req.body.category,
       channels: req.body && req.body.channels,
       siteChannelId: req.body && req.body.siteChannelId,
       format: req.body && req.body.format,
@@ -2052,6 +1717,7 @@ app.post('/api/suit-streak/channel', async (req, res) => {
   const check = await resolveChat(idsList[0]);
   if (!check.ok) return res.status(400).json({ error: check.error });
   suitStreak.configure({ channels: idsList });
+  if (check.chat && check.chat.title) suitStreak.setChannelTitle(idsList[0], check.chat.title);
   const notice = await suitStreak.test();
   res.json({ ok: true, channel: check.chat, notice, suitStreak: suitStreak.status() });
 });
@@ -2071,18 +1737,29 @@ app.post('/api/suit-streak/scan', async (req, res) => {
   res.json(suitStreak.status());
 });
 
+// Relève le nom (titre) des canaux propres d'une source, sans bloquer la réponse.
+function rememberPanelTitles(mod, list) {
+  for (const id of (list || [])) {
+    resolveChat(id).then((c) => { if (c && c.ok && c.chat && c.chat.title) mod.setChannelTitle(id, c.chat.title); }).catch(() => {});
+  }
+}
+function rememberSuitStreakTitles(list) { rememberPanelTitles(suitStreak, list); }
+
 app.post('/api/suit-streak/trackers', async (req, res) => {
   try {
     const t = suitStreak.addTracker(req.body && req.body.key, {
       n: req.body && req.body.n,
       mode: req.body && req.body.mode,
       offset: req.body && req.body.offset,
+      suitFilter: req.body && req.body.suitFilter,
+      predictSuit: req.body && req.body.predictSuit,
       channels: req.body && req.body.channels,
       siteChannelId: req.body && req.body.siteChannelId,
       format: req.body && req.body.format,
       maxR: req.body && req.body.maxR,
       name: req.body && req.body.name,
     });
+    rememberSuitStreakTitles(t && t.channels);
     res.json({ ok: true, tracker: t, suitStreak: suitStreak.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -2091,6 +1768,7 @@ app.put('/api/suit-streak/trackers/:id', (req, res) => {
   try {
     const t = suitStreak.updateTracker(req.params.id, req.body || {});
     if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    rememberSuitStreakTitles(t && t.channels);
     res.json({ ok: true, tracker: t, suitStreak: suitStreak.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -2098,6 +1776,369 @@ app.put('/api/suit-streak/trackers/:id', (req, res) => {
 app.delete('/api/suit-streak/trackers/:id', (req, res) => {
   suitStreak.removeTracker(req.params.id);
   res.json(suitStreak.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Dizaine — costume le plus / le moins sorti » (voir dizaine-top.js) —
+// nouvelle stratégie du bouton Stratégies (demande admin) : comptage par
+// dizaine de jeux (1-10, 11-20, 21-30…), choix du 1er/2e/3e/4e costume le
+// plus ou le moins sorti, et plusieurs configurations enregistrables
+// (fin de numéro, rattrapages, format, canal propres à chacune).
+// ---------------------------------------------------------------------------
+async function verifyDizaineChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) dizaineTop.setChannelTitle(id, check.chat.title);
+  }
+}
+
+app.get('/api/dizaine-top', (req, res) => res.json(dizaineTop.status()));
+
+app.post('/api/dizaine-top/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.bestChannels !== undefined) await verifyDizaineChannels(dizaineTop.parseChannels(b.bestChannels));
+    if (b.weakChannels !== undefined) await verifyDizaineChannels(dizaineTop.parseChannels(b.weakChannels));
+    dizaineTop.configure(b);
+    res.json(dizaineTop.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/dizaine-top/trackers', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyDizaineChannels(dizaineTop.parseChannels(b.channels));
+    const t = dizaineTop.addTracker({
+      name: b.name, mode: b.mode, rank: b.rank, lead: b.lead,
+      channels: b.channels, siteChannelId: b.siteChannelId, format: b.format, maxR: b.maxR,
+    });
+    res.json({ ok: true, tracker: t, dizaineTop: dizaineTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/dizaine-top/trackers/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined) await verifyDizaineChannels(dizaineTop.parseChannels(b.channels));
+    const t = dizaineTop.updateTracker(req.params.id, b);
+    if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, tracker: t, dizaineTop: dizaineTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/dizaine-top/trackers/:id', (req, res) => {
+  dizaineTop.removeTracker(req.params.id);
+  res.json(dizaineTop.status());
+});
+
+app.post('/api/dizaine-top/trackers/:id/test', async (req, res) => {
+  const r = await dizaineTop.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+// bilan : aperçu du texte (sans envoi) et envoi immédiat (test)
+app.get('/api/dizaine-top/bilan/preview', (req, res) => {
+  res.json({ text: dizaineTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
+});
+app.post('/api/dizaine-top/welcome/test', async (req, res) => {
+  const r = await (req.body && req.body.kind === 'weak' ? dizaineTop.testWeakWelcome() : dizaineTop.testWelcome());
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/dizaine-top/bilan/send', async (req, res) => {
+  const r = await dizaineTop.sendBilan({ force: true });
+  res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, dizaineTop: dizaineTop.status() });
+});
+
+// « Meilleur + plus faible » (voir best-weak-top.js) : un message à deux costumes (meilleur + plus faible) par jeu.
+async function verifyBestWeakChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) bestWeakTop.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/best-weak', (req, res) => res.json(bestWeakTop.status()));
+app.post('/api/best-weak/configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    const c = bestWeakTop.addConfig(b);
+    res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/best-weak/configs/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    const c = bestWeakTop.updateConfig(req.params.id, b);
+    if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/best-weak/configs/:id', (req, res) => { bestWeakTop.removeConfig(req.params.id); res.json(bestWeakTop.status()); });
+app.post('/api/best-weak/configs/:id/test', async (req, res) => {
+  const r = await bestWeakTop.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/dizaine-top/scan', async (req, res) => {
+  await dizaineTop.tick();
+  res.json(dizaineTop.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Costume faible sur 2 cartes (miroir) » avec configurations
+// (voir costume-faible-top.js) — même fonctionnement que la Dizaine :
+// configurations multiples, bilan, canal des meilleures prédictions.
+// ---------------------------------------------------------------------------
+async function verifyCostumeFaibleChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) costumeFaibleTop.setChannelTitle(id, check.chat.title);
+  }
+}
+
+app.get('/api/costume-faible-top', (req, res) => res.json(costumeFaibleTop.status()));
+app.post('/api/costume-faible-top/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.bestChannels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.bestChannels));
+    if (b.weakChannels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.weakChannels));
+    costumeFaibleTop.configure(b);
+    res.json(costumeFaibleTop.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/costume-faible-top/trackers', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.channels));
+    await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels((Array.isArray(b.slots) ? b.slots : []).map((x) => (x && x.channel) || '')));
+    const t = costumeFaibleTop.addTracker({
+      name: b.name, rule: b.rule, lead: b.lead, slots: b.slots,
+      channels: b.channels, siteChannelId: b.siteChannelId, format: b.format, maxR: b.maxR,
+    });
+    res.json({ ok: true, tracker: t, costumeFaibleTop: costumeFaibleTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/costume-faible-top/trackers/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.channels));
+    if (Array.isArray(b.slots)) await verifyCostumeFaibleChannels(costumeFaibleTop.parseChannels(b.slots.map((x) => (x && x.channel) || '')));
+    const t = costumeFaibleTop.updateTracker(req.params.id, b);
+    if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, tracker: t, costumeFaibleTop: costumeFaibleTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/costume-faible-top/trackers/:id', (req, res) => {
+  costumeFaibleTop.removeTracker(req.params.id);
+  res.json(costumeFaibleTop.status());
+});
+app.post('/api/costume-faible-top/trackers/:id/test', async (req, res) => {
+  const r = await costumeFaibleTop.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.get('/api/costume-faible-top/bilan/preview', (req, res) => {
+  res.json({ text: costumeFaibleTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
+});
+app.post('/api/costume-faible-top/welcome/test', async (req, res) => {
+  const r = await (req.body && req.body.kind === 'weak' ? costumeFaibleTop.testWeakWelcome() : costumeFaibleTop.testWelcome());
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/costume-faible-top/bilan/send', async (req, res) => {
+  const r = await costumeFaibleTop.sendBilan({ force: true });
+  res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, costumeFaibleTop: costumeFaibleTop.status() });
+});
+app.post('/api/costume-faible-top/scan', async (req, res) => {
+  await costumeFaibleTop.tick();
+  res.json(costumeFaibleTop.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Chevauchement de prédictions » (voir overlap.js) — nouveau bouton
+// (demande admin) : sélection d'UNE source (stratégie, IA, formation, ou un
+// autre panneau), surveillance prédiction par prédiction — dès qu'une 2ᵉ
+// prédiction arrive alors que la 1ʳᵉ n'est pas encore vérifiée, on déclenche
+// SUR LA 2ᵉ (jamais la 1ʳᵉ), selon le mode choisi : même prédiction, costume
+// miroir, ou +n jeux.
+// ---------------------------------------------------------------------------
+app.get('/api/overlap', async (req, res) => res.json({ ...overlap.status(), channelHints: await overlapSourceChannelHints() }));
+
+app.post('/api/overlap/config', (req, res) => {
+  overlap.configure(req.body || {});
+  res.json(overlap.status());
+});
+
+app.post('/api/overlap/channel', async (req, res) => {
+  const idsList = overlap.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  overlap.configure({ channels: idsList });
+  if (check.chat && check.chat.title) overlap.setChannelTitle(idsList[0], check.chat.title);
+  const notice = await overlap.test();
+  res.json({ ok: true, channel: check.chat, notice, overlap: overlap.status() });
+});
+
+app.delete('/api/overlap/channel', (req, res) => {
+  overlap.configure({ channels: [] });
+  res.json(overlap.status());
+});
+
+app.post('/api/overlap/test', async (req, res) => {
+  const r = await overlap.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/overlap/scan', async (req, res) => {
+  await overlap.tick();
+  res.json(overlap.status());
+});
+
+app.post('/api/overlap/trackers', async (req, res) => {
+  try {
+    // accepte soit `keys` (tableau, sélection multiple), soit `key`
+    // (rétrocompatibilité, une seule source) — mêmes réglages appliqués à
+    // chacune, en un seul appel (voir overlap.addTrackers).
+    const keys = Array.isArray(req.body && req.body.keys)
+      ? req.body.keys
+      : (req.body && req.body.key ? [req.body.key] : []);
+    const r = overlap.addTrackers(keys, {
+      mode: req.body && req.body.mode,
+      offset: req.body && req.body.offset,
+      channels: req.body && req.body.channels,
+      siteChannelId: req.body && req.body.siteChannelId,
+      format: req.body && req.body.format,
+      maxR: req.body && req.body.maxR,
+      name: req.body && req.body.name,
+    });
+    for (const t of (r.created || [])) rememberPanelTitles(overlap, t && t.channels);
+    res.json({ ok: true, created: r.created, errors: r.errors, overlap: overlap.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/overlap/trackers/:id', (req, res) => {
+  try {
+    const t = overlap.updateTracker(req.params.id, req.body || {});
+    if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    rememberPanelTitles(overlap, t && t.channels);
+    res.json({ ok: true, tracker: t, overlap: overlap.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/overlap/trackers/:id', (req, res) => {
+  overlap.removeTracker(req.params.id);
+  res.json(overlap.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Statistiques » (voir statistics.js) — nouveau bouton (demande admin) :
+// PAS un panneau de prédiction — relais brut des costumes/cartes reçus de
+// l'API Baccara (les mêmes données que le bouton « Canaux ») vers un canal
+// Telegram configuré, avec la notation demandée (✅/🔰/⏰/▶️/#T/#X/#R).
+// ---------------------------------------------------------------------------
+app.get('/api/statistics', (req, res) => res.json(statistics.status()));
+
+app.post('/api/statistics/config', (req, res) => {
+  statistics.configure(req.body || {});
+  res.json(statistics.status());
+});
+
+app.post('/api/statistics/channel', async (req, res) => {
+  const idsList = statistics.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  statistics.configure({ channels: idsList });
+  const notice = await statistics.test();
+  res.json({ ok: true, channel: check.chat, notice, statistics: statistics.status() });
+});
+
+app.delete('/api/statistics/channel', (req, res) => {
+  statistics.configure({ channels: [] });
+  res.json(statistics.status());
+});
+
+app.post('/api/statistics/test', async (req, res) => {
+  const r = await statistics.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/statistics/scan', async (req, res) => {
+  await statistics.tick();
+  res.json(statistics.status());
+});
+
+// ---------------------------------------------------------------------------
+// « Rupture de costume » (voir suit-break.js) — nouveau bouton (demande
+// admin) : sélection d'UNE source (stratégie, IA, ou formation), série de N
+// prédictions CONSÉCUTIVES de MÊME costume, puis attente de la RUPTURE
+// (prochaine prédiction d'un costume différent) — la rupture déclenche sur
+// SON PROPRE numéro (pas de décalage), en prédisant le costume ORIGINAL de
+// la série, avec le nombre de rattrapage configuré.
+// ---------------------------------------------------------------------------
+app.get('/api/suit-break', (req, res) => res.json(suitBreak.status()));
+
+app.post('/api/suit-break/config', (req, res) => {
+  suitBreak.configure(req.body || {});
+  res.json(suitBreak.status());
+});
+
+app.post('/api/suit-break/channel', async (req, res) => {
+  const idsList = suitBreak.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ error: 'ID de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  suitBreak.configure({ channels: idsList });
+  if (check.chat && check.chat.title) suitBreak.setChannelTitle(idsList[0], check.chat.title);
+  const notice = await suitBreak.test();
+  res.json({ ok: true, channel: check.chat, notice, suitBreak: suitBreak.status() });
+});
+
+app.delete('/api/suit-break/channel', (req, res) => {
+  suitBreak.configure({ channels: [] });
+  res.json(suitBreak.status());
+});
+
+app.post('/api/suit-break/test', async (req, res) => {
+  const r = await suitBreak.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/suit-break/scan', async (req, res) => {
+  await suitBreak.tick();
+  res.json(suitBreak.status());
+});
+
+app.post('/api/suit-break/trackers', async (req, res) => {
+  try {
+    const t = suitBreak.addTracker(req.body && req.body.key, {
+      n: req.body && req.body.n,
+      channels: req.body && req.body.channels,
+      siteChannelId: req.body && req.body.siteChannelId,
+      format: req.body && req.body.format,
+      maxR: req.body && req.body.maxR,
+      name: req.body && req.body.name,
+    });
+    rememberPanelTitles(suitBreak, t && t.channels);
+    res.json({ ok: true, tracker: t, suitBreak: suitBreak.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/suit-break/trackers/:id', (req, res) => {
+  try {
+    const t = suitBreak.updateTracker(req.params.id, req.body || {});
+    if (!t) return res.status(404).json({ error: 'Source suivie introuvable' });
+    rememberPanelTitles(suitBreak, t && t.channels);
+    res.json({ ok: true, tracker: t, suitBreak: suitBreak.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/suit-break/trackers/:id', (req, res) => {
+  suitBreak.removeTracker(req.params.id);
+  res.json(suitBreak.status());
 });
 
 // Optimisation IA : teste chaque déclencheur (rattrapage 1/2/3, perdue) x
@@ -2117,7 +2158,17 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   const out = [];
   for (const def of strategies.LIST) {
     const cfg = state.strategies[def.key] || {};
-    const entry = { key: def.key, name: def.name, enabled: !!cfg.enabled, silent: !!cfg.silent, published: [], shadow: [], sendError: state.sendErrors[def.key] || null, sentCount: cfg.sentCount || 0, lastSentAt: cfg.lastSentAt || null };
+    const hasOwnPublished = (Array.isArray(cfg.publishedChannels) && cfg.publishedChannels.length) || (Array.isArray(cfg.channels) && cfg.channels.length);
+    const publishedUsesFallback = !Array.isArray(cfg.publishedChannels) && !Array.isArray(cfg.channels);
+    const entry = {
+      key: def.key, name: def.name, enabled: !!cfg.enabled, silent: !!cfg.silent, published: [], shadow: [],
+      sendError: state.sendErrors[def.key] || null, sentCount: cfg.sentCount || 0, lastSentAt: cfg.lastSentAt || null,
+      // CORRECTIF « prédictions redirigées vers un autre canal » (demande admin) :
+      // Une stratégie configurée n'est jamais redirigée vers un autre canal :
+      // on expose séparément les canaux actifs globaux pour repérer uniquement
+      // les anciennes configurations incomplètes.
+      publishedUsesGlobalFallback: publishedUsesFallback,
+    };
     for (const mode of ['published', 'shadow']) {
       const ids = strategyChannels(def.key, mode);
       for (const id of ids) {
@@ -2130,8 +2181,302 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     entry.ready = !!bot.tokenSet && (entry.published.some((c) => c.ok) || entry.shadow.some((c) => c.ok));
     out.push(entry);
   }
-  res.json({ bot, strategies: out });
+
+  // --- panneaux (après-perte, combinée, série/rupture de costume, comptage
+  // 2/2, VIP, formation, Prédit IA, jeu 21) : chacun a un canal par défaut, et
+  // pour ceux qui ont des « configurations suivies » (trackers), chaque
+  // configuration peut avoir SON PROPRE canal ou retomber sur celui du
+  // panneau — on expose les deux pour que ce soit visible d'un coup d'œil.
+  async function resolveIds(ids) {
+    const out2 = [];
+    for (const id of ids) {
+      const check = bot.tokenSet ? await resolveChat(id) : { ok: false, error: 'Aucun token Telegram configuré' };
+      out2.push(check.ok
+        ? { id, title: check.chat.title, type: check.chat.type, canPost: check.chat.canPost, ok: check.chat.canPost !== false }
+        : { id, ok: false, error: check.error });
+    }
+    return out2;
+  }
+
+  async function trackerPanel(id, label, mod, editBase) {
+    const st = mod.status();
+    const defaultChannels = Array.isArray(st.channels) ? st.channels : [];
+    const trackers = Array.isArray(st.trackers) ? st.trackers : [];
+    return {
+      id, label, editBase,
+      defaultChannels: await resolveIds(defaultChannels),
+      items: await Promise.all(trackers.map(async (t) => {
+        const own = Array.isArray(t.channels) && t.channels.length;
+        return {
+          id: t.id, name: t.name || t.key || t.id,
+          usesDefault: !own,
+          channels: await resolveIds(own ? t.channels : defaultChannels),
+        };
+      })),
+    };
+  }
+
+  async function singlePanel(id, label, mod, editBase) {
+    const st = mod.status();
+    const panel = st.config || st;
+    return {
+      id, label, editBase,
+      enabled: panel.enabled !== false,
+      sentCount: panel.sentCount || 0,
+      lastSentAt: panel.lastSentAt || null,
+      lastError: panel.lastError || null,
+      channels: await resolveIds(Array.isArray(st.channels) ? st.channels : []),
+    };
+  }
+
+  const panels = [];
+  panels.push(await trackerPanel('after-loss', 'Prédiction après perte', afterLoss, 'after-loss'));
+  panels.push(await trackerPanel('combined', 'Prédiction combinée', combined, 'combined'));
+  panels.push(await trackerPanel('suit-streak', 'Série de même costume', suitStreak, 'suit-streak'));
+  panels.push(await trackerPanel('suit-break', 'Rupture de costume', suitBreak, 'suit-break'));
+  panels.push(await trackerPanel('overlap', 'Chevauchement de prédictions', overlap, 'overlap'));
+  {
+    const st = cardsCount.status();
+    const cfg = st.config || st;
+    const categoryChannels = cfg.categoryChannels && typeof cfg.categoryChannels === 'object'
+      ? cfg.categoryChannels : {};
+    const categories = {};
+    for (const category of ['3/2', '3/3', '2/2']) {
+      const own = Array.isArray(categoryChannels[category]) && categoryChannels[category].length;
+      const effective = own ? categoryChannels[category] : (Array.isArray(cfg.channels) ? cfg.channels : []);
+      categories[category] = {
+        usesDefault: !own,
+        channels: await resolveIds(effective),
+      };
+    }
+    panels.push({
+      id: 'cards-count', label: 'Comptage 3/2 · 3/3 · 2/2', editBase: 'cards-count',
+      enabled: cfg.enabled !== false, sentCount: st.sentCount || 0,
+      lastSentAt: st.lastSentAt || null, lastError: st.lastError || null,
+      channels: await resolveIds(Array.isArray(cfg.channels) ? cfg.channels : []),
+      categories,
+    });
+  }
+  panels.push(await singlePanel('vip', 'VIP', vip, 'vip'));
+  panels.push(await singlePanel('predit', 'Prédit IA', predit, 'predit'));
+  // Jeu 21 a DEUX canaux distincts (exacte / valeur), pas un seul comme les
+  // autres panneaux à canal unique — traité à part pour rester fidèle.
+  {
+    const g21 = game21Predict.status().config || {};
+    panels.push({
+      id: 'game21', label: 'Jeu 21', editBase: 'game21/predict',
+      items: [
+        { id: 'exacte', name: 'Format exact', usesDefault: false, channels: await resolveIds(Array.isArray(g21.exactChannels) ? g21.exactChannels : []) },
+        { id: 'valeur', name: 'Format valeur', usesDefault: false, channels: await resolveIds(Array.isArray(g21.valueChannels) ? g21.valueChannels : []) },
+      ],
+    });
+  }
+
+  // Formation (relais) : un canal par défaut + un canal éventuel par stratégie suivie
+  const frStatus = formationRelay.status();
+  const frDefault = Array.isArray(frStatus.channels) ? frStatus.channels : [];
+  panels.push({
+    id: 'formation', label: 'Formation (relais)', editBase: 'formation/relay',
+    defaultChannels: await resolveIds(frDefault),
+    items: await Promise.all((frStatus.strategies || []).map(async (s) => {
+      const own = Array.isArray(s.channels) && s.channels.length;
+      return { id: s.key, name: s.name || s.key, usesDefault: !own, channels: await resolveIds(own ? s.channels : frDefault) };
+    })),
+  });
+
+  // Vue consolidée : un même canal peut être utilisé par plusieurs stratégies
+  // ou panneaux. On garde les sources pour expliquer immédiatement pourquoi
+  // un message peut encore arriver dans un canal donné.
+  const channelSources = new Map();
+  const addSource = (c, source) => {
+    if (!c || c.id == null) return;
+    const key = String(c.id);
+    if (!channelSources.has(key)) channelSources.set(key, { id: c.id, title: c.title || key, ok: c.ok, sources: [] });
+    const row = channelSources.get(key);
+    if (c.title) row.title = c.title;
+    row.ok = row.ok !== false && c.ok !== false;
+    if (!row.sources.includes(source)) row.sources.push(source);
+  };
+  for (const s of out) {
+    s.published.forEach((c) => addSource(c, `${s.name} · public`));
+    s.shadow.forEach((c) => addSource(c, `${s.name} · silencieux`));
+  }
+  for (const p of panels) {
+    (p.channels || []).forEach((c) => addSource(c, p.label));
+    (p.defaultChannels || []).forEach((c) => addSource(c, `${p.label} · défaut`));
+    (p.items || []).forEach((item) => (item.channels || []).forEach((c) => addSource(c, `${p.label} · ${item.name}`)));
+    Object.entries(p.categories || {}).forEach(([category, item]) =>
+      (item.channels || []).forEach((c) => addSource(c, `${p.label} · ${category}${item.usesDefault ? ' · défaut' : ''}`)));
+  }
+  const globalChannels = await resolveIds(Array.isArray(state.activeChannels) ? state.activeChannels : []);
+  globalChannels.forEach((c) => addSource(c, 'Canaux actifs globaux / référence'));
+  res.json({
+    bot, control: predictionControl.status(),
+    globalChannels,
+    allChannels: [...channelSources.values()],
+    strategies: out, panels,
+  });
 });
+
+// --- interrupteur global « arrêter / démarrer / planifier » (même logique
+// que les commandes /stop /start /planifier dans un canal, accessible aussi
+// depuis le tableau de bord web) -------------------------------------------
+app.post('/api/prediction-control', (req, res) => {
+  try {
+    const action = (req.body && req.body.action) || '';
+    if (action === 'pause') return res.json({ ok: true, control: predictionControl.pause(req.body.reason, 'Tableau de bord') });
+    if (action === 'resume') return res.json({ ok: true, control: predictionControl.resume('Tableau de bord') });
+    if (action === 'schedule') return res.json({ ok: true, control: predictionControl.setSchedule(req.body.stopAt, req.body.startAt) });
+    if (action === 'clear-schedule') return res.json({ ok: true, control: predictionControl.clearSchedule() });
+    return res.status(400).json({ error: 'Action inconnue (attendu : pause, resume, schedule, clear-schedule).' });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// édition rapide du canal d'une configuration suivie (tracker) DEPUIS la page
+// « Envois » — mêmes règles que les routes /api/<panel>/trackers/:id déjà
+// existantes (série/rupture de costume, après-perte, combinée) ou l'entrée
+// « formation » par stratégie ; centralisé ici pour que le bouton « Canaux »
+// n'ait qu'un seul endpoint à appeler quel que soit le panneau d'origine.
+const TRACKER_PANELS = { 'after-loss': afterLoss, combined, 'suit-streak': suitStreak, 'suit-break': suitBreak, overlap };
+app.put('/api/diagnostics/panels/:panel/trackers/:id/channel', async (req, res) => {
+  const mod = TRACKER_PANELS[req.params.panel];
+  if (!mod) return res.status(404).json({ error: 'Panneau inconnu' });
+  try {
+    const idsList = mod.parseChannels(req.body && req.body.channelId);
+    const t = mod.updateTracker(req.params.id, { channels: idsList });
+    if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, tracker: t });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/diagnostics/panels/game21/trackers/:id/channel', async (req, res) => {
+  try {
+    const kind = req.params.id === 'valeur' ? 'valeur' : 'exacte';
+    const ids = game21Predict.parseChannels(req.body && req.body.channelId);
+    if (ids.length) {
+      const check = await resolveChat(ids[0]);
+      if (!check.ok) return res.status(400).json({ error: check.error });
+    }
+    game21Predict.configure(kind === 'valeur' ? { valueChannels: ids } : { exactChannels: ids });
+    res.json({ ok: true, status: game21Predict.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/diagnostics/panels/cards-count/categories/:category/channel', (req, res) => {
+  const category = String(req.params.category);
+  if (!['3/2', '3/3', '2/2'].includes(category)) return res.status(404).json({ error: 'Catégorie inconnue' });
+  try {
+    const current = cardsCount.status().config || cardsCount.status();
+    const categoryChannels = { ...(current.categoryChannels || {}) };
+    categoryChannels[category] = cardsCount.parseChannels(req.body && req.body.channelId);
+    cardsCount.configure({ categoryChannels });
+    res.json({ ok: true, status: cardsCount.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => {
+  try {
+    res.json(formationRelay.setStrategy(req.params.id, { channels: req.body && req.body.channelId ? [String(req.body.channelId).trim()] : [] }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ---------------------------------------------------------------------------
+// « Copie et annonce » (voir copy-announce.js) — règles : source (stratégie,
+// stratégie enregistrée ou canal) → canal de destination, copie des
+// prédictions et/ou annonces planifiées (intervalle ou heures pile).
+// ---------------------------------------------------------------------------
+// Liste de TOUS les canaux (id) déjà configurés quelque part — stratégies
+// (public/silencieux), panneaux et leurs sources suivies, canaux actifs —
+// pour le sélecteur « source = canal » et « destination » de Copie et annonce.
+// Aucun appel réseau : les noms viennent des titres déjà relevés.
+function configuredChannelList() {
+  const rows = new Map();
+  const titles = {};
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, overlap, copyAnnounce]) {
+    try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
+  }
+  const add = (id, source) => {
+    if (id === null || id === undefined || id === '') return;
+    const key = String(id);
+    if (!rows.has(key)) rows.set(key, { id: key, title: titles[key] || '', sources: [] });
+    const row = rows.get(key);
+    if (!row.sources.includes(source)) row.sources.push(source);
+  };
+  try {
+    for (const def of strategies.LIST) {
+      for (const mode of ['published', 'shadow']) {
+        for (const id of strategyChannels(def.key, mode)) add(id, `${def.name}${mode === 'shadow' ? ' · silencieux' : ''}`);
+      }
+    }
+  } catch (_) {}
+  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit]];
+  for (const [label, mod] of panelsList) {
+    try {
+      const st = mod.status() || {};
+      (Array.isArray(st.channels) ? st.channels : []).forEach((id) => add(id, label));
+      (Array.isArray(st.trackers) ? st.trackers : []).forEach((t) => (Array.isArray(t.channels) ? t.channels : []).forEach((id) => add(id, `${label} · ${t.name || t.key}`)));
+    } catch (_) {}
+  }
+  try {
+    const fr = formationRelay.status() || {};
+    (Array.isArray(fr.channels) ? fr.channels : []).forEach((id) => add(id, 'Formation'));
+  } catch (_) {}
+  (Array.isArray(state.activeChannels) ? state.activeChannels : []).forEach((id) => add(id, 'Canaux actifs'));
+  return [...rows.values()];
+}
+
+app.get('/api/copy-announce', (req, res) => res.json({ ...copyAnnounce.status(), channels: configuredChannelList() }));
+
+app.post('/api/copy-announce/config', (req, res) => {
+  copyAnnounce.configure(req.body || {});
+  res.json(copyAnnounce.status());
+});
+
+// Vérifie les canaux de destination auprès de Telegram (le bot doit y être
+// administrateur) et retient leur nom pour l'affichage « Nom · id ».
+async function checkCopyDest(list) {
+  const titles = [];
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`${id} : ${check.error}`);
+    if (check.chat && check.chat.canPost === false) throw new Error(`${id} : le bot ne peut pas publier dans ce canal`);
+    if (check.chat && check.chat.title) copyAnnounce.setChannelTitle(id, check.chat.title);
+    titles.push(id);
+  }
+  return titles;
+}
+app.post('/api/copy-announce/rules', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const dest = copyAnnounce.parseChannels(body.destChannels);
+    if (botStatus().tokenSet) await checkCopyDest(dest);
+    const rule = copyAnnounce.addRule(body);
+    res.json({ ok: true, rule, copyAnnounce: copyAnnounce.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/copy-announce/rules/:id', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.destChannels !== undefined && botStatus().tokenSet) await checkCopyDest(copyAnnounce.parseChannels(body.destChannels));
+    const rule = copyAnnounce.updateRule(req.params.id, body);
+    if (!rule) return res.status(404).json({ error: 'Règle introuvable' });
+    res.json({ ok: true, rule, copyAnnounce: copyAnnounce.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/copy-announce/rules/:id', (req, res) => {
+  copyAnnounce.removeRule(req.params.id);
+  res.json(copyAnnounce.status());
+});
+
+app.post('/api/copy-announce/rules/:id/test', async (req, res) => {
+  const r = await copyAnnounce.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/copy-announce/scan', async (req, res) => {
+  await copyAnnounce.tick();
+  res.json(copyAnnounce.status());
+});
+
 
 // ---------------------------------------------------------------------------
 // Démarrage : on connecte la base et on sème le compte admin AVANT d'ouvrir
@@ -2146,14 +2491,6 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   if (s.ready) {
     await auth.ensureAdminSeed();
     console.log('🔐 Compte admin vérifié/créé (' + auth.ADMIN_IDENTIFIER + ')');
-    // Le disque local (data.json) n'est PAS persistant sur Render gratuit :
-    // un redémarrage du conteneur (veille, redéploiement...) peut le vider.
-    // On recharge donc les réservations de paiement en attente depuis
-    // PostgreSQL (persistant) AVANT d'ouvrir le port, pour qu'un client qui
-    // revient sur succes.html juste après un redémarrage retrouve bien sa
-    // réservation au lieu de tomber sur « Aucun paiement en cours ».
-    const loaded = await paiement.loadFromDb();
-    console.log(loaded ? '💳 Réservations de paiement rechargées depuis la base' : '💳 Aucune réservation de paiement à recharger depuis la base');
   } else {
     console.error('⚠️ Le compte admin ne peut pas être créé tant que la base n\'est pas connectée — vérifiez DATABASE_URL sur Render.');
   }

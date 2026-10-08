@@ -1,36 +1,34 @@
-// suit-streak.js — nouveau bouton « Série de costume » (demande admin) :
-// système INDÉPENDANT de « Prédit après une perte » (after-loss.js) et de
-// « Combinaisons » (combined.js), avec une sémantique différente des deux :
+// suit-break.js — nouveau bouton « Rupture de costume » (demande admin) :
+// système INDÉPENDANT de « Série de costume » (suit-streak.js), « Prédit
+// après une perte » (after-loss.js) et « Combinaisons » (combined.js), avec
+// une sémantique différente des trois :
 //
 //  • On sélectionne UNE source : n'importe quelle stratégie existante, la
-//    stratégie IA « Prédit », OU une Formation (formation-relay.js — même
-//    logique de fiabilité que dans combined.js, voir formationOptions()).
+//    stratégie IA « Prédit », OU une Formation (formation-relay.js).
 //  • On définit N = nombre de prédictions CONSÉCUTIVES de MÊME COSTUME (peu
-//    importe si elles ont été gagnées ou perdues) à observer avant de
-//    déclencher. Une prédiction d'un AUTRE costume casse la série en cours
-//    et en démarre une nouvelle avec ce nouveau costume.
-//  • Dès que la série atteint N :
-//      - Si AUCUNE des N prédictions de la série n'a été perdue → on
-//        déclenche IMMÉDIATEMENT : on prédit le MÊME costume, soit sur le
-//        jeu qui suit directement la dernière occurrence (mode « jeu
-//        suivant », target+1), soit sur target+Z (mode « décalage », Z
-//        réglable).
-//      - Si AU MOINS UNE des N prédictions de la série a été perdue → on ne
-//        déclenche PAS tout de suite. On attend que la source prédise à
-//        nouveau CE MÊME costume (une prochaine fois, peu importe quand),
-//        et c'est CETTE occurrence-là qui déclenche (une seule fois), avec
-//        le même choix jeu suivant / +Z.
-//  • Exemple : source prédit ♦️ au jeu 2 (résultat gagné ou perdu), puis ♦️
-//    au jeu 4 (résultat gagné ou perdu) — série de 2 même costume atteinte.
-//    S'il n'y a eu aucune perte parmi les deux : on prédit ♦️ immédiatement
-//    (jeu 5 en mode « jeu suivant », ou jeu 4+Z en mode décalage). S'il y a
-//    eu une perte parmi les deux : on ne prédit rien pour l'instant — on
-//    attend que la source reprédise ♦️ une prochaine fois (même si elle
-//    prédit d'autres costumes entre-temps, ex. ❤️ au jeu 7 — ça ne compte
-//    pas, on attend spécifiquement le retour de ♦️) et c'est CE moment-là
-//    qui déclenche.
+//    importe si elles ont été gagnées ou perdues) à observer AVANT d'armer
+//    l'attente d'une rupture. Une prédiction d'un AUTRE costume casse la
+//    série en cours et en démarre une nouvelle avec ce nouveau costume.
+//  • Dès que la série atteint N, on est « armé » : on attend simplement la
+//    PROCHAINE prédiction de la source.
+//      - Si elle est ENCORE du même costume → la série continue (N+1, N+2…),
+//        toujours armé, on attend toujours la rupture.
+//      - Si elle est d'un costume DIFFÉRENT → c'est la rupture : on
+//        déclenche IMMÉDIATEMENT, sur le MÊME numéro que cette prédiction de
+//        rupture (aucun décalage), en prédisant le costume ORIGINAL de la
+//        série (pas le nouveau costume observé). Le nombre de rattrapage
+//        (maxR) configuré s'applique ensuite normalement pour la
+//        vérification (numéro, +1, +2… jusqu'à maxR).
+//    Après déclenchement (ou après une rupture qui n'atteignait pas encore
+//    N), on repart à zéro : le costume de la prédiction de rupture démarre
+//    une nouvelle série (compte 1).
+//  • Exemple : source prédit ♦️ au jeu 1052, puis ♦️ au jeu 1053 (N=2
+//    atteint, armé). Si le jeu 1054 est ❤️, ♣️ ou ♠️ → rupture → on prédit
+//    1054♦️ (avec le rattrapage configuré). Si le jeu 1054 est encore ♦️, on
+//    reste armé et on attend la prochaine prédiction ; dès qu'elle est enfin
+//    d'un autre costume, c'est CE numéro-là qui déclenche, toujours en ♦️.
 //  • Toujours sur la main du JOUEUR : vérification via hasSuit(), jamais
-//    hasSuitBanker() (comme combined.js).
+//    hasSuitBanker() (comme suit-streak.js/combined.js).
 'use strict';
 
 const strategies = require('./strategies');
@@ -52,6 +50,13 @@ const panel = {
   pendingMessages: [],
   channelTitles: {},
   history: [],
+  // GARDE-FOU ANTI-DOUBLON PERSISTANT (demande admin) : contrairement à
+  // history/pendingMessages (vidés à chaque démarrage — voir applySaved),
+  // cette liste d'empreintes « déjà envoyées » SURVIT aux redémarrages.
+  // Elle bloque un renvoi même si le crash/redémarrage survient juste après
+  // l'envoi d'une rupture, avant que le reste de l'état ait pu se
+  // recaler correctement.
+  sentFingerprints: [],
   sentCount: 0,
   lastSentAt: null,
   lastScanAt: null,
@@ -106,12 +111,9 @@ function config() {
 }
 
 // ---------------------------------------------------------------------------
-// Sources disponibles — n'importe quelle stratégie existante, la stratégie
-// IA « Prédit », les Formations, ET (comme after-loss.js/combined.js déjà
-// bridés entre eux) les trackers « après perte » et les combos.
-// Require() PARESSEUX de after-loss.js/combined.js : ce fichier est un
-// troisième panneau « frère » qui ne doit pas créer de cycle avec eux
-// (aucun des trois ne se requiert au chargement).
+// Sources disponibles — identique à suit-streak.js : n'importe quelle
+// stratégie existante, la stratégie IA « Prédit », les Formations, les
+// trackers « après perte » et les combos.
 // ---------------------------------------------------------------------------
 function afterLossOptions() {
   try {
@@ -168,67 +170,19 @@ function currentMaxTarget(key) {
   return list.length ? list[list.length - 1].target : 0;
 }
 
+// une confirmation de CE tracker est-elle déjà en attente de résultat ?
+// (voir garde-fou dans processTracker() : on ne publie jamais deux
+// prédictions superposées pour la même source suivie)
+function alreadyPendingForTracker(tracker) {
+  return panel.pendingMessages.some((e) => e.trackerId === tracker.id && e.status === 'en attente');
+}
+
 // ---------------------------------------------------------------------------
 // Réglages d'une source suivie
 // ---------------------------------------------------------------------------
 function sanitizeN(value) {
   const n = parseInt(value, 10);
   return Number.isFinite(n) ? Math.max(2, Math.min(20, n)) : 2;
-}
-
-function sanitizeMode(value) {
-  // 'next'     = attendre un costume DIFFÉRENT puis prédire sur son jeu (mode « même costume »)
-  // 'nextpred' = prédire sur la PROCHAINE prédiction de la source, quel que soit son costume
-  // 'offset'   = target+offset
-  // 'cross1' / 'cross2' = comme 'nextpred' mais avec le costume croisé A / B
-  if (value === 'offset' || value === 'nextpred' || value === 'cross1' || value === 'cross2' || value === 'mirror') return value;
-  return 'next';
-}
-
-// ---------------------------------------------------------------------------
-// Filtre de costume (demande admin) : par défaut (null / « tous »), la série
-// compte N prédictions consécutives, QUEL QUE SOIT le costume — c'est ce
-// costume-là qui est ensuite prédit. Avec un filtre choisi (❤️, ♦️, ♠️ ou
-// ♣️), le panneau IGNORE toute prédiction d'un AUTRE costume (elle ne compte
-// ni ne casse la série) et ne compte que les occurrences DU costume choisi :
-// dès qu'il en est vu N, c'est toujours LUI qui est prédit — jamais un autre
-// costume, jamais son miroir.
-// ---------------------------------------------------------------------------
-function sanitizeSuitFilter(value) {
-  if (value === null || value === undefined || value === '') return null;
-  return strategies.normSuit(value) || null;
-}
-
-// Option « costume prédit » (demande admin) : une fois la série de N même
-// costume détectée, on peut prédire soit CE costume (comportement
-// d'origine), soit son MIROIR (❤️↔♦️, ♠️↔♣️ — voir strategies.MIRROR),
-// exactement comme le mode 'miroir' de « Répétition après perte »
-// (after-loss.js) et « Chevauchement » (overlap.js).
-// Deux options « croisées » (demande admin) : cross1 = ♦️→♠️ et ❤️→♣️ ;
-// cross2 = ❤️→♠️ et ♦️→♣️ (et les correspondances inverses ♠️→♦️/♣️→❤️
-// pour cross1, ♠️→❤️/♣️→♦️ pour cross2). Comme le miroir, elles sont
-// appliquées sur la PROCHAINE prédiction de la source dès que N est atteint.
-const CROSS = {
-  cross1: { '♦️': '♠️', '❤️': '♣️', '♠️': '♦️', '♣️': '❤️' },
-  cross2: { '❤️': '♠️', '♦️': '♣️', '♠️': '❤️', '♣️': '♦️' },
-  mirror: { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' },
-};
-
-function sanitizePredictSuit(value) {
-  return value === 'mirror' ? 'mirror' : 'same';
-}
-
-// Costume réellement prédit : miroir (« Costume prédit »), ou croisé A/B
-// (choisi dans « Une fois la série atteinte, prédire sur » → tracker.mode).
-function mapSuit(tracker, suit) {
-  if (tracker.predictSuit === 'mirror') return strategies.MIRROR[suit] || suit;
-  if (CROSS[tracker.mode]) return CROSS[tracker.mode][suit] || suit;
-  return suit;
-}
-
-function sanitizeOffset(value) {
-  const z = parseInt(value, 10);
-  return Number.isFinite(z) ? Math.max(1, Math.min(20, z)) : 1;
 }
 
 function sanitizeTrackerFormat(value) {
@@ -273,27 +227,32 @@ function persist() {
     config: config(), trackers: panel.trackers, history: panel.history,
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
+    // celle-ci SURVIT au nettoyage de restore() — voir applySaved().
+    sentFingerprints: panel.sentFingerprints,
     channelTitles: panel.channelTitles,
   };
-  try { store.patch({ suitStreak: saved }); } catch (_) {}
-  if (db.ready) db.setSetting('suit_streak_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
+  try { store.patch({ suitBreak: saved }); } catch (_) {}
+  if (db.ready) db.setSetting('suit_break_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
 }
 
 function restore() {
   try {
-    const saved = (store.read() || {}).suitStreak;
+    const saved = (store.read() || {}).suitBreak;
     if (saved) applySaved(saved);
   } catch (_) {}
+  // on réécrit tout de suite l'état nettoyé : aucune prédiction stockée ne
+  // survit au démarrage, ni en mémoire ni en base.
+  persist();
   return config();
 }
 
 async function restoreFromDb() {
   if (!db.ready) return config();
   try {
-    const raw = await db.getSetting('suit_streak_state');
+    const raw = await db.getSetting('suit_break_state');
     if (raw) applySaved(JSON.parse(raw));
-    else persist();
-  } catch (_) { persist(); }
+  } catch (_) {}
+  persist();
   return config();
 }
 
@@ -307,42 +266,52 @@ function applySaved(saved) {
     panel.maxR = Math.max(0, Math.min(9, parseInt(saved.config.maxR, 10) || 0));
   }
   if (Array.isArray(saved.trackers)) {
+    // CORRECTIF « bouton rupture figé sur un costume » (demande admin) :
+    // avant, la série (streakSuit/streakCount) ET le curseur lastSeenTarget
+    // étaient restaurés depuis la base au démarrage. Or les prédictions des
+    // stratégies sont, elles, PURGÉES à chaque nouveau sabot / redémarrage.
+    // Résultat : le panneau gardait éternellement « ♦️ ×N » et, comme
+    // lastSeenTarget valait un grand numéro de l'ancien sabot, TOUTES les
+    // nouvelles prédictions (numéros repartis à 1) étaient ignorées — donc
+    // plus aucune rupture correcte, et les relais envoyés ne correspondaient
+    // ni aux prédictions ni au numéro réellement prédits.
+    // Désormais : AU DÉMARRAGE, aucune prédiction ni série n'est conservée —
+    // on repart toujours de zéro, seuls les réglages sont restaurés.
     panel.trackers = saved.trackers.map((t) => ({
       id: t.id,
       key: t.key,
       name: t.name || (optionByKey(t.key) || {}).name || t.key,
       n: sanitizeN(t.n),
-      mode: (t.predictSuit === 'cross1' || t.predictSuit === 'cross2') ? t.predictSuit : sanitizeMode(t.mode),
-      offset: sanitizeOffset(t.offset),
-      suitFilter: sanitizeSuitFilter(t.suitFilter),
-      predictSuit: sanitizePredictSuit(t.predictSuit),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: t.format ? fmt.clampFormat(t.format) : null,
       maxR: sanitizeTrackerMaxR(t.maxR),
-      // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
-      // la série en cours n'est plus rejouée telle quelle depuis data.json —
-      // on repart toujours de zéro, recalé sur la dernière prédiction déjà
-      // connue (jamais rejouée). Même principe que suit-break.js.
       streakSuit: null,
       streakCount: 0,
-      streakHasLoss: false,
-      waitingSuit: null,
-      mirrorPending: null,
-      diffPending: null,
-      lastSeenTarget: currentMaxTarget(t.key),
-      sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
-      lastSentAt: t.lastSentAt || null,
+      // null = panneau « non amorcé » : au premier passage on se cale sur la
+      // dernière prédiction DÉJÀ existante de la source sans la rejouer, pour
+      // ne JAMAIS renvoyer d'anciennes prédictions déjà passées dans le canal.
+      lastSeenTarget: null,
+      seen: [],
+      readCount: 0,
+      fireCount: 0,
+      lastFireAt: null,
+      sentCount: 0,
+      lastSentAt: null,
       createdAt: t.createdAt || Date.now(),
     }));
   }
-  // l'historique et les messages en attente ne sont jamais rejoués au
-  // démarrage — ils ne doivent refléter que ce qui se passe APRÈS.
+  // Aucune prédiction stockée n'est rejouée au démarrage (mémoire ET base) :
+  // l'historique et les messages en attente repartent vides.
   panel.history = [];
   panel.pendingMessages = [];
-  if (Number.isFinite(Number(saved.sentCount))) panel.sentCount = Number(saved.sentCount);
-  panel.lastSentAt = saved.lastSentAt || null;
-  panel.lastScanAt = saved.lastScanAt || null;
+  panel.sentCount = 0;
+  panel.lastSentAt = null;
+  panel.lastScanAt = null;
+  // ... SAUF les empreintes anti-doublon : celles-ci DOIVENT survivre au
+  // redémarrage, sinon la protection ne sert à rien pile quand elle est le
+  // plus utile (juste après un crash/redémarrage).
+  panel.sentFingerprints = Array.isArray(saved.sentFingerprints) ? saved.sentFingerprints.slice(-500) : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -350,28 +319,24 @@ function applySaved(saved) {
 // ---------------------------------------------------------------------------
 function addTracker(key, extra = {}) {
   const opt = optionByKey(key);
-  if (!opt) throw new Error('Source inconnue pour la série de costume.');
+  if (!opt) throw new Error('Source inconnue pour la rupture de costume.');
   const tracker = {
-    id: `ss-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `sb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     key: opt.key,
     name: (extra.name && String(extra.name).trim()) || opt.name,
     n: sanitizeN(extra.n),
-    mode: sanitizeMode(extra.mode),
-    offset: sanitizeOffset(extra.offset),
-    suitFilter: sanitizeSuitFilter(extra.suitFilter),
-    predictSuit: sanitizePredictSuit(extra.predictSuit),
     channels: parseChannels(extra.channels),
     siteChannelId: sanitizeSiteChannelId(extra.siteChannelId),
     format: sanitizeTrackerFormat(extra.format),
     maxR: sanitizeTrackerMaxR(extra.maxR),
     streakSuit: null,
     streakCount: 0,
-    streakHasLoss: false,
-    waitingSuit: null,
-    mirrorPending: null,
-    diffPending: null,
     // on ne rejoue pas l'historique déjà passé au moment de l'ajout.
     lastSeenTarget: currentMaxTarget(opt.key),
+    seen: [],
+    readCount: 0,
+    fireCount: 0,
+    lastFireAt: null,
     sentCount: 0,
     lastSentAt: null,
     createdAt: Date.now(),
@@ -388,20 +353,13 @@ function updateTracker(id, patch = {}) {
     const clean = String(patch.name || '').trim();
     if (clean) tracker.name = clean;
   }
-  if (patch.n !== undefined) tracker.n = sanitizeN(patch.n);
-  if (patch.mode !== undefined) tracker.mode = sanitizeMode(patch.mode);
-  if (patch.offset !== undefined) tracker.offset = sanitizeOffset(patch.offset);
-  if (patch.suitFilter !== undefined) tracker.suitFilter = sanitizeSuitFilter(patch.suitFilter);
-  if (patch.predictSuit !== undefined) tracker.predictSuit = sanitizePredictSuit(patch.predictSuit);
-  if (patch.n !== undefined || patch.mode !== undefined || patch.offset !== undefined || patch.suitFilter !== undefined || patch.predictSuit !== undefined) {
+  if (patch.n !== undefined) {
+    tracker.n = sanitizeN(patch.n);
     // changement de réglage : on annule la série/l'attente en cours pour
     // repartir proprement sur les nouvelles règles.
     tracker.streakSuit = null;
     tracker.streakCount = 0;
-    tracker.streakHasLoss = false;
-    tracker.waitingSuit = null;
-    tracker.mirrorPending = null;
-    tracker.diffPending = null;
+    tracker.seen = [];
   }
   if (patch.channels !== undefined) tracker.channels = parseChannels(patch.channels);
   if (patch.siteChannelId !== undefined) tracker.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
@@ -419,7 +377,7 @@ function removeTracker(id) {
 
 // ---------------------------------------------------------------------------
 // Boucle de traitement — voir le commentaire en tête de fichier pour la
-// règle complète (série de N même costume, mémoire de perte).
+// règle complète (série de N même costume, puis attente de la rupture).
 // ---------------------------------------------------------------------------
 async function processTracker(tracker) {
   if (isFormationSource(tracker.key)) {
@@ -429,124 +387,100 @@ async function processTracker(tracker) {
     if (!trust.ok) return; // formation pas (ou plus) fiable : on ne traite rien ce tour-ci
   }
   const list = trackerPredictions(tracker.key);
+  // AMORÇAGE (démarrage / nouveau sabot) : on ne rejoue jamais les
+  // prédictions déjà présentes. On se cale simplement sur la dernière et on
+  // n'envoie rien ce tour-ci : seules les prédictions FUTURES de la source
+  // pourront alimenter la série puis la rupture.
+  if (tracker.lastSeenTarget === null || tracker.lastSeenTarget === undefined) {
+    tracker.lastSeenTarget = list.length ? list[list.length - 1].target : 0;
+    tracker.streakSuit = null;
+    tracker.streakCount = 0;
+    tracker.seen = [];
+    return;
+  }
+  // CORRECTIF : le numéro de jeu repart à 1 à chaque nouveau sabot. Si la
+  // source repart nettement en dessous du curseur, on remet le curseur à zéro
+  // au lieu d'ignorer toutes les nouvelles prédictions.
+  if (list.length && list[0].target + 10 < tracker.lastSeenTarget) {
+    tracker.lastSeenTarget = 0; tracker.streakSuit = null; tracker.streakCount = 0; tracker.seen = [];
+  }
   for (const pred of list) {
     if (pred.target <= tracker.lastSeenTarget) continue;
-    // CORRECTIF (« prédit même costume » qui prédisait en retard) : on ne
-    // dépend PLUS du résultat (gagné/perdu) pour COMPTER la prédiction dans
-    // la série — même correctif que suit-break.js. Avant, dès qu'une
-    // prédiction de la source n'était pas encore résolue, on arrêtait tout
-    // (« break ») et on la re-regardait au tour suivant : la 3e prédiction
-    // n'était donc déclenchée qu'après vérification de la 2e, au lieu de
-    // partir dès que le MÊME COSTUME était vu deux fois de suite. La série
-    // (streakCount) avance maintenant dès que le costume est PRÉDIT, qu'il
-    // soit déjà vérifié ou non — seul le suivi d'une perte dans la série
-    // (streakHasLoss, pour la reprise waitingSuit) reste basé sur le statut
-    // connu au moment du passage.
+    // CORRECTIF : on ne dépend PLUS du résultat (gagné/perdu) pour compter la
+    // prédiction. La règle du panneau est « peu importe gagné/perdu », et
+    // attendre la résolution faisait rater les prédictions purgées entre-temps
+    // (série bloquée sur un seul costume).
     tracker.lastSeenTarget = pred.target;
     const suit = pred.suit;
-
-    // « Costume prédit » = miroir (demande admin) : une fois la série
-    // détectée, on ne prédit PAS sur pred.target+1 (« jeu suivant ») ni sur
-    // +Z (« décalage ») — on attend la PROCHAINE prédiction de la stratégie
-    // suivie, quel que soit son costume, et c'est SON jeu qui reçoit le
-    // miroir du costume de la série. Prioritaire sur tout le reste : cette
-    // prédiction-là ne compte pour rien d'autre (ni filtre, ni nouvelle
-    // série, ni attente de perte).
-    // Mode « même costume » + « jeu suivant » (réglage par défaut du
-    // panneau) — demande admin : une fois la série de N même costume
-    // atteinte, on attend que la stratégie suivie prédise un costume
-    // DIFFÉRENT de celui de la série. Cette prédiction-là (son jeu, pas +1)
-    // reçoit le costume de la série. Si elle prédit encore le même costume,
-    // on continue d'attendre. Exemple N=2 : 102♦️ 109♦️ → série atteinte ;
-    // 118❤️ → on prédit ♦️ sur 118.
-    if (tracker.diffPending) {
-      if (suit && suit !== tracker.diffPending) {
-        await send(tracker, { target: pred.target, suit: tracker.diffPending, sourceTarget: pred.target });
-        tracker.diffPending = null;
-      }
-      continue;
-    }
-
-    if (tracker.mirrorPending) {
-      if (suit) {
-        await fireMirrorNext(tracker, pred, tracker.mirrorPending);
-        tracker.mirrorPending = null;
-      }
-      continue;
-    }
-
     if (!suit) continue; // ce panneau ne suit que les prédictions de costume (parité/cartes non gérées)
-    // Filtre de costume (voir sanitizeSuitFilter) : une prédiction d'un
-    // AUTRE costume que celui choisi est totalement ignorée — elle ne
-    // compte pas dans la série et ne la casse pas non plus.
-    if (tracker.suitFilter && suit !== tracker.suitFilter) continue;
+    tracker.readCount = (tracker.readCount || 0) + 1;
 
-    // Une perte est déjà survenue dans une série précédente de ce costume :
-    // on attend SPÉCIFIQUEMENT son retour, quel que soit le costume prédit
-    // entre-temps (une prédiction d'un autre costume n'interrompt PAS cette
-    // attente — voir le commentaire d'en-tête, exemple ❤️ au jeu 7).
-    // Ne s'applique qu'en mode « même costume » — en mode miroir, c'est
-    // mirrorPending (ci-dessus) qui gère l'attente, sur N'IMPORTE quel
-    // costume suivant, pas spécifiquement le même.
-    if (tracker.waitingSuit) {
-      if (suit === tracker.waitingSuit) {
-        await fire(tracker, pred);
-        tracker.waitingSuit = null;
-      }
-      continue;
-    }
-
-    // comptage de la série de MÊME costume en cours (peu importe gagné/perdu) :
-    if (suit === tracker.streakSuit) tracker.streakCount += 1;
-    else { tracker.streakSuit = suit; tracker.streakCount = 1; tracker.streakHasLoss = false; }
-    if (pred.status === 'perdu') tracker.streakHasLoss = true;
-
-    if (tracker.streakCount >= tracker.n) {
-      if (tracker.predictSuit === 'mirror' || tracker.mode === 'nextpred' || CROSS[tracker.mode]) {
-        // miroir / croisé / « prédit suivant » : toujours différé sur la
-        // PROCHAINE prédiction de la stratégie, quel que soit son costume
-        // (peu importe perte ou pas dans la série qui vient de se terminer).
-        tracker.mirrorPending = tracker.streakSuit;
-      } else if (tracker.mode !== 'offset') {
-        // « même costume » + « jeu suivant » : on attend un costume différent
-        // (voir diffPending ci-dessus), peu importe les pertes dans la série.
-        tracker.diffPending = tracker.streakSuit;
-      } else if (!tracker.streakHasLoss) {
-        // aucune perte dans la série : on déclenche tout de suite.
-        await fire(tracker, pred);
+    let note = '';
+    if (suit === tracker.streakSuit) {
+      // la série en cours continue (peu importe gagné/perdu).
+      tracker.streakCount += 1;
+      note = `série ${suit} ×${tracker.streakCount}`;
+    } else {
+      // rupture par rapport à la série précédente : si elle avait atteint N,
+      // c'est LA rupture qui déclenche — sur ce même numéro, avec le
+      // costume ORIGINAL de la série (pas le nouveau costume observé ici).
+      // GARDE-FOU (demande admin) : ne publier dans le canal QUE les
+      // ruptures qui doivent réellement y aller. Si une confirmation
+      // précédente de ce même tracker est encore « en attente » de
+      // résultat, on ne déclenche pas une deuxième prédiction par-dessus —
+      // sinon plusieurs prédictions se retrouvent envoyées en même temps
+      // pour la même source, alors qu'une seule est censée être suivie à
+      // la fois.
+      if (tracker.streakSuit && tracker.streakCount >= tracker.n) {
+        if (alreadyPendingForTracker(tracker)) {
+          note = `RUPTURE ${tracker.streakSuit} sur #${pred.target} — ignorée : une confirmation de « ${tracker.name} » est déjà en attente de résultat dans le canal`;
+        } else {
+          note = `RUPTURE → prédiction ${tracker.streakSuit} sur #${pred.target}`;
+          tracker.fireCount = (tracker.fireCount || 0) + 1;
+          tracker.lastFireAt = Date.now();
+          await fire(tracker, pred, tracker.streakSuit);
+        }
       } else {
-        // au moins une perte dans la série : pas de déclenchement immédiat,
-        // on attend que ce costume revienne (une seule fois, voir plus haut).
-        tracker.waitingSuit = suit;
+        note = `nouvelle série ${suit} ×1`;
       }
-      tracker.streakSuit = null;
-      tracker.streakCount = 0;
-      tracker.streakHasLoss = false;
+      // le costume de cette prédiction démarre une nouvelle série.
+      tracker.streakSuit = suit;
+      tracker.streakCount = 1;
     }
+    // journal visible dans la configuration : ce que le panneau a réellement lu
+    tracker.seen = [{ target: pred.target, suit, status: pred.status || 'en attente', note, at: Date.now() }, ...(tracker.seen || [])].slice(0, 25);
   }
 }
 
-async function fire(tracker, pred) {
-  // Mode « même costume » (predictSuit !== 'mirror') uniquement : le mode
-  // miroir ne passe plus par ici, voir fireMirrorNext() et mirrorPending.
-  const target = pred.target + (tracker.mode === 'offset' ? tracker.offset : 1);
-  await send(tracker, { target, suit: pred.suit, sourceTarget: pred.target });
+// GARDE-FOU ANTI-DOUBLON PERSISTANT (demande admin) : identifie une rupture
+// déjà envoyée par SON EMPREINTE (tracker + jeu + costume), indépendamment
+// de pendingMessages (qui, lui, est vidé à chaque démarrage). Bloque tout
+// renvoi de la MÊME rupture, même après un crash/redémarrage en boucle.
+function fingerprintOf(tracker, target, suit) {
+  return `${tracker.id}#${target}#${suit}`;
+}
+function alreadySentFingerprint(tracker, target, suit) {
+  return panel.sentFingerprints.includes(fingerprintOf(tracker, target, suit));
+}
+function markSentFingerprint(tracker, target, suit) {
+  panel.sentFingerprints.push(fingerprintOf(tracker, target, suit));
+  if (panel.sentFingerprints.length > 500) panel.sentFingerprints = panel.sentFingerprints.slice(-500);
 }
 
-// « Costume prédit » = miroir : pred est la PROCHAINE prédiction de la
-// stratégie suivie après la série détectée — c'est SON jeu (pred.target,
-// jamais +1 ni +offset) qui reçoit le miroir du costume de la série
-// (streakSuit), quel que soit le costume que pred porte lui-même.
-async function fireMirrorNext(tracker, pred, streakSuit) {
-  const suit = mapSuit(tracker, streakSuit);
-  await send(tracker, { target: pred.target, suit, sourceTarget: pred.target });
+async function fire(tracker, pred, suit) {
+  if (alreadySentFingerprint(tracker, pred.target, suit)) {
+    panel.lastError = `Rupture ${suit} sur #${pred.target} pour « ${tracker.name} » ignorée : déjà envoyée précédemment (protection anti-doublon).`;
+    return;
+  }
+  const ok = await send(tracker, { target: pred.target, suit, sourceTarget: pred.target });
+  if (ok) markSentFingerprint(tracker, pred.target, suit);
 }
 
 function messageText(tracker, syn) {
   return fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: syn.target,
     suit: syn.suit,
-    strategy: `${tracker.name} (série de costume)`,
+    strategy: `${tracker.name} (rupture de costume)`,
     maxR: effectiveMaxR(tracker),
     status: 'en attente',
     rattrapage: 0,
@@ -572,14 +506,12 @@ async function send(tracker, syn) {
       // CORRECTIF (envoi en retard) : envoi en PARALLÈLE à tous les canaux.
       const results = await Promise.all(targetChannels.map((id) =>
         bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
-          // canal arrêté par /stop : le garde-fou de bot.js renvoie un faux
-          // message (skipped) — ce n'est PAS un envoi, on ne le compte pas.
-          .then((m) => (m && m.skipped ? { ok: false, skipped: true, id } : { ok: true, id, messageId: m.message_id }))
+          .then((m) => ({ ok: true, id, messageId: m.message_id }))
           .catch((e) => ({ ok: false, id, error: e.message }))
       ));
       for (const r of results) {
         if (r.ok) { sentMessages.push({ chatId: r.id, messageId: r.messageId }); ok = true; }
-        else if (!r.skipped) errors.push(`${r.id} : ${r.error}`);
+        else errors.push(`${r.id} : ${r.error}`);
       }
     }
   }
@@ -626,10 +558,7 @@ async function send(tracker, syn) {
 }
 
 // Vue « prédiction » des relais déjà envoyés par CE panneau, pour une source
-// suivie donnée (trackerId) — même forme que les prédictions normales, pour
-// être consommée à l'identique par after-loss.js/combined.js (bridge
-// symétrique, clé `streak:<id>` côté de ces deux fichiers si besoin). Voir
-// module.exports en bas de fichier.
+// suivie donnée (trackerId) — même forme que les prédictions normales.
 function pendingFor(trackerId) {
   return panel.pendingMessages
     .filter((e) => e.trackerId === trackerId)
@@ -688,15 +617,22 @@ async function verifyPending() {
   panel.pendingMessages = panel.pendingMessages.filter((e) => e.status === 'en attente' || !e.resolvedAt || e.resolvedAt >= cutoff);
 }
 
+// Nouveau sabot (le jeu repart au numéro 1 en direct) : purge TOTALE du
+// panneau — plus aucune prédiction stockée en mémoire ni en base, séries et
+// compteurs remis à zéro (demande admin).
 setOnShoeReset(() => {
   for (const t of panel.trackers) {
-    t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0; t.streakHasLoss = false; t.waitingSuit = null; t.mirrorPending = null; t.diffPending = null;
+    t.lastSeenTarget = null; t.streakSuit = null; t.streakCount = 0;
+    t.seen = []; t.readCount = 0; t.fireCount = 0; t.lastFireAt = null;
+    t.sentCount = 0; t.lastSentAt = null;
   }
   for (const entry of panel.pendingMessages) {
-    if (entry.status !== 'en attente') continue;
-    entry.status = 'annulé';
-    entry.resolvedAt = Date.now();
+    if (entry.status === 'en attente') editPending(entry, 'annulé');
   }
+  panel.pendingMessages = [];
+  panel.history = [];
+  panel.sentCount = 0;
+  panel.lastSentAt = null;
   persist();
 });
 
@@ -726,17 +662,20 @@ async function test() {
   const errors = [];
   for (const id of panel.channels) {
     try {
-      await bot.sendMessage(id, `🎯 SÉRIE DE COSTUME — message de test\n\nFormat ${panel.format} :\n\n${preview}`);
+      await bot.sendMessage(id, `🎯 RUPTURE DE COSTUME — message de test\n\nFormat ${panel.format} :\n\n${preview}`);
       sent.push(String(id));
     } catch (e) { errors.push(`${id} : ${e.message}`); }
   }
   return { ok: sent.length > 0, sent, errors };
 }
 
-// Nom lisible d'un canal Telegram (titre relevé à la vérification du canal).
+// Nom (titre) des canaux Telegram propres/du panneau, pour la carte compacte
+// des sources suivies (« Nom du canal · id »).
 function setChannelTitle(id, title) {
   const key = String(id == null ? '' : id).trim();
   if (!key || !title) return;
+  if (!panel.channelTitles) panel.channelTitles = {};
+  if (panel.channelTitles[key] === String(title).slice(0, 120)) return;
   panel.channelTitles[key] = String(title).slice(0, 120);
   persist();
 }
@@ -755,18 +694,24 @@ function statusView() {
   return {
     ...config(),
     options: options(),
-    // liste des canaux du site pour peupler le sélecteur — même source que
-    // la page « Canaux » (voir predictor.js/siteChannelsView), identique à
-    // after-loss.js.
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     channelTitles: panel.channelTitles,
     trackers: panel.trackers.map((t) => ({
-      id: t.id, key: t.key, name: t.name, n: t.n, mode: t.mode, offset: t.offset, suitFilter: t.suitFilter || null,
-      predictSuit: t.predictSuit || 'same',
+      id: t.id, key: t.key, name: t.name, n: t.n,
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
-      streakSuit: t.streakSuit, streakCount: t.streakCount, streakHasLoss: t.streakHasLoss, waitingSuit: t.waitingSuit, mirrorPending: t.mirrorPending || null, diffPending: t.diffPending || null,
-      sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
+      streakSuit: t.streakSuit, streakCount: t.streakCount,
+      seen: (t.seen || []).slice(0, 25),
+      readCount: t.readCount || 0,
+      fireCount: t.fireCount || 0,
+      lastFireAt: t.lastFireAt || null,
+      lastSeenTarget: t.lastSeenTarget == null ? 0 : t.lastSeenTarget,
+      sourcePredictions: trackerPredictions(t.key)
+        .slice(-15)
+        .map((p) => ({ target: p.target, suit: p.suit || null, status: p.status || 'en attente' }))
+        .reverse(),
+      pending: pendingFor(t.id).slice().reverse(),
       lastPreds: lastPredsFor(t.id, 3),
+      sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),
     sentCount: panel.sentCount,

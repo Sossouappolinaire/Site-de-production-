@@ -1,36 +1,32 @@
-// suit-streak.js — nouveau bouton « Série de costume » (demande admin) :
-// système INDÉPENDANT de « Prédit après une perte » (after-loss.js) et de
-// « Combinaisons » (combined.js), avec une sémantique différente des deux :
+// overlap.js — nouveau bouton « Chevauchement de prédictions » (demande
+// admin) : système INDÉPENDANT de « Prédit après une perte » (after-loss.js),
+// « Combinaisons » (combined.js), « Répétition de costume » (suit-streak.js)
+// et « Rupture de costume » (suit-break.js), avec une sémantique différente
+// de tous les autres :
 //
 //  • On sélectionne UNE source : n'importe quelle stratégie existante, la
 //    stratégie IA « Prédit », OU une Formation (formation-relay.js — même
-//    logique de fiabilité que dans combined.js, voir formationOptions()).
-//  • On définit N = nombre de prédictions CONSÉCUTIVES de MÊME COSTUME (peu
-//    importe si elles ont été gagnées ou perdues) à observer avant de
-//    déclencher. Une prédiction d'un AUTRE costume casse la série en cours
-//    et en démarre une nouvelle avec ce nouveau costume.
-//  • Dès que la série atteint N :
-//      - Si AUCUNE des N prédictions de la série n'a été perdue → on
-//        déclenche IMMÉDIATEMENT : on prédit le MÊME costume, soit sur le
-//        jeu qui suit directement la dernière occurrence (mode « jeu
-//        suivant », target+1), soit sur target+Z (mode « décalage », Z
-//        réglable).
-//      - Si AU MOINS UNE des N prédictions de la série a été perdue → on ne
-//        déclenche PAS tout de suite. On attend que la source prédise à
-//        nouveau CE MÊME costume (une prochaine fois, peu importe quand),
-//        et c'est CETTE occurrence-là qui déclenche (une seule fois), avec
-//        le même choix jeu suivant / +Z.
-//  • Exemple : source prédit ♦️ au jeu 2 (résultat gagné ou perdu), puis ♦️
-//    au jeu 4 (résultat gagné ou perdu) — série de 2 même costume atteinte.
-//    S'il n'y a eu aucune perte parmi les deux : on prédit ♦️ immédiatement
-//    (jeu 5 en mode « jeu suivant », ou jeu 4+Z en mode décalage). S'il y a
-//    eu une perte parmi les deux : on ne prédit rien pour l'instant — on
-//    attend que la source reprédise ♦️ une prochaine fois (même si elle
-//    prédit d'autres costumes entre-temps, ex. ❤️ au jeu 7 — ça ne compte
-//    pas, on attend spécifiquement le retour de ♦️) et c'est CE moment-là
-//    qui déclenche.
+//    logique de fiabilité que dans combined.js/suit-streak.js).
+//  • On surveille la source prédiction par prédiction. Dès que la source
+//    prédit un jeu (n° X), on se met à la SURVEILLER tant qu'elle n'est pas
+//    vérifiée (statut « en attente »).
+//  • Si la source publie une NOUVELLE prédiction (jeu n° Y > X) AVANT que le
+//    jeu n° X soit vérifié → on considère qu'il y a CHEVAUCHEMENT (la
+//    prédiction précédente n'a pas eu le temps d'être confirmée qu'une autre
+//    est déjà arrivée). On déclenche alors sur cette 2ᵉ prédiction (n° Y),
+//    jamais sur la 1ʳᵉ, selon le mode choisi :
+//      - 'meme'   → même prédiction : on relaie Y tel quel (même costume,
+//                   même numéro de jeu).
+//      - 'miroir' → même numéro de jeu Y, mais costume miroir
+//                   (strategies.MIRROR — ❤️↔♦️, ♠️↔♣️, comme le mode
+//                   « miroir » de after-loss.js).
+//      - 'offset' → même costume que Y, mais sur le jeu Y + décalage réglable.
+//  • Si au contraire le jeu n° X est vérifié (gagné/perdu/annulé) avant
+//    qu'une nouvelle prédiction n'arrive → il n'y a pas de chevauchement,
+//    rien ne se déclenche, et on passe simplement à la surveillance de la
+//    prochaine prédiction dès qu'elle apparaît.
 //  • Toujours sur la main du JOUEUR : vérification via hasSuit(), jamais
-//    hasSuitBanker() (comme combined.js).
+//    hasSuitBanker() (comme combined.js/suit-streak.js/suit-break.js).
 'use strict';
 
 const strategies = require('./strategies');
@@ -107,11 +103,10 @@ function config() {
 
 // ---------------------------------------------------------------------------
 // Sources disponibles — n'importe quelle stratégie existante, la stratégie
-// IA « Prédit », les Formations, ET (comme after-loss.js/combined.js déjà
-// bridés entre eux) les trackers « après perte » et les combos.
-// Require() PARESSEUX de after-loss.js/combined.js : ce fichier est un
-// troisième panneau « frère » qui ne doit pas créer de cycle avec eux
-// (aucun des trois ne se requiert au chargement).
+// IA « Prédit », les Formations, ET (comme les autres panneaux « frères »)
+// les trackers « après perte », les combos, les répétitions et ruptures de
+// costume. Require() PARESSEUX de ces modules : ce fichier ne doit pas créer
+// de cycle avec eux (aucun des cinq ne se requiert au chargement).
 // ---------------------------------------------------------------------------
 function afterLossOptions() {
   try {
@@ -127,6 +122,20 @@ function combinedOptions() {
   } catch (_) { return []; }
 }
 
+function suitStreakOptions() {
+  try {
+    const suitStreak = require('./suit-streak');
+    return (suitStreak.panel.trackers || []).map((t) => ({ key: `streak:${t.id}`, name: `Répétition — ${t.name}`, group: 'Répétitions de costume' }));
+  } catch (_) { return []; }
+}
+
+function suitBreakOptions() {
+  try {
+    const suitBreak = require('./suit-break');
+    return (suitBreak.panel.trackers || []).map((t) => ({ key: `break:${t.id}`, name: `Rupture — ${t.name}`, group: 'Ruptures de costume' }));
+  } catch (_) { return []; }
+}
+
 function options() {
   const base = [
     ...strategies.LIST.map((s) => ({ key: s.key, name: s.name, group: 'Stratégies' })),
@@ -136,7 +145,7 @@ function options() {
     ...strategies.LIST.map((s) => ({ key: `formation:${s.key}`, name: s.name, group: 'Formations' })),
     { key: 'formation:ia', name: 'Prédit IA', group: 'Formations' },
   ];
-  return [...base, ...formations, ...afterLossOptions(), ...combinedOptions()];
+  return [...base, ...formations, ...afterLossOptions(), ...combinedOptions(), ...suitStreakOptions(), ...suitBreakOptions()];
 }
 
 function optionByKey(key) {
@@ -158,6 +167,12 @@ function trackerPredictions(key) {
   if (key.startsWith('combo:')) {
     try { return require('./combined').pendingFor(key.slice('combo:'.length)); } catch (_) { return []; }
   }
+  if (key.startsWith('streak:')) {
+    try { return require('./suit-streak').pendingFor(key.slice('streak:'.length)); } catch (_) { return []; }
+  }
+  if (key.startsWith('break:')) {
+    try { return require('./suit-break').pendingFor(key.slice('break:'.length)); } catch (_) { return []; }
+  }
   const base = baseKeyOf(key);
   if (base === 'ia') return [...predit.panel.predictions].sort((a, b) => a.target - b.target);
   return state.predictions.filter((p) => p.strategy === base).sort((a, b) => a.target - b.target);
@@ -171,59 +186,8 @@ function currentMaxTarget(key) {
 // ---------------------------------------------------------------------------
 // Réglages d'une source suivie
 // ---------------------------------------------------------------------------
-function sanitizeN(value) {
-  const n = parseInt(value, 10);
-  return Number.isFinite(n) ? Math.max(2, Math.min(20, n)) : 2;
-}
-
 function sanitizeMode(value) {
-  // 'next'     = attendre un costume DIFFÉRENT puis prédire sur son jeu (mode « même costume »)
-  // 'nextpred' = prédire sur la PROCHAINE prédiction de la source, quel que soit son costume
-  // 'offset'   = target+offset
-  // 'cross1' / 'cross2' = comme 'nextpred' mais avec le costume croisé A / B
-  if (value === 'offset' || value === 'nextpred' || value === 'cross1' || value === 'cross2' || value === 'mirror') return value;
-  return 'next';
-}
-
-// ---------------------------------------------------------------------------
-// Filtre de costume (demande admin) : par défaut (null / « tous »), la série
-// compte N prédictions consécutives, QUEL QUE SOIT le costume — c'est ce
-// costume-là qui est ensuite prédit. Avec un filtre choisi (❤️, ♦️, ♠️ ou
-// ♣️), le panneau IGNORE toute prédiction d'un AUTRE costume (elle ne compte
-// ni ne casse la série) et ne compte que les occurrences DU costume choisi :
-// dès qu'il en est vu N, c'est toujours LUI qui est prédit — jamais un autre
-// costume, jamais son miroir.
-// ---------------------------------------------------------------------------
-function sanitizeSuitFilter(value) {
-  if (value === null || value === undefined || value === '') return null;
-  return strategies.normSuit(value) || null;
-}
-
-// Option « costume prédit » (demande admin) : une fois la série de N même
-// costume détectée, on peut prédire soit CE costume (comportement
-// d'origine), soit son MIROIR (❤️↔♦️, ♠️↔♣️ — voir strategies.MIRROR),
-// exactement comme le mode 'miroir' de « Répétition après perte »
-// (after-loss.js) et « Chevauchement » (overlap.js).
-// Deux options « croisées » (demande admin) : cross1 = ♦️→♠️ et ❤️→♣️ ;
-// cross2 = ❤️→♠️ et ♦️→♣️ (et les correspondances inverses ♠️→♦️/♣️→❤️
-// pour cross1, ♠️→❤️/♣️→♦️ pour cross2). Comme le miroir, elles sont
-// appliquées sur la PROCHAINE prédiction de la source dès que N est atteint.
-const CROSS = {
-  cross1: { '♦️': '♠️', '❤️': '♣️', '♠️': '♦️', '♣️': '❤️' },
-  cross2: { '❤️': '♠️', '♦️': '♣️', '♠️': '❤️', '♣️': '♦️' },
-  mirror: { '❤️': '♦️', '♦️': '❤️', '♠️': '♣️', '♣️': '♠️' },
-};
-
-function sanitizePredictSuit(value) {
-  return value === 'mirror' ? 'mirror' : 'same';
-}
-
-// Costume réellement prédit : miroir (« Costume prédit »), ou croisé A/B
-// (choisi dans « Une fois la série atteinte, prédire sur » → tracker.mode).
-function mapSuit(tracker, suit) {
-  if (tracker.predictSuit === 'mirror') return strategies.MIRROR[suit] || suit;
-  if (CROSS[tracker.mode]) return CROSS[tracker.mode][suit] || suit;
-  return suit;
+  return (value === 'miroir' || value === 'offset') ? value : 'meme'; // 'meme' par défaut = même prédiction (relais)
 }
 
 function sanitizeOffset(value) {
@@ -270,18 +234,18 @@ function postToSiteChannel(tracker, text) {
 // ---------------------------------------------------------------------------
 function persist() {
   const saved = {
-    config: config(), trackers: panel.trackers, history: panel.history,
+    config: config(), trackers: panel.trackers.map((t) => ({ ...t, watching: null })), history: panel.history,
     pendingMessages: panel.pendingMessages, sentCount: panel.sentCount,
     lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt,
     channelTitles: panel.channelTitles,
   };
-  try { store.patch({ suitStreak: saved }); } catch (_) {}
-  if (db.ready) db.setSetting('suit_streak_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
+  try { store.patch({ overlap: saved }); } catch (_) {}
+  if (db.ready) db.setSetting('overlap_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
 }
 
 function restore() {
   try {
-    const saved = (store.read() || {}).suitStreak;
+    const saved = (store.read() || {}).overlap;
     if (saved) applySaved(saved);
   } catch (_) {}
   return config();
@@ -290,7 +254,7 @@ function restore() {
 async function restoreFromDb() {
   if (!db.ready) return config();
   try {
-    const raw = await db.getSetting('suit_streak_state');
+    const raw = await db.getSetting('overlap_state');
     if (raw) applySaved(JSON.parse(raw));
     else persist();
   } catch (_) { persist(); }
@@ -311,26 +275,19 @@ function applySaved(saved) {
       id: t.id,
       key: t.key,
       name: t.name || (optionByKey(t.key) || {}).name || t.key,
-      n: sanitizeN(t.n),
-      mode: (t.predictSuit === 'cross1' || t.predictSuit === 'cross2') ? t.predictSuit : sanitizeMode(t.mode),
+      mode: sanitizeMode(t.mode),
       offset: sanitizeOffset(t.offset),
-      suitFilter: sanitizeSuitFilter(t.suitFilter),
-      predictSuit: sanitizePredictSuit(t.predictSuit),
       channels: Array.isArray(t.channels) ? parseChannels(t.channels) : [],
       siteChannelId: sanitizeSiteChannelId(t.siteChannelId),
       format: t.format ? fmt.clampFormat(t.format) : null,
       maxR: sanitizeTrackerMaxR(t.maxR),
-      // CORRECTIF « anciennes prédictions relais renvoyées au redémarrage » :
-      // la série en cours n'est plus rejouée telle quelle depuis data.json —
-      // on repart toujours de zéro, recalé sur la dernière prédiction déjà
-      // connue (jamais rejouée). Même principe que suit-break.js.
-      streakSuit: null,
-      streakCount: 0,
-      streakHasLoss: false,
-      waitingSuit: null,
-      mirrorPending: null,
-      diffPending: null,
+      // la surveillance en cours n'est jamais rejouée telle quelle depuis
+      // data.json au redémarrage — on repart de zéro, recalé sur la
+      // dernière prédiction déjà connue (jamais rejouée), même principe
+      // que suit-streak.js/suit-break.js.
+      watching: null,
       lastSeenTarget: currentMaxTarget(t.key),
+      overlapCount: Number.isFinite(Number(t.overlapCount)) ? Number(t.overlapCount) : 0,
       sentCount: Number.isFinite(Number(t.sentCount)) ? Number(t.sentCount) : 0,
       lastSentAt: t.lastSentAt || null,
       createdAt: t.createdAt || Date.now(),
@@ -348,30 +305,25 @@ function applySaved(saved) {
 // ---------------------------------------------------------------------------
 // Gestion des sources suivies
 // ---------------------------------------------------------------------------
+// Crée UNE source suivie. Voir addTrackers() ci-dessous pour en ajouter
+// plusieurs à la fois (sélection multi-sources, comme combined.js).
 function addTracker(key, extra = {}) {
   const opt = optionByKey(key);
-  if (!opt) throw new Error('Source inconnue pour la série de costume.');
+  if (!opt) throw new Error('Source inconnue pour le chevauchement de prédictions.');
   const tracker = {
-    id: `ss-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `ov-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     key: opt.key,
     name: (extra.name && String(extra.name).trim()) || opt.name,
-    n: sanitizeN(extra.n),
     mode: sanitizeMode(extra.mode),
     offset: sanitizeOffset(extra.offset),
-    suitFilter: sanitizeSuitFilter(extra.suitFilter),
-    predictSuit: sanitizePredictSuit(extra.predictSuit),
     channels: parseChannels(extra.channels),
     siteChannelId: sanitizeSiteChannelId(extra.siteChannelId),
     format: sanitizeTrackerFormat(extra.format),
     maxR: sanitizeTrackerMaxR(extra.maxR),
-    streakSuit: null,
-    streakCount: 0,
-    streakHasLoss: false,
-    waitingSuit: null,
-    mirrorPending: null,
-    diffPending: null,
+    watching: null,
     // on ne rejoue pas l'historique déjà passé au moment de l'ajout.
     lastSeenTarget: currentMaxTarget(opt.key),
+    overlapCount: 0,
     sentCount: 0,
     lastSentAt: null,
     createdAt: Date.now(),
@@ -381,6 +333,23 @@ function addTracker(key, extra = {}) {
   return tracker;
 }
 
+// Ajoute PLUSIEURS sources à la fois (sélection multi-sources), avec LES
+// MÊMES réglages (mode, décalage, canaux...) pour chacune — un appel,
+// plusieurs trackers créés d'un coup. `keys` est un tableau de clés de
+// sources (voir options()). Même principe que combined.addTrackers().
+function addTrackers(keys, extra = {}) {
+  const list = Array.isArray(keys) ? keys : [keys];
+  if (!list.length) throw new Error('Sélectionne au moins une source.');
+  const created = [];
+  const errors = [];
+  for (const key of list) {
+    try { created.push(addTracker(key, extra)); }
+    catch (e) { errors.push(`${key} : ${e.message}`); }
+  }
+  if (!created.length) throw new Error(errors[0] || 'Aucune source ajoutée.');
+  return { created, errors };
+}
+
 function updateTracker(id, patch = {}) {
   const tracker = panel.trackers.find((t) => t.id === id);
   if (!tracker) return null;
@@ -388,21 +357,8 @@ function updateTracker(id, patch = {}) {
     const clean = String(patch.name || '').trim();
     if (clean) tracker.name = clean;
   }
-  if (patch.n !== undefined) tracker.n = sanitizeN(patch.n);
   if (patch.mode !== undefined) tracker.mode = sanitizeMode(patch.mode);
   if (patch.offset !== undefined) tracker.offset = sanitizeOffset(patch.offset);
-  if (patch.suitFilter !== undefined) tracker.suitFilter = sanitizeSuitFilter(patch.suitFilter);
-  if (patch.predictSuit !== undefined) tracker.predictSuit = sanitizePredictSuit(patch.predictSuit);
-  if (patch.n !== undefined || patch.mode !== undefined || patch.offset !== undefined || patch.suitFilter !== undefined || patch.predictSuit !== undefined) {
-    // changement de réglage : on annule la série/l'attente en cours pour
-    // repartir proprement sur les nouvelles règles.
-    tracker.streakSuit = null;
-    tracker.streakCount = 0;
-    tracker.streakHasLoss = false;
-    tracker.waitingSuit = null;
-    tracker.mirrorPending = null;
-    tracker.diffPending = null;
-  }
   if (patch.channels !== undefined) tracker.channels = parseChannels(patch.channels);
   if (patch.siteChannelId !== undefined) tracker.siteChannelId = sanitizeSiteChannelId(patch.siteChannelId);
   if (patch.format !== undefined) tracker.format = sanitizeTrackerFormat(patch.format);
@@ -419,8 +375,24 @@ function removeTracker(id) {
 
 // ---------------------------------------------------------------------------
 // Boucle de traitement — voir le commentaire en tête de fichier pour la
-// règle complète (série de N même costume, mémoire de perte).
+// règle complète (surveillance d'UNE prédiction à la fois, déclenchement
+// uniquement en cas de chevauchement avec la suivante).
 // ---------------------------------------------------------------------------
+async function fire(tracker, pred) {
+  const sourceSuit = pred.suit || null;
+  if (!sourceSuit) return;
+  let suit = sourceSuit;
+  let target = pred.target;
+  if (tracker.mode === 'miroir') {
+    suit = strategies.MIRROR[sourceSuit] || sourceSuit;
+  } else if (tracker.mode === 'offset') {
+    target = pred.target + tracker.offset;
+  }
+  // mode 'meme' (par défaut) = même prédiction : suit + target identiques.
+  tracker.overlapCount = (tracker.overlapCount || 0) + 1;
+  await send(tracker, { target, suit, sourceTarget: pred.target, sourceSuit, mode: tracker.mode });
+}
+
 async function processTracker(tracker) {
   if (isFormationSource(tracker.key)) {
     const base = baseKeyOf(tracker.key);
@@ -429,124 +401,54 @@ async function processTracker(tracker) {
     if (!trust.ok) return; // formation pas (ou plus) fiable : on ne traite rien ce tour-ci
   }
   const list = trackerPredictions(tracker.key);
-  for (const pred of list) {
-    if (pred.target <= tracker.lastSeenTarget) continue;
-    // CORRECTIF (« prédit même costume » qui prédisait en retard) : on ne
-    // dépend PLUS du résultat (gagné/perdu) pour COMPTER la prédiction dans
-    // la série — même correctif que suit-break.js. Avant, dès qu'une
-    // prédiction de la source n'était pas encore résolue, on arrêtait tout
-    // (« break ») et on la re-regardait au tour suivant : la 3e prédiction
-    // n'était donc déclenchée qu'après vérification de la 2e, au lieu de
-    // partir dès que le MÊME COSTUME était vu deux fois de suite. La série
-    // (streakCount) avance maintenant dès que le costume est PRÉDIT, qu'il
-    // soit déjà vérifié ou non — seul le suivi d'une perte dans la série
-    // (streakHasLoss, pour la reprise waitingSuit) reste basé sur le statut
-    // connu au moment du passage.
+
+  // Cas 1 : on surveille déjà une prédiction encore en attente (le jeu n° X
+  // du commentaire d'en-tête).
+  if (tracker.watching != null) {
+    const watched = list.find((p) => p.target === tracker.watching);
+    const next = list.find((p) => p.target > tracker.watching);
+    if (next) {
+      // Chevauchement : une 2ᵉ prédiction (jeu n° Y) est arrivée avant que
+      // la 1ʳᵉ (jeu n° X) ait été vérifiée — peu importe l'état de X à cet
+      // instant précis. On déclenche sur CETTE 2ᵉ, jamais sur la 1ʳᵉ.
+      tracker.lastSeenTarget = next.target;
+      tracker.watching = null;
+      await fire(tracker, next);
+      return;
+    }
+    if (watched && watched.status !== 'en attente') {
+      // La 1ʳᵉ prédiction s'est résolue avant qu'une 2ᵉ n'arrive : pas de
+      // chevauchement, rien à faire — on arrête de la surveiller et on
+      // repart en veille (Cas 2 au prochain tour).
+      tracker.lastSeenTarget = tracker.watching;
+      tracker.watching = null;
+    }
+    return; // on attend encore soit la résolution, soit une 2ᵉ prédiction
+  }
+
+  // Cas 2 : pas de surveillance en cours — on cherche la prochaine
+  // prédiction jamais vue de cette source.
+  const pred = list.find((p) => p.target > tracker.lastSeenTarget);
+  if (!pred) return;
+  if (pred.status === 'en attente') {
+    // Elle n'est pas encore vérifiée : on commence à la surveiller (jeu
+    // n° X). On ne déclenche rien tant qu'aucune 2ᵉ prédiction n'arrive.
+    tracker.watching = pred.target;
+  } else {
+    // Déjà résolue au moment où on la voit pour la première fois : rien de
+    // spécial (pas de chevauchement possible), on avance simplement.
     tracker.lastSeenTarget = pred.target;
-    const suit = pred.suit;
-
-    // « Costume prédit » = miroir (demande admin) : une fois la série
-    // détectée, on ne prédit PAS sur pred.target+1 (« jeu suivant ») ni sur
-    // +Z (« décalage ») — on attend la PROCHAINE prédiction de la stratégie
-    // suivie, quel que soit son costume, et c'est SON jeu qui reçoit le
-    // miroir du costume de la série. Prioritaire sur tout le reste : cette
-    // prédiction-là ne compte pour rien d'autre (ni filtre, ni nouvelle
-    // série, ni attente de perte).
-    // Mode « même costume » + « jeu suivant » (réglage par défaut du
-    // panneau) — demande admin : une fois la série de N même costume
-    // atteinte, on attend que la stratégie suivie prédise un costume
-    // DIFFÉRENT de celui de la série. Cette prédiction-là (son jeu, pas +1)
-    // reçoit le costume de la série. Si elle prédit encore le même costume,
-    // on continue d'attendre. Exemple N=2 : 102♦️ 109♦️ → série atteinte ;
-    // 118❤️ → on prédit ♦️ sur 118.
-    if (tracker.diffPending) {
-      if (suit && suit !== tracker.diffPending) {
-        await send(tracker, { target: pred.target, suit: tracker.diffPending, sourceTarget: pred.target });
-        tracker.diffPending = null;
-      }
-      continue;
-    }
-
-    if (tracker.mirrorPending) {
-      if (suit) {
-        await fireMirrorNext(tracker, pred, tracker.mirrorPending);
-        tracker.mirrorPending = null;
-      }
-      continue;
-    }
-
-    if (!suit) continue; // ce panneau ne suit que les prédictions de costume (parité/cartes non gérées)
-    // Filtre de costume (voir sanitizeSuitFilter) : une prédiction d'un
-    // AUTRE costume que celui choisi est totalement ignorée — elle ne
-    // compte pas dans la série et ne la casse pas non plus.
-    if (tracker.suitFilter && suit !== tracker.suitFilter) continue;
-
-    // Une perte est déjà survenue dans une série précédente de ce costume :
-    // on attend SPÉCIFIQUEMENT son retour, quel que soit le costume prédit
-    // entre-temps (une prédiction d'un autre costume n'interrompt PAS cette
-    // attente — voir le commentaire d'en-tête, exemple ❤️ au jeu 7).
-    // Ne s'applique qu'en mode « même costume » — en mode miroir, c'est
-    // mirrorPending (ci-dessus) qui gère l'attente, sur N'IMPORTE quel
-    // costume suivant, pas spécifiquement le même.
-    if (tracker.waitingSuit) {
-      if (suit === tracker.waitingSuit) {
-        await fire(tracker, pred);
-        tracker.waitingSuit = null;
-      }
-      continue;
-    }
-
-    // comptage de la série de MÊME costume en cours (peu importe gagné/perdu) :
-    if (suit === tracker.streakSuit) tracker.streakCount += 1;
-    else { tracker.streakSuit = suit; tracker.streakCount = 1; tracker.streakHasLoss = false; }
-    if (pred.status === 'perdu') tracker.streakHasLoss = true;
-
-    if (tracker.streakCount >= tracker.n) {
-      if (tracker.predictSuit === 'mirror' || tracker.mode === 'nextpred' || CROSS[tracker.mode]) {
-        // miroir / croisé / « prédit suivant » : toujours différé sur la
-        // PROCHAINE prédiction de la stratégie, quel que soit son costume
-        // (peu importe perte ou pas dans la série qui vient de se terminer).
-        tracker.mirrorPending = tracker.streakSuit;
-      } else if (tracker.mode !== 'offset') {
-        // « même costume » + « jeu suivant » : on attend un costume différent
-        // (voir diffPending ci-dessus), peu importe les pertes dans la série.
-        tracker.diffPending = tracker.streakSuit;
-      } else if (!tracker.streakHasLoss) {
-        // aucune perte dans la série : on déclenche tout de suite.
-        await fire(tracker, pred);
-      } else {
-        // au moins une perte dans la série : pas de déclenchement immédiat,
-        // on attend que ce costume revienne (une seule fois, voir plus haut).
-        tracker.waitingSuit = suit;
-      }
-      tracker.streakSuit = null;
-      tracker.streakCount = 0;
-      tracker.streakHasLoss = false;
-    }
   }
 }
 
-async function fire(tracker, pred) {
-  // Mode « même costume » (predictSuit !== 'mirror') uniquement : le mode
-  // miroir ne passe plus par ici, voir fireMirrorNext() et mirrorPending.
-  const target = pred.target + (tracker.mode === 'offset' ? tracker.offset : 1);
-  await send(tracker, { target, suit: pred.suit, sourceTarget: pred.target });
-}
-
-// « Costume prédit » = miroir : pred est la PROCHAINE prédiction de la
-// stratégie suivie après la série détectée — c'est SON jeu (pred.target,
-// jamais +1 ni +offset) qui reçoit le miroir du costume de la série
-// (streakSuit), quel que soit le costume que pred porte lui-même.
-async function fireMirrorNext(tracker, pred, streakSuit) {
-  const suit = mapSuit(tracker, streakSuit);
-  await send(tracker, { target: pred.target, suit, sourceTarget: pred.target });
-}
-
 function messageText(tracker, syn) {
+  const modeLabel = tracker.mode === 'miroir' ? 'chevauchement, costume miroir'
+    : tracker.mode === 'offset' ? `chevauchement, +${tracker.offset} jeux`
+    : 'chevauchement, même prédiction';
   return fmt.renderMessage(effectiveFormat(tracker), {
     gameNumber: syn.target,
     suit: syn.suit,
-    strategy: `${tracker.name} (série de costume)`,
+    strategy: `${tracker.name} (${modeLabel})`,
     maxR: effectiveMaxR(tracker),
     status: 'en attente',
     rattrapage: 0,
@@ -569,17 +471,16 @@ async function send(tracker, syn) {
     if (!bot) {
       errors.push('Aucun token Telegram configuré');
     } else {
-      // CORRECTIF (envoi en retard) : envoi en PARALLÈLE à tous les canaux.
+      // envoi en PARALLÈLE à tous les canaux (jamais un for...await
+      // séquentiel — voir le correctif appliqué aux autres panneaux).
       const results = await Promise.all(targetChannels.map((id) =>
         bot.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
-          // canal arrêté par /stop : le garde-fou de bot.js renvoie un faux
-          // message (skipped) — ce n'est PAS un envoi, on ne le compte pas.
-          .then((m) => (m && m.skipped ? { ok: false, skipped: true, id } : { ok: true, id, messageId: m.message_id }))
+          .then((m) => ({ ok: true, id, messageId: m.message_id }))
           .catch((e) => ({ ok: false, id, error: e.message }))
       ));
       for (const r of results) {
         if (r.ok) { sentMessages.push({ chatId: r.id, messageId: r.messageId }); ok = true; }
-        else if (!r.skipped) errors.push(`${r.id} : ${r.error}`);
+        else errors.push(`${r.id} : ${r.error}`);
       }
     }
   }
@@ -599,7 +500,7 @@ async function send(tracker, syn) {
   tracker.lastSentAt = Date.now();
   panel.history.unshift({
     trackerId: tracker.id, trackerName: tracker.name, target: syn.target, suit: syn.suit,
-    sourceTarget: syn.sourceTarget, sentAt: Date.now(),
+    sourceTarget: syn.sourceTarget, mode: syn.mode, sentAt: Date.now(),
   });
   panel.history = panel.history.slice(0, 100);
   if (sentMessages.length) {
@@ -627,9 +528,8 @@ async function send(tracker, syn) {
 
 // Vue « prédiction » des relais déjà envoyés par CE panneau, pour une source
 // suivie donnée (trackerId) — même forme que les prédictions normales, pour
-// être consommée à l'identique par after-loss.js/combined.js (bridge
-// symétrique, clé `streak:<id>` côté de ces deux fichiers si besoin). Voir
-// module.exports en bas de fichier.
+// être consommée à l'identique par les autres panneaux (bridge symétrique,
+// clé `overlap:<id>` côté de ces fichiers si besoin).
 function pendingFor(trackerId) {
   return panel.pendingMessages
     .filter((e) => e.trackerId === trackerId)
@@ -690,7 +590,7 @@ async function verifyPending() {
 
 setOnShoeReset(() => {
   for (const t of panel.trackers) {
-    t.lastSeenTarget = 0; t.streakSuit = null; t.streakCount = 0; t.streakHasLoss = false; t.waitingSuit = null; t.mirrorPending = null; t.diffPending = null;
+    t.lastSeenTarget = 0; t.watching = null;
   }
   for (const entry of panel.pendingMessages) {
     if (entry.status !== 'en attente') continue;
@@ -704,7 +604,8 @@ async function tick() {
   if (busy || !panel.enabled) return panel;
   busy = true;
   try {
-    // CORRECTIF (envoi en retard) : trackers traités en PARALLÈLE.
+    // trackers traités en PARALLÈLE (voir le correctif « envoi en retard »
+    // appliqué aux autres panneaux).
     await Promise.all(panel.trackers.map((tracker) => processTracker(tracker)));
     await verifyPending();
     panel.lastScanAt = Date.now();
@@ -726,17 +627,20 @@ async function test() {
   const errors = [];
   for (const id of panel.channels) {
     try {
-      await bot.sendMessage(id, `🎯 SÉRIE DE COSTUME — message de test\n\nFormat ${panel.format} :\n\n${preview}`);
+      await bot.sendMessage(id, `🎯 CHEVAUCHEMENT DE PRÉDICTIONS — message de test\n\nFormat ${panel.format} :\n\n${preview}`);
       sent.push(String(id));
     } catch (e) { errors.push(`${id} : ${e.message}`); }
   }
   return { ok: sent.length > 0, sent, errors };
 }
 
-// Nom lisible d'un canal Telegram (titre relevé à la vérification du canal).
+// Nom (titre) des canaux Telegram propres/du panneau, pour la carte compacte
+// des sources suivies (« Nom du canal · id »).
 function setChannelTitle(id, title) {
   const key = String(id == null ? '' : id).trim();
   if (!key || !title) return;
+  if (!panel.channelTitles) panel.channelTitles = {};
+  if (panel.channelTitles[key] === String(title).slice(0, 120)) return;
   panel.channelTitles[key] = String(title).slice(0, 120);
   persist();
 }
@@ -751,22 +655,34 @@ function lastPredsFor(trackerId, limit = 3) {
     .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, createdAt: e.createdAt }));
 }
 
+// Combien de relais de chaque costume cette source a envoyés (depuis le
+// dernier démarrage) — affichés « x/total » aux 4 coins de la carte.
+function suitCountsFor(trackerId) {
+  const out = { '❤️': 0, '♦️': 0, '♠️': 0, '♣️': 0 };
+  for (const h of panel.history) {
+    if (h.trackerId !== trackerId) continue;
+    const k = String(h.suit || '').replace(/\uFE0F/g, '');
+    for (const s of Object.keys(out)) if (s.replace(/\uFE0F/g, '') === k) out[s] += 1;
+  }
+  return out;
+}
+
 function statusView() {
   return {
     ...config(),
     options: options(),
     // liste des canaux du site pour peupler le sélecteur — même source que
-    // la page « Canaux » (voir predictor.js/siteChannelsView), identique à
-    // after-loss.js.
+    // la page « Canaux » (voir predictor.js/siteChannelsView), identique
+    // aux autres panneaux.
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     channelTitles: panel.channelTitles,
     trackers: panel.trackers.map((t) => ({
-      id: t.id, key: t.key, name: t.name, n: t.n, mode: t.mode, offset: t.offset, suitFilter: t.suitFilter || null,
-      predictSuit: t.predictSuit || 'same',
+      id: t.id, key: t.key, name: t.name, mode: t.mode, offset: t.offset,
       channels: t.channels, siteChannelId: t.siteChannelId, format: t.format, maxR: t.maxR,
-      streakSuit: t.streakSuit, streakCount: t.streakCount, streakHasLoss: t.streakHasLoss, waitingSuit: t.waitingSuit, mirrorPending: t.mirrorPending || null, diffPending: t.diffPending || null,
-      sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
+      watching: t.watching, overlapCount: t.overlapCount,
       lastPreds: lastPredsFor(t.id, 3),
+      suitCounts: suitCountsFor(t.id),
+      sentCount: t.sentCount, lastSentAt: t.lastSentAt, createdAt: t.createdAt,
     })),
     history: panel.history.slice(0, 30),
     sentCount: panel.sentCount,
@@ -778,7 +694,7 @@ function statusView() {
 
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
-  options, addTracker, updateTracker, removeTracker,
+  options, addTracker, addTrackers, updateTracker, removeTracker,
   restore, restoreFromDb, parseChannels, pendingFor, setChannelTitle,
 };
 

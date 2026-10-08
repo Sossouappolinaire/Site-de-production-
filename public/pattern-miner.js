@@ -104,10 +104,10 @@ function mineCardRules(games) {
             b.hitPos[suit][idx] = (b.hitPos[suit][idx] || 0) + 1;
           }
           // occurrence CONCRÈTE (numéro de jeu réel, pas juste un compteur) —
-          // sert à répondre à l'acheteur « ce déclencheur a été utilisé pour
-          // prédire le jeu X » (voir shop.js/explainTrigger). On garde les
-          // 60 dernières par bucket : largement assez pour l'historique
-          // affiché au client, sans faire grossir l'objet indéfiniment.
+          // sert à retrouver « ce déclencheur a été utilisé pour prédire le
+          // jeu X » dans l'historique. On garde les 60 dernières par bucket :
+          // largement assez pour l'historique affiché, sans faire grossir
+          // l'objet indéfiniment.
           if (Number.isFinite(g.number) && Number.isFinite(target.number)) {
             b.occ.push({ from: g.number, to: target.number, suits: target.playerSuits || [] });
             if (b.occ.length > 60) b.occ.shift();

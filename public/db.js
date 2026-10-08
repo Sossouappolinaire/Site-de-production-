@@ -5,11 +5,16 @@ let Pool = null;
 try { Pool = require('pg').Pool; } catch (_) { /* pg installé au déploiement */ }
 const config = require('./config');
 const store = require('./store');
+const { databaseUrl } = require('./database-url');
 
 let pool = null;
 let ready = false;
 let lastError = null;
-let url = store.read().databaseUrl || config.DATABASE_URL || '';
+// Priorité : DATABASE_URL (Render) > base « kile » par défaut (database-url.js)
+// > dernier lien enregistré via /setdb ou le panel web. La base par défaut
+// passe devant l'ancien lien resté dans data.json, pour que le changement de
+// base soit effectif même sur un service déjà déployé.
+let url = databaseUrl() || store.read().databaseUrl || config.DATABASE_URL || '';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -146,7 +151,10 @@ CREATE INDEX IF NOT EXISTS ai_analyses_generated_idx ON ai_analyses (generated_a
 
 -- comptes du tableau de bord web : le compte admin fixe (identifier=nom
 -- d'utilisateur) et les comptes créés par email @gmail.com (identifier=email).
-CREATE TABLE IF NOT EXISTS users (
+-- Table dédiée « baccara_users » : la base peut être partagée avec un autre
+-- service qui possède déjà sa propre table « users » (colonnes différentes).
+-- On ne touche jamais à cette table voisine.
+CREATE TABLE IF NOT EXISTS baccara_users (
   id            BIGSERIAL PRIMARY KEY,
   identifier    TEXT UNIQUE NOT NULL,
   email         TEXT,
@@ -172,13 +180,31 @@ CREATE TABLE IF NOT EXISTS email_codes (
 -- L'admin accorde alors un temps d'accès (access_expires_at) ; une fois ce
 -- délai dépassé, le compte est considéré bloqué (blocked=true) et redirigé
 -- vers Telegram depuis la page de connexion.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS approved          BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked           BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS approved_at       TIMESTAMPTZ;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS approved          BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS access_expires_at TIMESTAMPTZ;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS blocked           BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE baccara_users ADD COLUMN IF NOT EXISTS approved_at       TIMESTAMPTZ;
 -- le compte admin fixe n'a jamais besoin de validation (au cas où la colonne
 -- vient d'être ajoutée sur une base déjà en place, avec l'admin déjà semé).
-UPDATE users SET approved = true, blocked = false WHERE role = 'admin' AND approved = false;
+UPDATE baccara_users SET approved = true, blocked = false WHERE role = 'admin' AND approved = false;
+
+-- ANTI-DOUBLON « prédiction après une perte » (toutes catégories, 1/2/3) :
+-- registre PERSISTANT de chaque prédiction relayée par le panneau
+-- « Prédiction après une perte ». La clé unique (target, suit) garantit, au
+-- niveau de la BASE elle-même, qu'un même numéro de jeu avec le même costume
+-- ne peut jamais être envoyé deux fois (même après un redémarrage du bot, une
+-- session série/dizaine reprise, ou deux configurations qui tombent sur la
+-- même cible).
+CREATE TABLE IF NOT EXISTS after_loss_sent (
+  id           BIGSERIAL PRIMARY KEY,
+  target       BIGINT NOT NULL,
+  suit         TEXT   NOT NULL,
+  tracker_id   TEXT,
+  tracker_name TEXT,
+  category     INT,
+  sent_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS after_loss_sent_key_idx ON after_loss_sent (target, suit);
 `;
 
 function status() {
@@ -227,6 +253,8 @@ async function q(sql, params = []) {
 
 // ---- jeux ------------------------------------------------------------------
 async function saveGame(g) {
+  // un jeu EN LIVE (non terminé) n'est jamais enregistré en base
+  if (!g || !g.finished) return null;
   return q(
     `INSERT INTO games (number, played_on, winner, player_cards, banker_cards,
         player_suits, banker_suits, player_value, banker_value,
@@ -602,6 +630,78 @@ async function loadAfterLossState() {
   try { return JSON.parse(raw); } catch (_) { return null; }
 }
 
+// ---- ANTI-DOUBLON des prédictions « après une perte » ----------------------
+// Lecture/écriture DIRECTE en base (pas seulement en mémoire) : c'est la base
+// qui fait foi, donc le contrôle survit aux redémarrages et aux sessions
+// série (catégorie 3) / dizaine (catégorie 1) reprises en cours de route.
+
+// true si une prédiction pour ce numéro + ce costume a déjà été envoyée,
+// que ce soit par le panneau « après une perte » (after_loss_sent) ou par la
+// stratégie source elle-même (table predictions).
+async function afterLossSendExists(target, suit) {
+  const r = await q(
+    `SELECT 1
+       FROM after_loss_sent WHERE target = $1 AND suit = $2
+      UNION ALL
+     SELECT 1
+       FROM predictions     WHERE target = $1 AND suit = $2
+      LIMIT 1`,
+    [Number(target) || 0, String(suit || '')]
+  );
+  return !!(r && r.rowCount);
+}
+
+// Réservation ATOMIQUE : insère la clé (target, suit) et renvoie true seulement
+// si elle n'existait pas encore. Deux envois simultanés ne peuvent donc pas
+// passer tous les deux.
+async function reserveAfterLossSend(entry = {}) {
+  const r = await q(
+    `INSERT INTO after_loss_sent (target, suit, tracker_id, tracker_name, category)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (target, suit) DO NOTHING
+     RETURNING id`,
+    [
+      Number(entry.target) || 0,
+      String(entry.suit || ''),
+      entry.trackerId != null ? String(entry.trackerId) : null,
+      entry.trackerName || null,
+      Number(entry.category) || 0,
+    ]
+  );
+  return !!(r && r.rowCount);
+}
+
+// Libère la réservation quand l'envoi Telegram a finalement échoué.
+async function releaseAfterLossSend(target, suit) {
+  return q(`DELETE FROM after_loss_sent WHERE target = $1 AND suit = $2`,
+    [Number(target) || 0, String(suit || '')]);
+}
+
+// Nouveau sabot : les numéros de jeu repartent de 1, le registre est vidé.
+async function clearAfterLossSent() {
+  return q(`DELETE FROM after_loss_sent`);
+}
+
+async function listAfterLossSent(limit = 100) {
+  const r = await q(`SELECT target, suit, tracker_name, category, sent_at
+                       FROM after_loss_sent ORDER BY sent_at DESC LIMIT $1`,
+    [Math.max(1, Math.min(500, parseInt(limit, 10) || 100))]);
+  return r ? r.rows : [];
+}
+
+
+
+// ---- interrupteur global « arrêter/démarrer/planifier les prédictions » ----
+async function savePredictionControlState(value) {
+  return setSetting('prediction_control_state', JSON.stringify(value || {}));
+}
+
+async function loadPredictionControlState() {
+  const raw = await getSetting('prediction_control_state');
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+
 // ---- panneau base de données : tout ce qui est stocké ----------------------
 async function allSettings() {
   const r = await q(`SELECT key, value FROM settings ORDER BY key`);
@@ -770,6 +870,8 @@ module.exports = {
   lastGames, gameByNumber, gamesInRange, predictionsByDate, predictionSummary,
   overview, availableDates, readOnlyQuery,
   saveAppConfig, loadAppConfig, savePreditState, loadPreditState, saveAfterLossState, loadAfterLossState,
+  afterLossSendExists, reserveAfterLossSend, releaseAfterLossSend, clearAfterLossSent, listAfterLossSent,
+  savePredictionControlState, loadPredictionControlState,
   dump, allSettings, lastPredictions, strategyRows, tableCounts,
   get ready() { return ready; },
 };

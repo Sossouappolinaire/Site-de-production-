@@ -12,6 +12,8 @@ const config = require('./config');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const db = require('./db');
+const earlyVerify = require('./early-verify');
+const sendDelay = require('./send-delay');
 
 const BADGES = ['0⃣', '1⃣', '2⃣', '3⃣', '4⃣', '5⃣', '6⃣', '7⃣', '8⃣', '9⃣'];
 const SUITS = strategies.SUITS;
@@ -138,6 +140,9 @@ function setStrategyConfig(key, patch = {}) {
   // stratégie « Dominant Baccarat » : écart minimum (en jeux) entre deux
   // prédictions successives de cette stratégie
   if (key === 'dominant' && patch.gap !== undefined) next.gap = Math.max(1, Math.min(20, parseInt(patch.gap, 10) || 3));
+  // stratégie « Absence — costume absent chez le joueur » : liste des cases
+  // Abs:N cochées (voir strategies.js/sanitizeAbsenceEntries).
+  if (key === 'absenceJoueur' && patch.entries !== undefined) next.entries = strategies.sanitizeAbsenceEntries(patch.entries);
   // mode silencieux 1 — RÉSERVÉ à la stratégie « ombre », et OBLIGATOIRE pour
   // elle : ombre fonctionne exclusivement via ce filtre, `silent` ne peut donc
   // jamais y être désactivé (patch.silent est ignoré pour cette clé). Pour
@@ -193,6 +198,9 @@ function setStrategyConfig(key, patch = {}) {
   // interrupteur, effectif seulement pour les stratégies à costume (voir
   // aiSuitOverride() plus bas, appelée depuis evaluate()).
   if (patch.aiAuto !== undefined) next.aiAuto = !!patch.aiAuto;
+  // retard d'envoi (voir send-delay.js)
+  if (patch.delayEnabled !== undefined) next.delayEnabled = key === 'ombre' ? false : !!patch.delayEnabled;
+  if (patch.delaySec !== undefined) next.delaySec = Math.max(0, Math.min(120, parseInt(patch.delaySec, 10) || 0));
   // message de perte + formation VIP (voir loss-notice.js) — case par
   // stratégie, désactivée par défaut (voir strategies.js/defaultsFor).
   if (patch.lossNoticeEnabled !== undefined) next.lossNoticeEnabled = !!patch.lossNoticeEnabled;
@@ -221,10 +229,15 @@ function resetStrategy(key) {
 
 function strategyChannels(key, mode = 'published') {
   const c = state.strategies[key];
-  if (!c) return mode === 'published' ? state.activeChannels : [];
+  // Une stratégie existante doit rester isolée de `activeChannels`. Sinon,
+  // retirer/arrêter son canal pouvait donner l'impression que ses messages
+  // étaient « redirigés » vers le canal principal ou vers un autre panneau.
+  // `initStrategies()` migre déjà l'ancien champ `channels` vers
+  // `publishedChannels`; il n'y a donc plus besoin d'un fallback implicite.
+  if (!c) return [];
   const configured = Array.isArray(c.publishedChannels)
     ? c.publishedChannels
-    : Array.isArray(c.channels) && c.channels.length ? c.channels : state.activeChannels;
+    : Array.isArray(c.channels) ? c.channels : [];
   // Un canal ne reçoit jamais les deux catégories pour une même stratégie.
   // En cas de doublon, le canal PUBLIC est prioritaire : auparavant la liste
   // publique était vidée et PLUS AUCUNE prédiction publique ne partait.
@@ -1007,10 +1020,22 @@ function resetShoe(reason = 'nouveau sabot') {
   state.triggersDone = {};
   state.lastFinished = null;
   for (const s of SUITS) state.counters[s] = 0;
-  // les prédictions encore en attente visaient l'ancien sabot : elles sont closes
-  for (const p of state.predictions) {
-    if (p.status === 'en attente') { p.status = 'annulé'; p.badge = '♻️'; }
-  }
+  // CORRECTIF « anciennes prédictions confondues avec les récentes » (demande
+  // admin) : avant ce correctif, les prédictions de l'ancien sabot étaient
+  // seulement marquées « annulé » puis laissées dans state.predictions,
+  // plafonnées à 300 résolues. Comme les numéros de jeu REPARTENT À 1 à
+  // chaque nouveau sabot, et que les listes « X dernières prédictions »
+  // trient par NUMÉRO DE JEU croissant (pas par date d'envoi), une vieille
+  // prédiction de l'ancien sabot avec un grand numéro (ex. #N1438, #N1439,
+  // #N1440) se retrouvait affichée comme la PLUS RÉCENTE devant une vraie
+  // prédiction du nouveau sabot avec un petit numéro (ex. #N60) — donnant
+  // l'impression que le bot « confondait » des costumes alors qu'il
+  // mélangeait simplement deux sabots différents. On purge donc maintenant
+  // ENTIÈREMENT state.predictions (mémoire) ET la table `predictions` (base)
+  // dès qu'un nouveau sabot démarre : plus aucune prédiction de l'ancien
+  // sabot ne peut réapparaître dans une liste ou un compteur.
+  state.predictions = [];
+  if (db.ready) db.clearPredictions().catch((error) => { state.lastError = error.message; });
   state.shoeResetAt = Date.now();
   state.shoeResetReason = reason;
   // compteur de sabots : le bot s'en sert pour publier le bilan complet
@@ -1053,12 +1078,35 @@ function signatureOf(g) {
 }
 
 function registerGames(games) {
+  // Vérification « restauration après déploiement » — une seule fois, au
+  // tout premier lot de jeux reçu après un restorePredictions() (voir
+  // là-bas). Même règle que isNewShoe() : si les jeux réellement en direct
+  // sont nettement en dessous du plus grand numéro restauré (table qui a
+  // rebouclé pendant que le bot était hors ligne), les prédictions
+  // restaurées sont d'un sabot révolu → purge complète (mémoire + base).
+  if (state.pendingRestoreCheck != null) {
+    const numbers = (games || []).map((g) => g.number).filter((n) => Number.isFinite(n));
+    if (numbers.length) {
+      const minIn = Math.min(...numbers);
+      const maxIn = Math.max(...numbers);
+      const stale = (maxIn + 10 < state.pendingRestoreCheck) || (minIn <= 1 && state.pendingRestoreCheck > 10);
+      if (stale) {
+        state.predictions = [];
+        if (db.ready) db.clearPredictions().catch((error) => { state.lastError = error.message; });
+      }
+    }
+    state.pendingRestoreCheck = null; // vérifié une fois, on ne revient plus dessus
+  }
   if (isNewShoe(games)) resetShoe();
   // CORRECTIF : l'API renvoie les jeux du plus RÉCENT au plus ancien. Il faut les
   // traiter dans l'ordre CROISSANT, sinon « lastFinished » devient le jeu le plus
   // ancien : toutes les cibles calculées semblent déjà jouées et AUCUNE
   // prédiction ne sort jamais.
   const ordered = [...games].sort((a, b) => a.number - b.number);
+  // « nouveau départ » de minuit (midnight-reset.js) : les jeux DÉJÀ terminés que le
+  // flux renvoie à nouveau sont simplement mémorisés, sans redéclencher les
+  // stratégies (sinon des prédictions déjà envoyées avant minuit repartiraient).
+  const baseline = state.baselineNext === true && ordered.length > 0;
   for (const g of ordered) {
     const prev = state.games.get(g.number);
     // CORRECTIF « vérifications ratées » : le flux 1xbet renvoie parfois un
@@ -1070,8 +1118,9 @@ function registerGames(games) {
     if (prev && prev.finished && prev.complete && !(g.finished && g.complete)) continue;
     if (prev && prev.complete && !g.complete) continue;
     state.games.set(g.number, g);
-    if (g.finished && (!prev || !prev.finished)) onFinished(g);
+    if (g.finished && (!prev || !prev.finished) && !baseline) onFinished(g);
   }
+  if (baseline) state.baselineNext = false;
   if (state.games.size > 600) {
     const keys = [...state.games.keys()].sort((a, b) => a - b);
     for (const k of keys.slice(0, state.games.size - 600)) state.games.delete(k);
@@ -1381,6 +1430,8 @@ function evaluate() {
       shoe: state.shoeSeq || 0,
     };
     if (trigKey) state.triggersDone[trigKey] = true;
+    // retard d'envoi : la prédiction est créée mais retenue (voir send-delay.js)
+    if (sendDelay.shouldHold(def.key, cfg)) sendDelay.mark(pred, cfg);
     state.predictions.unshift(pred);
     out.push(pred);
   }
@@ -1459,6 +1510,7 @@ function verify() {
   const queue = [...state.predictions].sort((a, b) => a.target - b.target);
   for (const p of queue) {
     if (p.status !== 'en attente') continue;
+    if (p.holdSend) continue; // retenue (retard d'envoi) : jamais vérifiée avant son envoi
     let guard = 0;
     if (p.gap == null) p.gap = 0;
     while (p.status === 'en attente' && guard++ <= p.maxR + p.gap + 8) {
@@ -1466,7 +1518,9 @@ function verify() {
       const g = state.games.get(num);
       // Un tour n'est vérifiable que s'il est TERMINÉ **et** complet (cartes
       // du joueur reçues). Sinon il est considéré comme manquant.
-      const usable = !!g && g.finished && g.complete !== false;
+      const usable = (!!g && g.finished && g.complete !== false)
+        // vérification anticipée : costume déjà chez le joueur → validé sans attendre la fin du jeu (early-verify.js)
+        || earlyVerify.hit(g, p.kind, (gg) => matches(p, gg));
       if (!usable) {
         // CORRECTIF MAJEUR « le jeu en live saute » : avant, un tour absent du
         // flux consommait une étape de rattrapage et pouvait clôturer la
@@ -1792,6 +1846,17 @@ async function restorePredictions() {
       shoe: -1, // restaurée depuis la base : numéro de sabot d'origine inconnu
     };
   });
+  // CORRECTIF « vieilles prédictions qui reviennent après un déploiement »
+  // (demande admin) : restorePredictions() recharge tout ce qui reste en
+  // base SANS savoir si ça correspond au sabot réellement en cours (les
+  // jeux en direct n'ont pas encore été reçus à cet instant). On mémorise
+  // donc le plus grand numéro restauré, pour le comparer au PREMIER lot de
+  // jeux réellement reçu de l'API (voir registerGames ci-dessous) : si ce
+  // lot montre que la table a en fait rebouclé depuis (comme isNewShoe()
+  // le détecterait en fonctionnement normal), on purge — mémoire ET base —
+  // au lieu de garder des prédictions d'un sabot qui n'existe plus.
+  const maxRestoredTarget = state.predictions.reduce((m, p) => Math.max(m, Number(p.target) || 0), 0);
+  state.pendingRestoreCheck = maxRestoredTarget > 0 ? maxRestoredTarget : null;
   return state.predictions.length;
 }
 

@@ -54,8 +54,8 @@ function persist() {
   } catch (_) { /* pas grave : repli sur la base au démarrage */ }
 })();
 
-// appelée depuis bot.js une fois la base confirmée prête (même pattern que
-// shop.loadFromDb) : la base prime sur data.json si elle contient une valeur.
+// appelée depuis bot.js une fois la base confirmée prête : la base prime
+// sur data.json si elle contient une valeur.
 async function loadFromDb() {
   if (!db.ready) return false;
   try {

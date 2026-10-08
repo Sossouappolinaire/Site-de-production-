@@ -19,9 +19,19 @@ des canaux Telegram et analyseur guidé par Pollinations.ai.
 | `POLLINATIONS_API_KEY` | Non | Clé secrète pour l'enrichissement IA distant |
 
 | `POLLINATIONS_MODEL` | Non | Modèle Pollinations, valeur par défaut `openai` |
+| `CHAMP_ID` | Non | Identifiant du championnat Baccarat, `2050671` par défaut |
+| `API_HOSTS` | Non | Hôtes LiveFeed séparés par des virgules ; `https://1xbet.cd/service-api` est le premier secours |
 
 Les clés et les URLs privées ne sont pas incluses dans le ZIP. Ne les écris jamais dans
 `config.js` ou dans un fichier versionné.
+
+### Flux 1xBet
+
+Le flux public utilisé par cette application n'est pas une API officielle 1xBet.
+Le projet utilise actuellement `https://1xbet.cd/service-api`, avec le championnat
+Baccarat `2050671`. Le module `api.js` découvre automatiquement le nouvel identifiant
+quand 1xBet le remplace, et affiche désormais le statut HTTP ou le type de réponse
+dans `lastError` au lieu de transformer une page Cloudflare en simple liste vide.
 
 ## Persistance PostgreSQL
 
@@ -111,8 +121,19 @@ L'analyseur tourne automatiquement : analyse locale toutes les 15 s, enrichissem
 Pollinations.ai toutes les 3 min. Chaque constat apparaît dans « Résultats », chaque
 stratégie trouvée est enregistrée (désactivée) dans « Stratégies IA créées ».
 
-La page « Envois » vérifie, pour chaque stratégie, le token du bot, les canaux
-public et silencieux, le droit de publier et la dernière erreur d'envoi.
+La page « Envois » vérifie, pour chaque stratégie et chaque panneau secondaire,
+le token du bot, les canaux réellement utilisés, le droit de publier et la
+dernière erreur d'envoi. Elle détaille aussi les configurations suivies
+(après-perte, combinée, séries/ruptures), les deux sorties du jeu 21 et les
+catégories 3/2, 3/3 et 2/2 du comptage. La liste consolidée indique toutes les
+sources d'un même canal et les fallbacks globaux éventuels.
+
+`/stop` est un arrêt global : il bloque les nouveaux envois de toutes les
+stratégies et de tous les panneaux, y compris les bilans et la file « ombre ».
+Les prédictions déjà publiées restent vérifiées et leurs messages peuvent être
+mis à jour avec leur résultat. Une stratégie configurée ne retombe plus
+implicitement sur `activeChannels` : son canal doit apparaître explicitement
+dans la page « Envois ».
 
 ## Version 3.2 — corrections
 
@@ -282,3 +303,131 @@ Page `#/ai-repair` du tableau de bord (bouton « 🛠 Réparation IA » dans le 
 Routes : `GET /api/ai/repair`, `POST /api/ai/repair/diagnose|fix|verify|reset` (administrateur uniquement).
 Clé Groq : `GROQ_API_KEY` (déjà présente dans `config.js`), modèle réglable via `GROQ_MODEL`.
 Le palier gratuit Groq limite le débit (8000 tokens/min) : les erreurs 429 sont réessayées automatiquement.
+
+## Version 1.25 — Copie et annonce
+
+- Nouvelle page `#/copy-announce` (« Copie et annonce »), module `copy-announce.js`.
+- Chaque règle : une source (stratégie existante, stratégie enregistrée — après perte, combinée, répétition, rupture, chevauchement — ou canal déjà configuré) vers un canal de destination.
+- **Copie** des prédictions publiées (mise à jour du résultat dans le canal de destination) et/ou **annonces planifiées** (intervalle en minutes : 30 min, 1 h, 3 h… ou heures pile HH:MM, heure du serveur). Les deux options peuvent être actives ensemble ou séparément.
+- Seules les prédictions publiées après l'ajout de la règle sont copiées.
+
+## Version 1.27
+
+- « Copie et annonce » : une prédiction déjà publiée et encore en attente au moment de la création de la règle est copiée tout de suite ; la copie et les annonces tournent sur leur propre minuterie (4 s), indépendante du flux de jeux ; en pause, les résultats déjà copiés continuent d'être mis à jour.
+- Nouvelle stratégie « Absence + décalage » (`absenceDecalage`) : costume absent exactement N jeux consécutifs chez le joueur → prédiction sur dernier numéro + décalage (ex. 4 absences, décalage 2 : jeux 2-5 sans ❤️ → ❤️ sur #7). Format, rattrapages et canal comme les autres stratégies.
+
+## Version 1.28 — Export Excel complet (/exporter, /importer)
+
+- Panneaux ajoutés à la feuille « Panneaux » : **Copie et annonce** et **stratégies Jeu 21** (ils n'étaient pas exportés).
+- Nouvelle feuille « Reglages » : clés Gemini / Groq / OpenRouter, analyse IA automatique, clé e-mail (Brevo), lien de base de données (jamais remplacé s'il existe déjà), liste, historique et **code source** des stratégies créées par l'IA.
+- `copy-announce.js` ajouté au générateur de déploiement.
+
+## Version 1.29 — Aucun jeu en live stocké
+
+- L'export Excel ne contient plus aucune donnée issue du jeu en cours : feuilles « Annonces », « Portes » et « Predictions » supprimées ; dans « Panneaux », les champs en direct (prédictions en attente, numéro surveillé, progression de série, bloc de comptage, dernier scan) sont retirés. À l'import, ces champs ne sont jamais écrasés.
+- Un jeu non terminé n'est jamais enregistré en base (`db.saveGame`), et le numéro surveillé par « Chevauchement » n'est plus persisté.
+- Le jeu en live n'existe qu'en mémoire vive, pour l'affichage et les stratégies.
+
+## Import automatique de la configuration (Excel)
+
+Le classeur `.xlsx` placé dans `config-import/` (celui produit par `/exporter`) est importé
+automatiquement à chaque démarrage après déploiement (module `auto-import.js`), une fois par
+version du fichier (empreinte SHA-256 en base). `AUTO_IMPORT=force` réimporte à chaque
+démarrage, `AUTO_IMPORT=off` désactive.
+
+## Animation du statut « En cours »
+
+Tous les formats de prédiction (1 à 101) sont animés tant que le résultat n'est pas connu
+(module `status-animator.js`) : sablier ⏳/⌛ qui se retourne, « En cours » écrit lettre par
+lettre avec un curseur de couleur 🔴🟠🟡🟢🔵🟣. À la vérification, l'animation s'arrête et le
+statut final (ex. ✅ 1️⃣) remplace le message. Réglages : `STATUS_ANIM=off`,
+`STATUS_ANIM_FRAME_MS` (3500 par défaut, écart mini entre deux images d'un même canal),
+`STATUS_ANIM_MAX_MS` (durée maxi, 30 min).
+
+## Vérification anticipée
+
+Dès que le costume prédit est trouvé dans la main du **joueur**, la prédiction est validée
+immédiatement (✅ + rattrapage), sans attendre la fin du jeu (module `early-verify.js`, appliqué
+au moteur principal et aux panneaux Après perte, Combiné, Chevauchement, Série, Rupture,
+Dizaine, VIP et Prédit IA). Si le costume n'est pas trouvé, on attend la fin du jeu ; une perte
+n'est jamais prononcée avant la fin du tour. Parité, nombre de cartes et vérifications sur la
+main du banquier restent vérifiées en fin de jeu. Désactivation : `EARLY_VERIFY=off`.
+
+## Retard d'envoi (par stratégie)
+
+Réglage « ⏱️ Retard d'envoi » sur la page de chaque stratégie (ou `/setstrat <clé> retard on` et
+`/setstrat <clé> delai 10`). Activé, la prédiction est calculée normalement puis retenue : elle
+part quand le jeu situé juste avant la cible est en cours, plus N secondes (10 par défaut).
+Ex. déclencheur au jeu #2, cible #4 : envoi du jeu #4 quand le jeu #3 est en cours + 10 s.
+Si le jeu cible a déjà commencé avant l'envoi, la prédiction est annulée. Désactivé par défaut ;
+`SEND_DELAY=off` désactive la fonction partout.
+
+## Intro de démarrage (personnage + mallette)
+
+L'ancienne intro « livre » est remplacée par un personnage qui entre en marchant, ramasse sa
+mallette et repart (`public/intro.js`, pages d'accueil et de connexion). Elle n'est jouée
+qu'une fois après chaque redémarrage / redéploiement du serveur : le serveur injecte un
+identifiant de démarrage (`BOOT_ID`) et le navigateur mémorise le dernier vu. Ensuite les pages
+s'ouvrent directement, sans intro. Toucher l'écran passe l'intro.
+
+## Bilan « Dizaine — costume le plus / le moins sorti »
+
+Toutes les 2 h (réglable, 1 à 24 h), à heure fixe (00h, 02h, 04h…), un bilan est envoyé dans les
+canaux des configurations actives (Telegram + canaux du site) : la meilleure configuration est
+désignée par le nom réel de son canal, classée 1ʳᵉ avec son taux sur N prédictions, suivie du
+classement. Taux de la journée en cours (fuseau `BILAN_TZ`, `Africa/Porto-Novo` par défaut) ; au
+point de minuit, bilan de la journée écoulée. Minimum 5 prédictions vérifiées dans la journée pour
+être classée (réglable). Chaque canal reçoit le bilan complet. Réglages, aperçu et envoi immédiat
+sur la page de la stratégie.
+
+## Nouveau départ de 00h00 (heure d'Abidjan)
+
+Chaque jour à 00h00 pile (`RESET_TZ`, `Africa/Abidjan` par défaut ; `MIDNIGHT_RESET=off` pour
+désactiver), `midnight-reset.js` : 1) envoie l'export Excel complet de la configuration (comme
+`/exporter`) dans le chat privé de l'administrateur (`ADMIN_ID`) ; 2) efface les DONNÉES : jeux
+stockés, prédictions, compteurs, historiques, messages en attente et bilans de chaque panneau,
+registres anti-doublon, filtres « double perte », annonces de position, analyses cumulées du jour
+(mémoire + tables `games`, `predictions`, `after_loss_sent`, `announcements`, `gates`,
+`cumulative_analyses`) ; 3) confirme à l'administrateur. AUCUNE configuration n'est touchée.
+Si le serveur dormait à 00h00, l'opération a lieu à son réveil (30 premières minutes). Un seul
+passage par jour. Les jeux déjà terminés renvoyés ensuite par le flux ne redéclenchent rien.
+
+## Bilan remis à zéro après chaque envoi
+
+Pour « Dizaine » et « Costume faible » : le compteur du bilan (`seg`) repart de **zéro** dès qu'un bilan
+a réellement été envoyé (Telegram ou canal du site). Le bilan suivant ne compte que les prédictions
+vérifiées **depuis le bilan précédent** (l'en-tête indique « Compté depuis le dernier bilan (HHhMM → HHh00) »).
+- Le compteur est gelé pendant l'envoi : les résultats qui arrivent à ce moment-là comptent déjà pour le bilan suivant.
+- Si aucun envoi n'a abouti (bot en pause, erreur partout), le compteur est remis en place : rien n'est perdu.
+- Pas de prédiction vérifiée depuis le dernier bilan → aucun bilan envoyé, le compteur continue.
+- Le compteur « du jour » (classement du jour, choix des meilleures prédictions, Excel) n'est pas touché.
+- `midnight-reset.js` remet aussi ce compteur à zéro à 00h00.
+- Le minimum de prédictions pour être classé (`minPreds`, 5 par défaut) s'applique maintenant à chaque tranche
+  entre deux bilans : avec un bilan toutes les heures, baissez-le si trop de canaux restent « pas assez de données ».
+
+## Canal du plus faible (4ᵉ du classement)
+
+Dans les panneaux « Dizaine » et « Costume faible », une nouvelle section **📉 Canal du plus faible**
+(sous « Canal des meilleures prédictions ») se configure de la même façon : ID du canal, lien, format,
+rattrapages, retard d'envoi, bienvenue et récapitulatif. Le bot y relaie les prédictions de la stratégie
+(ou du canal, en mode 4 canaux) classée au **rang 4** du classement du jour (rang réglable de 2 à 10).
+- Au moins 2 stratégies classées sont requises ; s'il y en a moins de 4, c'est la dernière classée.
+- Ce n'est jamais la même stratégie que celle du canal des meilleures.
+- Il bascule automatiquement quand le classement change (alerte privée à l'admin).
+- Réglages : `weakEnabled`, `weakChannels`, `weakLink`, `weakRank`, `weakFormat`, `weakMaxR`, `weakDelayEnabled`,
+  `weakDelaySec`, `weakWelcome`, `weakRecap`, `weakRecapMin` sur `POST /api/dizaine-top/config` et
+  `POST /api/costume-faible-top/config` ; test : `POST …/welcome/test` avec `{ "kind": "weak" }`.
+
+## Meilleur + plus faible (message à deux costumes)
+
+Bouton **🎯 Meilleur + plus faible** dans la page Stratégies. « Créer » demande la stratégie source (Dizaine ou Costume faible), puis l'ID du canal, les rattrapages et les costumes à proposer : on coche **au moins 2** (jusqu'à 4) parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible (4ᵉ). Quand tous ceux qui sont cochés
+(Dizaine ou Costume faible), puis l'ID du canal et le nombre de rattrapages. Quand la meilleure configuration du jour et
+le plus faible (4ᵉ du classement) de cette stratégie prédisent le **même numéro de jeu**, le bot envoie :
+
+    ♦️ 85% ─────┐
+                ├ N°464
+    ❤️ 78% ─────┘
+
+(pourcentage = taux de réussite du jour). Après vérification (main du joueur, avec les rattrapages), le message est
+modifié : on garde le costume sorti (`⚜️ #464 | ♦️ | ✅0️⃣`), les deux s'ils sortent ensemble, ou `⚜️ #464 | ♦️ ❤️ | ❌`.
+Code : `best-weak-top.js` ; routes `/api/best-weak/…`.

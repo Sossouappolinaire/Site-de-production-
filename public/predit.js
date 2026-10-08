@@ -19,8 +19,8 @@
 //  • FILTRE « PERTES RAPPROCHÉES » (optionnel, désactivé par défaut) : une
 //    fois activé, une prédiction n'est publiée sur le canal qu'APRÈS avoir
 //    observé une série de pertes rapprochées (même principe que le filtre de
-//    la stratégie « ombre », jamais nommé ainsi dans les messages envoyés à
-//    l'acheteur — voir shop.js). Tant que le filtre n'est pas armé, les
+//    la stratégie « ombre », jamais nommé ainsi dans les messages envoyés).
+//    Tant que le filtre n'est pas armé, les
 //    prédictions restent suivies en interne (elles alimentent le compteur de
 //    pertes) mais ne partent jamais sur Telegram. Une victoire publiée
 //    referme le filtre. Voir panel.silentMode / silentLossTrigger /
@@ -35,6 +35,7 @@ const db = require('./db');
 const fmt = require('./formats');
 const { state } = require('./predictor');
 const lossNotice = require('./loss-notice');
+const earlyVerify = require('./early-verify');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
 
@@ -54,7 +55,7 @@ const panel = {
   // défaut (demande admin), indépendant du panneau « Prédit » lui-même.
   lossNoticeEnabled: false,
   // ── Filtre « pertes rapprochées » (même principe que la stratégie « ombre »,
-  // jamais nommé ainsi dans les messages envoyés — voir shop.js/formation.js) ──
+  // jamais nommé ainsi dans les messages envoyés) ──
   // Quand actif, une prédiction du panneau n'est PUBLIÉE qu'après confirmation :
   // tant qu'aucune série de pertes rapprochées n'a été observée, les
   // prédictions restent TRACKÉES en interne (elles alimentent le compteur)
@@ -623,7 +624,9 @@ function verify(games) {
       // Tour déjà présent mais PAS ENCORE TERMINÉ : on ne le saute pas, on
       // attend simplement le prochain passage. Le sauter reviendrait à
       // vérifier la prédiction sur le mauvais numéro de jeu.
-      if (g && (g.finished === false || g.complete === false)) break;
+      // vérification anticipée : costume déjà chez le joueur → validé sans attendre la fin du jeu (early-verify.js)
+      const earlyWin = g && g.finished === false && earlyVerify.hit(g, null, (gg) => suitsOf(gg).includes(pred.suit));
+      if (g && (g.finished === false || g.complete === false) && !earlyWin) break;
       // Tour absent du flux ou sans cartes lisibles : ignoré, il ne consomme
       // PAS d'étape de rattrapage et ne peut donc pas provoquer une fausse
       // perte. Au-delà de 6 tours illisibles consécutifs, la prédiction est
@@ -971,4 +974,7 @@ function status() {
   };
 }
 
-module.exports = { panel, status, config, configure, restore, restoreFromDb, setSender, tick, mirror, test, parseChannels, sendBilans, globalBilanText, strategiesView };
+module.exports = { panel, predictionText, status, config, configure, restore, restoreFromDb, setSender, tick, mirror, test, parseChannels, sendBilans, globalBilanText, strategiesView };
+
+// exposé pour l'effacement de minuit (midnight-reset.js)
+module.exports.persist = persist;

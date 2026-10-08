@@ -297,9 +297,10 @@
     },
     "trackers": [
       {
-        "id": "al-1",
+        "id": "t-1789459347620-155he",
         "key": "costume",
-        "name": "Costume suivi",
+        "name": "R",
+        "category": 2,
         "triggers": {
           "r1": {
             "enabled": false,
@@ -315,7 +316,7 @@
           },
           "perdue": {
             "enabled": true,
-            "n": 0
+            "n": 2
           }
         },
         "repeat": {
@@ -343,6 +344,8 @@
         "lastDecadeEnd": 0,
         "decadeSession": null,
         "lastStreakEnd": 0,
+        "streakProgress": null,
+        "streakSession": null,
         "channels": [],
         "siteChannelId": null,
         "format": null,
@@ -356,76 +359,16 @@
         "lastSeenTarget": 0,
         "sentCount": 0,
         "lastSentAt": null,
-        "createdAt": 1788819278030
-      },
-      {
-        "id": "t-1788813649562-uqm5y",
-        "key": "combo:ct-1",
-        "name": "Combinaison — Dominant combiné",
-        "triggers": {
-          "r1": {
-            "enabled": false,
-            "n": 0
-          },
-          "r2": {
-            "enabled": false,
-            "n": 0
-          },
-          "r3": {
-            "enabled": false,
-            "n": 0
-          },
-          "perdue": {
-            "enabled": true,
-            "n": 0
-          }
-        },
-        "repeat": {
-          "enabled": false,
-          "lead": 5,
-          "mode": "meme"
-        },
-        "streak": {
-          "enabled": false,
-          "count": 3,
-          "n": 4,
-          "nj": 4,
-          "maxR": null,
-          "format": null
-        },
-        "decade": {
-          "enabled": false,
-          "count": 3,
-          "n": 8,
-          "ni": 10,
-          "nk": 4,
-          "maxR": null,
-          "format": null
-        },
-        "lastDecadeEnd": 0,
-        "decadeSession": null,
-        "lastStreakEnd": 0,
-        "channels": [],
-        "siteChannelId": null,
-        "format": null,
-        "lastRepeatSource": 0,
-        "counting": false,
-        "armedTrigger": null,
-        "armedNeeded": 0,
-        "armedSeen": 0,
-        "armed": false,
-        "armedAt": null,
-        "lastSeenTarget": 0,
-        "sentCount": 0,
-        "lastSentAt": null,
-        "createdAt": 1788813649562
+        "createdAt": 1789459347620
       }
     ],
     "history": [],
     "pendingMessages": [],
+    "tally": {},
+    "verified": {},
     "sentCount": 0,
     "lastSentAt": null,
-    "lastScanAt": 1788819689637
+    "lastScanAt": 1789459393309
   },
   "combined": {
     "config": {
@@ -522,7 +465,7 @@
     "pendingMessages": [],
     "sentCount": 0,
     "lastSentAt": null,
-    "lastScanAt": 1788819689638
+    "lastScanAt": 1789459393309
   },
   "suitStreak": {
     "config": {
@@ -534,14 +477,16 @@
     },
     "trackers": [
       {
-        "id": "ss-1788813991824-3vvhz",
-        "key": "ia",
-        "name": "Stratégie IA (Prédit)",
+        "id": "ss-1790768340645-o3iyb",
+        "key": "costume",
+        "name": "Costume par numéro",
         "n": 2,
-        "mode": "next",
+        "mode": "cross2",
         "offset": 1,
+        "suitFilter": null,
+        "predictSuit": "same",
         "channels": [
-          "@test"
+          -100
         ],
         "siteChannelId": null,
         "format": null,
@@ -550,26 +495,155 @@
         "streakCount": 0,
         "streakHasLoss": false,
         "waitingSuit": null,
-        "lastSeenTarget": 0,
+        "mirrorPending": null,
+        "diffPending": null,
+        "lastSeenTarget": 118,
         "sentCount": 1,
-        "lastSentAt": 1788813991827,
-        "createdAt": 1788813991824
+        "lastSentAt": 1790768340648,
+        "createdAt": 1790768340645
       }
     ],
     "history": [
       {
-        "trackerId": "ss-1788813991824-3vvhz",
-        "trackerName": "Stratégie IA (Prédit)",
-        "target": 56,
+        "trackerId": "ss-1790768340645-o3iyb",
+        "trackerName": "Costume par numéro",
+        "target": 118,
         "suit": "♠️",
-        "sourceTarget": 55,
-        "sentAt": 1788813991827
+        "sourceTarget": 118,
+        "sentAt": 1790768340648
       }
     ],
-    "pendingMessages": [],
-    "sentCount": 1,
-    "lastSentAt": 1788813991827,
-    "lastScanAt": 1788819689639
+    "pendingMessages": [
+      {
+        "id": "p-1790768340624-82mn1",
+        "trackerId": "ss-1790768340613-k9fr9",
+        "target": 118,
+        "suit": "♦️",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1790768340624,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1790768340631-oca0p",
+        "trackerId": "ss-1790768340628-jqxgm",
+        "target": 118,
+        "suit": "❤️",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1790768340631,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1790768340636-l7ibn",
+        "trackerId": "ss-1790768340633-81fea",
+        "target": 118,
+        "suit": "♠️",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1790768340636,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1790768340641-07f80",
+        "trackerId": "ss-1790768340639-aww1o",
+        "target": 118,
+        "suit": "♣️",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1790768340641,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1790768340644-c4cci",
+        "trackerId": "ss-1790768340642-tcevb",
+        "target": 118,
+        "suit": "♣️",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1790768340644,
+        "resolvedAt": null
+      },
+      {
+        "id": "p-1790768340648-v5b69",
+        "trackerId": "ss-1790768340645-o3iyb",
+        "target": 118,
+        "suit": "♠️",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1790768340648,
+        "resolvedAt": null
+      }
+    ],
+    "sentCount": 6,
+    "lastSentAt": 1790768340648,
+    "lastScanAt": 1790768340648
   },
   "botToken": "",
   "shopBotToken": "",
@@ -767,7 +841,7 @@
     "ombre": {
       "token": null,
       "bilan": true,
-      "silent": false,
+      "silent": true,
       "lossWindow": 6,
       "lossTrigger": 2,
       "lossInterval": 5,
@@ -956,5 +1030,227 @@
     "silentLossTrigger": 2,
     "silentLossWindow": 3,
     "lossNoticeEnabled": false
+  },
+  "cardsCount": {
+    "config": {
+      "enabled": true,
+      "channels": [],
+      "siteChannelId": null,
+      "maxR": 1,
+      "predictionCount": 1,
+      "trigger": "both",
+      "blockSize": 30,
+      "categoriesOn": {
+        "3/2": true,
+        "3/3": true,
+        "2/2": true
+      },
+      "categoryChannels": {
+        "3/2": [],
+        "3/3": [],
+        "2/2": []
+      },
+      "categorySiteChannels": {
+        "3/2": null,
+        "3/3": null,
+        "2/2": null
+      }
+    },
+    "block": {
+      "start": 511,
+      "end": 540,
+      "counts": {
+        "3/2": 0,
+        "3/3": 0,
+        "2/2": 0
+      },
+      "counted": []
+    },
+    "pending": [],
+    "history": [],
+    "sentCount": 0,
+    "lastSentAt": null,
+    "lastScanAt": 1789459393310
+  },
+  "vip": {
+    "config": {
+      "enabled": true,
+      "channels": [],
+      "siteChannelId": null,
+      "format": 1,
+      "maxR": 1,
+      "lossNeed": 3,
+      "lossRelay": 2,
+      "suitNeed": 3,
+      "suitRelay": 2,
+      "selected": {}
+    },
+    "trackers": {},
+    "pendingMessages": [],
+    "history": [],
+    "sentCount": 0,
+    "lastSentAt": null,
+    "lastScanAt": 1789459393310
+  },
+  "suitBreak": {
+    "config": {
+      "enabled": true,
+      "channels": [],
+      "siteChannelId": null,
+      "format": 1,
+      "maxR": 1
+    },
+    "trackers": [
+      {
+        "id": "sb-1789498464258-iqnmx",
+        "key": "costume",
+        "name": "Costume par numéro",
+        "n": 2,
+        "channels": [
+          -100123
+        ],
+        "siteChannelId": null,
+        "format": null,
+        "maxR": 1,
+        "streakSuit": "❤",
+        "streakCount": 1,
+        "lastSeenTarget": 3,
+        "sentCount": 1,
+        "lastSentAt": 1789498464262,
+        "createdAt": 1789498464258
+      }
+    ],
+    "history": [
+      {
+        "trackerId": "sb-1789498464258-iqnmx",
+        "trackerName": "Costume par numéro",
+        "target": 3,
+        "suit": "♦",
+        "sourceTarget": 3,
+        "sentAt": 1789498464262
+      }
+    ],
+    "pendingMessages": [
+      {
+        "id": "p-1789498464262-z08b9",
+        "trackerId": "sb-1789498464258-iqnmx",
+        "target": 3,
+        "suit": "♦",
+        "strategyName": "Costume par numéro",
+        "format": 1,
+        "maxR": 1,
+        "step": 1,
+        "gap": 0,
+        "skipped": 0,
+        "status": "gagné",
+        "messages": [
+          {
+            "chatId": -100123,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1789498464262,
+        "resolvedAt": 1789498464262
+      }
+    ],
+    "sentCount": 1,
+    "lastSentAt": 1789498464262,
+    "lastScanAt": 1789498464266
+  },
+  "costumeFaibleTop": {
+    "config": {
+      "enabled": true,
+      "bilanEnabled": true,
+      "bilanEveryHours": 1,
+      "bilanMinPreds": 5,
+      "bestEnabled": false,
+      "bestChannels": [],
+      "bestFormat": 1,
+      "bestMaxR": 2
+    },
+    "trackers": [
+      {
+        "id": "cf-1791222705197-zp3t6",
+        "rule": "croise",
+        "lead": 2,
+        "enabled": true,
+        "channels": [
+          -100111
+        ],
+        "siteChannelId": null,
+        "format": 1,
+        "maxR": 2,
+        "lastGame": 0,
+        "lastInfo": null,
+        "wins": 0,
+        "losses": 0,
+        "sentCount": 0,
+        "lastSentAt": null,
+        "createdAt": 1791222705197,
+        "day": {
+          "date": "2026-10-05",
+          "wins": 7,
+          "losses": 2,
+          "rsum": 4
+        },
+        "prevDay": null,
+        "name": "Costume faible croisé (a+2)"
+      },
+      {
+        "id": "cf-1791222705202-g4pva",
+        "rule": "strategie",
+        "lead": 3,
+        "enabled": true,
+        "channels": [
+          -100222
+        ],
+        "siteChannelId": null,
+        "format": 1,
+        "maxR": 2,
+        "lastGame": 0,
+        "lastInfo": null,
+        "wins": 0,
+        "losses": 0,
+        "sentCount": 0,
+        "lastSentAt": null,
+        "createdAt": 1791222705202,
+        "day": {
+          "date": "2026-10-05",
+          "wins": 5,
+          "losses": 3,
+          "rsum": 2
+        },
+        "prevDay": null,
+        "name": "Costume faible stratégie (a+3)"
+      }
+    ],
+    "history": [],
+    "pendingMessages": [],
+    "sentCount": 0,
+    "lastSentAt": null,
+    "lastScanAt": null,
+    "channelTitles": {
+      "-100111": "Canal Alpha",
+      "-100222": "Canal Beta"
+    },
+    "bilan": {
+      "enabled": true,
+      "everyHours": 1,
+      "hourlyMigrated": true,
+      "minPreds": 5,
+      "lastSlot": null,
+      "lastSentAt": null,
+      "lastResult": null
+    },
+    "best": {
+      "enabled": false,
+      "channels": [],
+      "format": 1,
+      "maxR": 2,
+      "currentTrackerId": null,
+      "switchedAt": null,
+      "sentCount": 0,
+      "lastSentAt": null
+    }
   }
 }

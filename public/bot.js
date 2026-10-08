@@ -11,20 +11,29 @@ const aiAuto = require('./ai-auto');
 const ai = require('./ai-analyzer');
 const aiQa = require('./ai-qa');
 const fmt = require('./formats');
+const statusAnimator = require('./status-animator');
+const sendDelay = require('./send-delay');
+const midnightReset = require('./midnight-reset');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
+const copyAnnounce = require('./copy-announce');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
+const dizaineTop = require('./dizaine-top');
+const bestWeakTop = require('./best-weak-top');
+const costumeFaibleTop = require('./costume-faible-top');
+const suitBreak = require('./suit-break');
+const overlap = require('./overlap');
+const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const vip = require('./vip');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
-const shop = require('./shop');
-const paiement = require('./paiement');
 const mirrorCounter = require('./mirror-counter');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
+const predictionControl = require('./prediction-control');
 const {
   state, evaluate, verify, registerGames, setOnFinished, setOnShoeReset, setOnGateChange, setOnConfirm,
   predictionText, predictionMessage, liveText, stats, SUITS,
@@ -35,17 +44,22 @@ const {
 } = require('./predictor');
 
 let bot = null;
-let shopBot = null;
 let loopStarted = false;
 
 const saved = store.read();
 state.botToken = saved.botToken || config.BOT_TOKEN || '';
-// Token API dédié EXCLUSIVEMENT à la boutique de stratégies (shop.js) —
-// jamais partagé avec le bot principal ni avec un autre service.
-state.shopBotToken = saved.shopBotToken || config.SHOP_BOT_TOKEN || '';
 state.adminId = saved.adminId || config.ADMIN_ID;
 if (Array.isArray(saved.channels)) state.channels = saved.channels;
 if (Array.isArray(saved.activeChannels)) state.activeChannels = saved.activeChannels;
+// CORRECTIF « le site doit marcher même sans base de données » (demande
+// admin) : si ni le disque local (vidé à chaque redémarrage Render Free) ni
+// la base (non connectée / expirée) n'ont de canaux actifs enregistrés, on
+// se rabat sur ACTIVE_CHANNELS (variable d'environnement Render, durable —
+// voir config.js) plutôt que de démarrer avec une liste vide où aucune
+// stratégie de base n'aurait où envoyer.
+if (!state.activeChannels.length && config.ACTIVE_CHANNELS.length) {
+  state.activeChannels = config.ACTIVE_CHANNELS.slice();
+}
 if (Array.isArray(saved.siteChannels)) state.siteChannels = saved.siteChannels;
 if (saved.B) state.B = saved.B;
 if (saved.maxR != null) state.maxR = saved.maxR;
@@ -88,7 +102,6 @@ let dbDirty = false;
 function persist() {
   store.patch({
     botToken: state.botToken,
-    shopBotToken: state.shopBotToken,
     adminId: state.adminId,
     channels: state.channels,
     activeChannels: state.activeChannels,
@@ -117,9 +130,6 @@ function persist() {
       template: state.template || '',
       savedAt: new Date().toISOString(),
     });
-    // token de la boutique : clé séparée, jamais mêlée à saveAppConfig()
-    // (qui ne concerne que le bot principal).
-    db.setSetting('shop_bot_token', state.shopBotToken || '');
     db.setSetting('site_channels', JSON.stringify(state.siteChannels || []));
     db.setSetting('B', state.B);
     db.setSetting('maxR', state.maxR);
@@ -167,8 +177,6 @@ function listChannels() {
 
 const HELP =
   '🎴 *Bot Baccara 1xbet — main du JOUEUR*\n\n' +
-  'ℹ️ La boutique de stratégies (/start, /boutique, /langue) est sur son ' +
-  'propre bot Telegram — ce bot-ci ne gère que les prédictions et l\'admin.\n\n' +
   '*Jeu*\n' +
   '/live — jeu réellement en cours (cartes + costumes joueur)\n' +
   '/stats — statistiques des prédictions\n' +
@@ -177,6 +185,14 @@ const HELP =
   '/canaux — canaux où je suis admin\n' +
   '/activer <id> — activer les prédictions\n' +
   '/desactiver <id> — arrêter\n\n' +
+  '*Interrupteur des prédictions* (commandes à taper DIRECTEMENT dans le ' +
+  'canal — réservées de fait aux administrateurs de ce canal, Telegram ' +
+  'n\'autorise personne d\'autre à y écrire)\n' +
+  '/stop [raison] — stoppe l\'envoi de TOUTES les nouvelles prédictions\n' +
+  '/start — relance l\'envoi\n' +
+  '/planifier <HH:MM arrêt> <HH:MM reprise> — arrêt/reprise quotidien automatique\n' +
+  '/planifier off — désactive la planification\n' +
+  '/statut — état actuel (arrêté/actif, planification)\n\n' +
   '*Prédiction*\n' +
   '/setb <n> — compteur B (apparitions consécutives max)\n' +
   '/setmaxr <n> — nombre de rattrapages vérifiés\n' +
@@ -220,8 +236,130 @@ const HELP =
   '/pred [date] — prédictions enregistrées + taux\n' +
   '/sql <SELECT ...> — requête de lecture seule\n\n' +
   '*Export / Import*\n' +
-  '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA)\n' +
+  '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA, tous les panneaux)\n' +
   '/importer — puis envoie un fichier .xlsx (ou envoie-le directement, sans /importer) pour restaurer la configuration';
+
+// ---------------------------------------------------------------------------
+// Commandes « arrêter / démarrer / planifier les prédictions » (demande
+// admin) — utilisables aussi bien en message privé par l'administrateur
+// général du bot QUE directement dans un canal Telegram par l'administrateur
+// de CE canal (voir le handler channel_post dans wire() plus bas ; Telegram
+// interdit déjà nativement à un non-administrateur de poster dans un canal,
+// donc la seule présence d'un channel_post avec l'une de ces commandes est
+// déjà la preuve qu'elle vient d'un administrateur du canal).
+// ---------------------------------------------------------------------------
+function parsePredictionControlCommand(text) {
+  const t = String(text || '').trim();
+  let m;
+  if ((m = t.match(/^\/stop(?:@\w+)?(?:\s+([\s\S]+))?\s*$/i))) {
+    return { action: 'stop', reason: m[1] ? m[1].trim() : null };
+  }
+  if (/^\/start(?:@\w+)?\s*$/i.test(t)) {
+    return { action: 'start' };
+  }
+  if ((m = t.match(/^\/planifier(?:@\w+)?(?:\s+(off)|\s+(\S+)\s+(\S+))?\s*$/i))) {
+    if (m[1]) return { action: 'schedule-off' };
+    if (m[2] && m[3]) return { action: 'schedule', stopAt: m[2], startAt: m[3] };
+    return { action: 'schedule-status' };
+  }
+  if (/^\/statut(?:@\w+)?\s*$/i.test(t)) {
+    return { action: 'status' };
+  }
+  return null;
+}
+
+function runPredictionControlCommand(cmd, by, chat) {
+  try {
+    // Commande tapée DANS un canal (chat fourni) : elle ne concerne QUE ce
+    // canal — les autres canaux continuent de recevoir leurs prédictions.
+    if (chat) {
+      switch (cmd.action) {
+        case 'stop':
+          predictionControl.pauseChannel(chat, cmd.reason, by);
+          return `⏸️ Prédictions arrêtées pour CE canal${cmd.reason ? ` (${cmd.reason})` : ''}. Les autres canaux continuent normalement.\nEnvoie /start ici pour les relancer.`;
+        case 'start':
+          predictionControl.resumeChannel(chat, by);
+          return '▶️ Prédictions relancées pour ce canal.';
+        case 'schedule':
+          predictionControl.setChannelSchedule(chat, cmd.stopAt, cmd.startAt);
+          return `📅 Planification de CE canal enregistrée : arrêt automatique à ${cmd.stopAt}, reprise automatique à ${cmd.startAt} (tous les jours). Les autres canaux ne sont pas concernés.`;
+        case 'schedule-off':
+          predictionControl.clearChannelSchedule(chat);
+          return '📅 Planification de ce canal désactivée.';
+        case 'schedule-status':
+        case 'status':
+          return predictionControl.channelStatusText(chat);
+        default:
+          return null;
+      }
+    }
+    switch (cmd.action) {
+      case 'stop':
+        predictionControl.pause(cmd.reason, by);
+        return `⏸️ Prédictions arrêtées PARTOUT${cmd.reason ? ` (${cmd.reason})` : ''} — toutes les stratégies, tous les panneaux, sur tous les canaux.\nEnvoie /start pour les relancer partout. (Pour arrêter un seul canal, tape /stop directement dans ce canal.)`;
+      case 'start':
+        predictionControl.resume(by);
+        return '▶️ Prédictions relancées PARTOUT (l\'interrupteur global est levé ; les canaux arrêtés individuellement le restent jusqu\'à leur propre /start).';
+      case 'schedule':
+        predictionControl.setSchedule(cmd.stopAt, cmd.startAt);
+        return `📅 Planification globale enregistrée : arrêt automatique à ${cmd.stopAt}, reprise automatique à ${cmd.startAt} (tous les jours).`;
+      case 'schedule-off':
+        predictionControl.clearSchedule();
+        return '📅 Planification globale désactivée.';
+      case 'schedule-status':
+      case 'status':
+        return predictionControl.statusText();
+      default:
+        return null;
+    }
+  } catch (e) {
+    return `⚠️ ${e.message}`;
+  }
+}
+
+// Garde-fou d'envoi PAR CANAL : tout sendMessage vers un canal arrêté par
+// /stop est retenu (les autres canaux ne sont pas touchés). L'appelant reçoit
+// un message factice sans message_id ; les éditions/suppressions visant ce
+// message factice sont ignorées. Les messages DÉJÀ envoyés avant l'arrêt
+// restent éditables (résultat gagné/perdu). sendMessageUnguarded sert aux
+// réponses aux commandes (/start, /statut…) dans le canal arrêté.
+function installChannelGuard(inst) {
+  if (!inst || inst.__channelGuard) return inst;
+  inst.__channelGuard = true;
+  const send = inst.sendMessage.bind(inst);
+  const edit = inst.editMessageText.bind(inst);
+  inst.sendMessageUnguarded = send;
+  inst.sendMessage = function guardedSend(chatId, ...rest) {
+    if (predictionControl.isChannelPaused(chatId)) {
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
+    }
+    // prédiction « en cours » → animation du statut (status-animator.js)
+    return Promise.resolve(send(chatId, ...rest)).then((m) => {
+      try { statusAnimator.maybeTrack(edit, chatId, m, rest[0], rest[1]); } catch (_) { /* l'animation ne doit jamais bloquer l'envoi */ }
+      return m;
+    });
+  };
+  inst.editMessageText = function guardedEdit(text, opts) {
+    if (opts && (opts.message_id === null || opts.message_id === undefined) && opts.inline_message_id === undefined) return Promise.resolve(true);
+    const key = statusAnimator.keyFromOpts(opts);
+    if (key && statusAnimator.has(key)) {
+      // nouveau texte « en cours » : l'animation continue ; sinon (résultat final)
+      // elle s'arrête et l'édition finale passe en dernier.
+      if (statusAnimator.matchPending(text)) return statusAnimator.rebase(key, text).then(() => edit(text, opts));
+      return statusAnimator.stop(key).then(() => edit(text, opts));
+    }
+    return edit(text, opts);
+  };
+  if (typeof inst.deleteMessage === 'function') {
+    const del = inst.deleteMessage.bind(inst);
+    inst.deleteMessage = function guardedDelete(chatId, messageId, ...rest) {
+      if (messageId === null || messageId === undefined) return Promise.resolve(true);
+      statusAnimator.stop(`${chatId}:${messageId}`).catch(() => {});
+      return del(chatId, messageId, ...rest);
+    };
+  }
+  return inst;
+}
 
 function settingsText() {
   return (
@@ -243,19 +381,62 @@ function fmtDate(d) {
 }
 
 function wire(b) {
-  b.on('polling_error', (e) => { state.botError = e.message; });
+  b.on('polling_error', (e) => {
+    state.botError = e.message;
+    // CORRECTIF « le token ne répond à aucune commande » : si un webhook est
+    // encore actif sur ce token (configuré une fois par erreur, ou laissé par
+    // un ancien hébergement), Telegram refuse TOUT getUpdates avec une erreur
+    // 409 Conflict — le bot peut alors continuer d'ENVOYER des prédictions,
+    // mais ne reçoit plus jamais aucune commande. On supprime donc le webhook
+    // dès qu'on voit ce conflit, puis le polling reprend tout seul.
+    if (/409|conflict|webhook/i.test(e.message || '')) {
+      b.deleteWebHook().catch(() => {});
+    }
+  });
   b.on('my_chat_member', (u) => {
     const status = u.new_chat_member && u.new_chat_member.status;
     if (['administrator', 'member', 'creator'].includes(status)) rememberChannel(u.chat);
   });
-  b.on('channel_post', (m) => rememberChannel(m.chat));
+  // Nouveau membre dans le canal des meilleures prédictions : message de bienvenue + récapitulatif
+  b.on('chat_member', (u) => {
+    try { console.log(`[chat_member] ${u.chat && (u.chat.title || u.chat.id)} : ${(u.old_chat_member || {}).status} → ${(u.new_chat_member || {}).status} (${u.new_chat_member && u.new_chat_member.user && u.new_chat_member.user.id})`); } catch (_) { /* journal seulement */ }
+    Promise.resolve(costumeFaibleTop.handleMemberUpdate(u)).catch(() => {});
+    Promise.resolve(dizaineTop.handleMemberUpdate(u)).catch(() => {});
+  });
 
   // ---------------------------------------------------------------------
-  // La boutique de stratégies (shop.js) vit désormais sur son PROPRE bot
-  // Telegram, avec son propre token (voir wireShop() + state.shopBotToken
-  // ci-dessous) : le bot principal ne gère plus /boutique, /langue, /start
-  // ni la saisie des codes de paiement.
+  // Commandes envoyées DANS un canal (channel_post) — CORRECTIF : avant,
+  // seules /stop /start /planifier /statut étaient reconnues ici, toutes les
+  // autres commandes (/statut, /strategies, /ombre, /ia…) restaient sans
+  // réponse quand on les écrivait dans le canal d'une stratégie, parce que
+  // node-telegram-bot-api n'applique ses handlers onText() qu'aux messages
+  // (update.message), jamais aux publications de canal (update.channel_post).
+  // On rejoue donc chaque publication de canal à travers les handlers
+  // onText() du bot, exactement comme un message privé de l'admin.
   // ---------------------------------------------------------------------
+  b.on('channel_post', (m) => {
+    rememberChannel(m.chat);
+    if (!m.text) return;
+    const cmd = parsePredictionControlCommand(m.text);
+    if (cmd) {
+      const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`, m.chat);
+      const raw = b.sendMessageUnguarded || b.sendMessage.bind(b); // la réponse doit passer même si le canal est arrêté
+      if (reply) raw(m.chat.id, reply).catch(() => {});
+      return;
+    }
+    if (!m.text.startsWith('/')) return;
+    // Telegram interdit nativement à un non-administrateur de publier dans un
+    // canal : la seule présence de cette publication prouve qu'elle vient d'un
+    // administrateur du canal. On la présente donc aux handlers onText() comme
+    // venant de l'administrateur du bot (les commandes réservées à l'admin
+    // restent ainsi utilisables depuis le canal).
+    const asMessage = {
+      ...m,
+      from: m.from || { id: Number(state.adminId) || 0, is_bot: false, first_name: 'Canal' },
+    };
+    try { b.processUpdate({ update_id: 0, message: asMessage }); }
+    catch (e) { console.error('Commande de canal :', e.message); }
+  });
 
   // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une
   // commande (ne commence pas par /) est transmis à l'IA générale
@@ -276,6 +457,19 @@ function wire(b) {
     }
   });
 
+  // CORRECTIF : /start, /stop, /planifier et /statut n'étaient traités QUE
+  // dans un canal (handler channel_post ci-dessus) — en message privé ou dans
+  // un groupe, le bot ne répondait donc rien du tout, ce qui donnait
+  // l'impression que « le token ne répond à aucune commande ». Elles sont
+  // désormais aussi disponibles en privé/groupe pour l'administrateur.
+  b.onText(/^\/(?:start|stop|statut|planifier)\b/i, (msg) => {
+    const cmd = parsePredictionControlCommand(msg.text);
+    if (!cmd) return;
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const reply = runPredictionControlCommand(cmd, 'administrateur');
+    if (reply) b.sendMessage(msg.chat.id, reply).catch(() => {});
+  });
+
   b.onText(/^\/(aide|help)/, (msg) =>
     b.sendMessage(msg.chat.id, HELP, { parse_mode: 'Markdown' })
   );
@@ -289,12 +483,12 @@ function wire(b) {
   b.onText(/^\/exporter\b/, async (msg) => {
     if (!isAdmin(msg)) return deny(msg.chat.id);
     try {
-      const buffer = dataTransfer.exportBuffer();
+      const buffer = await dataTransfer.exportBuffer();
       const filename = `baccara-config-${new Date().toISOString().slice(0, 10)}.xlsx`;
       await b.sendDocument(
         msg.chat.id,
         buffer,
-        { caption: '📦 Export complet de la configuration (tokens, canaux, stratégies, stratégies IA, analyses IA).' },
+        { caption: '📦 Export complet de la configuration (tokens, clés API, canaux, stratégies, stratégies IA et leur code, analyses IA, annonces, tous les panneaux : Répétition costume, Rupture, Chevauchement, Après perte, Combinée, Copie et annonce, Jeu 21, etc.).' },
         { filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
       );
     } catch (e) {
@@ -322,7 +516,7 @@ function wire(b) {
       const resp = await fetch(link);
       if (!resp.ok) throw new Error(`Téléchargement du fichier impossible (HTTP ${resp.status}).`);
       const buffer = Buffer.from(await resp.arrayBuffer());
-      const report = dataTransfer.importBuffer(buffer);
+      const report = await dataTransfer.importBufferAsync(buffer);
       persist();
       if (db.ready) await saveConfigsToDb();
       const lines = ['✅ Import terminé.'];
@@ -419,7 +613,7 @@ function wire(b) {
       );
     state.template = m[1].trim();
     persist();
-    b.sendMessage(msg.chat.id, `✅ Template personnalisé actif :\n\n${fmt.renderMessage(state.format, { gameNumber: 1234, suit: '♦️', maxR: state.maxR }, state.template).text}`);
+    b.sendMessage(msg.chat.id, `✅ Template personnalisé actif :\n\n${fmt.renderMessage(state.format, { gameNumber: 1234, suit: '♦️', maxR: state.maxR }, state.template, { noAnimate: true }).text}`);
   });
 
   b.onText(/^\/notemplate/, (msg) => {
@@ -631,15 +825,16 @@ function wire(b) {
       silence: 'silent', silencieux: 'silent', silent: 'silent',
       fenetre: 'lossWindow', intervalle: 'lossWindow', perte: 'lossWindow',
       resetgain: 'resetOnWin',
+      retard: 'delayEnabled', retardement: 'delayEnabled', delai: 'delaySec', delay: 'delaySec',
     };
-    if (!map[field]) return b.sendMessage(msg.chat.id, '⚠️ Champ inconnu (format, formatdistribution, maxr, b, lead, depart, var, decalage, streak, absence, scope, silence, fenetre, resetgain, template).');
+    if (!map[field]) return b.sendMessage(msg.chat.id, '⚠️ Champ inconnu (format, formatdistribution, maxr, b, lead, depart, var, decalage, streak, absence, scope, silence, fenetre, resetgain, retard, delai, template).');
     const target = map[field];
     if (target === 'silent')
       return b.sendMessage(msg.chat.id, 'ℹ️ Le mode silencieux 1 est toujours actif pour « ombre » et n\'est pas désactivable ; il n\'existe pour aucune autre stratégie.');
     if ((target === 'lossWindow' || target === 'resetOnWin') && key !== 'ombre')
       return b.sendMessage(msg.chat.id, '⚠️ Le mode silencieux est réservé à la stratégie « ombre ».');
     let parsed = value;
-    if (target === 'resetOnWin') parsed = /^(1|oui|on|true|actif)$/i.test(value);
+    if (target === 'resetOnWin' || target === 'delayEnabled') parsed = /^(1|oui|on|true|actif)$/i.test(value);
     const cfg = setStrategyConfig(key, { [target]: parsed });
     persist();
     b.sendMessage(msg.chat.id, `✅ ${strategies.BY_KEY[key].name} → ${field} = ${cfg[target]}\n\n${fmt.formatPreview(cfg.format, { maxR: cfg.maxR })}`);
@@ -1067,312 +1262,6 @@ function wire(b) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Bot DÉDIÉ à la boutique de stratégies (shop.js) — token API totalement
-// séparé de celui du bot principal (state.botToken). Ce bot ne gère QUE :
-// accueil multilingue, liste de stratégies, saisie du code de paiement,
-// explication IA restreinte à la stratégie achetée. Voir shop.js.
-// ---------------------------------------------------------------------------
-function wireShop(b) {
-  b.on('polling_error', (e) => { state.shopBotError = e.message; });
-
-  function langKeyboard() {
-    return { inline_keyboard: shop.LANGS.map((l) => [{ text: `${l.flag} ${l.label}`, callback_data: `lang:${l.code}` }]) };
-  }
-
-  async function sendWelcome(chatId) {
-    await b.sendMessage(chatId, shop.t('welcome', 'fr'), { parse_mode: 'Markdown', reply_markup: langKeyboard() });
-  }
-
-  async function sendShopMenu(chatId, userId, lang) {
-    // Les stratégies déjà achetées par CET utilisateur ne réapparaissent
-    // plus dans la liste principale — elles restent accessibles via le
-    // bouton « Mes stratégies » (voir myitems:list ci-dessous).
-    const items = shop.listActive().filter((it) => !shop.hasUnlocked(userId, it.id));
-    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}${Number.isFinite(it.price) ? ' — ' + it.price + '€' : ''}`, callback_data: `shop:${it.id}` }]);
-    if (shop.listUnlocked(userId).length) {
-      rows.push([{ text: shop.t('myItemsButton', lang), callback_data: 'myitems:list' }]);
-    }
-    rows.push([{ text: shop.t('supportButton', lang), callback_data: 'support:start' }]);
-    await b.sendMessage(chatId, items.length ? shop.t('shopIntro', lang) : shop.t('noItems', lang), { reply_markup: { inline_keyboard: rows } });
-  }
-
-  async function sendMyItemsMenu(chatId, userId, lang) {
-    const items = shop.listUnlocked(userId);
-    const rows = items.map((it) => [{ text: `${it.aiName}${Number.isFinite(it.rate) ? ' — ' + it.rate + '%' : ''}`, callback_data: `shop:${it.id}` }]);
-    await b.sendMessage(chatId, items.length ? shop.t('myItemsIntro', lang) : shop.t('noItemsUnlocked', lang), { reply_markup: { inline_keyboard: rows } });
-  }
-
-  // Présentation d'une stratégie débloquée (code accepté, ou réouverture
-  // depuis « Mes stratégies ») + les deux boutons de suite : « Répondre-moi »
-  // (pose une question à l'IA sur cette stratégie) et « J'ai compris »
-  // (remerciement + conseil de formation, voir shop.closingMessage). La
-  // saisie libre au clavier reste TOUJOURS possible en parallèle (voir le
-  // handler 'message' plus bas, qui route déjà vers explain()/closingMessage
-  // selon le texte tapé) — les boutons ne font que rendre ces deux actions
-  // explicites, sans rien retirer à l'ancien fonctionnement au clavier.
-  async function sendUnlockedPresentation(chatId, userId, item, lang) {
-    shop.setActiveItem(userId, item.id);
-    const text = await shop.fullPresentation(item, lang);
-    await b.sendMessage(chatId, text);
-    const buttons = [[
-      { text: shop.t('askButton', lang), callback_data: `strategy:ask:${item.id}` },
-      { text: shop.t('understoodButton', lang), callback_data: `strategy:understood:${item.id}` },
-    ]];
-    await b.sendMessage(chatId, shop.t('canAsk', lang), { reply_markup: { inline_keyboard: buttons } });
-  }
-
-  b.on('callback_query', async (q) => {
-    try {
-      const data = String(q.data || '');
-      const chatId = q.message && q.message.chat && q.message.chat.id;
-      const userId = q.from && q.from.id;
-      if (!chatId || !userId) return b.answerCallbackQuery(q.id);
-
-      if (data.startsWith('lang:')) {
-        const lang = data.slice(5);
-        shop.setLang(userId, lang);
-        await b.answerCallbackQuery(q.id, { text: shop.t('langSaved', lang) });
-        await sendShopMenu(chatId, userId, lang);
-        return;
-      }
-      if (data.startsWith('strategy:ask:')) {
-        const itemId = data.slice('strategy:ask:'.length);
-        const lang = shop.getLang(userId) || 'fr';
-        shop.setActiveItem(userId, itemId); // garantit le routage vers l'IA (explain()) au prochain message tapé
-        await b.answerCallbackQuery(q.id);
-        await b.sendMessage(chatId, shop.t('askPrompt', lang));
-        return;
-      }
-      if (data.startsWith('strategy:understood:')) {
-        const itemId = data.slice('strategy:understood:'.length);
-        const item = shop.getItem(itemId);
-        const lang = shop.getLang(userId) || 'fr';
-        await b.answerCallbackQuery(q.id);
-        if (!item) return;
-        const closing = await shop.closingMessage(item, lang);
-        await b.sendMessage(chatId, closing);
-        // Explication détaillée du déclencheur (uniquement pour un
-        // déclencheur IA — voir shop.explainTrigger).
-        const explanation = shop.explainTrigger(item);
-        if (explanation) await b.sendMessage(chatId, explanation);
-        return;
-      }
-      if (data === 'support:start') {
-        const lang = shop.getLang(userId) || 'fr';
-        shop.setPendingSupport(userId, true);
-        await b.answerCallbackQuery(q.id);
-        await b.sendMessage(chatId, shop.t('supportAskAmount', lang));
-        return;
-      }
-      if (data === 'myitems:list') {
-        const lang = shop.getLang(userId) || 'fr';
-        await b.answerCallbackQuery(q.id);
-        await sendMyItemsMenu(chatId, userId, lang);
-        return;
-      }
-      if (data.startsWith('support:pay:')) {
-        const lang = shop.getLang(userId) || 'fr';
-        const amountUsd = Number(data.slice('support:pay:'.length));
-        await b.answerCallbackQuery(q.id);
-        if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
-        const rate = shop.getUsdToXof();
-        const amountLocal = Math.round(amountUsd * rate);
-        const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
-        const pay = await paiement.initiateSupportPayment({ userId, chatId, lang, buyerName, amountUsd, amountLocal });
-        if (pay.ok) {
-          const buttons = [[{ text: `💛 ${shop.t('payButton', lang)} — ${amountUsd}$`, url: pay.checkoutUrl }]];
-          await b.sendMessage(chatId, shop.t('supportPayIntro', lang), { reply_markup: { inline_keyboard: buttons } });
-          return;
-        }
-        console.error('Soutien (initiation) :', pay.error);
-        return;
-      }
-      if (data.startsWith('shop:')) {
-        const itemId = data.slice(5);
-        const item = shop.getItem(itemId);
-        const lang = shop.getLang(userId) || 'fr';
-        if (!item || !item.active) {
-          await b.answerCallbackQuery(q.id);
-          return b.sendMessage(chatId, shop.t('itemInactive', lang));
-        }
-        if (shop.hasUnlocked(userId, itemId)) {
-          // déjà acheté : on rouvre directement le mode questions, sans redemander le code.
-          await b.answerCallbackQuery(q.id);
-          return sendUnlockedPresentation(chatId, userId, item, lang);
-        }
-        shop.setPendingCode(userId, itemId);
-        await b.answerCallbackQuery(q.id);
-        // Lien de paiement direct Money Fusion (paiement.js, SANS appel API —
-        // voir commentaire en tête de ce fichier) : le lien est construit
-        // localement (id du modèle + montant + nom du client), pas de
-        // vérification automatique du paiement. La saisie manuelle d'un
-        // code reste possible en parallèle (ex. code donné par l'admin par
-        // un autre moyen), voir le handler 'message' plus bas.
-        const payAmountLocal = shop.paymentAmountFor(item);
-        {
-          // Verrou de 3 minutes sur CETTE stratégie (voir paiement.js) : tant
-          // qu'un autre acheteur a une réservation active dessus, on ne
-          // relance pas de nouveau paiement — ça évite que deux acheteurs
-          // se voient attribuer/afficher en même temps le même code (unique
-          // et partagé tant qu'il n'a pas été consommé), qui pourrait être
-          // régénéré pour l'un pendant que l'autre le croit encore valide.
-          const lock = paiement.lockItem(itemId, userId);
-          if (!lock) {
-            return b.sendMessage(chatId, shop.t('itemLocked', lang));
-          }
-          const buyerName = [q.from.first_name, q.from.last_name].filter(Boolean).join(' ').trim() || q.from.username || `Client ${userId}`;
-          // Fenêtre d'information envoyée DÈS que le verrou de 3 minutes est
-          // obtenu (avant même de générer le lien de paiement) : elle
-          // confirme au client qu'il est désormais prioritaire sur cette
-          // stratégie et personne d'autre ne pourra lancer de paiement
-          // pendant ce délai.
-          const infoText = shop.t('reservationInfo', lang)
-            .replace('{lastName}', q.from.last_name || '—')
-            .replace('{firstName}', q.from.first_name || '—')
-            .replace('{userId}', String(userId))
-            .replace('{strategy}', item.aiName);
-          await b.sendMessage(chatId, infoText);
-          const pay = await paiement.initiatePayment({
-            item: { ...item, payAmountLocal },
-            userId,
-            chatId,
-            lang,
-            buyerName,
-          });
-          if (pay.ok) {
-            // Le code COURANT de la stratégie est attaché à cette réservation
-            // avec 10s de délai (pas immédiatement au clic) : tant que ce
-            // délai n'est pas écoulé, succes.html affiche « code pas encore
-            // disponible » si le client clique trop vite sur « Voir mon
-            // code ». Passé les 10s, le code apparaît sur succes.html au
-            // clic sur ce bouton — jamais envoyé dans le chat Telegram. On
-            // revérifie juste avant l'attachement que CETTE réservation
-            // précise (pay.ref) est toujours active : si elle a expiré
-            // entre-temps (voir paiement.js — expireRecord, déclenché par le
-            // minuteur de 3 min posé à l'initiation), on n'attache rien.
-            // UNIQUEMENT pour Money Fusion (lien fixe, confirmation par
-            // simple arrivée sur succes.html) : pour SebPay, le code n'est
-            // attaché qu'à la confirmation RÉELLE du webhook (voir
-            // paiement.confirmSebpayPayment, server.js — POST
-            // /api/sebpay/webhook), jamais par ce minuteur aveugle.
-            if (pay.provider !== 'sebpay') {
-              setTimeout(() => {
-                const rec = paiement.getRecord(pay.ref);
-                if (!rec || rec.status === 'expired' || rec.status === 'failed') return; // verrou expiré/annulé : rien à attacher
-                paiement.attachCode(pay.ref, item.code);
-              }, 10000);
-            }
-            const buttons = [[{ text: `💳 ${shop.t('payButton', lang)}${item.price ? ' — ' + item.price + '€' : ''}`, url: pay.checkoutUrl }]];
-            await b.sendMessage(chatId, shop.t('payIntro', lang), { reply_markup: { inline_keyboard: buttons } });
-            // 30s après avoir ouvert le lien de paiement, rappel : le client
-            // peut aussi taper directement un code déjà en sa possession
-            // (ex. donné par l'admin) — pas de vérification automatique du
-            // paiement en mode lien direct, donc ce message reste utile même
-            // après avoir cliqué sur Payer, tant que rien n'est débloqué.
-            setTimeout(() => {
-              if (shop.hasUnlocked(userId, itemId)) return; // déjà débloqué entre-temps, inutile de relancer
-              b.sendMessage(chatId, shop.t('askCode', lang)).catch((e) => {
-                console.error('Paiement (rappel code) :', e.message);
-              });
-            }, 30000);
-            return;
-          }
-          paiement.unlockItem(itemId); // l'initiation a échoué : on relâche le verrou immédiatement
-          console.error('Paiement (initiation) :', pay.error);
-        }
-        return b.sendMessage(chatId, shop.t('askCode', lang));
-      }
-      await b.answerCallbackQuery(q.id);
-    } catch (e) {
-      // AVANT : l'erreur était totalement avalée (catch (_) {}) — un clic sur
-      // un bouton (langue, stratégie...) qui échouait en interne ne laissait
-      // AUCUNE trace : le bouton semblait "ne pas répondre" sans qu'on sache
-      // pourquoi. On log désormais l'erreur et on la garde visible dans
-      // /api/shop/bot (state.shopBotError), comme pour polling_error.
-      console.error('Boutique — erreur callback_query (' + (q.data || '?') + ') :', e && e.message);
-      state.shopBotError = e && e.message ? e.message : String(e);
-      try { await b.answerCallbackQuery(q.id); } catch (__) {}
-    }
-  });
-
-  b.onText(/^\/boutique/, async (msg) => {
-    const userId = msg.from.id;
-    const lang = shop.getLang(userId);
-    if (!lang) return sendWelcome(msg.chat.id);
-    return sendShopMenu(msg.chat.id, userId, lang);
-  });
-
-  b.onText(/^\/langue/, (msg) => sendWelcome(msg.chat.id));
-  b.onText(/^\/start/, (msg) => sendWelcome(msg.chat.id));
-
-  // Code de paiement saisi une fois avec succès → CODE EXPIRÉ immédiatement
-  // (voir shop.redeem()) : un nouveau code est régénéré automatiquement pour
-  // cette stratégie, donc l'ancien code ne peut plus servir à personne.
-  b.on('message', async (msg) => {
-    if (!msg.text || msg.text.startsWith('/')) return;
-    if (!msg.chat || msg.chat.type !== 'private') return;
-    const userId = msg.from && msg.from.id;
-    if (!userId) return;
-    const lang = shop.getLang(userId);
-    if (!lang) return sendWelcome(msg.chat.id);
-
-    // Montant de soutien en $ attendu (bouton « Soutien » du menu) : on
-    // valide le nombre, on affiche l'équivalent en F CFA, et on propose un
-    // bouton « Payer » (voir callback support:pay:<montant> plus haut).
-    if (shop.getPendingSupport(userId)) {
-      const amountUsd = Number(String(msg.text).replace(',', '.').trim());
-      if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
-        return b.sendMessage(msg.chat.id, shop.t('supportAmountInvalid', lang));
-      }
-      shop.clearPendingSupport(userId);
-      const rate = shop.getUsdToXof();
-      const amountLocal = Math.round(amountUsd * rate);
-      const text = shop.t('supportAmountShown', lang)
-        .replace('{usd}', String(amountUsd))
-        .replace('{francs}', String(amountLocal));
-      const buttons = [[{ text: `💛 ${shop.t('payButton', lang)}`, callback_data: `support:pay:${amountUsd}` }]];
-      return b.sendMessage(msg.chat.id, text, { reply_markup: { inline_keyboard: buttons } });
-    }
-
-    const pendingItemId = shop.getPendingCode(userId);
-    if (pendingItemId) {
-      const r = shop.redeem(userId, pendingItemId, msg.text);
-      if (r.ok) {
-        await b.sendMessage(msg.chat.id, shop.t('unlockedHeader', lang));
-        return sendUnlockedPresentation(msg.chat.id, userId, r.item, lang);
-      }
-      if (r.reason === 'used') return b.sendMessage(msg.chat.id, shop.t('codeUsed', lang));
-      if (r.reason === 'inactive') return b.sendMessage(msg.chat.id, shop.t('itemInactive', lang));
-      return b.sendMessage(msg.chat.id, shop.t('codeWrong', lang));
-    }
-    const activeItemId = shop.getActiveItem(userId);
-    if (activeItemId) {
-      const item = shop.getItem(activeItemId);
-      if (item) {
-        // L'acheteur signale qu'il a compris (fr/en/ar/ru/es, voir
-        // shop.isUnderstoodMessage) → on conclut la présentation : remerciement
-        // + bonne chance + vrai conseil du panneau Formation pour CETTE
-        // stratégie (voir shop.closingMessage / formation.js), au lieu de
-        // renvoyer ça à l'IA de Q&A comme une question ordinaire.
-        if (shop.isUnderstoodMessage(msg.text)) {
-          const closing = await shop.closingMessage(item, lang);
-          await b.sendMessage(msg.chat.id, closing);
-          // Explication détaillée du déclencheur (uniquement pour un
-          // déclencheur IA — voir shop.explainTrigger, retourne null pour
-          // une stratégie du catalogue existant, qui n'en a pas besoin).
-          const explanation = shop.explainTrigger(item);
-          if (explanation) await b.sendMessage(msg.chat.id, explanation);
-          return;
-        }
-        const answer = await shop.explain(item, msg.text, lang);
-        return b.sendMessage(msg.chat.id, answer);
-      }
-    }
-    return sendShopMenu(msg.chat.id, userId, lang);
-  });
-}
-
 function activate(id) {
   if (!state.activeChannels.includes(id)) state.activeChannels.push(id);
   if (!state.channels.some((c) => c.id === id)) state.channels.push({ id, title: String(id) });
@@ -1385,14 +1274,6 @@ function deactivate(id) {
 }
 
 async function startBot(token) {
-  // Validation AVANT toute mutation d'état / persistance : un token en
-  // conflit avec celui de la boutique ne doit jamais être enregistré, même
-  // temporairement (sinon un redémarrage ultérieur repartirait bloqué).
-  const nextToken = token ? token.trim() : state.botToken;
-  if (nextToken && state.shopBotToken && nextToken === state.shopBotToken) {
-    state.botError = 'Ce token est déjà utilisé par la boutique : configure un token différent pour le bot principal.';
-    return { ok: false, error: state.botError };
-  }
   if (token) state.botToken = token.trim();
   persist();
   state.botError = null;
@@ -1405,13 +1286,39 @@ async function startBot(token) {
     return { ok: false, error: state.botError };
   }
   try {
-    bot = new TelegramBot(state.botToken, { polling: true });
+    // CORRECTIF PRINCIPAL « aucune commande ne répond » : on démarre d'abord
+    // SANS polling, on supprime tout webhook resté actif sur ce token (sinon
+    // Telegram rejette chaque getUpdates avec 409 Conflict : les prédictions
+    // partent toujours, mais AUCUNE commande n'arrive jamais), puis seulement
+    // ensuite on lance la réception des mises à jour — en demandant
+    // explicitement les publications de canal (channel_post), nécessaires
+    // pour les commandes écrites dans le canal d'une stratégie.
+    bot = new TelegramBot(state.botToken, {
+      polling: {
+        autoStart: false, // démarré à la main, après deleteWebHook (voir plus bas)
+        params: {
+          timeout: 30,
+          // liste explicite : sans « channel_post », les commandes écrites
+          // dans le canal d'une stratégie n'arrivent jamais au bot.
+          allowed_updates: JSON.stringify([
+            'message', 'edited_message', 'channel_post', 'edited_channel_post',
+            'callback_query', 'my_chat_member', 'chat_member',
+          ]),
+        },
+      },
+    });
+    installChannelGuard(bot);
     wire(bot);
-    const me = await bot.getMe();
+    const me = await bot.getMe(); // valide le token avant de lancer le polling
     state.botUsername = me.username;
+    try { await bot.deleteWebHook({ drop_pending_updates: false }); }
+    catch (e) { console.error('Suppression du webhook impossible :', e.message); }
+    await bot.startPolling({ restart: true });
+    console.log('🤖 Bot principal @' + me.username + ' : réception des commandes active (privé, groupes et canaux).');
     return { ok: true, username: me.username };
   } catch (e) {
     state.botError = e.message;
+    if (bot) { try { await bot.stopPolling({ cancel: true }); } catch (_) {} }
     bot = null;
     return { ok: false, error: e.message };
   }
@@ -1445,92 +1352,6 @@ async function disconnectBot() {
 }
 
 // ---------------------------------------------------------------------------
-// Cycle de vie du bot DÉDIÉ à la boutique — token strictement séparé du bot
-// principal (voir wireShop() et la vérification croisée ci-dessus/ci-dessous :
-// aucun des deux bots ne démarre si les deux tokens sont identiques).
-// ---------------------------------------------------------------------------
-// Paiement confirmé automatiquement (arrivée du client sur succes.html
-// après validation Money Fusion, voir paiement.js/markPaidOnArrival) :
-// - achat de stratégie (record.kind === 'item') : le code reste uniquement
-//   sur succes.html ; le client doit le copier et l'envoyer au bot.
-// - soutien (record.kind === 'support') : AUCUN code n'est envoyé, juste un
-//   message de remerciement personnalisé (voir shop.supportThanksMessage).
-// Enregistrée une seule fois (le handler regarde `shopBot` à l'appel, pas à
-// l'enregistrement, donc il fonctionne même si le bot redémarre entre-temps).
-// ---------------------------------------------------------------------------
-paiement.setPaidHandler(async (record) => {
-  if (record.kind === 'support') {
-    if (!shopBot) return;
-    try {
-      await shopBot.sendMessage(record.chatId, shop.supportThanksMessage(record, record.lang));
-    } catch (e) { console.error('Soutien (envoi Telegram après paiement) :', e.message); }
-    return;
-  }
-});
-
-// À l'expiration, seul le code courant lié à ce paiement est remplacé.
-// Aucun message « Code accepté » n'est envoyé automatiquement.
-paiement.setExpiredHandler(async (record) => {
-  if (record.kind === 'item') shop.expirePaymentCode(record.itemId, record.code);
-});
-
-async function startShopBot(token) {
-  // Même garde-fou que startBot() ci-dessus, dans l'autre sens : rien n'est
-  // persisté si le token entre en conflit avec celui du bot principal.
-  const nextToken = token ? token.trim() : state.shopBotToken;
-  if (nextToken && state.botToken && nextToken === state.botToken) {
-    state.shopBotError = 'Ce token est déjà utilisé par le bot principal : configure un token différent, réservé uniquement à la boutique.';
-    return { ok: false, error: state.shopBotError };
-  }
-  if (token) state.shopBotToken = token.trim();
-  persist();
-  state.shopBotError = null;
-  if (shopBot) {
-    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
-    shopBot = null;
-  }
-  if (!state.shopBotToken) {
-    state.shopBotError = 'Aucun token configuré';
-    return { ok: false, error: state.shopBotError };
-  }
-  try {
-    shopBot = new TelegramBot(state.shopBotToken, { polling: true });
-    wireShop(shopBot);
-    const me = await shopBot.getMe();
-    state.shopBotUsername = me.username;
-    return { ok: true, username: me.username };
-  } catch (e) {
-    state.shopBotError = e.message;
-    shopBot = null;
-    return { ok: false, error: e.message };
-  }
-}
-
-// Déconnexion volontaire du bot boutique — même logique que disconnectBot()
-// ci-dessus, côté token séparé (voir shop_bot_token dans persist()).
-async function disconnectShopBot() {
-  if (shopBot) {
-    try { await shopBot.stopPolling({ cancel: true }); } catch (_) {}
-    shopBot = null;
-  }
-  state.shopBotToken = '';
-  state.shopBotUsername = null;
-  state.shopBotError = null;
-  persist();
-  return { ok: true };
-}
-
-function shopBotStatus() {
-  return {
-    running: !!shopBot,
-    username: state.shopBotUsername || null,
-    tokenSet: !!state.shopBotToken,
-    tokenMasked: state.shopBotToken ? state.shopBotToken.slice(0, 8) + '••••••' + state.shopBotToken.slice(-4) : null,
-    error: state.shopBotError || null,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Expéditeurs : chaque stratégie peut avoir SON propre token de bot
 // ---------------------------------------------------------------------------
 const senders = new Map(); // token -> instance TelegramBot (sans polling)
@@ -1543,7 +1364,7 @@ function senderFor() {
   if (!token) return null;
   if (bot) return bot;                      // bot principal (polling actif)
   if (!senders.has(token)) {
-    try { senders.set(token, new TelegramBot(token, { polling: false })); }
+    try { senders.set(token, installChannelGuard(new TelegramBot(token, { polling: false }))); }
     catch (e) { console.error('Token Telegram invalide :', e.message); senders.set(token, null); }
   }
   return senders.get(token) || null;
@@ -1606,6 +1427,9 @@ let lastShoeSeq = 0;
 let ticking = false;
 
 async function sendBilan(key, snapshot) {
+  // Un bilan est un nouvel envoi. Il ne doit pas contourner l'interrupteur
+  // global si /stop arrive entre la détection de fin de sabot et son envoi.
+  if (predictionControl.isPaused()) return;
   const cfg = state.strategies[key] || {};
   if (cfg.bilan === false) return;
   const sender = senderFor();
@@ -1656,6 +1480,10 @@ async function flushBilans(reason = 'nouveau jour') {
     try { await sendBilan(key, snapshot); done.push(key); }
     catch (e) { console.error('Bilan non envoyé', key, e.message); }
   }
+  // `predit.sendBilans()` est un autre chemin d'envoi Telegram. Si /stop a
+  // été reçu pendant le bilan d'une stratégie, il ne doit pas continuer à
+  // publier dans le panneau IA ni nettoyer prématurément la file du bilan.
+  if (predictionControl.isPaused()) return { strategies: done, ai: { ok: false, error: 'Prédictions arrêtées' } };
   let ai = { ok: false, error: 'panneau Prédit indisponible' };
   try { ai = await predit.sendBilans(); }
   catch (e) { ai = { ok: false, error: e.message }; }
@@ -1810,6 +1638,14 @@ async function announceMainBot() {
 // Envoi + vérification des prédictions
 // ---------------------------------------------------------------------------
 async function broadcast(pred) {
+  // Le garde-fou de tick() protège le chemin normal, mais un tick peut déjà
+  // être en cours quand le message /stop arrive. Refaire le test ici empêche
+  // la file « ombre » ou une prédiction déjà calculée de partir après l'arrêt.
+  if (predictionControl.isPaused()) {
+    pred.silent = true;
+    pred.gate = '⏸️ Arrêt global — envoi ignoré';
+    return;
+  }
   if (db.ready) db.savePrediction(pred, state.B);
   const sender = senderFor();
   if (!sender) {
@@ -1873,6 +1709,11 @@ async function sendPrediction(pred, sender, ids) {
   state.sendErrors[pred.strategy] = null;
   const { text, parse_mode } = predictionText(pred);
   for (const id of [...new Set(ids)]) {
+    if (predictionControl.isPaused()) {
+      pred.silent = true;
+      pred.gate = '⏸️ Arrêt global — envoi interrompu';
+      break;
+    }
     try {
       const m = await sender.sendMessage(id, text, parse_mode ? { parse_mode } : {});
       pred.messages.push({ chatId: id, messageId: m.message_id });
@@ -1902,7 +1743,7 @@ async function updateResult(pred) {
   // strategies.js/defaultsFor), désactivée par défaut — les deux réglages
   // (général + celui-ci) doivent être activés à la fois.
   const stratCfg = state.strategies[pred.strategy];
-  if (pred.status === 'perdu' && pred.messages.length && stratCfg && stratCfg.lossNoticeEnabled && lossNotice.getSettings().enabled) {
+  if (!predictionControl.isPaused() && pred.status === 'perdu' && pred.messages.length && stratCfg && stratCfg.lossNoticeEnabled && lossNotice.getSettings().enabled) {
     const noticeText = lossNotice.buildText();
     for (const m of pred.messages) {
       try { await sender.sendMessage(m.chatId, noticeText); } catch (_) {}
@@ -1950,7 +1791,7 @@ async function tick() {
     // — voir pendingBilan plus haut. Comme tick() ne se chevauche jamais
     // (garde `ticking`), aucune prédiction (nouvelle ou « ombre ») ne peut
     // être diffusée tant que l'envoi du bilan n'est pas terminé.
-    if (pendingBilan) {
+    if (pendingBilan && !predictionControl.isPaused()) {
       const { seq, previousMax } = pendingBilan;
       pendingBilan = null;
       if (seq !== lastBilanShoeSeq) {
@@ -1964,11 +1805,28 @@ async function tick() {
     const freed = sweepAutoUnlock();
     if (freed.length) console.log('🔓 Déblocage automatique : ' + freed.join(', '));
 
+    // retard d'envoi : libère les prédictions retenues dont l'heure est venue
+    // (AVANT verify() pour annuler celles dont le jeu cible a déjà commencé)
+    if (!predictionControl.isPaused()) { try { await sendDelay.releaseDue(state, broadcast); } catch (e) { state.lastError = e.message; } }
+
     const closed = verify();
     for (const p of closed) {
       await updateResult(p);
       bilanPending.add(p.strategy);           // bilan dès que le jeu reprend
     }
+
+    // planification quotidienne (arrêt/reprise auto) : voir prediction-control.js
+    predictionControl.tickSchedule();
+
+    // INTERRUPTEUR GLOBAL « arrêter les prédictions » (demande admin,
+    // commandable par l'administrateur du canal — voir prediction-control.js
+    // et le handler channel_post plus bas). Tant qu'il est actif, on saute
+    // ENTIÈREMENT la génération et l'envoi de nouvelles prédictions (toutes
+    // stratégies + tous les panneaux ci-dessous) — mais on continue de lire
+    // les jeux en direct et de vérifier/éditer les prédictions déjà envoyées
+    // AVANT l'arrêt (verify()/updateResult() ci-dessus, non concernés par ce
+    // garde-fou), pour qu'aucun message ne reste bloqué « en attente ».
+    if (predictionControl.isPaused()) return;
 
     // « ombre » : une prédiction est créée (et envoyée, ou pas) au moment où
     // evaluate() la détecte — mais le filtre « double perte » peut s'ouvrir
@@ -1987,7 +1845,7 @@ async function tick() {
     // Chaque envoi dépile la tête de file (fulfillAnnouncement), donc canSend()
     // reflète ensuite l'état de la position suivante, toujours dans l'ordre.
     let guard = 0;
-    while (canSend('ombre') && guard++ < 20) {
+    while (!predictionControl.isPaused() && canSend('ombre') && guard++ < 20) {
       // CORRECTIF : exclure les prédictions « annulé » (tuées par un reset de
       // sabot en cours de décompte, voir resetShoe()). Sans ce filtre, dès que
       // la position N était enfin prête, le bot pouvait ressusciter une vieille
@@ -2031,45 +1889,82 @@ async function tick() {
     // isolées) et la garde anti-doublon (lastBilanShoeSeq).
 
     const preds = evaluate();
-    for (const pred of preds) await broadcast(pred);
+    for (const pred of preds) {
+      if (predictionControl.isPaused()) break;
+      if (pred.holdSend) continue; // retard d'envoi : sera envoyée par sendDelay.releaseDue()
+      await broadcast(pred);
+    }
 
-    // panneau « Prédit » : prédictions certifiées à 100% (IA)
-    await predit.tick();
-
-    // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
-    // cartes exactes et cartes de valeur sur leurs canaux respectifs.
-    await game21Predict.tick();
-
-    // panneau « Prédiction après perte » : relais de la prochaine prédiction
-    // d'une stratégie suivie (existante ou IA) après N pertes consécutives.
-    await afterLoss.tick();
-
-    // panneau « Formation » : pour chaque stratégie cochée, lecture de la
-    // formation après une perte, puis publication de la prédiction confirmée
-    // (et du « Bingo » si elle est gagnée) dans le canal configuré.
-    await formationRelay.tick();
-
-    // panneau « Prédiction combinée pour costume joueur » : sources multiples
-    // (stratégies + formations), déclencheur consécutif par niveau de
-    // rattrapage, prédiction synthétisée même costume/inverse +w.
-    await combined.tick();
-
-    // panneau « Série de costume » : sélection d'UNE source (stratégie, IA
-    // ou formation), série de N prédictions consécutives de MÊME costume —
-    // déclenchement immédiat si aucune perte dans la série, sinon attente du
-    // retour de ce costume avant de déclencher (voir suit-streak.js).
-    await suitStreak.tick();
-
-    // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
-    // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur début+34
-    // déclenchées quand le jeu en live arrive à −3/−2 de la cible (voir cards-count.js).
-    await cardsCount.tick();
-
-    // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
-    // relais des 2 prochaines prédictions d'une stratégie cochée après 3
-    // pertes consécutives, ou après 3 prédictions consécutives du même
-    // costume, dans le canal VIP configuré (voir vip.js).
-    await vip.tick();
+    // CORRECTIF (envoi en retard) : ces panneaux sont INDÉPENDANTS les uns
+    // des autres (chacun a son propre état/canaux et ne fait que LIRE
+    // state.games / state.predictions en commun). Avant, ils étaient
+    // enchaînés un par un avec await : si un panneau mettait du temps à
+    // envoyer ses messages Telegram (plusieurs canaux, réseau lent), TOUS
+    // les panneaux suivants — dont « combinaison » et « même costume » —
+    // attendaient avant même de commencer leur scan, avec un retard cumulé
+    // à chaque panneau. On les lance maintenant en parallèle avec
+    // Promise.all pour qu'ils partent tous au même tick, sans s'attendre
+    // les uns les autres.
+    if (predictionControl.isPaused()) return;
+    await Promise.all([
+      // panneau « Prédit » : prédictions certifiées à 100% (IA)
+      predit.tick(),
+      // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
+      // cartes exactes et cartes de valeur sur leurs canaux respectifs.
+      game21Predict.tick(),
+      // panneau « Prédiction après perte » : relais de la prochaine
+      // prédiction d'une stratégie suivie (existante ou IA) après N pertes
+      // consécutives.
+      afterLoss.tick(),
+      // panneau « Formation » : pour chaque stratégie cochée, lecture de la
+      // formation après une perte, puis publication de la prédiction
+      // confirmée (et du « Bingo » si elle est gagnée) dans le canal
+      // configuré.
+      formationRelay.tick(),
+      // panneau « Prédiction combinée pour costume joueur » : sources
+      // multiples (stratégies + formations), déclencheur consécutif par
+      // niveau de rattrapage, prédiction synthétisée même costume/inverse +w.
+      combined.tick(),
+      // panneau « Série de costume » : sélection d'UNE source (stratégie,
+      // IA ou formation), série de N prédictions consécutives de MÊME
+      // costume — déclenchement immédiat si aucune perte dans la série,
+      // sinon attente du retour de ce costume avant de déclencher (voir
+      // suit-streak.js).
+      suitStreak.tick(),
+      // stratégie « Dizaine — costume le plus / le moins sorti » : configurations
+      // multiples, comptage par dizaine de jeux (voir dizaine-top.js).
+      dizaineTop.tick(),
+      // « Meilleur + plus faible » : vérification des messages à deux costumes (voir best-weak-top.js)
+      Promise.resolve(bestWeakTop.tick()),
+      // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
+      // multiples (voir costume-faible-top.js).
+      costumeFaibleTop.tick(),
+      // panneau « Rupture de costume » : sélection d'UNE source (stratégie,
+      // IA ou formation), série de N prédictions consécutives de MÊME
+      // costume puis attente de la RUPTURE (prochain costume différent) —
+      // la rupture déclenche sur son propre numéro, en prédisant le costume
+      // original (voir suit-break.js).
+      suitBreak.tick(),
+      // panneau « Chevauchement de prédictions » : surveille UNE source
+      // (stratégie, IA, formation, ou un autre panneau), déclenche sur la
+      // 2ᵉ prédiction quand elle arrive avant que la 1ʳᵉ soit vérifiée —
+      // même prédiction / miroir / +n (voir overlap.js).
+      overlap.tick(),
+      // panneau « Statistiques » : relais brut (pas de prédiction) des
+      // costumes/cartes reçus de l'API Baccara vers un canal Telegram
+      // configuré, avec la notation demandée (voir statistics.js).
+      statistics.tick(),
+      // panneau « Comptage 2/2 » : comptage des catégories 3/2, 3/3, 2/2 par
+      // lot de 30 jeux (1→30, 31→60, 61→90…) et UNE prédiction par lot sur
+      // début+34 déclenchées quand le jeu en live arrive à −3/−2 de la
+      // cible (voir cards-count.js).
+      cardsCount.tick(),
+      // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
+      // relais des 2 prochaines prédictions d'une stratégie cochée après 3
+      // pertes consécutives, ou après 3 prédictions consécutives du même
+      // costume, dans le canal VIP configuré (voir vip.js).
+      vip.tick(),
+    ]);
   } catch (e) {
     state.lastError = e.message;
   } finally {
@@ -2134,11 +2029,6 @@ async function applyDbConfigs() {
       state.siteChannels = app.siteChannels; restored.push('canaux du site');
     }
   }
-  // token de la boutique : restauré depuis sa clé dédiée (jamais depuis
-  // loadAppConfig(), réservé au bot principal) — garantit la séparation
-  // même après un redémarrage.
-  const shopToken = await db.getSetting('shop_bot_token');
-  if (shopToken) { state.shopBotToken = shopToken; restored.push('token boutique'); }
   if (!state.siteChannels.length) {
     const rawSiteChannels = await db.getSetting('site_channels');
     if (rawSiteChannels) {
@@ -2241,16 +2131,23 @@ async function applyDbConfigs() {
   await afterLoss.restoreFromDb();
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
+  await dizaineTop.restoreFromDb();
+  await bestWeakTop.restoreFromDb();
+  await costumeFaibleTop.restoreFromDb();
+  await midnightReset.restoreFromDb();
+  await copyAnnounce.restoreFromDb();
+  await suitBreak.restoreFromDb();
+  await overlap.restoreFromDb();
+  await statistics.restoreFromDb();
   await cardsCount.restoreFromDb();
   await vip.restoreFromDb();
+  await predictionControl.restoreFromDb();
   // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
   // depuis la base les prédictions encore « en attente » + les dernières
   // résolues, pour que gagné/perdu/total ne repartent pas à zéro à chaque
   // redémarrage du process.
   const restoredCount = await restorePredictions();
   if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
-  await shop.loadFromDb();
-  await paiement.loadFromDb();
   await mirrorCounter.loadFromDb();
   await lossNotice.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
@@ -2298,12 +2195,40 @@ async function startLoop() {
   combined.setSender(senderFor);
   suitStreak.restore();
   suitStreak.setSender(senderFor);
+  dizaineTop.restore();
+  bestWeakTop.restore();
+  bestWeakTop.setSender(senderFor);
+  costumeFaibleTop.restore();
+  midnightReset.restore();
+  midnightReset.setSender(senderFor);
+  dizaineTop.setSender(senderFor);
+  dizaineTop.setAdminId(() => state.adminId);
+  costumeFaibleTop.setSender(senderFor);
+  costumeFaibleTop.setAdminId(() => state.adminId);
+  copyAnnounce.restore();
+  copyAnnounce.setSender(senderFor);
+  // « Copie et annonce » tourne sur SA PROPRE minuterie : elle ne dépend ni
+  // du flux de jeux (tick() s'arrête si l'API échoue) ni de la pause des
+  // prédictions pour mettre à jour les résultats copiés ; les annonces
+  // planifiées partent à l'heure même si le flux est coupé.
+  if (!global.__copyAnnounceTimer) {
+    global.__copyAnnounceTimer = setInterval(() => {
+      copyAnnounce.tick({ paused: predictionControl.isPaused() }).catch(() => {});
+    }, 4000);
+  }
+  suitBreak.restore();
+  suitBreak.setSender(senderFor);
+  overlap.restore();
+  overlap.setSender(senderFor);
+  statistics.restore();
+  statistics.setSender(senderFor);
   cardsCount.restore();
   cardsCount.setSender(senderFor);
   vip.restore();
   vip.setSender(senderFor);
   formationRelay.restore();
   formationRelay.setSender(senderFor);
+  predictionControl.restore();
   // Compteur « Taux Miroir » : édite le même message à chaque jeu terminé
   // (voir setOnFinished ci-dessous) plutôt que d'en renvoyer un nouveau —
   // retombe sur un nouvel envoi si l'édition échoue (message trop
@@ -2333,11 +2258,11 @@ async function startLoop() {
   });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
-  setOnShoeReset((reason, seq) => sendShoeReport(reason, seq));
+  setOnShoeReset((reason, seq) => (state.wiping ? false : sendShoeReport(reason, seq)));
   // bilan complet (toutes stratégies + IA) — envoyé quand les numéros
   // reviennent à 1 ET que le sabot qui vient de se terminer représente une
   // vraie journée (voir sendBilanIfDayOver ci-dessus pour le seuil).
-  setOnShoeReset((reason, seq, previousMax) => sendBilanIfDayOver(reason, seq, previousMax));
+  setOnShoeReset((reason, seq, previousMax) => (state.wiping ? undefined : sendBilanIfDayOver(reason, seq, previousMax)));
   setOnGateChange((key, g) => { if (db.ready) db.saveGate(key, g); });
   setOnAnnouncementSave((entry) => { if (db.ready) db.saveAnnouncement(entry); });
   setOnAnnouncementDelete((id) => { if (db.ready) db.deleteAnnouncement(id); });
@@ -2355,21 +2280,35 @@ async function startLoop() {
   } else {
     initStrategies();
   }
+  // Import AUTOMATIQUE du classeur Excel de configuration placé dans
+  // config-import/ (une seule fois par version du fichier — voir
+  // auto-import.js). Fait AVANT startBot() pour que le token importé soit
+  // utilisé dès ce démarrage, et APRÈS la lecture de la base pour que
+  // l'import prime sur les anciens réglages.
+  try {
+    const r = await require('./auto-import').run({ dataTransfer, db, persist, saveConfigsToDb });
+    if (r.imported) console.log('📥 Import automatique : ' + r.imported + ' — ' + (r.report.applied || []).join(', '));
+    else if (r.error) console.error('⚠️ Import automatique impossible (' + (r.file || '') + ') : ' + r.error);
+    else if (r.skipped) console.log('📥 Import automatique ignoré : ' + r.skipped);
+  } catch (e) { console.error('⚠️ Import automatique : erreur inattendue :', e.message); }
   if (!loopStarted) {
     loopStarted = true;
     setInterval(tick, config.POLL_INTERVAL_MS);
+    // retard d'envoi : contrôle chaque seconde (le tick ne passe que toutes les
+    // POLL_INTERVAL_MS) pour que les « +10 secondes » soient respectées à ~1 s près
+    let releasing = false;
+    setInterval(async () => {
+      if (releasing || ticking || predictionControl.isPaused()) return;
+      if (!state.predictions.some((p) => p.holdSend && p.status === 'en attente')) return;
+      releasing = true;
+      try { await sendDelay.releaseDue(state, broadcast); } catch (e) { state.lastError = e.message; } finally { releasing = false; }
+    }, 1000);
+    // « nouveau départ » de 00h00 (heure d'Abidjan) : export dans le chat privé puis
+    // effacement des données, configurations conservées (voir midnight-reset.js)
+    setInterval(() => { midnightReset.check().catch((e) => { state.lastError = e.message; }); }, 1000);
     tick();
-    // Vente automatique des déclencheurs IA >93% (shop.js/syncAutoIaListings) :
-    // intervalle dédié, séparé du tick jeu-par-jeu (1.5s) — la génération du
-    // nom de code par l'IA peut prendre plusieurs secondes, ça ne doit jamais
-    // ralentir le suivi des jeux en direct. « fire and forget » volontaire.
-    setInterval(() => {
-      shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
-    }, 60 * 1000);
-    shop.syncAutoIaListings(aiAuto.listStrategies()).catch((e) => console.error('Boutique (sync IA >93%) :', e.message));
   }
   startBot();
-  startShopBot();
 }
 
-module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, disconnectBot, startShopBot, shopBotStatus, disconnectShopBot, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };
+module.exports = { predit, flushBilans, setMainChannel, broadcast, sendPrediction, updateResult, startLoop, startBot, botStatus, disconnectBot, activate, deactivate, persist, listChannels, sendBilan, dropSender, announceConfig, announceMainBot, resolveChat, testSend, senderFor, saveConfigsToDb, applyDbConfigs, sendShoeReport };
