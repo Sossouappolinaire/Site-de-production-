@@ -45,7 +45,6 @@ const strategies = require('./strategies');
 const { state, hasSuit, addSiteChannelMessage, siteChannelsView, setOnShoeReset } = require('./predictor');
 const earlyVerify = require('./early-verify');
 const sendDelay = require('./send-delay');
-const bilanChart = require('./bilan-chart');
 
 const SUITS = strategies.SUITS; // ['♦️', '❤️', '♣️', '♠️'] — ordre de départage des égalités
 const MIN_READABLE = 6;
@@ -62,7 +61,7 @@ const panel = {
   lastScanAt: null,
   lastError: null,
   // bilan périodique (voir en-tête)
-  bilan: { enabled: true, chart: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
+  bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
   // canal des MEILLEURES prédictions (voir en-tête) : configuré une fois, il reçoit les
   // prédictions de la configuration actuellement en tête du classement du jour.
   best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 0 },
@@ -123,7 +122,6 @@ function sanitizeMinPreds(v) { const n = parseInt(v, 10); return Number.isFinite
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.bilanEnabled !== undefined) panel.bilan.enabled = !!patch.bilanEnabled;
-  if (patch.bilanChart !== undefined) panel.bilan.chart = !!patch.bilanChart;
   if (patch.bilanEveryHours !== undefined) panel.bilan.everyHours = sanitizeEvery(patch.bilanEveryHours);
   if (patch.bilanMinPreds !== undefined) panel.bilan.minPreds = sanitizeMinPreds(patch.bilanMinPreds);
   if (patch.bestEnabled !== undefined) panel.best.enabled = !!patch.bestEnabled;
@@ -153,7 +151,7 @@ function configure(patch = {}) {
 function config() {
   return {
     enabled: panel.enabled,
-    bilanEnabled: panel.bilan.enabled, bilanChart: panel.bilan.chart !== false, bilanEveryHours: panel.bilan.everyHours, bilanMinPreds: panel.bilan.minPreds,
+    bilanEnabled: panel.bilan.enabled, bilanEveryHours: panel.bilan.everyHours, bilanMinPreds: panel.bilan.minPreds,
     bestEnabled: panel.best.enabled, bestChannels: panel.best.channels, bestFormat: panel.best.format, bestMaxR: panel.best.maxR,
     weakEnabled: panel.weak.enabled, weakChannels: panel.weak.channels, weakFormat: panel.weak.format, weakMaxR: panel.weak.maxR, weakRank: panel.weak.rank,
   };
@@ -244,7 +242,6 @@ function applySaved(saved) {
     panel.bilan = {
       ...panel.bilan,
       enabled: saved.bilan.enabled !== false,
-      chart: saved.bilan.chart !== false,
       // migration unique : passage à un bilan toutes les heures pile (demande admin)
       everyHours: saved.bilan.hourlyMigrated ? sanitizeEvery(saved.bilan.everyHours) : 1,
       hourlyMigrated: true,
@@ -275,7 +272,6 @@ function applySaved(saved) {
       delayEnabled: saved.best.delayEnabled !== false,
       delaySec: sanitizeDelaySec(saved.best.delaySec),
       day: saved.best.day || undefined,
-      log: Array.isArray(saved.best.log) ? saved.best.log.slice(-300) : [],
       lastSuit: saved.best.lastSuit || null,
       lastTarget: Number.isFinite(Number(saved.best.lastTarget)) && saved.best.lastTarget !== null ? Number(saved.best.lastTarget) : null,
     };
@@ -302,7 +298,6 @@ function applySaved(saved) {
       delayEnabled: saved.weak.delayEnabled !== false,
       delaySec: sanitizeDelaySec(saved.weak.delaySec),
       day: saved.weak.day || undefined,
-      log: Array.isArray(saved.weak.log) ? saved.weak.log.slice(-300) : [],
       lastSuit: saved.weak.lastSuit || null,
       lastTarget: Number.isFinite(Number(saved.weak.lastTarget)) && saved.weak.lastTarget !== null ? Number(saved.weak.lastTarget) : null,
     };
@@ -620,7 +615,7 @@ function rollBestDay(now = Date.now()) {
   if (b.day === key) return false;
   const stale = b.day ? true : !!(b.lastSentAt && bestDayKey(b.lastSentAt) !== key);
   b.day = key;
-  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; b.log = []; }
+  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; }
   persist();
   return stale;
 }
@@ -827,7 +822,7 @@ function rollWeakDay(now = Date.now()) {
   if (b.day === key) return false;
   const stale = b.day ? true : !!(b.lastSentAt && bestDayKey(b.lastSentAt) !== key);
   b.day = key;
-  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; b.log = []; }
+  if (stale) { b.wins = 0; b.losses = 0; b.lastSuit = null; b.lastTarget = null; }
   persist();
   return stale;
 }
@@ -1001,6 +996,27 @@ async function handleMemberUpdateAll(u) {
 }
 
 
+// « Meilleur + plus faible » (best-weak-top.js) : transmet la prédiction si cette configuration est la meilleure
+// ou la plus faible du moment, avec son pourcentage de réussite du jour.
+async function comboHook(tracker, syn) {
+  const bw = require('./best-weak-top');
+  if (!bw.hasEnabled('dizaine')) return;
+  bw.setPctProvider('dizaine', (ref) => { const r = rankedToday().find((x) => x.t.id === ref); return r ? r.rate * 100 : null; });
+  const ranked = rankedToday();
+  const pctOf = (t) => { const r = ranked.find((x) => x.t.id === t.id); return r ? r.rate * 100 : null; };
+  const b = currentBest(); const w = currentWeak();
+  // rang de cette configuration : 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
+  let rank = null;
+  if (b && b.id === tracker.id) rank = 1;
+  else if (w && w.id === tracker.id) rank = 4;
+  else {
+    const rest = ranked.filter((r) => r.t.id !== (b && b.id) && r.t.id !== (w && w.id));
+    const i = rest.findIndex((r) => r.t.id === tracker.id);
+    rank = i === 0 ? 2 : (i === 1 ? 3 : null);
+  }
+  if (rank) await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker) });
+}
+
 async function send(tracker, syn) {
   const targetChannels = effectiveChannels(tracker);
   if (!targetChannels.length && !tracker.siteChannelId) {
@@ -1069,6 +1085,7 @@ async function send(tracker, syn) {
   // canal des meilleures prédictions : relais si cette configuration est la meilleure du moment
   try { await forwardToBest(tracker, syn); } catch (e) { panel.lastError = `Meilleures prédictions : ${e.message}`; }
   try { await forwardToWeak(tracker, syn); } catch (e) { panel.lastError = `Plus faible : ${e.message}`; }
+  try { await comboHook(tracker, syn); } catch (_) { /* jamais bloquant */ }
   return true;
 }
 
@@ -1091,22 +1108,15 @@ function editPending(entry, statusFr) {
 // des configurations à taux égal (moyenne des rattrapages, voir compareQuality).
 // relais vers le canal des meilleures : jamais compté dans les scores des configurations,
 // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
-// journal des résultats des prédictions envoyées dans le canal des meilleures / du plus faible (courbe cumulée du bilan)
-function pushResultLog(b, entry, field) {
-  if (!Array.isArray(b.log)) b.log = [];
-  b.log.push({ target: entry.target, suit: entry.suit, status: field === 'wins' ? 'gagné' : 'perdu', step: Number(entry.step) || 0, maxR: Number(entry.maxR) || 0, resolvedAt: Date.now() });
-  if (b.log.length > 300) b.log = b.log.slice(-300);
-}
-
 function bumpEntry(entry, field, step = 0) {
   if (entry.mirror) {
     if (entry.best) {
       rollBestDay();
-      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.best.day) { panel.best[field] = (panel.best[field] || 0) + 1; pushResultLog(panel.best, entry, field); persist(); }
+      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.best.day) { panel.best[field] = (panel.best[field] || 0) + 1; persist(); }
     }
     if (entry.weak) {
       rollWeakDay();
-      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.weak.day) { panel.weak[field] = (panel.weak[field] || 0) + 1; pushResultLog(panel.weak, entry, field); persist(); }
+      if (!entry.createdAt || bestDayKey(entry.createdAt) === panel.weak.day) { panel.weak[field] = (panel.weak[field] || 0) + 1; persist(); }
     }
     return;
   }
@@ -1457,38 +1467,6 @@ async function refreshChannelTitles(ids) {
   }));
 }
 
-// COURBE CUMULÉE des prédictions envoyées dans le canal des meilleures (kind = 'best') ou du plus faible ('weak'),
-// depuis 00h00 (heure d'Abidjan) : une seule ligne, descente tracée en rouge.
-function buildBilanChart(kind = 'best') {
-  if (panel.bilan.chart === false) return null;
-  const b = kind === 'weak' ? panel.weak : panel.best;
-  const log = (Array.isArray(b.log) ? b.log : []).filter((e) => e && e.resolvedAt);
-  if (!log.length) return null;
-  const day = bestDayKey(log[log.length - 1].resolvedAt); // journée de la dernière prédiction (bilan de minuit compris)
-  const entries = log.filter((e) => bestDayKey(e.resolvedAt) === day).sort((x, y) => x.resolvedAt - y.resolvedAt);
-  return bilanChart.buildCumulative({ title: kind === 'weak' ? 'Courbe cumulée — canal du plus faible' : 'Courbe cumulée — canal des meilleures', entries });
-}
-// envoi après chaque bilan : la courbe du meilleur dans le canal des meilleures, celle du plus faible dans le canal du plus faible
-async function sendBilanCharts(bot, errors) {
-  if (!bot || typeof bot.sendPhoto !== 'function' || panel.bilan.chart === false) return 0;
-  let paused = () => false;
-  try { paused = require('./prediction-control').isChannelPaused; } catch (_) { /* pas de pause connue */ }
-  let n = 0;
-  for (const kind of ['best', 'weak']) {
-    const b = panel[kind];
-    if (!b.enabled || !b.channels.length) continue;
-    let ch = null;
-    try { ch = buildBilanChart(kind); } catch (e) { errors.push(`courbe ${kind} : ${e.message}`); }
-    if (!ch) continue;
-    for (const id of b.channels) {
-      if (paused(id)) continue; // /stop : rien n'est publié
-      try { await bot.sendPhoto(id, ch.png, { caption: ch.caption }, { filename: `courbe-${kind}.png`, contentType: 'image/png' }); n++; }
-      catch (e) { errors.push(`courbe ${id} : ${e.message}`); }
-    }
-  }
-  return n;
-}
-
 async function sendBilan({ force = false, now = Date.now() } = {}) {
   const { tg, site } = bilanTargets();
   if (!tg.length && !site.length) return { ok: false, error: 'Aucun canal configuré' };
@@ -1510,7 +1488,6 @@ async function sendBilan({ force = false, now = Date.now() } = {}) {
       for (const r of res) { if (r.ok) sent.push(String(r.id)); else if (!r.skipped) errors.push(`${r.id} : ${r.error}`); }
     }
   }
-  try { await sendBilanCharts(bot, errors); } catch (e) { errors.push(`courbe : ${e.message}`); }
   for (const id of site) { if (addSiteChannelMessage(id, { sender: 'Bilan Dizaine', text })) sent.push(`site:${id}`); }
   panel.bilan.lastSentAt = Date.now();
   panel.bilan.lastResult = { sent: sent.length, errors: errors.slice(0, 3), at: Date.now() };
@@ -1667,7 +1644,7 @@ module.exports = {
   restore, restoreFromDb, parseChannels, setChannelTitle,
   // exposés pour les tests
   countDecade, rankSuits, pickSuit,
-  sendBilan, buildBilanText, buildBilanChart, bilanTick, rollDay, compareQuality, compareRanking,
+  sendBilan, buildBilanText, bilanTick, rollDay, compareQuality, compareRanking,
 };
 
 // exposé pour l'effacement de minuit (midnight-reset.js)

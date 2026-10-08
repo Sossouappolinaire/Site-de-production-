@@ -44,6 +44,7 @@ const afterLoss = require('./after-loss');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
+const bestWeakTop = require('./best-weak-top');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
 const suitBreak = require('./suit-break');
@@ -392,6 +393,7 @@ app.get('/api/state', async (req, res) => {
     combined: combined.status(),
     suitStreak: suitStreak.status(),
     dizaineTop: dizaineTop.status(),
+    bestWeakTop: bestWeakTop.status(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
@@ -1836,11 +1838,6 @@ app.post('/api/dizaine-top/trackers/:id/test', async (req, res) => {
 });
 
 // bilan : aperçu du texte (sans envoi) et envoi immédiat (test)
-app.get('/api/dizaine-top/bilan/chart.png', (req, res) => {
-  const c = dizaineTop.buildBilanChart(req.query.kind === 'weak' ? 'weak' : 'best');
-  if (!c) return res.status(404).send("Aucune prédiction vérifiée à tracer.");
-  res.type('png').send(c.png);
-});
 app.get('/api/dizaine-top/bilan/preview', (req, res) => {
   res.json({ text: dizaineTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });
 });
@@ -1851,6 +1848,38 @@ app.post('/api/dizaine-top/welcome/test', async (req, res) => {
 app.post('/api/dizaine-top/bilan/send', async (req, res) => {
   const r = await dizaineTop.sendBilan({ force: true });
   res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, dizaineTop: dizaineTop.status() });
+});
+
+// « Meilleur + plus faible » (voir best-weak-top.js) : un message à deux costumes (meilleur + plus faible) par jeu.
+async function verifyBestWeakChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) bestWeakTop.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/best-weak', (req, res) => res.json(bestWeakTop.status()));
+app.post('/api/best-weak/configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    const c = bestWeakTop.addConfig(b);
+    res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/best-weak/configs/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    const c = bestWeakTop.updateConfig(req.params.id, b);
+    if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/best-weak/configs/:id', (req, res) => { bestWeakTop.removeConfig(req.params.id); res.json(bestWeakTop.status()); });
+app.post('/api/best-weak/configs/:id/test', async (req, res) => {
+  const r = await bestWeakTop.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
 });
 
 app.post('/api/dizaine-top/scan', async (req, res) => {
@@ -1910,11 +1939,6 @@ app.delete('/api/costume-faible-top/trackers/:id', (req, res) => {
 app.post('/api/costume-faible-top/trackers/:id/test', async (req, res) => {
   const r = await costumeFaibleTop.test(req.params.id);
   res.status(r.ok ? 200 : 400).json(r);
-});
-app.get('/api/costume-faible-top/bilan/chart.png', (req, res) => {
-  const c = costumeFaibleTop.buildBilanChart(req.query.kind === 'weak' ? 'weak' : 'best');
-  if (!c) return res.status(404).send("Aucune prédiction vérifiée à tracer.");
-  res.type('png').send(c.png);
 });
 app.get('/api/costume-faible-top/bilan/preview', (req, res) => {
   res.json({ text: costumeFaibleTop.buildBilanText(Date.now(), true) || "Aucune prédiction vérifiée aujourd'hui." });

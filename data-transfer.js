@@ -145,6 +145,7 @@ const PANELS = {
   combined: { mod: './combined' },
   suitStreak: { mod: './suit-streak' },
   dizaineTop: { mod: './dizaine-top' },
+  bestWeakTop: { mod: './best-weak-top' },
   costumeFaibleTop: { mod: './costume-faible-top' },
   suitBreak: { mod: './suit-break' },
   overlap: { mod: './overlap' },

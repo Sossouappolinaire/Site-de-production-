@@ -20,6 +20,7 @@ const copyAnnounce = require('./copy-announce');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
+const bestWeakTop = require('./best-weak-top');
 const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
@@ -1933,6 +1934,8 @@ async function tick() {
       // stratégie « Dizaine — costume le plus / le moins sorti » : configurations
       // multiples, comptage par dizaine de jeux (voir dizaine-top.js).
       dizaineTop.tick(),
+      // « Meilleur + plus faible » : vérification des messages à deux costumes (voir best-weak-top.js)
+      Promise.resolve(bestWeakTop.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
       // multiples (voir costume-faible-top.js).
       costumeFaibleTop.tick(),
@@ -2129,6 +2132,7 @@ async function applyDbConfigs() {
   await combined.restoreFromDb();
   await suitStreak.restoreFromDb();
   await dizaineTop.restoreFromDb();
+  await bestWeakTop.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
   await copyAnnounce.restoreFromDb();
@@ -2192,6 +2196,8 @@ async function startLoop() {
   suitStreak.restore();
   suitStreak.setSender(senderFor);
   dizaineTop.restore();
+  bestWeakTop.restore();
+  bestWeakTop.setSender(senderFor);
   costumeFaibleTop.restore();
   midnightReset.restore();
   midnightReset.setSender(senderFor);

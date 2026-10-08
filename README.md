@@ -391,3 +391,43 @@ registres anti-doublon, filtres « double perte », annonces de position, analys
 `cumulative_analyses`) ; 3) confirme à l'administrateur. AUCUNE configuration n'est touchée.
 Si le serveur dormait à 00h00, l'opération a lieu à son réveil (30 premières minutes). Un seul
 passage par jour. Les jeux déjà terminés renvoyés ensuite par le flux ne redéclenchent rien.
+
+## Bilan remis à zéro après chaque envoi
+
+Pour « Dizaine » et « Costume faible » : le compteur du bilan (`seg`) repart de **zéro** dès qu'un bilan
+a réellement été envoyé (Telegram ou canal du site). Le bilan suivant ne compte que les prédictions
+vérifiées **depuis le bilan précédent** (l'en-tête indique « Compté depuis le dernier bilan (HHhMM → HHh00) »).
+- Le compteur est gelé pendant l'envoi : les résultats qui arrivent à ce moment-là comptent déjà pour le bilan suivant.
+- Si aucun envoi n'a abouti (bot en pause, erreur partout), le compteur est remis en place : rien n'est perdu.
+- Pas de prédiction vérifiée depuis le dernier bilan → aucun bilan envoyé, le compteur continue.
+- Le compteur « du jour » (classement du jour, choix des meilleures prédictions, Excel) n'est pas touché.
+- `midnight-reset.js` remet aussi ce compteur à zéro à 00h00.
+- Le minimum de prédictions pour être classé (`minPreds`, 5 par défaut) s'applique maintenant à chaque tranche
+  entre deux bilans : avec un bilan toutes les heures, baissez-le si trop de canaux restent « pas assez de données ».
+
+## Canal du plus faible (4ᵉ du classement)
+
+Dans les panneaux « Dizaine » et « Costume faible », une nouvelle section **📉 Canal du plus faible**
+(sous « Canal des meilleures prédictions ») se configure de la même façon : ID du canal, lien, format,
+rattrapages, retard d'envoi, bienvenue et récapitulatif. Le bot y relaie les prédictions de la stratégie
+(ou du canal, en mode 4 canaux) classée au **rang 4** du classement du jour (rang réglable de 2 à 10).
+- Au moins 2 stratégies classées sont requises ; s'il y en a moins de 4, c'est la dernière classée.
+- Ce n'est jamais la même stratégie que celle du canal des meilleures.
+- Il bascule automatiquement quand le classement change (alerte privée à l'admin).
+- Réglages : `weakEnabled`, `weakChannels`, `weakLink`, `weakRank`, `weakFormat`, `weakMaxR`, `weakDelayEnabled`,
+  `weakDelaySec`, `weakWelcome`, `weakRecap`, `weakRecapMin` sur `POST /api/dizaine-top/config` et
+  `POST /api/costume-faible-top/config` ; test : `POST …/welcome/test` avec `{ "kind": "weak" }`.
+
+## Meilleur + plus faible (message à deux costumes)
+
+Bouton **🎯 Meilleur + plus faible** dans la page Stratégies. « Créer » demande la stratégie source (Dizaine ou Costume faible), puis l'ID du canal, les rattrapages et les costumes à proposer : on coche **au moins 2** (jusqu'à 4) parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible (4ᵉ). Quand tous ceux qui sont cochés
+(Dizaine ou Costume faible), puis l'ID du canal et le nombre de rattrapages. Quand la meilleure configuration du jour et
+le plus faible (4ᵉ du classement) de cette stratégie prédisent le **même numéro de jeu**, le bot envoie :
+
+    ♦️ 85% ─────┐
+                ├ N°464
+    ❤️ 78% ─────┘
+
+(pourcentage = taux de réussite du jour). Après vérification (main du joueur, avec les rattrapages), le message est
+modifié : on garde le costume sorti (`⚜️ #464 | ♦️ | ✅0️⃣`), les deux s'ils sortent ensemble, ou `⚜️ #464 | ♦️ ❤️ | ❌`.
+Code : `best-weak-top.js` ; routes `/api/best-weak/…`.
