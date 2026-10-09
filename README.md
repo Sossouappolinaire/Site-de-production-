@@ -431,3 +431,25 @@ le plus faible (4ᵉ du classement) de cette stratégie prédisent le **même nu
 (pourcentage = taux de réussite du jour). Après vérification (main du joueur, avec les rattrapages), le message est
 modifié : on garde le costume sorti (`⚜️ #464 | ♦️ | ✅0️⃣`), les deux s'ils sortent ensemble, ou `⚜️ #464 | ♦️ ❤️ | ❌`.
 Code : `best-weak-top.js` ; routes `/api/best-weak/…`.
+
+### Types de configuration « Meilleur + plus faible » (page Stratégies, carte d'accueil ⚡)
+
+Trois types, pour « Dizaine » et « Costume faible » (assistant : confirmation → stratégie → ID du canal Telegram,
+rattrapages, format de prédiction, nom) :
+- **🎯 Plusieurs costumes** : un message avec 2 à 4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) et leur pourcentage.
+- **⚡ Déclencheurs** : prédiction simple quand une des 4 configurations enchaîne 2 pertes, ou 2 gains de suite au
+  rattrapage 2 ou 3 (→ sa prochaine prédiction), ou quand un costume est absent depuis 13 jeux (→ prédit à +1 et +5).
+- **🔁 Cycle** : on suit le meilleur tant que ses prédictions gagnent en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe
+  au plus faible, puis au 2ᵉ, puis au 3ᵉ. Une fois les 4 passées, le cycle ne recommence pas : on attend qu'une des 4
+  perde ; celle qui perd est suivie (sa prochaine prédiction part) et les mêmes règles s'appliquent. Une prédiction à la fois.
+
+Anti-doublons : deux configurations identiques (même type, stratégie, costumes et un canal en commun) sont refusées /
+fusionnées au chargement ; une configuration n'envoie jamais deux fois la prédiction du même jeu (mémoire persistée).
+
+### Suivi des canaux (👁️)
+
+Carte « Suivre des canaux » à l'accueil (et page Stratégies) : confirmation → liste de tous les canaux (ID + nom) qui
+reçoivent des prédictions, à cocher → nom, ID du canal où envoyer, rattrapages, format de prédiction. Le bot suit les
+messages à plusieurs costumes qu'il publie lui-même dans les canaux cochés (`♦️ 95% … N°884`) :
+- **rotation** : 1ᵉʳ costume au 1ᵉʳ message, 2ᵉ au suivant, 3ᵉ au suivant s'il y en a 3 ; avec 2 costumes, retour au 1ᵉʳ ;
+- **motif** : le 1ᵉʳ costume gagne (jeu N) puis le 2ᵉ gagne au rattrapage (jeu N+1) → le 2ᵉ costume est prédit au jeu N+2.

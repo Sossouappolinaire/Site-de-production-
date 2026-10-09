@@ -1048,6 +1048,15 @@ async function handleMemberUpdateAll(u) {
 
 // « Meilleur + plus faible » (best-weak-top.js) : transmet la prédiction si cette configuration est la meilleure
 // ou la plus faible du moment, avec son pourcentage de réussite du jour.
+function bwRankOfRef(ref) {
+  const ranked = rankedToday();
+  const b = currentBest(); const w = currentWeak();
+  if (b && b.key === ref) return 1;
+  if (w && w.key === ref) return 4;
+  const rest = ranked.filter((r) => r.c.key !== (b && b.key) && r.c.key !== (w && w.key));
+  const i = rest.findIndex((r) => r.c.key === ref);
+  return i === 0 ? 2 : (i === 1 ? 3 : null);
+}
 async function comboHook(tracker, syn) {
   const bw = require('./best-weak-top');
   if (!bw.hasEnabled('costumeFaible')) return;
@@ -1055,16 +1064,7 @@ async function comboHook(tracker, syn) {
   const ranked = rankedToday();
   const myKey = syn.slot !== undefined ? `${tracker.id}#${syn.slot}` : tracker.id;
   const pctOf = (key) => { const r = ranked.find((x) => x.c.key === key); return r ? r.rate * 100 : null; };
-  const b = currentBest(); const w = currentWeak();
-  // rang de ce canal : 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
-  let rank = null;
-  if (b && b.key === myKey) rank = 1;
-  else if (w && w.key === myKey) rank = 4;
-  else {
-    const rest = ranked.filter((r) => r.c.key !== (b && b.key) && r.c.key !== (w && w.key));
-    const i = rest.findIndex((r) => r.c.key === myKey);
-    rank = i === 0 ? 2 : (i === 1 ? 3 : null);
-  }
+  const rank = bwRankOfRef(myKey); // 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
   if (rank) await bw.record('costumeFaible', rank, { target: syn.target, suit: syn.suit, ref: myKey, pct: pctOf(myKey) });
 }
 
@@ -1179,6 +1179,7 @@ function bumpScore(trackerId, field, step = 0) {
 // score d'une prédiction vérifiée. Prédiction d'un canal (slot) : le score va au canal lui-même
 // (chaque canal est une stratégie séparée dans le bilan et pour le choix du meilleur).
 function bumpEntry(entry, field, step = 0) {
+  if (!entry.mirror) { try { require('./best-weak-top').recordResult('costumeFaible', (entry.slot !== undefined ? `${entry.trackerId}#${entry.slot}` : entry.trackerId), field, step); } catch (_) { /* jamais bloquant */ } }
   if (entry.mirror) {
     // relais vers le canal des meilleures : jamais compté dans les scores des canaux,
     // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
@@ -1753,3 +1754,4 @@ module.exports.currentWeak = currentWeak;
 module.exports.welcomeText = welcomeText;
 module.exports.testWelcome = testWelcome;
 module.exports.bumpEntry = bumpEntry;
+try { require('./best-weak-top').setRankProvider('costumeFaible', bwRankOfRef); } catch (_) { /* module facultatif */ }

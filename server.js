@@ -1859,6 +1859,13 @@ async function verifyBestWeakChannels(list) {
   }
 }
 app.get('/api/best-weak', (req, res) => res.json(bestWeakTop.status()));
+// liste de TOUS les canaux (id + nom) qui reçoivent des prédictions, pour choisir ceux à suivre (mode « suivi »)
+app.get('/api/best-weak/channels', (req, res) => {
+  const multi = new Set(bestWeakTop.hasMultiChannels());
+  const rows = configuredChannelList().map((r) => ({ ...r, multi: multi.has(String(r.id)) }));
+  rows.sort((a, b) => Number(b.multi) - Number(a.multi));
+  res.json({ channels: rows });
+});
 app.post('/api/best-weak/configs', async (req, res) => {
   try {
     const b = req.body || {};
@@ -2389,7 +2396,7 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
 function configuredChannelList() {
   const rows = new Map();
   const titles = {};
-  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, overlap, copyAnnounce]) {
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, overlap, copyAnnounce]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {
@@ -2418,6 +2425,7 @@ function configuredChannelList() {
     const fr = formationRelay.status() || {};
     (Array.isArray(fr.channels) ? fr.channels : []).forEach((id) => add(id, 'Formation'));
   } catch (_) {}
+  try { for (const c of (bestWeakTop.status().configs || [])) (c.channels || []).forEach((id) => add(id, `Meilleur + plus faible · ${c.name || c.strategyLabel}`)); } catch (_) {}
   (Array.isArray(state.activeChannels) ? state.activeChannels : []).forEach((id) => add(id, 'Canaux actifs'));
   return [...rows.values()];
 }

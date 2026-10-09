@@ -998,22 +998,22 @@ async function handleMemberUpdateAll(u) {
 
 // « Meilleur + plus faible » (best-weak-top.js) : transmet la prédiction si cette configuration est la meilleure
 // ou la plus faible du moment, avec son pourcentage de réussite du jour.
+function bwRankOfRef(ref) {
+  const ranked = rankedToday();
+  const b = currentBest(); const w = currentWeak();
+  if (b && b.id === ref) return 1;
+  if (w && w.id === ref) return 4;
+  const rest = ranked.filter((r) => r.t.id !== (b && b.id) && r.t.id !== (w && w.id));
+  const i = rest.findIndex((r) => r.t.id === ref);
+  return i === 0 ? 2 : (i === 1 ? 3 : null);
+}
 async function comboHook(tracker, syn) {
   const bw = require('./best-weak-top');
   if (!bw.hasEnabled('dizaine')) return;
   bw.setPctProvider('dizaine', (ref) => { const r = rankedToday().find((x) => x.t.id === ref); return r ? r.rate * 100 : null; });
   const ranked = rankedToday();
   const pctOf = (t) => { const r = ranked.find((x) => x.t.id === t.id); return r ? r.rate * 100 : null; };
-  const b = currentBest(); const w = currentWeak();
-  // rang de cette configuration : 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
-  let rank = null;
-  if (b && b.id === tracker.id) rank = 1;
-  else if (w && w.id === tracker.id) rank = 4;
-  else {
-    const rest = ranked.filter((r) => r.t.id !== (b && b.id) && r.t.id !== (w && w.id));
-    const i = rest.findIndex((r) => r.t.id === tracker.id);
-    rank = i === 0 ? 2 : (i === 1 ? 3 : null);
-  }
+  const rank = bwRankOfRef(tracker.id); // 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
   if (rank) await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker) });
 }
 
@@ -1109,6 +1109,7 @@ function editPending(entry, statusFr) {
 // relais vers le canal des meilleures : jamais compté dans les scores des configurations,
 // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
 function bumpEntry(entry, field, step = 0) {
+  if (!entry.mirror) { try { require('./best-weak-top').recordResult('dizaine', entry.trackerId, field, step); } catch (_) { /* jamais bloquant */ } }
   if (entry.mirror) {
     if (entry.best) {
       rollBestDay();
@@ -1658,3 +1659,4 @@ module.exports.currentWeak = currentWeak;
 module.exports.welcomeText = welcomeText;
 module.exports.testWelcome = testWelcome;
 module.exports.bumpEntry = bumpEntry;
+try { require('./best-weak-top').setRankProvider('dizaine', bwRankOfRef); } catch (_) { /* module facultatif */ }
