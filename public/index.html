@@ -517,8 +517,8 @@
       <div class="home-grid">
         ${card('#/canaux', '📡', 'Canaux', 'Fil des prédictions, style Telegram')}
         ${card('#/strategies', '🎯', 'Stratégies', `${(snapshot.strategies||[]).length} stratégie(s)`)}
-        ${card(null, '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · créer`, 'startBwWizard(\'trigger\')')}
-        ${card(null, '👁️', 'Suivre des canaux', 'Cocher les canaux de prédiction à suivre', 'startBwWizard(\'follow\')')}
+        ${card('#/best-weak', '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · voir / modifier`)}
+        ${card('#/best-weak', '👁️', 'Suivre des canaux', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'follow').length} configuration(s) · voir / modifier`)}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
         ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
       </div>
@@ -1792,7 +1792,7 @@ Faites-en bon usage !
     const BW_MODES = {
       multi: { icon: '🎯', title: 'Message à plusieurs costumes', sub: 'Un message avec 2 à 4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) et leur pourcentage ; seul le costume sorti reste.' },
       trigger: { icon: '⚡', title: 'Envoi sur déclencheur', sub: '2 pertes de suite · 2× rattrapage 2 ou 3 de suite · costume absent 13 jeux (prédit à +1 et +5).' },
-      follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit un costume à la fois en tournant (1er, 2ᵉ, 3ᵉ…) et, si le 1er gagne puis le 2ᵉ au rattrapage, prédit le 2ᵉ à N+2.' },
+      follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne en ✅0️⃣/✅1️⃣ ; sinon il passe au 2ᵉ. Si un costume sort directement (✅0️⃣) sans l’autre, l’autre est prédit à N+2 ; si les deux sortent, on ignore.' },
       cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
     };
     let bwWizard = { mode: 'multi', strategy: null };
