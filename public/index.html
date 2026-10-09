@@ -517,6 +517,8 @@
       <div class="home-grid">
         ${card('#/canaux', '📡', 'Canaux', 'Fil des prédictions, style Telegram')}
         ${card('#/strategies', '🎯', 'Stratégies', `${(snapshot.strategies||[]).length} stratégie(s)`)}
+        ${card(null, '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · créer`, 'startBwWizard(\'trigger\')')}
+        ${card(null, '👁️', 'Suivre des canaux', 'Cocher les canaux de prédiction à suivre', 'startBwWizard(\'follow\')')}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
         ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
       </div>
@@ -1782,24 +1784,54 @@ Faites-en bon usage !
       return main + each;
     }
     // -------------------------------------------------------------------
-    // « Meilleur + plus faible » (voir best-weak-top.js) : un seul message qui propose DEUX costumes
-    // (celui de la meilleure configuration + celui du plus faible), avec leur pourcentage ; après vérification,
-    // seul le costume sorti reste dans le message.
+    // « Meilleur + plus faible » (voir best-weak-top.js) — 3 types de configuration :
+    //   🎯 multi    : un message à 2-4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) avec leur pourcentage
+    //   ⚡ trigger  : prédiction simple sur déclencheur (2 pertes · 2× rattrapage 2/3 · costume absent 13 jeux → +1 et +5)
+    //   🔁 cycle    : on suit une configuration à la fois (meilleur → faible → 2ᵉ → 3ᵉ…), elle reste tant que ✅0️⃣/✅1️⃣
     // -------------------------------------------------------------------
+    const BW_MODES = {
+      multi: { icon: '🎯', title: 'Message à plusieurs costumes', sub: 'Un message avec 2 à 4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) et leur pourcentage ; seul le costume sorti reste.' },
+      trigger: { icon: '⚡', title: 'Envoi sur déclencheur', sub: '2 pertes de suite · 2× rattrapage 2 ou 3 de suite · costume absent 13 jeux (prédit à +1 et +5).' },
+      follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit un costume à la fois en tournant (1er, 2ᵉ, 3ᵉ…) et, si le 1er gagne puis le 2ᵉ au rattrapage, prédit le 2ᵉ à N+2.' },
+      cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
+    };
+    let bwWizard = { mode: 'multi', strategy: null };
+    const bwModeOf = (c) => (c && ['trigger', 'cycle', 'follow'].includes(c.mode) ? c.mode : 'multi');
     function bestWeakButtons() {
       const d = snapshot.bestWeakTop || {};
       const list = d.configs || [];
-      const main = `<button class="strategy-button" onclick="location.hash='#/best-weak'">
-        <span class="eyebrow">🎯 Meilleur + plus faible</span><b>Message à deux costumes : le meilleur et le plus faible</b>
-        <span>Choisis la stratégie (Dizaine ou Costume faible), le canal et les rattrapages : le bot envoie le costume du meilleur et celui du plus faible avec leur pourcentage, puis ne garde que celui qui sort.</span>
-        <span class="strategy-stats"><span class="tag">${esc(list.length)} configuration(s)</span><span class="tag">${esc(d.sentCount || 0)} envoyée(s)</span></span>
-        <em>Ouvrir la configuration →</em></button>`;
+      const btn = (onclick, m, extra) => `<button class="strategy-button" onclick="${onclick}"><span class="eyebrow">${m.icon} Meilleur + plus faible</span><b>${esc(m.title)}</b><span>${esc(m.sub)}</span>${extra || ''}<em>Ouvrir →</em></button>`;
+      const count = (mode) => list.filter(c => bwModeOf(c) === mode).length;
+      const tag = (mode) => `<span class="strategy-stats"><span class="tag">${count(mode)} configuration(s)</span></span>`;
+      const main = btn("location.hash='#/best-weak'", BW_MODES.multi, `<span class="strategy-stats"><span class="tag">${esc(list.length)} configuration(s)</span><span class="tag">${esc(d.sentCount || 0)} envoyée(s)</span></span>`);
+      const cycle = btn("startBwWizard('cycle')", BW_MODES.cycle, tag('cycle'));
+      const trig = btn("startBwWizard('trigger')", BW_MODES.trigger, tag('trigger'));
+      const follow = btn("startBwWizard('follow')", BW_MODES.follow, tag('follow'));
       const each = list.map(c => `<button class="strategy-button" onclick="location.hash='#/best-weak'">
-        <span class="eyebrow">🎯 Meilleur + plus faible${c.enabled ? '' : ' · en pause'}</span><b>${esc(c.strategyLabel)}</b><span>Canal : ${esc((c.channelNames || []).join(', '))} · ${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s)</span>
+        <span class="eyebrow">${BW_MODES[bwModeOf(c)].icon} ${esc(BW_MODES[bwModeOf(c)].title)}${c.enabled ? '' : ' · en pause'}</span><b>${esc(c.name || c.strategyLabel)}</b><span>${esc(c.strategyLabel)} · Canal : ${esc((c.channelNames || []).join(', '))} · ${esc(c.maxR)} rattrapage(s)</span>
         <span class="strategy-stats"><span class="tag good">${esc(c.wins || 0)} gagné(s)</span><span class="tag bad">${esc(c.losses || 0)} perdu(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`).join('');
-      return main + each;
+      return main + cycle + trig + follow + each;
     }
+    function bestWeakPage() {
+      setNav('strategies');
+      const p = snapshot.bestWeakTop || {};
+      const list = p.configs || [];
+      const cards = list.length ? list.map(c => { const m = bwModeOf(c); return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div><span class="eyebrow">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)} · ${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}Envoi dans : ${esc((c.channelNames || []).join(', '))}</h3>
+          <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s)${m === 'multi' ? '' : ` · format ${esc(c.format || 1)}`} · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)${c.cycleLabel ? ` · <b>${esc(c.cycleLabel)}</b>` : ''}</p></div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`; }).join('')
+        : '<p class="small">Aucune configuration pour le moment. Clique sur « Créer ».</p>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">🎯 Meilleur + plus faible</h2>
+        <p class="small">Trois types de configuration pour les stratégies « Dizaine » et « Costume faible » : un message à plusieurs costumes, un envoi sur déclencheur, ou un cycle meilleur / faible. Les doublons sont bloqués : deux configurations identiques dans le même canal sont refusées, et une configuration n'envoie jamais deux fois la prédiction du même jeu${p.duplicatesBlocked ? ` (${esc(p.duplicatesBlocked)} doublon(s) de prédiction évité(s))` : ''}${p.duplicatesRemoved ? ` · ${esc(p.duplicatesRemoved)} configuration(s) en double fusionnée(s)` : ''}.</p>
+        <div class="toolbar"><button class="button primary" onclick="chooseBwType()">Créer</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button><button class="button ghost" onclick="location.hash='#/strategies'">← Stratégies</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
+    }
+    async function reloadBestWeak() { await refresh(); bestWeakPage(); }
     function bestWeakRanksHtml(prefix, ranks) {
       const labels = (snapshot.bestWeakTop || {}).rankLabels || { 1: 'Le meilleur', 2: 'Le 2ᵉ meilleur', 3: 'Le 3ᵉ meilleur', 4: 'Le plus faible (4ᵉ)' };
       const on = Array.isArray(ranks) && ranks.length ? ranks : [1, 4];
@@ -1811,64 +1843,90 @@ Faites-en bon usage !
       if (r.length < 2) throw new Error('Coche au moins 2 costumes.');
       return r;
     }
-    function bestWeakPage() {
-      setNav('strategies');
-      const p = snapshot.bestWeakTop || {};
-      const list = p.configs || [];
-      const cards = list.length ? list.map(c => `<div class="card" style="margin-bottom:12px"><div class="section-head"><div><span class="eyebrow">${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
-          <h3 style="margin-top:6px">Canal : ${esc((c.channelNames || []).join(', '))}</h3>
-          <p class="small">Costumes : <b>${esc(c.ranksLabel || '')}</b> · ${esc(c.maxR)} rattrapage(s) · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)</p></div></div>
-          <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
-          <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
-          <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
-          <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`).join('')
-        : '<p class="small">Aucune configuration pour le moment. Clique sur « Créer ».</p>';
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">🎯 Meilleur + plus faible</h2>
-        <p class="small">Tu choisis les costumes à proposer (au moins 2, jusqu'à 4) : le <b>meilleur</b>, le <b>2ᵉ</b>, le <b>3ᵉ</b> et le <b>plus faible</b> (4ᵉ du classement). Pour chaque jeu où tous ceux que tu as cochés prédisent le même numéro, un seul message est envoyé avec leurs costumes et leur pourcentage instantané. Dès qu'un costume sort, le message est modifié : seul le costume sorti reste (ex. « ⚜️ #464 | ♦️ | ✅0️⃣ »). Si aucun ne sort après les rattrapages : ❌. Si les choisis ne prédisent pas le même numéro de jeu, rien n'est envoyé.</p>
-        <div class="toolbar"><button class="button primary" onclick="addBestWeakModal()">Créer</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button><button class="button ghost" onclick="location.hash='#/strategies'">← Stratégies</button></div></div>
-        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
-    }
-    async function reloadBestWeak() { await refresh(); bestWeakPage(); }
-    // étape 1 : choisir la stratégie qui envoie dans les canaux ; étape 2 : ID du canal + rattrapages
-    function addBestWeakModal() {
-      const labels = (snapshot.bestWeakTop || {}).strategies || {};
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration · étape 1/2</span><h3 style="margin-top:8px">Quelle stratégie envoie dans les canaux ?</h3></div></div>
-        <p class="small">Le bot utilisera le meilleur et le plus faible de la stratégie choisie.</p>
-        <div style="display:grid;gap:10px;margin-top:10px">
-          <button class="button primary" onclick="bestWeakStep2('dizaine')">${esc(labels.dizaine || 'Dizaine')}</button>
-          <button class="button primary" onclick="bestWeakStep2('costumeFaible')">${esc(labels.costumeFaible || 'Costume faible')}</button></div>
+    const bwSimpleFields = (prefix, c) => `<div class="field"><label>Nom</label><input id="${prefix}Name" value="${esc((c && c.name) || '')}" placeholder="Ex. Cycle du soir"></div>`;
+    const bwFormatField = (prefix, c) => { const n = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101; return `<div class="field"><label>Format de prédiction (1 → ${esc(n)})</label><input id="${prefix}Format" type="number" min="1" max="${esc(n)}" value="${esc(String((c && c.format) || 1))}"></div>`; };
+    // « Créer » depuis la page : on choisit d'abord le type
+    function chooseBwType() {
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Quel type de configuration ?</h3></div></div>
+        <div style="display:grid;gap:10px;margin-top:10px">${['multi', 'trigger', 'cycle', 'follow'].map(m => `<button class="button primary" style="text-align:left" onclick="closeModal();startBwFlow('${m}')">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)}<br><small>${esc(BW_MODES[m].sub)}</small></button>`).join('')}</div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
-    function bestWeakStep2(strategy) {
-      const labels = (snapshot.bestWeakTop || {}).strategies || {};
-      closeModal();
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration · étape 2/2</span><h3 style="margin-top:8px">${esc(labels[strategy] || strategy)}</h3></div></div>
-        <div class="field"><label>ID du canal où envoyer</label><input id="bwNewChannels" placeholder="-1001234567890 ou @nomducanal"></div>
-        <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwNewMaxR" type="number" min="0" max="9" value="2"></div>
-        ${bestWeakRanksHtml('bwNew', [1, 4])}
-        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addBestWeak('${esc(strategy)}')">Enregistrer</button><button class="button small ghost" onclick="closeModal();addBestWeakModal()">← Retour</button></div>`);
+    // assistant : confirmation → stratégie (celles qui utilisent meilleur et faible) → configuration → enregistrer
+    function startBwWizard(mode) {
+      bwWizard = { mode, strategy: null };
+      const m = BW_MODES[mode];
+      openModal(`<div class="modal-head"><div><span class="eyebrow">${m.icon} ${esc(m.title)}</span><h3 style="margin-top:8px">Créer une nouvelle configuration ?</h3></div></div>
+        <p class="small">${esc(m.sub)}</p>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="closeModal();startBwFlow('${mode}')">Oui, créer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
-    async function addBestWeak(strategy) {
+    // après confirmation : « suivi » → liste des canaux à cocher ; les autres types → choix de la stratégie
+    function startBwFlow(mode) {
+      bwWizard = { mode, strategy: null, sources: [] };
+      if (mode === 'follow') bwWizardChannels(); else bwWizardStrategy();
+    }
+    async function bwWizardChannels() {
+      let list = [];
+      try { list = (await api('/api/best-weak/channels')).channels || []; } catch (e) { toast(e.message, 'error'); return; }
+      const rows = list.length ? list.map((c, i) => `<label class="check" style="display:block;margin:6px 0"><input type="checkbox" class="bwSrc" value="${esc(c.id)}"> <b>${esc(c.title || 'Canal sans nom')}</b> · <code>${esc(c.id)}</code>${c.multi ? ' <span class="tag good">reçoit des messages à plusieurs costumes</span>' : ''}<br><small>${esc((c.sources || []).join(' · '))}</small></label>`).join('') : '<p class="small">Aucun canal configuré pour le moment.</p>';
+      openModal(`<div class="modal-head"><div><span class="eyebrow">${BW_MODES.follow.icon} ${esc(BW_MODES.follow.title)} · étape 1/2</span><h3 style="margin-top:8px">Quels canaux suivre ?</h3></div></div>
+        <p class="small">Coche les canaux qui reçoivent les messages à plusieurs costumes (♦️ 95% … N°884). Le bot suit ce qu'il y publie.</p>
+        <div style="max-height:46vh;overflow:auto;margin-top:8px">${rows}</div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="bwWizardChannelsNext()">Suivant</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    function bwWizardChannelsNext() {
+      const picked = [...document.querySelectorAll('.bwSrc:checked')].map(x => x.value);
+      if (!picked.length) { toast('Coche au moins un canal à suivre.', 'error'); return; }
+      bwWizard.sources = picked; closeModal(); bwWizardForm(null);
+    }
+    function bwWizardStrategy() {
+      const labels = (snapshot.bestWeakTop || {}).strategies || {};
+      openModal(`<div class="modal-head"><div><span class="eyebrow">${BW_MODES[bwWizard.mode].icon} ${esc(BW_MODES[bwWizard.mode].title)} · étape 1/2</span><h3 style="margin-top:8px">Quelle stratégie (meilleur et plus faible) ?</h3></div></div>
+        <div style="display:grid;gap:10px;margin-top:10px">
+          <button class="button primary" onclick="bwWizardForm('dizaine')">${esc(labels.dizaine || 'Dizaine')}</button>
+          <button class="button primary" onclick="bwWizardForm('costumeFaible')">${esc(labels.costumeFaible || 'Costume faible')}</button></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    function bwWizardForm(strategy) {
+      bwWizard.strategy = strategy;
+      const labels = (snapshot.bestWeakTop || {}).strategies || {};
+      const mode = bwWizard.mode;
+      closeModal();
+      openModal(`<div class="modal-head"><div><span class="eyebrow">${BW_MODES[mode].icon} ${esc(BW_MODES[mode].title)} · étape 2/2</span><h3 style="margin-top:8px">${mode === 'follow' ? esc(`${bwWizard.sources.length} canal(aux) suivi(s)`) : esc(labels[strategy] || strategy)}</h3></div></div>
+        ${mode === 'multi' ? '' : bwSimpleFields('bwNew')}
+        <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwNewChannels" placeholder="-1001234567890 ou @nomducanal"></div>
+        <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwNewMaxR" type="number" min="0" max="9" value="2"></div>
+        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : bwFormatField('bwNew')}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addBestWeak()">Enregistrer</button><button class="button small ghost" onclick="closeModal();startBwFlow('${mode}')">← Retour</button></div>`);
+    }
+    async function addBestWeak() {
       try {
-        await api('/api/best-weak/configs', 'POST', { strategy, channels: ids(val('bwNewChannels')), maxR: val('bwNewMaxR'), ranks: readBestWeakRanks('bwNew') });
-        closeModal(); await refresh(); bestWeakPage(); toast('Configuration enregistrée.');
+        const mode = bwWizard.mode;
+        const body = { mode, strategy: bwWizard.strategy, channels: ids(val('bwNewChannels')), maxR: val('bwNewMaxR') };
+        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); }
+        if (mode === 'follow') body.sources = bwWizard.sources;
+        await api('/api/best-weak/configs', 'POST', body);
+        closeModal(); await refresh(); if (location.hash === '#/best-weak') bestWeakPage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
       } catch (e) { toast(e.message, 'error'); }
     }
     function editBestWeakModal(id) {
       const c = ((snapshot.bestWeakTop || {}).configs || []).find(x => x.id === id);
       if (!c) return;
+      const m = bwModeOf(c);
       const labels = (snapshot.bestWeakTop || {}).strategies || {};
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier la configuration</span><h3 style="margin-top:8px">${esc(c.strategyLabel)}</h3></div></div>
-        <div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>
-        <div class="field"><label>ID du canal où envoyer</label><input id="bwEditChannels" value="${esc((c.channels || []).join(', '))}"></div>
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier · ${esc(BW_MODES[m].title)}</span><h3 style="margin-top:8px">${esc(c.name || c.strategyLabel)}</h3></div></div>
+        ${m === 'multi' ? '' : bwSimpleFields('bwEdit', c)}
+        ${m === 'follow' ? `<div class="field"><label>Canaux suivis (ID séparés par des virgules)</label><input id="bwEditSources" value="${esc((c.sources || []).join(', '))}"></div>` : `<div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>`}
+        <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwEditChannels" value="${esc((c.channels || []).join(', '))}"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwEditMaxR" type="number" min="0" max="9" value="${esc(String(c.maxR))}"></div>
-        ${bestWeakRanksHtml('bwEdit', c.ranks)}
-        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateBestWeak('${esc(id)}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : bwFormatField('bwEdit', c)}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateBestWeak('${esc(id)}','${m}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
-    async function updateBestWeak(id) {
+    async function updateBestWeak(id, m) {
       try {
-        await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { strategy: val('bwEditStrategy'), channels: ids(val('bwEditChannels')), maxR: val('bwEditMaxR'), ranks: readBestWeakRanks('bwEdit') });
+        const body = { channels: ids(val('bwEditChannels')), maxR: val('bwEditMaxR') };
+        if (m === 'follow') body.sources = ids(val('bwEditSources')); else body.strategy = val('bwEditStrategy');
+        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); }
+        await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', body);
         closeModal(); await refresh(); bestWeakPage(); toast('Configuration mise à jour.');
       } catch (e) { toast(e.message, 'error'); }
     }
