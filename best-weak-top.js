@@ -30,9 +30,11 @@
 // ─── Mode « suivi » (bouton « Créer » de l'accueil) : suivre les messages à plusieurs costumes du bot ────────────
 //   On coche, dans la liste de tous les canaux qui reçoivent des prédictions, ceux à suivre. Chaque message à plusieurs
 //   costumes que CE bot publie dans un canal coché (♦️ 95% / ♣️ 93% / N°884) donne une prédiction simple, au format choisi :
-//     • rotation : 1ᵉʳ costume au 1ᵉʳ message, 2ᵉ costume au suivant, 3ᵉ au suivant s'il y en a 3 ; avec 2 costumes on
-//       revient au 1ᵉʳ (le compteur tourne par canal suivi) ;
-//     • motif : si le 1ᵉʳ costume gagne (jeu N) et que le 2ᵉ gagne au rattrapage (jeu N+1), on prédit le 2ᵉ costume au jeu N+2.
+//     • rotation (selon le résultat) : on prédit le costume au meilleur taux (1ᵉʳ) ; tant que notre prédiction gagne en
+//       ✅0️⃣ ou ✅1️⃣ on reste sur lui ; si le résultat est ✅2️⃣/✅3️⃣… ou ❌, le message suivant utilise le 2ᵉ costume (puis le 3ᵉ,
+//       puis retour au 1ᵉʳ), et ainsi de suite. Le compteur tourne par canal suivi ;
+//     • motif : une fois la main du joueur terminée au jeu N, si UN des deux costumes est sorti directement (✅0️⃣) et pas
+//       l'autre, l'autre est prédit au jeu N+2 ; si les deux sont sortis, on ignore.
 //
 // ─── ANTI-DOUBLONS ─────────────────────────────────────────────────────────────────────────────────────────────
 //   • configurations : deux configurations identiques (même mode, même stratégie, mêmes costumes et un canal en commun)
@@ -279,14 +281,14 @@ function editTrigger(entry, statusFr) { const o = triggerMessage(entry, statusFr
 // ---------------------------------------------------------------------------
 // Mode « déclencheur » : envoi d'une prédiction simple
 // ---------------------------------------------------------------------------
-async function sendTrigger(cfg, { target, suit, reason, role }) {
+async function sendTrigger(cfg, { target, suit, reason, role, src }) {
   if (!Number.isFinite(Number(target)) || !suit) return false;
   if (alreadySent(cfg.id, target)) { blocked(); return false; } // doublon de prédiction
   const k = sentKey(cfg.id, target);
   inflight.add(k);
   try {
     const entry = {
-      id: `bwt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, configId: cfg.id, mode: modeOf(cfg), reason, role: role || null, strategy: cfg.strategy,
+      id: `bwt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, configId: cfg.id, mode: modeOf(cfg), reason, role: role || null, src: src == null ? null : String(src), strategy: cfg.strategy,
       target: Number(target), suits: [{ suit }], format: cfg.format, strategyName: cfg.name || 'Déclencheur',
       maxR: cfg.maxR, step: 0, gap: 0, skipped: 0, status: 'en attente', messages: [], createdAt: Date.now(), resolvedAt: null,
     };
@@ -331,6 +333,14 @@ function recordResult(strategy, ref, field, step) {
     if (reason) ts.armed[key] = { reason, at: Date.now() }; else delete ts.armed[key];
     persist();
   } catch (e) { panel.lastError = e.message; }
+}
+// mode « suivi » : après le résultat de NOTRE prédiction — ✅0️⃣/✅1️⃣ → même rang au prochain message ; sinon → rang suivant
+function advanceFollow(cfg, entry) {
+  if (!cfg || modeOf(cfg) !== 'follow' || entry.reason !== 'rotation' || entry.src == null) return;
+  const stay = entry.status === 'gagné' && CYCLE_STAY_STEPS.includes(Number(entry.step));
+  if (stay) return;
+  cfg.rot = cfg.rot || {};
+  cfg.rot[entry.src] = (cfg.rot[entry.src] || 0) + 1;
 }
 const cyclePending = (cfg) => panel.pending.some((e) => e.configId === cfg.id && e.status === 'en attente');
 // mode cycle : prédiction de la configuration suivie (une seule à la fois ; rien tant qu'on attend une perte)
@@ -396,14 +406,16 @@ async function onMultiSent(chatId, entry) {
   for (const cfg of panel.configs.filter((c) => c.enabled && modeOf(c) === 'follow' && (c.sources || []).map(String).includes(src))) {
     const items = entry.suits || [];
     if (!items.length) continue;
-    // 1) rotation : costume n°1 puis n°2 puis n°3 (s'il y en a 3), puis retour au n°1
+    // 1) rotation pilotée par le RÉSULTAT : on envoie le costume au meilleur taux (n°1) ; on reste dessus tant que notre
+    //    prédiction gagne en ✅0️⃣ ou ✅1️⃣ ; on passe au costume suivant (n°2…) seulement si le résultat est ✅2️⃣/✅3️⃣… ou ❌
+    //    (voir advanceFollow). Le compteur tourne par canal suivi.
     cfg.rot = cfg.rot || {};
     const idx = (cfg.rot[src] || 0) % items.length;
-    const sent = await sendTrigger(cfg, { target: entry.target, suit: items[idx].suit, reason: 'rotation', role: idx + 1 });
-    if (sent) cfg.rot[src] = (cfg.rot[src] || 0) + 1;
-    // 2) motif : 1ᵉʳ costume gagnant au jeu N puis 2ᵉ costume gagnant au rattrapage (N+1) → on prédit le 2ᵉ au jeu N+2
+    await sendTrigger(cfg, { target: entry.target, suit: items[idx].suit, reason: 'rotation', role: idx + 1, src });
+    // 2) motif : on attend que le joueur ait fini ses cartes au jeu N ; si UN des deux costumes sort directement (✅0️⃣)
+    //    et pas l'autre → l'autre est prédit au jeu N+2 ; si les deux sortent, on ignore (voir checkPatterns)
     if (items.length >= 2 && !panel.watch.some((w) => w.cfgId === cfg.id && w.target === Number(entry.target))) {
-      panel.watch.push({ cfgId: cfg.id, target: Number(entry.target), s1: items[0].suit, s2: items[1].suit, at: Date.now() });
+      panel.watch.push({ cfgId: cfg.id, target: Number(entry.target), s1: items[0].suit, s2: items[1].suit, src, at: Date.now() });
       if (panel.watch.length > 100) panel.watch = panel.watch.slice(-100);
     }
     persist();
@@ -414,12 +426,15 @@ async function checkPatterns() {
   const maxDone = maxFinishedGameNumber();
   const keep = [];
   for (const w of panel.watch) {
-    const done = (g) => !!g && g.finished && g.complete !== false;
-    const g0 = state.games.get(w.target); const g1 = state.games.get(w.target + 1);
-    if (done(g0) && done(g1)) {
+    const done = (g) => !!g && g.finished && g.complete !== false; // le joueur a fini de prendre ses cartes
+    const g0 = state.games.get(w.target);
+    if (done(g0)) {
       const cfg = panel.configs.find((c) => c.id === w.cfgId && c.enabled);
-      if (cfg && hasSuit(g0, w.s1) && !hasSuit(g0, w.s2) && hasSuit(g1, w.s2)) {
-        await sendTrigger(cfg, { target: w.target + 2, suit: w.s2, reason: 'motif' });
+      if (cfg) {
+        const a = hasSuit(g0, w.s1); const b = hasSuit(g0, w.s2);
+        // un seul des deux est sorti directement (✅0️⃣) → l'autre est prédit à N+2 ; les deux sortis (ou aucun) → on ignore
+        if (a && !b) await sendTrigger(cfg, { target: w.target + 2, suit: w.s2, reason: 'motif', src: w.src });
+        else if (b && !a) await sendTrigger(cfg, { target: w.target + 2, suit: w.s1, reason: 'motif', src: w.src });
       }
       continue; // motif évalué : on ne le garde plus
     }
@@ -505,6 +520,7 @@ function verifyPending() {
         entry.status = 'gagné'; entry.resolvedAt = Date.now(); changed = true;
         if (cfg) cfg.wins = (cfg.wins || 0) + 1;
         if (isTrigger) editTrigger(entry, 'gagné');
+        if (entry.mode === 'follow') advanceFollow(cfg, entry);
         if (entry.mode === 'cycle' && cfg) advanceCycle(cfg, entry);
         else editAll(entry, resultText(entry, [...new Set(hit)], true)); // on garde le(s) costume(s) sorti(s), on retire l'autre
         break;
@@ -513,6 +529,7 @@ function verifyPending() {
         entry.status = 'perdu'; entry.resolvedAt = Date.now(); changed = true;
         if (cfg) cfg.losses = (cfg.losses || 0) + 1;
         if (isTrigger) editTrigger(entry, 'perdu');
+        if (entry.mode === 'follow') advanceFollow(cfg, entry);
         if (entry.mode === 'cycle' && cfg) advanceCycle(cfg, entry);
         else editAll(entry, resultText(entry, [], false));
         break;
