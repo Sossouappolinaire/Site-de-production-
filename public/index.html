@@ -293,6 +293,7 @@
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
+        <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/vip" data-nav="vip">VIP</a>
@@ -535,6 +536,7 @@
         ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/copy-announce', '📣', 'Copie et annonce', `${(snapshot.copyAnnounce?.rules || []).length} règle(s)`)}
+        ${card('#/bet-type', '🎲', 'Type de mise', `${(snapshot.betType?.trackers || []).length} configuration(s)`)}
         ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
@@ -3954,6 +3956,324 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
 
+    // -------------------------------------------------------------------
+    // « Type de mise » (voir bet-type.js) — « Créer » : une configuration
+    // surveille un ou plusieurs canaux et renvoie des prédictions selon son
+    // type (1 à 4) ; « Meilleur type de mise » : envoie les prédictions de la
+    // configuration au meilleur taux de réussite et publie le classement.
+    // -------------------------------------------------------------------
+    const BT_TYPES = {
+      1: 'Type 1 — si deux prédictions du canal ont le même costume, attendre que ce costume soit prédit à nouveau, puis l\'envoyer.',
+      2: 'Type 2 — après deux prédictions consécutives de même costume, envoyer la prédiction suivante du canal.',
+      3: 'Type 3 — après 2 pertes consécutives du canal, envoyer sa prédiction suivante.',
+      4: 'Type 4 — après 1 perte du canal, envoyer sa prédiction suivante.',
+    };
+    function btChannelLabel(id) {
+      const p = snapshot.betType || {};
+      const t = (p.channelTitles || {})[String(id)] || ((p.allChannels || []).find(c => String(c.id) === String(id)) || {}).title;
+      return t ? `${t} · ${id}` : String(id);
+    }
+    function btRateHtml(c) {
+      const total = (c.wins || 0) + (c.losses || 0);
+      if (!total) return '<span class="small muted">Pas encore de résultat</span>';
+      return `<b>${esc(String(c.rate))}%</b> <span class="small muted">· ${c.wins} gagné(s) · ${c.losses} perdu(s)</span>`;
+    }
+    function btCardHtml(c) {
+      const stLabel = (x) => x.status === 'gagné' ? 'gagné' : (x.status === 'perdu' ? 'perdu' : (x.status === 'annulé' ? 'annulé' : 'attente'));
+      const stCls = (x) => x.status === 'gagné' ? 'good' : (x.status === 'perdu' ? 'bad' : (x.status === 'annulé' ? '' : 'warn'));
+      const preds = c.lastPreds || [];
+      const prog = Object.values(c.progress || {});
+      const armed = prog.some(x => x.armed || x.waitingSuit);
+      const info = armed ? (c.type === 1 ? `En attente du costume ${esc(prog.find(x => x.waitingSuit)?.waitingSuit || '')}` : 'Armé : prochaine prédiction envoyée') : '';
+      return `<article class="proposal">
+        <div class="split"><h3>${esc(c.name)}</h3><span class="tag ${c.enabled ? 'good' : ''}">${c.enabled ? '🟢 Actif' : '⏹️ Arrêté'}</span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px"><span class="tag">Type ${c.type}</span>${c.isBest ? '<span class="tag good">⭐ Meilleur</span>' : ''}</div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:12px;font-size:14px"><span class="muted">Canaux surveillés</span><span style="text-align:right">${(c.sources || []).map(id => esc(btChannelLabel(id))).join('<br>')}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Envoi dans</span><span style="text-align:right">${(c.destChannels || []).map(id => esc(btChannelLabel(id))).join('<br>')}</span></div>
+        ${(c.bestChannels || []).length || c.bestLink ? `<div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Canal du meilleur</span><span style="text-align:right">${(c.bestChannels || []).map(id => esc(btChannelLabel(id))).join('<br>')}${c.bestLink ? `<br><a href="${esc(c.bestLink.startsWith('http') ? c.bestLink : 'https://' + c.bestLink)}" target="_blank" rel="noopener">${esc(c.bestLink)}</a>` : ''}</span></div>` : ''}
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:14px"><span class="muted">Taux de réussite</span><span style="text-align:right">${btRateHtml(c)}</span></div>
+        ${info ? `<p class="small muted" style="margin:6px 0 0">${info}</p>` : ''}
+        <div style="margin:12px 0 6px"><span class="small muted">3 dernières prédictions envoyées · ${esc(String(c.sentCount || 0))} au total</span></div>
+        <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">${preds.length
+          ? preds.map(x => `<div><span class="tag ${stCls(x)} mono" style="font-size:13px">#N${esc(String(x.target))} ${esc(x.suit || '')} ${stLabel(x)}</span></div>`).join('')
+          : '<span class="small muted">Aucune prédiction envoyée pour le moment</span>'}</div>
+        <div class="toolbar" style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr"><button class="button small primary" onclick="editBetTypeModal('${esc(c.id)}')">Modifier</button><button class="button small ghost" onclick="betTypeTest('${esc(c.id)}')">Test</button><button class="button small danger" onclick="removeBetType('${esc(c.id)}')">Retirer</button></div>
+      </article>`;
+    }
+    function btCardsHtml() {
+      const list = (snapshot.betType || {}).trackers || [];
+      if (!list.length) return '<div class="empty">Aucune configuration pour le moment. Clique sur « Créer » pour commencer.</div>';
+      return `<div class="proposals">${list.map(btCardHtml).join('')}</div>`;
+    }
+    function btBestHtml() {
+      const p = snapshot.betType || {};
+      const b = p.best || {};
+      const rank = p.ranking || [];
+      const medals = ['🥇', '🥈', '🥉'];
+      const fc = String(snapshot.formatCount || 88);
+      return `<div class="panel"><span class="eyebrow">Meilleur type de mise</span>
+        <p class="small muted" style="margin:6px 0 0">Envoie les prédictions de la configuration qui a le meilleur taux de réussite, et publie le classement des taux dans ce canal à chaque changement.</p>
+        <div class="field" style="margin-top:12px"><label>ID du canal</label><input id="btBestChannel" value="${esc((b.channels || []).join(', '))}" placeholder="-1001234567890">
+          ${(p.allChannels || []).length ? `<select onchange="if(this.value){document.getElementById('btBestChannel').value=this.value;this.value='';}"><option value="">Choisir un canal déjà configuré…</option>${p.allChannels.map(c => `<option value="${esc(c.id)}">${esc(c.title ? c.title + ' · ' + c.id : String(c.id))}</option>`).join('')}</select>` : ''}</div>
+        <div class="field-row" style="display:flex;gap:10px;flex-wrap:wrap">
+          <div class="field" style="flex:1;min-width:140px"><label>Nombre de rattrapage</label><input id="btBestMaxR" type="number" min="0" max="9" value="${esc(String(b.maxR ?? 1))}"></div>
+          <div class="field" style="flex:1;min-width:140px"><label>Format de prédiction (1 → ${esc(fc)})</label><input id="btBestFormat" type="number" min="1" max="${esc(fc)}" value="${esc(String(b.format ?? 1))}"></div>
+          <div class="field" style="flex:1;min-width:140px"><label>Résultats minimum pour être « meilleur »</label><input id="btBestMin" type="number" min="1" max="100" value="${esc(String(b.minSample ?? 3))}"></div>
+        </div>
+        <label class="check"><input id="btBestOn" type="checkbox" ${b.enabled !== false ? 'checked' : ''}> Activer le meilleur type de mise</label>
+        <label class="check"><input id="btBestRates" type="checkbox" ${b.announceRates !== false ? 'checked' : ''}> Publier le taux de réussite à chaque changement</label>
+        <label class="check"><input id="btBilanOn" type="checkbox" ${b.bilanEnabled !== false ? 'checked' : ''}> Envoyer le bilan des taux de réussite toutes les</label>
+        <div class="field" style="max-width:200px;margin-top:4px"><label>Minutes (60 = 1 h)</label><input id="btBilanEvery" type="number" min="1" max="1440" value="${esc(String(b.bilanEveryMin ?? 60))}"></div>
+        <p class="small muted" style="margin:0">Le bilan complet part dans le canal ci-dessus ; chaque configuration envoie aussi son propre taux dans son canal.</p>
+        <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveBetTypeBest()">Enregistrer</button><button class="button small ghost" onclick="betTypeBestTest()">Envoyer un test</button><button class="button small ghost" onclick="betTypeBilanNow()">Envoyer le bilan maintenant</button></div>
+        <div style="margin-top:16px"><span class="small muted">Classement actuel · ${b.current ? 'meilleur : ' + esc(b.current.name) : 'pas encore de meilleur (résultats insuffisants)'}</span>
+          ${rank.length ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${rank.map((r, i) => `<div class="small">${medals[i] || '▫️'} <b>${esc(r.name)}</b> (type ${r.type}) — ${esc(String(r.rate))}% · ${r.wins}✅ ${r.losses}❌</div>`).join('')}</div>` : '<p class="small muted" style="margin:6px 0 0">Aucun résultat pour le moment.</p>'}</div>
+        ${b.sentCount ? `<p class="small muted" style="margin:10px 0 0">${b.sentCount} prédiction(s) envoyée(s) · ${b.wins || 0} gagné(s) · ${b.losses || 0} perdu(s)</p>` : ''}</div>`;
+    }
+    function betTypePage() {
+      setNav('bet-type');
+      const p = snapshot.betType || {};
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Types de mise</span><h2 style="margin-top:7px">Type de mise</h2><p class="small">Clique sur « Créer » pour choisir un ou plusieurs canaux qui envoient des prédictions, puis un type (1 à 4) et le canal où envoyer. « Meilleur type de mise » envoie les prédictions de la configuration au meilleur taux de réussite.</p></div><div class="toolbar"><button class="button primary" onclick="addBetTypeModal()">Créer</button><button class="button ghost" onclick="betTypePage()">Actualiser</button></div></div>
+        <div class="panel"><label class="check"><input id="btEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''} onchange="saveBetTypeEnabled()"> Activer « Type de mise »</label>
+          ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
+        <div id="btBest">${btBestHtml()}</div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations</span><h2 style="margin-top:7px">${(p.trackers || []).length} configuration(s)</h2></div></div>
+          <div id="btCards">${btCardsHtml()}</div></section>`;
+    }
+    async function refreshBetTypeCards() {
+      if (location.hash !== '#/bet-type' || document.getElementById('modalRoot')) return;
+      const box = document.getElementById('btCards');
+      if (!box) return;
+      await refresh();
+      const again = document.getElementById('btCards');
+      if (again) again.innerHTML = btCardsHtml();
+    }
+    setInterval(() => { refreshBetTypeCards().catch(() => {}); }, 5000);
+    async function saveBetTypeEnabled() {
+      try { await api('/api/bet-type/config', 'POST', { enabled: $('#btEnabled')?.checked }); await refresh(); betTypePage(); toast('Réglage enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveBetTypeBest() {
+      try {
+        await api('/api/bet-type/best', 'POST', {
+          channels: val('btBestChannel'), maxR: val('btBestMaxR'), format: val('btBestFormat'), minSample: val('btBestMin'),
+          enabled: !!document.getElementById('btBestOn')?.checked, announceRates: !!document.getElementById('btBestRates')?.checked,
+          bilanEnabled: !!document.getElementById('btBilanOn')?.checked, bilanEveryMin: val('btBilanEvery'),
+        });
+        await refresh(); betTypePage(); toast('Meilleur type de mise enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function betTypeBilanNow() {
+      try { await api('/api/bet-type/bilan', 'POST', {}); toast('Bilan envoyé.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function betTypeBestTest() {
+      try { const r = await api('/api/bet-type/best/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    function btFormHtml(c) {
+      const p = snapshot.betType || {};
+      const isNew = !c.id;
+      const chosen = (c.sources || []).map(String);
+      const all = (p.allChannels || []).slice();
+      for (const id of chosen) if (!all.some(x => String(x.id) === id)) all.push({ id, title: '', sources: [] });
+      const fc = String(snapshot.formatCount || 88);
+      const rows = all.length ? all.map(ch => `<label class="check" style="align-items:flex-start;margin:6px 0"><input type="checkbox" class="bt-src" value="${esc(ch.id)}" ${chosen.includes(String(ch.id)) ? 'checked' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${esc(ch.sources.slice(0, 2).join(', '))}</span>` : ''}</span></label>`).join('')
+        : '<p class="small muted">Aucun canal n\'envoie encore de prédictions.</p>';
+      const t = c.type || 1;
+      return `<div class="modal-head"><div><span class="eyebrow">${isNew ? 'Créer' : 'Modifier'}</span><h3 style="margin-top:8px">Type de mise</h3></div></div>
+        <div class="field"><label>Nom <span class="small">(optionnel)</span></label><input id="bt-name" value="${esc(c.name || '')}" placeholder="Ex. Canal Dominant — type 3"></div>
+        <div class="field"><label>Canaux à surveiller (un ou plusieurs)</label><div style="max-height:220px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;padding:6px 10px">${rows}</div></div>
+        <div class="field"><label>Type</label><select id="bt-type">${[1, 2, 3, 4].map(n => `<option value="${n}" ${t === n ? 'selected' : ''}>Type ${n}</option>`).join('')}</select>
+          <p class="small muted" id="bt-type-help" style="margin:6px 0 0">${esc(BT_TYPES[t])}</p></div>
+        <div class="field"><label>ID du canal où envoyer les prédictions</label><input id="bt-dest" value="${esc((c.destChannels || []).join(', '))}" placeholder="-1001234567890">
+          ${all.length ? `<select onchange="if(this.value){document.getElementById('bt-dest').value=this.value;this.value='';}"><option value="">Choisir un canal déjà configuré…</option>${all.map(ch => `<option value="${esc(ch.id)}">${esc(ch.title ? ch.title + ' · ' + ch.id : String(ch.id))}</option>`).join('')}</select>` : ''}</div>
+        <div class="panel" style="margin:10px 0"><span class="eyebrow">Canal du meilleur</span>
+          <p class="small muted" style="margin:6px 0 8px">Reçoit les prédictions de cette configuration quand elle a le meilleur taux de réussite. Vide : le canal du panneau « Meilleur type de mise » est utilisé.</p>
+          <div class="field"><label>Lien du canal du meilleur</label><input id="bt-bestlink" value="${esc(c.bestLink || '')}" placeholder="https://t.me/nom_du_canal"></div>
+          <div class="field"><label>ID du canal du meilleur</label><input id="bt-bestid" value="${esc((c.bestChannels || []).join(', '))}" placeholder="-1001234567890 (ou déduit du lien public)">
+            ${all.length ? `<select onchange="if(this.value){document.getElementById('bt-bestid').value=this.value;this.value='';}"><option value="">Choisir un canal déjà configuré…</option>${all.map(ch => `<option value="${esc(ch.id)}">${esc(ch.title ? ch.title + ' · ' + ch.id : String(ch.id))}</option>`).join('')}</select>` : ''}</div></div>
+        <div class="field-row" style="display:flex;gap:10px;flex-wrap:wrap">
+          <div class="field" style="flex:1;min-width:140px"><label>Nombre de rattrapage</label><input id="bt-maxr" type="number" min="0" max="9" value="${esc(String(c.maxR ?? 1))}"></div>
+          <div class="field" style="flex:1;min-width:140px"><label>Format (1 → ${esc(fc)})</label><input id="bt-format" type="number" min="1" max="${esc(fc)}" value="${esc(String(c.format ?? 1))}"></div>
+        </div>
+        <label class="check"><input id="bt-enabled" type="checkbox" ${c.enabled !== false ? 'checked' : ''}> Configuration active</label>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveBetType('${esc(c.id || '')}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`;
+    }
+    function btBindTypeHelp() {
+      const sel = document.getElementById('bt-type');
+      if (sel) sel.onchange = () => { const h = document.getElementById('bt-type-help'); if (h) h.textContent = BT_TYPES[sel.value] || ''; };
+    }
+    function addBetTypeModal() { openModal(btFormHtml({ type: 1, maxR: 1, format: 1, enabled: true })); btBindTypeHelp(); }
+    function editBetTypeModal(id) {
+      const c = ((snapshot.betType || {}).trackers || []).find(x => x.id === id);
+      if (!c) return;
+      openModal(btFormHtml(c)); btBindTypeHelp();
+    }
+    async function saveBetType(id) {
+      const sources = [...document.querySelectorAll('.bt-src:checked')].map(x => x.value);
+      if (!sources.length) return toast('Sélectionne au moins un canal à surveiller.', 'error');
+      const body = {
+        name: val('bt-name'), sources, type: val('bt-type'), destChannels: val('bt-dest'), bestLink: val('bt-bestlink'), bestChannels: val('bt-bestid'),
+        maxR: val('bt-maxr'), format: val('bt-format'), enabled: !!document.getElementById('bt-enabled')?.checked,
+      };
+      try {
+        await api(id ? `/api/bet-type/configs/${encodeURIComponent(id)}` : '/api/bet-type/configs', id ? 'PUT' : 'POST', body);
+        closeModal(); await refresh(); betTypePage();
+        toast(id ? 'Configuration mise à jour.' : 'Configuration créée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeBetType(id) {
+      try { await api(`/api/bet-type/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); betTypePage(); toast('Configuration retirée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function betTypeTest(id) {
+      try { const r = await api(`/api/bet-type/configs/${encodeURIComponent(id)}/test`, 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+
+    // --- fonctions de « Prédiction après perte » et « Prédiction combinée » (manquaient dans cette page) ---
+    async function addAfterLossTracker() {
+      const key = val('newTrackerKey');
+      const triggers = readAfterLossTriggers('new');
+      const repeat = readAfterLossRepeat('new');
+      const streak = readAfterLossStreak('new');
+      const decade = readAfterLossDecade('new');
+      const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
+      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, streak, decade, channels, siteChannelId, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    function addAfterLossTrackerModal() {
+      const opts = (snapshot.afterLoss?.options || []).map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('');
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot ou la stratégie IA, puis coche au moins un type de résultat déclencheur et le N à attendre pour chacun.</p></div></div>
+        <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
+        ${afterLossTriggerRows('new', { perdue: { enabled: true, n: 0 } })}
+        ${afterLossRepeatRow('new', { enabled: false, lead: 5 })}
+        ${afterLossStreakRow('new', null, snapshot.formatCount)}
+        ${afterLossDecadeRow('new', null, snapshot.formatCount)}
+        ${afterLossChannelFormatRow('new', { channels: [], format: null })}
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    function combinedChannelFormatRow(prefix, tracker) {
+      const t = tracker || { channels: [], format: null };
+      return `<div class="field-row" style="display:flex;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:220px;margin:0"><label style="font-size:11px">Canal(x) propre(s) (vide = canal du panneau)</label><input id="${prefix}-channels" value="${esc((t.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+        <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Format propre (vide = panneau)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${t.format ?? ''}"></div>
+      </div>`;
+    }
+    function combinedPage() {
+      setNav('combined');
+      const p = snapshot.combined || {};
+      const trackers = p.trackers || [];
+      const history = p.history || [];
+      const optsHtml = (opt) => {
+        const groups = {};
+        for (const o of (opt || [])) { (groups[o.group] = groups[o.group] || []).push(o); }
+        return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
+      };
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Sources multiples</span><h2 style="margin-top:7px">Prédiction combinée pour costume joueur</h2><p class="small">Sélectionne une ou plusieurs stratégies (ou formations) existantes. Pour chacune, coche un ou plusieurs niveaux de rattrapage avec un nombre N — N = combien de fois ce niveau doit arriver D'AFFILÉE avant de déclencher (N=2 → 2 rattrapages 2 consécutifs déclenchent au 2ᵉ ; N=1 → dès le 1ᵉʳ). Une fois déclenché, une nouvelle prédiction est envoyée automatiquement : même costume ou son inverse, +w jeux plus loin. Toujours sur la main du JOUEUR.</p></div><div class="toolbar"><button class="button primary" onclick="addCombinedTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="combinedPage()">Actualiser</button></div></div>
+        <div class="two-col">
+          <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit les prédictions combinées, sauf source avec son propre canal.</p>
+            <div class="field"><label>ID ou @nom du canal</label><input id="combinedChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveCombinedChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="combinedTest()">Envoyer un test</button><button class="button small danger" onclick="removeCombinedChannel()">Retirer</button></div>
+            ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
+          <div class="panel"><h3>Réglages du panneau</h3>
+            <label class="check"><input id="combinedEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer la prédiction combinée</label>
+            <div class="two-col" style="margin-top:16px">
+              <div class="field"><label>Nombre de rattrapage</label><input id="combinedMaxR" type="number" min="0" max="9" value="${esc(String(p.maxR ?? 1))}"></div>
+              <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 88))})</label><input id="combinedFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(p.format ?? 1))}"></div>
+            </div>
+            <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveCombined()">Enregistrer</button></div></div>
+        </div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Sources suivies</span><h2 style="margin-top:7px">${trackers.length} source(s)</h2></div></div>
+          ${trackers.length ? `<div class="proposals">${trackers.map(t => `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3><span class="tag ${t.streakCount > 0 ? 'warn' : 'good'}">${t.streakCount > 0 ? `Série en cours : ${esc(COMBINED_LEVEL_LABELS[t.streakKind] || t.streakKind)} ×${esc(String(t.streakCount))}` : 'Surveillance'}</span></div>
+            <dl><dt>Envois combinés</dt><dd>${esc(String(t.sentCount || 0))}</dd><dt>Dernier envoi</dt><dd>${formatDate(t.lastSentAt)}</dd>${t.armed ? `<dt>État</dt><dd><b>Armé — en attente de la prochaine prédiction source (${esc(COMBINED_LEVEL_LABELS[t.armedKind] || t.armedKind || '')})</b></dd>` : ''}<dt>Canal utilisé</dt><dd>${(t.channels && t.channels.length) ? esc(t.channels.join(', ')) : `Canal du panneau (${esc((p.channels || []).join(', ') || '—')})`}</dd><dt>Format utilisé</dt><dd>${(t.format === null || t.format === undefined) ? `Format du panneau (${esc(String(p.format ?? 1))})` : esc(String(t.format))}</dd></dl>
+            ${combinedRuleRows('ct-' + t.id, t.rules)}
+            ${combinedChannelFormatRow('ct-' + t.id, t)}
+            <div class="field" style="margin-top:12px"><label>Nom de cette stratégie combinée <span class="small">(affiché aussi dans la liste « Stratégies »)</span></label><input id="ct-${esc(t.id)}-name" value="${esc(t.name)}"></div>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateCombinedTracker('${esc(t.id)}')">Enregistrer</button><button class="button small danger" onclick="removeCombinedTracker('${esc(t.id)}')">Retirer</button></div></article>`).join('')}</div>` : '<div class="empty">Aucune source suivie pour le moment. Clique sur « Ajouter une source » pour commencer.</div>'}</section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers envois combinés</h2></div></div>
+          ${history.length ? `<table><thead><tr><th>Source</th><th>Déclenché par</th><th>Mode</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${esc(h.triggeredBy || '—')}</td><td>${h.mode === 'inverse' ? 'Inverse' : h.mode === 'meme' ? 'Même costume' : 'Relais'}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun envoi combiné pour le moment.</div>'}</section>`;
+    }
+    function combinedRuleRows(prefix, rules) {
+      const r = rules || {};
+      return ['r1', 'r2', 'r3', 'perdue'].map((k) => {
+        const cur = r[k] || { enabled: false, need: 1, mode: 'relais', offset: 5 };
+        const m = cur.mode || 'relais';
+        // CORRECTIF (demande admin) : les options mode/+w étaient masquées
+        // tant que la case n'était pas cochée (repliées derrière un
+        // onchange) — désormais TOUJOURS visibles dès l'affichage de la
+        // ligne, cochée ou non, pour qu'on les voie immédiatement.
+        return `<div class="rule-row" style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-top:8px">
+          <div class="field-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <label class="check" style="flex:1;min-width:140px"><input id="${prefix}-${k}-on" type="checkbox" ${cur.enabled ? 'checked' : ''}> ${esc(COMBINED_LEVEL_LABELS[k])}</label>
+            <div class="field" style="max-width:150px;margin:0"><label style="font-size:11px">Fois consécutives (N)</label><input id="${prefix}-${k}-need" type="number" min="1" max="20" value="${esc(String(cur.need || 1))}"></div>
+          </div>
+          <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e2e8f0" class="field-row">
+            <div class="field" style="max-width:340px;margin:0"><label style="font-size:11px">Une fois ce niveau atteint</label>
+              <select id="${prefix}-${k}-mode" onchange="document.getElementById('${prefix}-${k}-offset-wrap').style.display = this.value === 'relais' ? 'none' : ''">
+                <option value="relais" ${m === 'relais' ? 'selected' : ''}>Relayer la prochaine prédiction naturelle (défaut)</option>
+                <option value="meme" ${m === 'meme' ? 'selected' : ''}>Même costume que la dernière occurrence, +w jeux</option>
+                <option value="inverse" ${m === 'inverse' ? 'selected' : ''}>Son inverse (❤️↔♣️, ♦️↔♠️), +w jeux</option>
+              </select>
+            </div>
+            <div class="field" id="${prefix}-${k}-offset-wrap" style="max-width:130px;margin:0;${m === 'relais' ? 'display:none' : ''}"><label style="font-size:11px">Décalage (+w jeux)</label><input id="${prefix}-${k}-offset" type="number" min="1" max="50" value="${esc(String(cur.offset || 5))}"></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+    async function optimizeAfterLossTracker(id) {
+      const box = $(`#opt-result-${id}`);
+      if (box) box.innerHTML = '<div class="notice" style="margin:10px 0">Analyse de l\'historique en cours…</div>';
+      try {
+        const r = await api(`/api/after-loss/trackers/${encodeURIComponent(id)}/optimize`, 'POST', {});
+        if (!box) return;
+        const rows = (r.top || []).map(x => `<tr><td>${esc(x.label)}</td><td>${esc(String(x.n))}</td><td>${esc(String(x.wins))}/${esc(String(x.sends))}</td><td>${esc(String(x.ratePct))}%</td></tr>`).join('');
+        box.innerHTML = `<div class="notice" style="margin:10px 0"><b>Backtest sur ${esc(String(r.sampleSize))} prédiction(s) passée(s)</b><p class="small" style="margin:6px 0">${esc(r.explanation || '')}</p>${rows ? `<table style="margin-top:8px"><thead><tr><th>Déclencheur</th><th>N</th><th>Gagnés/Envois</th><th>Taux</th></tr></thead><tbody>${rows}</tbody></table>` : ''}</div>`;
+      } catch (e) { toast(e.message, 'error'); if (box) box.innerHTML = ''; }
+    }
+    function readCombinedChannelFormat(prefix) {
+      return { channels: ids(val(`${prefix}-channels`)), format: val(`${prefix}-format`) || null };
+    }
+    function readCombinedRules(prefix) {
+      const out = {};
+      for (const k of ['r1', 'r2', 'r3', 'perdue']) {
+        out[k] = {
+          enabled: !!$(`#${prefix}-${k}-on`)?.checked,
+          need: val(`${prefix}-${k}-need`),
+          mode: val(`${prefix}-${k}-mode`),
+          offset: val(`${prefix}-${k}-offset`),
+        };
+      }
+      return out;
+    }
+    async function removeAfterLossChannel() { try { await api('/api/after-loss/channel', 'DELETE'); await refresh(); afterLossPage(); } catch (e) { toast(e.message, 'error'); } }
+    async function removeAfterLossTracker(id) {
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); afterLossPage(); toast('Stratégie retirée du suivi.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveAfterLoss() {
+      const rawSite = val('afterLossSiteChannel');
+      try { await api('/api/after-loss/config', 'POST', { enabled: $('#afterLossEnabled')?.checked, lossNoticeEnabled: $('#afterLossLossNotice')?.checked, maxR: val('afterLossMaxR'), format: val('afterLossFormat'), channels: ids(val('afterLossChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); afterLossPage(); toast('Panneau « Prédiction après perte » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveAfterLossChannel() {
+      const list = ids(val('afterLossChannel'));
+      if (!list.length) return toast('Renseigne un ID de canal.', 'error');
+      try { const r = await api('/api/after-loss/channel', 'POST', { channelId: list[0] }); await refresh(); afterLossPage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function updateAfterLossTriggers(id) {
+      const triggers = readAfterLossTriggers('trk-' + id);
+      const repeat = readAfterLossRepeat('trk-' + id);
+      const streak = readAfterLossStreak('trk-' + id);
+      const decade = readAfterLossDecade('trk-' + id);
+      const { channels, siteChannelId, format } = readAfterLossChannelFormat('trk-' + id);
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, streak, decade, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
     async function route() {
       try {
         await refresh();
@@ -3979,6 +4299,7 @@ Faites-en bon usage !
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
+        else if (h === '#/bet-type') betTypePage();
         else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/vip') vipPage();
