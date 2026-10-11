@@ -17,6 +17,7 @@ const midnightReset = require('./midnight-reset');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const copyAnnounce = require('./copy-announce');
+const betType = require('./bet-type');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
@@ -468,6 +469,14 @@ function wire(b) {
     if (!isAdmin(msg)) return deny(msg.chat.id);
     const reply = runPredictionControlCommand(cmd, 'administrateur');
     if (reply) b.sendMessage(msg.chat.id, reply).catch(() => {});
+  });
+
+  // /meri — dans un canal suivi par « Type de mise » : meilleur type, explication
+  // et exemple du dernier suivi réussi (français puis russe).
+  b.onText(/^\/meri(?:@\w+)?\s*$/i, (msg) => {
+    const text = betType.meriReply(msg.chat);
+    if (!text) return;
+    (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, text).catch(() => {});
   });
 
   b.onText(/^\/(aide|help)/, (msg) =>
@@ -2136,6 +2145,7 @@ async function applyDbConfigs() {
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
   await copyAnnounce.restoreFromDb();
+  await betType.restoreFromDb();
   await suitBreak.restoreFromDb();
   await overlap.restoreFromDb();
   await statistics.restoreFromDb();
@@ -2207,6 +2217,14 @@ async function startLoop() {
   costumeFaibleTop.setAdminId(() => state.adminId);
   copyAnnounce.restore();
   copyAnnounce.setSender(senderFor);
+  betType.restore();
+  betType.setSender(senderFor);
+  // « Type de mise » tourne aussi sur sa propre minuterie (comme « Copie et annonce »).
+  if (!global.__betTypeTimer) {
+    global.__betTypeTimer = setInterval(() => {
+      betType.tick({ paused: predictionControl.isPaused() }).catch(() => {});
+    }, 4000);
+  }
   // « Copie et annonce » tourne sur SA PROPRE minuterie : elle ne dépend ni
   // du flux de jeux (tick() s'arrête si l'API échoue) ni de la pause des
   // prédictions pour mettre à jour les résultats copiés ; les annonces

@@ -47,6 +47,7 @@ const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
+const betType = require('./bet-type');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
@@ -398,6 +399,7 @@ app.get('/api/state', async (req, res) => {
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
     copyAnnounce: { ...copyAnnounce.status(), channels: configuredChannelList() },
+    betType: { ...betType.status(), allChannels: configuredChannelList() },
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
@@ -2396,7 +2398,7 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
 function configuredChannelList() {
   const rows = new Map();
   const titles = {};
-  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, overlap, copyAnnounce]) {
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, overlap, copyAnnounce, betType]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {
@@ -2413,7 +2415,7 @@ function configuredChannelList() {
       }
     }
   } catch (_) {}
-  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit]];
+  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType]];
   for (const [label, mod] of panelsList) {
     try {
       const st = mod.status() || {};
@@ -2483,6 +2485,81 @@ app.post('/api/copy-announce/rules/:id/test', async (req, res) => {
 app.post('/api/copy-announce/scan', async (req, res) => {
   await copyAnnounce.tick();
   res.json(copyAnnounce.status());
+});
+
+
+// ---------------------------------------------------------------------------
+// « Type de mise » (voir bet-type.js) : configurations (4 types) créées à
+// partir des canaux déjà connus + « Meilleur type de mise ».
+// ---------------------------------------------------------------------------
+async function checkBetDest(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`${id} : ${check.error}`);
+    if (check.chat && check.chat.canPost === false) throw new Error(`${id} : le bot ne peut pas publier dans ce canal`);
+    if (check.chat && check.chat.title) betType.setChannelTitle(id, check.chat.title);
+  }
+}
+const betTypeSnapshot = () => ({ ...betType.status(), allChannels: configuredChannelList() });
+
+app.get('/api/bet-type', (req, res) => res.json(betTypeSnapshot()));
+
+app.post('/api/bet-type/config', (req, res) => {
+  betType.configure(req.body || {});
+  res.json(betTypeSnapshot());
+});
+
+app.post('/api/bet-type/configs', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (botStatus().tokenSet) await checkBetDest([...betType.parseChannels(body.destChannels), ...betType.parseChannels(body.bestChannels)]);
+    const config = betType.addConfig(body);
+    res.json({ ok: true, config, betType: betTypeSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/bet-type/configs/:id', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if ((body.destChannels !== undefined || body.bestChannels !== undefined) && botStatus().tokenSet) await checkBetDest([...betType.parseChannels(body.destChannels), ...betType.parseChannels(body.bestChannels)]);
+    const config = betType.updateConfig(req.params.id, body);
+    if (!config) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, config, betType: betTypeSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/bet-type/configs/:id', (req, res) => {
+  betType.removeConfig(req.params.id);
+  res.json(betTypeSnapshot());
+});
+
+app.post('/api/bet-type/configs/:id/test', async (req, res) => {
+  const r = await betType.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/bet-type/best', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.channels !== undefined && botStatus().tokenSet) await checkBetDest(betType.parseChannels(body.channels));
+    betType.configureBest(body);
+    res.json({ ok: true, betType: betTypeSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/bet-type/best/test', async (req, res) => {
+  const r = await betType.testBest();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/bet-type/bilan', async (req, res) => {
+  const ok = await betType.sendBilan();
+  res.status(ok ? 200 : 400).json({ ok, error: ok ? undefined : 'Aucun bilan envoyé (aucun résultat, ou aucun canal configuré)' });
+});
+
+app.post('/api/bet-type/scan', async (req, res) => {
+  await betType.tick();
+  res.json(betTypeSnapshot());
 });
 
 

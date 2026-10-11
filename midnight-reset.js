@@ -120,7 +120,7 @@ function wipePanel(panel) {
 }
 
 const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap', 'vip', 'cards-count',
-  'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'game21-predict', 'statistics'];
+  'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'bet-type', 'game21-predict', 'statistics'];
 
 async function wipeData() {
   const report = { memory: [], db: [], errors: [] };

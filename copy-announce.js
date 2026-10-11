@@ -524,7 +524,7 @@ function statusView() {
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
   options, addRule, updateRule, removeRule, parseChannels,
-  restore, restoreFromDb, setChannelTitle,
+  restore, restoreFromDb, setChannelTitle, sourceEntries,
 };
 
 // exposé pour l'effacement de minuit (midnight-reset.js)
