@@ -294,6 +294,7 @@
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
+        <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/vip" data-nav="vip">VIP</a>
@@ -537,6 +538,7 @@
         ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/copy-announce', '📣', 'Copie et annonce', `${(snapshot.copyAnnounce?.rules || []).length} règle(s)`)}
         ${card('#/bet-type', '🎲', 'Type de mise', `${(snapshot.betType?.trackers || []).length} configuration(s)`)}
+        ${card('#/like-react', '👍', 'J\'aime', `${(snapshot.likeReact?.channels || []).length} canal(aux) coché(s)`)}
         ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
@@ -4030,6 +4032,97 @@ Faites-en bon usage !
           ${rank.length ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${rank.map((r, i) => `<div class="small">${medals[i] || '▫️'} <b>${esc(r.name)}</b> (type ${r.type}) — ${esc(String(r.rate))}% · ${r.wins}✅ ${r.losses}❌</div>`).join('')}</div>` : '<p class="small muted" style="margin:6px 0 0">Aucun résultat pour le moment.</p>'}</div>
         ${b.sentCount ? `<p class="small muted" style="margin:10px 0 0">${b.sentCount} prédiction(s) envoyée(s) · ${b.wins || 0} gagné(s) · ${b.losses || 0} perdu(s)</p>` : ''}</div>`;
     }
+    // -------------------------------------------------------------------
+    // « J'aime » (voir like-react.js) : on coche les canaux qui envoient des
+    // prédictions ; le bot met l'emoji du type (1 à 4) sur chaque prédiction
+    // « Type de mise » publiée dans un canal coché.
+    // -------------------------------------------------------------------
+    function likeReactPage() {
+      setNav('like-react');
+      const p = snapshot.likeReact || {};
+      const emojis = p.emojis || { 1: '👍', 2: '🔥', 3: '\u2764', 4: '🍾' };
+      const checked = (p.channels || []).map(String);
+      const all = (p.allChannels || []).slice();
+      for (const id of checked) if (!all.some(x => String(x.id) === id)) all.push({ id, title: '', sources: [] });
+      const lrState = (n, x) => {
+        if (!x) return `Type ${n} : —`;
+        if (n === 1) return x.waitingSuit ? `Type 1 : attend ${x.waitingSuit}` : `Type 1 : série ${x.streakCount || 0}/2`;
+        if (n === 2) return x.armed ? 'Type 2 : prochaine prédiction' : `Type 2 : série ${x.streakCount || 0}/2`;
+        if (x.armed) return `Type ${n} : prochaine prédiction`;
+        return `Type ${n} : ${x.lossCount || 0}/${n === 3 ? 2 : 1} perte(s)`;
+      };
+      const rows = all.length ? all.map(ch => { const pr = (p.progress || {})[String(ch.id)]; return `<label class="check" style="align-items:flex-start;margin:8px 0"><input type="checkbox" class="lr-ch" value="${esc(ch.id)}" ${checked.includes(String(ch.id)) ? 'checked' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}${pr ? `<br><span class="small muted">${[1, 2, 3, 4].map(n => esc(lrState(n, pr[n]))).join(' · ')}</span>` : ''}</span></label>`; }).join('')
+        : '<p class="small muted">Aucun canal n\'envoie encore de prédictions.</p>';
+      const hist = (p.history || []).slice(0, 8).map(h => `<div class="small"><span class="tag mono">${esc(h.emoji)}</span> Type ${esc(String(h.type))} · #N${esc(String(h.target ?? ''))} ${esc(h.suit || '')} · <span class="mono">${esc(String(h.chatId))}</span></div>`).join('');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Réactions automatiques</span><h2 style="margin-top:7px">J'aime</h2><p class="small">Coche les canaux qui envoient des prédictions. Le bot suit leurs prédictions avec les règles de « Type de mise » et met l'emoji du type sur le message de prédiction qui déclenche : ${[1, 2, 3, 4].map(n => `<b>Type ${n}</b> ${esc(emojis[n])}`).join(' · ')}.</p></div><div class="toolbar"><button class="button ghost" onclick="likeReactRescan()">Revérifier les canaux</button></div></div>
+        <div class="panel"><label class="check"><input id="lrEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''}> Activer « J'aime »</label>
+          <p class="small muted" style="margin:8px 0 0">Type 1 : deux prédictions de même costume de suite, puis dès que ce costume est prédit à nouveau → ${esc(emojis[1])}. Type 2 : même série, la prédiction suivante → ${esc(emojis[2])}. Type 3 : après 2 pertes, la suivante → ${esc(emojis[3])}. Type 4 : après 1 perte, la suivante → ${esc(emojis[4])}. Si plusieurs types se déclenchent sur la même prédiction, un seul emoji est mis (le plus petit numéro). Le bot doit être administrateur du canal et les réactions doivent y être autorisées. Seules les nouvelles prédictions comptent, pas l'historique déjà publié.</p>
+          ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Canaux qui envoient des prédictions</span><h2 style="margin-top:7px">${all.length} canal(aux) · ${checked.length} coché(s)</h2></div></div>
+          <div class="panel"><div style="max-height:360px;overflow:auto">${rows}</div>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveLikeReact()">Enregistrer</button></div></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Dernières réactions</span><h2 style="margin-top:7px">${esc(String(p.reactedCount || 0))} au total</h2></div></div>
+          <div class="panel">${hist || '<span class="small muted">Aucune réaction pour le moment.</span>'}</div></section>`;
+    }
+    // -------------------------------------------------------------------
+    // Sélecteur de canaux partagé : sous chaque champ « ID du canal » de TOUS
+    // les boutons, la même liste (canaux de tous les boutons et stratégies,
+    // avec leurs configurations) pour choisir un canal d'un clic.
+    // -------------------------------------------------------------------
+    function chAllChannels() { return (snapshot && (snapshot.channelList || snapshot.betType?.allChannels)) || []; }
+    function chPickerHtml(inputId) {
+      const all = chAllChannels();
+      if (!all.length) return '';
+      const label = ch => `${ch.title || 'Canal'} · ${ch.id}${ch.sources?.length ? ` (${ch.sources.length})` : ''}`;
+      return `<div class="ch-picker" data-for="${esc(inputId)}" style="margin-top:6px">
+        <select class="ch-pick-select" data-for="${esc(inputId)}"><option value="">Choisir un canal déjà configuré…</option>${all.map(ch => `<option value="${esc(ch.id)}">${esc(label(ch))}</option>`).join('')}</select>
+        <details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Voir tous les canaux (${all.length}) et leurs configurations</summary>
+          <div style="max-height:260px;overflow:auto;margin-top:6px">${all.map(ch => `<div class="split" style="align-items:flex-start;gap:10px;padding:6px 0;border-top:1px solid var(--border)"><span class="small"><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}</span><button type="button" class="button small ghost ch-pick-btn" data-for="${esc(inputId)}" data-id="${esc(ch.id)}">Utiliser</button></div>`).join('')}</div></details></div>`;
+    }
+    function chAddToInput(inputId, id) {
+      const input = document.getElementById(inputId);
+      if (!input || !id) return;
+      const cur = String(input.value || '').split(/[\s,;]+/).filter(Boolean);
+      if (!cur.some(x => x.toLowerCase() === String(id).toLowerCase())) cur.push(String(id));
+      input.value = cur.join(', ');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    function attachChannelPickers() {
+      if (!chAllChannels().length) return;
+      document.querySelectorAll('#app input[id], #modalRoot input[id]').forEach(input => {
+        if (input.dataset.chpicker || (input.type && input.type !== 'text')) return;
+        const id = input.id || '';
+        const isChannel = /channel/i.test(id) || /Chan$/.test(id) || /-100\d{6,}/.test(input.placeholder || '');
+        if (!isChannel || /site|title|name|link|search/i.test(id)) return;
+        input.dataset.chpicker = '1';
+        // champs qui ont déjà leur propre liste de canaux : on ne double pas
+        const next = input.nextElementSibling;
+        if (next && next.tagName === 'SELECT') return;
+        const holder = document.createElement('div');
+        holder.innerHTML = chPickerHtml(id);
+        if (holder.firstElementChild) input.insertAdjacentElement('afterend', holder.firstElementChild);
+      });
+    }
+    document.addEventListener('change', e => { const t = e.target; if (t && t.classList && t.classList.contains('ch-pick-select') && t.value) { chAddToInput(t.dataset.for, t.value); t.value = ''; } });
+    document.addEventListener('click', e => { const t = e.target && e.target.closest ? e.target.closest('.ch-pick-btn') : null; if (t) chAddToInput(t.dataset.for, t.dataset.id); });
+    (function startChannelPickers() {
+      let timer = null;
+      const run = () => { clearTimeout(timer); timer = setTimeout(() => { try { attachChannelPickers(); } catch (_) {} }, 40); };
+      const boot = () => { new MutationObserver(run).observe(document.body, { childList: true, subtree: true }); run(); };
+      if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot);
+    })();
+    async function saveLikeReact() {
+      const channels = [...document.querySelectorAll('.lr-ch:checked')].map(x => x.value);
+      try {
+        await api('/api/like-react/config', 'POST', { enabled: !!document.getElementById('lrEnabled')?.checked, channels });
+        await refresh(); likeReactPage(); toast('Réglage enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function likeReactRescan() {
+      try { await api('/api/like-react/scan', 'POST', {}); await refresh(); likeReactPage(); toast('Canaux revérifiés.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     function betTypePage() {
       setNav('bet-type');
       const p = snapshot.betType || {};
@@ -4078,7 +4171,7 @@ Faites-en bon usage !
       const all = (p.allChannels || []).slice();
       for (const id of chosen) if (!all.some(x => String(x.id) === id)) all.push({ id, title: '', sources: [] });
       const fc = String(snapshot.formatCount || 88);
-      const rows = all.length ? all.map(ch => `<label class="check" style="align-items:flex-start;margin:6px 0"><input type="checkbox" class="bt-src" value="${esc(ch.id)}" ${chosen.includes(String(ch.id)) ? 'checked' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${esc(ch.sources.slice(0, 2).join(', '))}</span>` : ''}</span></label>`).join('')
+      const rows = all.length ? all.map(ch => `<label class="check" style="align-items:flex-start;margin:6px 0"><input type="checkbox" class="bt-src" value="${esc(ch.id)}" ${chosen.includes(String(ch.id)) ? 'checked' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}</span></label>`).join('')
         : '<p class="small muted">Aucun canal n\'envoie encore de prédictions.</p>';
       const t = c.type || 1;
       return `<div class="modal-head"><div><span class="eyebrow">${isNew ? 'Créer' : 'Modifier'}</span><h3 style="margin-top:8px">Type de mise</h3></div></div>
@@ -4300,6 +4393,7 @@ Faites-en bon usage !
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
         else if (h === '#/bet-type') betTypePage();
+        else if (h === '#/like-react') likeReactPage();
         else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/vip') vipPage();
