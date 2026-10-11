@@ -197,8 +197,31 @@ function emptyTypeState(seen) {
 }
 function entriesOf(id) {
   const ca = lazy('./copy-announce');
-  if (!ca || typeof ca.sourceEntries !== 'function') return [];
-  return ca.sourceEntries(`channel:${id}`).filter((e) => e.suit).sort((a, b) => a.target - b.target);
+  const entries = ca && typeof ca.sourceEntries === 'function'
+    ? ca.sourceEntries(`channel:${id}`).slice()
+    : [];
+
+  // « Type de mise » envoie ses propres prédictions dans pendingMessages ;
+  // copy-announce.sourceEntries() ne les inclut pas. Les ajouter ici permet
+  // à « J'aime » de suivre le message automatique publié dans ce canal.
+  const betType = lazy('./bet-type');
+  for (const e of (betType && betType.panel && Array.isArray(betType.panel.pendingMessages)
+    ? betType.panel.pendingMessages
+    : [])) {
+    if (!e || !Array.isArray(e.messages)) continue;
+    const messages = e.messages.filter((m) => m && sameChannel(m.chatId, id));
+    if (!messages.length) continue;
+    entries.push({
+      uid: `bet-type:${e.id || `${e.trackerId || ''}:${e.scope || ''}:${e.target || ''}:${e.createdAt || ''}`}`,
+      target: e.target,
+      suit: e.suit || '',
+      status: e.status,
+      step: e.step || 0,
+      messages,
+    });
+  }
+
+  return entries.filter((e) => e.suit).sort((a, b) => a.target - b.target);
 }
 // Un canal qui vient d'être coché ignore tout l'historique déjà publié.
 function newChannelState(id) {
@@ -244,8 +267,11 @@ function runType(type, st, entries, onFire) {
     if (type === 3 || type === 4) {
       const need = type === 3 ? 2 : 1;
       if (st.armed) {
-        // une prédiction déjà terminée ne peut plus être marquée : on reste armé
-        if (pending) { onFire(e); st.armed = false; st.lossCount = 0; }
+        // Les pertes précédentes ont déjà armé la règle. Réagir à la première
+        // prédiction suivante sans attendre la vérification de son résultat.
+        onFire(e);
+        st.armed = false;
+        st.lossCount = 0;
         st.seen.push(e.uid);
         continue;
       }
@@ -258,12 +284,15 @@ function runType(type, st, entries, onFire) {
 
     // types 1 et 2 : séries de même costume (peu importe gagné / perdu)
     if (type === 2 && st.armed) {
-      if (pending) { onFire(e); st.armed = false; st.streakSuit = null; st.streakCount = 0; }
+      onFire(e);
+      st.armed = false;
+      st.streakSuit = null;
+      st.streakCount = 0;
       st.seen.push(e.uid);
       continue;
     }
     if (type === 1 && st.waitingSuit) {
-      if (e.suit === st.waitingSuit && pending) { onFire(e); st.waitingSuit = null; }
+      if (e.suit === st.waitingSuit) { onFire(e); st.waitingSuit = null; }
       st.seen.push(e.uid);
       continue;
     }
