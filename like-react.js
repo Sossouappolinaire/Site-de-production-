@@ -42,6 +42,7 @@ const panel = {
   lastScanAt: null,
   lastError: null,
   history: [],
+  diag: {},              // id canal -> { followed, pending, lastFire, lastError, lastErrorAt }
 };
 
 let sender = null;
@@ -53,6 +54,35 @@ function setChannelSource(fn) { channelSource = fn; }
 let busy = false;
 
 const sameChannel = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+
+// Un même canal peut être saisi « @nom » dans un bouton et « -100… » dans un autre.
+// Les messages enregistrent l'identifiant tel qu'il a été saisi : sans cette
+// équivalence, un canal coché sous son numéro ne retrouvait pas ses prédictions.
+const aliasCache = {};   // '@nom' (minuscules) -> identifiant numérique (texte)
+const aliasFailedAt = {}; // '@nom' -> date du dernier échec de résolution
+const canon = (x) => { const s = String(x == null ? '' : x).trim().toLowerCase(); return aliasCache[s] || s; };
+const sameCh = (a, b) => canon(a) === canon(b);
+// toutes les écritures connues du même canal
+function aliasesOf(id) {
+  const c = canon(id);
+  const out = new Set([String(id), c]);
+  for (const [name, num] of Object.entries(aliasCache)) if (num === c) out.add(name);
+  return [...out];
+}
+async function refreshAliases(bot) {
+  if (!bot || typeof bot.getChat !== 'function') return;
+  const names = new Set();
+  for (const id of panel.channels) if (typeof id === 'string' && id.startsWith('@')) names.add(id);
+  try { for (const r of discoverChannels()) if (String(r.id).startsWith('@')) names.add(String(r.id)); } catch (_) {}
+  let n = 0;
+  for (const name of names) {
+    const k = name.toLowerCase();
+    if (aliasCache[k] || (aliasFailedAt[k] && Date.now() - aliasFailedAt[k] < 600000) || n >= 5) continue;
+    n += 1;
+    try { const chat = await bot.getChat(name); if (chat && chat.id !== undefined) aliasCache[k] = String(chat.id); }
+    catch (_) { aliasFailedAt[k] = Date.now(); }
+  }
+}
 
 function parseChannels(value) {
   const list = Array.isArray(value) ? value : String(value == null ? '' : value).split(/[\s,;]+/);
@@ -195,15 +225,63 @@ function scan() {
 function emptyTypeState(seen) {
   return { seen: seen || [], streakSuit: null, streakCount: 0, waitingSuit: null, armed: false, lossCount: 0 };
 }
+// modules dont les messages de prédiction ne passent pas par copy-announce.sourceEntries()
+const EXTRA_SOURCES = [
+  ['./bet-type', 'pendingMessages', 'bet-type'],
+  ['./dizaine-top', 'pendingMessages', 'dizaine'],
+  ['./costume-faible-top', 'pendingMessages', 'faible'],
+  ['./vip', 'pendingMessages', 'vip'],
+  ['./best-weak-top', 'pending', 'bestweak'],
+];
+
 function entriesOf(id) {
   const ca = lazy('./copy-announce');
-  if (!ca || typeof ca.sourceEntries !== 'function') return [];
-  return ca.sourceEntries(`channel:${id}`).filter((e) => e.suit).sort((a, b) => a.target - b.target);
+  const entries = [];
+  if (ca && typeof ca.sourceEntries === 'function') {
+    const seenUid = new Set();
+    for (const key of aliasesOf(id)) {
+      for (const e of ca.sourceEntries(`channel:${key}`)) { if (!seenUid.has(e.uid)) { seenUid.add(e.uid); entries.push(e); } }
+    }
+  }
+
+  // « J'aime » est indépendant de « Type de mise » : il lit les prédictions envoyées
+  // par TOUS les boutons. copy-announce.sourceEntries() ne couvre que les
+  // stratégies et quelques suivis (Après perte, Combinaison, Répétition, Rupture,
+  // Chevauchement) : on ajoute ici les messages publiés par Type de mise, Dizaine,
+  // Costume faible, VIP, Meilleur + plus faible et les relais de Copie et annonce.
+  const have = new Set();
+  for (const e of entries) for (const m of (e.messages || [])) have.add(`${canon(m.chatId)}:${m.messageId}`);
+  const addExtra = (prefix, e) => {
+    if (!e || !Array.isArray(e.messages) || !e.suit) return;
+    const messages = e.messages.filter((m) => m && m.messageId !== null && m.messageId !== undefined && sameCh(m.chatId, id));
+    if (!messages.length) return;
+    if (messages.every((m) => have.has(`${canon(m.chatId)}:${m.messageId}`))) return; // déjà lu ailleurs
+    messages.forEach((m) => have.add(`${canon(m.chatId)}:${m.messageId}`));
+    entries.push({
+      uid: `${prefix}:${e.id || e.uid || `${e.trackerId || ''}:${e.scope || ''}:${e.target || ''}:${e.createdAt || ''}`}`,
+      target: e.target, suit: e.suit, status: e.status, step: e.step || 0, messages,
+    });
+  };
+  for (const [file, prop, prefix] of EXTRA_SOURCES) {
+    const mod = lazy(file);
+    const list = mod && mod.panel && Array.isArray(mod.panel[prop]) ? mod.panel[prop] : [];
+    for (const e of list) addExtra(prefix, e);
+  }
+  const copy = lazy('./copy-announce');
+  try { for (const r of ((copy && copy.panel && copy.panel.rules) || [])) for (const e of (r.mirrors || [])) addExtra('copie', e); } catch (_) {}
+
+  return entries.filter((e) => e.suit).sort((a, b) => a.target - b.target);
 }
-// Un canal qui vient d'être coché ignore tout l'historique déjà publié.
+// Un canal qui vient d'être coché relit les prédictions déjà publiées pour
+// connaître la situation (séries de même costume, pertes) mais ne réagit jamais
+// sur ces anciens messages : seules les nouvelles prédictions reçoivent un emoji.
 function newChannelState(id) {
-  const uids = entriesOf(id).map((e) => e.uid);
-  return { 1: emptyTypeState(uids.slice()), 2: emptyTypeState(uids.slice()), 3: emptyTypeState(uids.slice()), 4: emptyTypeState(uids.slice()) };
+  const st = { 1: emptyTypeState(), 2: emptyTypeState(), 3: emptyTypeState(), 4: emptyTypeState() };
+  let entries = [];
+  try { entries = id === undefined ? [] : entriesOf(id); } catch (_) {}
+  // relecture silencieuse : l'état (séries, pertes) est appris, aucune réaction n'est mise
+  for (const type of [1, 2, 3, 4]) runType(type, st[type], entries, () => {});
+  return st;
 }
 const keyOf = (id) => String(id);
 const stateKey = (id) => Object.keys(panel.states).find((k) => sameChannel(k, id));
@@ -244,8 +322,9 @@ function runType(type, st, entries, onFire) {
     if (type === 3 || type === 4) {
       const need = type === 3 ? 2 : 1;
       if (st.armed) {
-        // une prédiction déjà terminée ne peut plus être marquée : on reste armé
-        if (pending) { onFire(e); st.armed = false; st.lossCount = 0; }
+        // les pertes précédentes ont armé la règle : la première prédiction suivante
+        // reçoit la réaction, sans attendre son résultat
+        onFire(e); st.armed = false; st.lossCount = 0;
         st.seen.push(e.uid);
         continue;
       }
@@ -258,12 +337,12 @@ function runType(type, st, entries, onFire) {
 
     // types 1 et 2 : séries de même costume (peu importe gagné / perdu)
     if (type === 2 && st.armed) {
-      if (pending) { onFire(e); st.armed = false; st.streakSuit = null; st.streakCount = 0; }
+      onFire(e); st.armed = false; st.streakSuit = null; st.streakCount = 0;
       st.seen.push(e.uid);
       continue;
     }
     if (type === 1 && st.waitingSuit) {
-      if (e.suit === st.waitingSuit && pending) { onFire(e); st.waitingSuit = null; }
+      if (e.suit === st.waitingSuit) { onFire(e); st.waitingSuit = null; }
       st.seen.push(e.uid);
       continue;
     }
@@ -276,6 +355,12 @@ function runType(type, st, entries, onFire) {
     st.seen.push(e.uid);
   }
   if (st.seen.length > 800) st.seen = st.seen.slice(-600);
+}
+
+function errText(e) {
+  const body = e && e.response && e.response.body;
+  const desc = body && (body.description || (typeof body === 'string' ? body : ''));
+  return String(desc || (e && e.message) || e);
 }
 
 async function setReaction(bot, chatId, messageId, emoji) {
@@ -303,11 +388,17 @@ async function processChannel(bot, id) {
       if (!old || type < old.type) fired.set(e.uid, { entry: e, type });
     });
   }
+  const dg = panel.diag[k] || (panel.diag[k] = {});
+  dg.followed = entries.length;
+  dg.pending = entries.filter((e) => e.status === 'en attente').length;
+  dg.checkedAt = Date.now();
+  dg.recent = entries.slice(-5).map((e) => ({ target: e.target, suit: e.suit, status: e.status }));
   for (const { entry, type } of fired.values()) {
     const emoji = EMOJIS[type];
+    dg.lastFire = { type, emoji, target: entry.target, suit: entry.suit, at: Date.now() };
     for (const m of (entry.messages || [])) {
       if (m.messageId === null || m.messageId === undefined) continue;
-      if (!sameChannel(m.chatId, id)) continue; // uniquement le message du canal coché
+      if (!sameCh(m.chatId, id)) continue; // uniquement le message du canal coché
       const key = `${m.chatId}:${m.messageId}`;
       if (panel.reacted.includes(key)) continue;
       try {
@@ -320,16 +411,80 @@ async function processChannel(bot, id) {
         panel.lastError = null;
       } catch (e) {
         panel.attempts[key] = (panel.attempts[key] || 0) + 1;
-        panel.lastError = `${m.chatId} : ${e.message}`;
+        panel.lastError = `${m.chatId} : ${errText(e)}`;
+        dg.lastError = errText(e); dg.lastErrorAt = Date.now();
+        console.error('[J\'aime] réaction refusée', m.chatId, m.messageId, errText(e));
         if (panel.attempts[key] >= MAX_ATTEMPTS) { panel.reacted.push(key); delete panel.attempts[key]; }
       }
     }
   }
 }
 
+// Ce que le bot voit dans un canal (sans rien envoyer).
+function inspect(channelId) {
+  const entries = entriesOf(channelId);
+  let last = null;
+  for (const e of entries) for (const m of (e.messages || [])) {
+    if (sameCh(m.chatId, channelId) && m.messageId !== null && m.messageId !== undefined) {
+      if (!last || Number(m.messageId) > Number(last.messageId)) last = { chatId: m.chatId, messageId: m.messageId, target: e.target, suit: e.suit };
+    }
+  }
+  const row = (panel.known || []).find((r) => sameCh(r.id, channelId));
+  const dg = panel.diag[String(channelId)] || {};
+  return {
+    id: String(channelId),
+    title: (row && row.title) || '',
+    checked: panel.channels.some((c) => sameCh(c, channelId)),
+    followed: entries.length,
+    pending: entries.filter((e) => e.status === 'en attente').length,
+    last,
+    lastFire: dg.lastFire || null,
+    lastError: dg.lastError || null,
+  };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Test d'un canal : teste les 4 emojis (👍 🔥 ❤ 🍾) sur le dernier message de
+// prédiction du canal, vérifie le rôle du bot, puis remet le message comme avant
+// (la réaction déjà posée par « J'aime », sinon aucune réaction).
+async function testReaction(channelId) {
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return { ok: false, error: 'Aucun bot Telegram n\'est connecté (token manquant).' };
+  try { await refreshAliases(bot); } catch (_) {}
+  const info = inspect(channelId);
+  if (!info.last) {
+    return { ok: false, info, error: `Aucune prédiction du site n'a été trouvée dans le canal ${channelId} : le bot n'y a encore envoyé aucun message suivi.` };
+  }
+  const { chatId, messageId } = info.last;
+
+  let role = null;
+  try { const me = await bot.getMe(); const mem = await bot.getChatMember(chatId, me.id); role = mem && mem.status; } catch (_) {}
+
+  const results = {};
+  let firstError = null;
+  for (const type of [1, 2, 3, 4]) {
+    const emoji = EMOJIS[type];
+    try { await setReaction(bot, chatId, messageId, emoji); results[type] = { type, emoji, ok: true }; }
+    catch (e) { const err = errText(e); results[type] = { type, emoji, ok: false, error: err }; if (!firstError) firstError = err; }
+    await sleep(350);
+  }
+  // remise en l'état : la réaction que « J'aime » avait déjà posée sur ce message, sinon aucune
+  const had = panel.history.find((h) => String(h.messageId) === String(messageId) && sameCh(h.chatId, chatId));
+  try {
+    if (had) await setReaction(bot, chatId, messageId, had.emoji);
+    else await bot._request('setMessageReaction', { form: { chat_id: chatId, message_id: messageId, reaction: JSON.stringify([]) } });
+  } catch (_) {}
+  const okAll = Object.values(results).every((r) => r.ok);
+  return { ok: okAll, error: okAll ? null : firstError, info, role, messageId, results, emoji: EMOJIS[1] };
+}
+
 async function processReactions() {
   const bot = typeof sender === 'function' ? sender() : null;
-  if (!bot || !panel.channels.length) return;
+  if (!bot) { panel.lastError = 'Aucun bot Telegram connecté (token manquant) : aucune réaction ne peut être mise.'; return; }
+  if ((panel.lastError || '').startsWith('Aucun bot')) panel.lastError = null;
+  if (!panel.channels.length) return;
+  try { await refreshAliases(bot); } catch (_) {}
   for (const id of panel.channels) {
     try { await processChannel(bot, id); } catch (e) { panel.lastError = e.message; }
   }
@@ -355,6 +510,7 @@ async function tick(opts = {}) {
 // ---------------------------------------------------------------------------
 // Persistance
 // ---------------------------------------------------------------------------
+let lastPersisted = '';
 function persist() {
   const seen = {};
   for (const [id, st] of Object.entries(panel.states)) {
@@ -365,8 +521,11 @@ function persist() {
     config: { enabled: panel.enabled }, channels: panel.channels, seen,
     reacted: panel.reacted.slice(-1000), reactedCount: panel.reactedCount, lastReactAt: panel.lastReactAt,
   };
+  const json = JSON.stringify(saved);
+  if (json === lastPersisted) return;
+  lastPersisted = json;
   try { store.patch({ likeReact: saved }); } catch (_) {}
-  if (db.ready) db.setSetting('like_react_state', JSON.stringify(saved)).catch((error) => { panel.lastError = error.message; });
+  if (db.ready) db.setSetting('like_react_state', json).catch((error) => { panel.lastError = error.message; });
 }
 
 function applySaved(saved) {
@@ -418,6 +577,7 @@ function statusView() {
       const v = (t) => { const x = st[t] || {}; return { streakSuit: x.streakSuit || null, streakCount: x.streakCount || 0, waitingSuit: x.waitingSuit || null, armed: !!x.armed, lossCount: x.lossCount || 0 }; };
       return [String(id), { 1: v(1), 2: v(2), 3: v(3), 4: v(4) }];
     })),
+    diag: panel.diag,
     reactedCount: panel.reactedCount, lastReactAt: panel.lastReactAt,
     lastScanAt: panel.lastScanAt, lastError: panel.lastError,
     history: panel.history.slice(0, 20),
@@ -425,7 +585,7 @@ function statusView() {
 }
 
 module.exports = {
-  panel, EMOJIS, setSender, setChannelSource, tick, scan, discoverChannels, config, configure,
+  panel, EMOJIS, testReaction, inspect, setSender, setChannelSource, tick, scan, discoverChannels, config, configure,
   restore, restoreFromDb, parseChannels, status: statusView,
 };
 module.exports.persist = persist;

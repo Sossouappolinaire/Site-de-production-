@@ -186,6 +186,8 @@ const HELP =
   '*Canaux*\n' +
   '/canaux — canaux où je suis admin\n' +
   '/activer <id> — activer les prédictions\n' +
+  '/jaime — canaux qui reçoivent les réactions automatiques (👍 🔥 ❤ 🍾)\n' +
+  '/jaime test <id> — tester les réactions (tous les canaux cochés si pas d\'id)\n' +
   '/desactiver <id> — arrêter\n\n' +
   '*Interrupteur des prédictions* (commandes à taper DIRECTEMENT dans le ' +
   'canal — réservées de fait aux administrateurs de ce canal, Telegram ' +
@@ -750,6 +752,71 @@ function wire(b) {
       await b.sendMessage(id, '🟢 *Prédictions actives*', { parse_mode: 'Markdown' });
     } catch (e) {
       b.sendMessage(msg.chat.id, `⚠️ Impossible d'écrire dans ce canal : ${e.message}`);
+    }
+  });
+
+  // ---- « J'aime » : réactions automatiques (like-react.js) -----------------
+  //   /jaime              -> liste des canaux cochés et ce que le bot y voit
+  //   /jaime test         -> teste 👍 🔥 ❤ 🍾 sur chaque canal coché
+  //   /jaime test <id>    -> teste un canal précis (coché ou non)
+  b.onText(/^\/jaimes?(?:@\w+)?(?:\s+(test|tester))?(?:\s+(\S+))?\s*$/i, async (msg, m) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const chat = msg.chat.id;
+    const say = (t) => (b.sendMessageUnguarded ? b.sendMessageUnguarded(chat, t) : b.sendMessage(chat, t)).catch(() => {});
+    const status = likeReact.status();
+    const em = status.emojis || {};
+    const typesLine = [1, 2, 3, 4].map((n) => `Type ${n} ${em[n]}`).join(' · ');
+    const nameOf = (info) => info.title || (state.channels.find((c) => String(c.id) === String(info.id)) || {}).title || 'Canal';
+    const wantTest = !!m[1];
+    const arg = m[2];
+
+    if (!wantTest) {
+      const ids = status.channels;
+      let text = `${em[1]} J'aime — réactions automatiques : ${status.enabled ? 'activé ✅' : 'désactivé ⛔'}\n${typesLine}\n\n`;
+      if (!ids.length) {
+        text += 'Aucun canal coché. Coche des canaux dans le bouton « J\'aime » du site, ou teste un ID : /jaime test -100123456789';
+      } else {
+        text += `Canaux cochés (${ids.length}) :\n`;
+        ids.forEach((id, i) => {
+          const info = likeReact.inspect(id);
+          const last = info.lastFire ? ` · dernier : ${info.lastFire.emoji} #N${info.lastFire.target ?? ''} ${info.lastFire.suit || ''}` : '';
+          text += `\n${i + 1}. ${nameOf(info)}\n   ID : ${id}\n   ${info.followed} prédiction(s) suivie(s) (${info.pending} en attente)${last}`;
+          if (!info.followed) text += '\n   ⚠ aucune prédiction du site trouvée dans ce canal';
+          if (info.lastError) text += `\n   ❌ dernière erreur Telegram : ${info.lastError}`;
+        });
+        text += '\n\nPour tester les réactions : /jaime test (tous) ou /jaime test <id>';
+      }
+      if (status.lastError) text += `\n\nDernière erreur : ${status.lastError}`;
+      return say(text);
+    }
+
+    // test : un canal précis, sinon tous les canaux cochés
+    let ids = status.channels;
+    if (arg) {
+      const parsed = /^-?\d{5,}$/.test(arg) || /^@[A-Za-z][A-Za-z0-9_]{4,}$/.test(arg) ? likeReact.parseChannels(arg) : [];
+      if (!parsed.length) return say('❌ ID de canal invalide. Exemple : /jaime test -100123456789 ou /jaime test @moncanal');
+      ids = parsed;
+    }
+    if (!ids.length) return say('Aucun canal coché à tester. Coche des canaux dans « J\'aime » ou tape /jaime test <id>.');
+    await say(`🧪 Test des réactions sur ${ids.length} canal(aux)… (le message de test est remis comme avant)`);
+    for (const id of ids) {
+      let r;
+      try { r = await likeReact.testReaction(id); }
+      catch (e) { r = { ok: false, error: e.message, info: likeReact.inspect(id) }; }
+      const info = r.info || likeReact.inspect(id);
+      let text = `${r.ok ? '✅' : '❌'} ${nameOf(info)}\nID : ${id}${info.checked ? '' : ' (non coché)'}\n`;
+      text += `Prédictions suivies : ${info.followed} (${info.pending} en attente)\n`;
+      if (r.role) text += `Rôle du bot : ${r.role === 'administrator' || r.role === 'creator' ? r.role + ' ✅' : r.role + ' ⚠ (il doit être administrateur)'}\n`;
+      if (r.results) {
+        text += Object.values(r.results).map((x) => `${x.emoji} ${x.ok ? '✅' : '❌'}`).join('   ') + '\n';
+        const bad = Object.values(r.results).filter((x) => !x.ok);
+        if (bad.length) text += bad.map((x) => `${x.emoji} refusé : ${x.error}`).join('\n') + '\n';
+        if (bad.some((x) => /REACTION_INVALID/i.test(x.error))) text += '→ Dans les paramètres du canal, onglet Réactions, autorise ces emojis.\n';
+        if (r.role && r.role !== 'administrator' && r.role !== 'creator') text += '→ Ajoute le bot comme administrateur du canal.\n';
+      } else if (r.error) {
+        text += `${r.error}\n`;
+      }
+      await say(text.trim());
     }
   });
 

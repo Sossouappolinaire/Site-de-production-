@@ -2529,6 +2529,11 @@ app.post('/api/like-react/config', (req, res) => {
   likeReact.scan();
   res.json({ ok: true, likeReact: likeReactSnapshot() });
 });
+app.post('/api/like-react/test', async (req, res) => {
+  const chatId = (req.body || {}).chatId;
+  if (chatId === undefined || chatId === null || chatId === '') return res.status(400).json({ ok: false, error: 'Canal manquant.' });
+  res.json(await likeReact.testReaction(chatId));
+});
 app.post('/api/like-react/scan', (req, res) => { likeReact.scan(); res.json({ ok: true, likeReact: likeReactSnapshot() }); });
 
 app.get('/api/bet-type', (req, res) => res.json(betTypeSnapshot()));
