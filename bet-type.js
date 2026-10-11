@@ -341,7 +341,7 @@ async function send(cfg, syn, scope) {
   panel.history.unshift({ trackerId: cfg.id, trackerName: cfg.name, scope, target: syn.target, suit: syn.suit, sentAt: Date.now() });
   panel.history = panel.history.slice(0, 100);
   panel.pendingMessages.push({
-    id: newId('p'), trackerId: cfg.id, scope, target: syn.target, suit: syn.suit, strategyName: label,
+    id: newId('p'), trackerId: cfg.id, type: cfg.type, scope, target: syn.target, suit: syn.suit, strategyName: label,
     trigger: syn.trigger || null, sourceId: syn.sourceId || null,
     format, maxR, step: 0, gap: 0, skipped: 0, status: 'en attente', messages: sent,
     createdAt: Date.now(), resolvedAt: null,

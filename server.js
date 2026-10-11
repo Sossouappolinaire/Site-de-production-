@@ -48,6 +48,7 @@ const bestWeakTop = require('./best-weak-top');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
 const betType = require('./bet-type');
+const likeReact = require('./like-react');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
@@ -332,6 +333,7 @@ async function overlapSourceChannelHints() {
 }
 
 app.get('/api/state', async (req, res) => {
+  const channelList = configuredChannelList(); // liste unique des canaux (tous les boutons), partagée par toutes les pages
   const aiCreatedKeys = new Set(aiRepair.status().createdStrategyKeys || []);
   res.json({
     role: req.session ? req.session.role || null : null,
@@ -398,8 +400,10 @@ app.get('/api/state', async (req, res) => {
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
-    copyAnnounce: { ...copyAnnounce.status(), channels: configuredChannelList() },
-    betType: { ...betType.status(), allChannels: configuredChannelList() },
+    channelList,
+    copyAnnounce: { ...copyAnnounce.status(), channels: channelList },
+    betType: { ...betType.status(), allChannels: channelList },
+    likeReact: { ...likeReact.status(), allChannels: channelList },
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
@@ -2398,6 +2402,9 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
 function configuredChannelList() {
   const rows = new Map();
   const titles = {};
+  let discovered = [];
+  try { discovered = likeReact.discoverChannels(); } catch (_) {}
+  for (const r of discovered) if (r.title) titles[r.id] = r.title;
   for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, overlap, copyAnnounce, betType]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
@@ -2415,14 +2422,24 @@ function configuredChannelList() {
       }
     }
   } catch (_) {}
-  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType]];
+  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType],
+    // sources qui manquaient : leurs canaux n'apparaissaient pas dans « Type de mise »
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Statistiques', statistics]];
   for (const [label, mod] of panelsList) {
     try {
       const st = mod.status() || {};
       (Array.isArray(st.channels) ? st.channels : []).forEach((id) => add(id, label));
+      (Array.isArray(st.bestChannels) ? st.bestChannels : []).forEach((id) => add(id, `${label} · meilleur`));
+      (Array.isArray(st.weakChannels) ? st.weakChannels : []).forEach((id) => add(id, `${label} · faible`));
       (Array.isArray(st.trackers) ? st.trackers : []).forEach((t) => (Array.isArray(t.channels) ? t.channels : []).forEach((id) => add(id, `${label} · ${t.name || t.key}`)));
     } catch (_) {}
   }
+  // Copie et annonce : canaux de destination des règles
+  try { for (const r of (copyAnnounce.status().rules || [])) (r.destChannels || []).forEach((id) => add(id, `Copie et annonce · ${r.name || ''}`.trim())); } catch (_) {}
+  // Jeu 21 : canaux des prédictions (exacte / valeur)
+  try { const g = game21Predict.panel || {}; [...(g.exactChannels || []), ...(g.valueChannels || [])].forEach((id) => add(id, 'Jeu 21')); } catch (_) {}
+  // Canaux où des prédictions ont réellement été publiées, même s'ils ne sont plus saisis dans un réglage
+  try { for (const r of discovered) r.sources.forEach((s) => add(r.id, s)); } catch (_) {}
   try {
     const fr = formationRelay.status() || {};
     (Array.isArray(fr.channels) ? fr.channels : []).forEach((id) => add(id, 'Formation'));
@@ -2501,6 +2518,18 @@ async function checkBetDest(list) {
   }
 }
 const betTypeSnapshot = () => ({ ...betType.status(), allChannels: configuredChannelList() });
+
+// « J'aime » (voir like-react.js) : canaux cochés dont les prédictions Type de
+// mise reçoivent une réaction automatique selon leur type (1 à 4).
+likeReact.setChannelSource(configuredChannelList);
+const likeReactSnapshot = () => ({ ...likeReact.status(), allChannels: configuredChannelList() });
+app.get('/api/like-react', (req, res) => { likeReact.scan(); res.json(likeReactSnapshot()); });
+app.post('/api/like-react/config', (req, res) => {
+  likeReact.configure(req.body || {});
+  likeReact.scan();
+  res.json({ ok: true, likeReact: likeReactSnapshot() });
+});
+app.post('/api/like-react/scan', (req, res) => { likeReact.scan(); res.json({ ok: true, likeReact: likeReactSnapshot() }); });
 
 app.get('/api/bet-type', (req, res) => res.json(betTypeSnapshot()));
 

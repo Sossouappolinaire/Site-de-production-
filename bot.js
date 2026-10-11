@@ -18,6 +18,7 @@ const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const copyAnnounce = require('./copy-announce');
 const betType = require('./bet-type');
+const likeReact = require('./like-react');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
@@ -2146,6 +2147,7 @@ async function applyDbConfigs() {
   await midnightReset.restoreFromDb();
   await copyAnnounce.restoreFromDb();
   await betType.restoreFromDb();
+  await likeReact.restoreFromDb();
   await suitBreak.restoreFromDb();
   await overlap.restoreFromDb();
   await statistics.restoreFromDb();
@@ -2219,6 +2221,15 @@ async function startLoop() {
   copyAnnounce.setSender(senderFor);
   betType.restore();
   betType.setSender(senderFor);
+  // « J'aime » : réactions automatiques sur les prédictions Type de mise des
+  // canaux cochés ; revérifie les canaux au démarrage (restore → scan).
+  likeReact.setSender(senderFor);
+  likeReact.restore();
+  if (!global.__likeReactTimer) {
+    global.__likeReactTimer = setInterval(() => {
+      likeReact.tick({ paused: predictionControl.isPaused() }).catch(() => {});
+    }, 4000);
+  }
   // « Type de mise » tourne aussi sur sa propre minuterie (comme « Copie et annonce »).
   if (!global.__betTypeTimer) {
     global.__betTypeTimer = setInterval(() => {

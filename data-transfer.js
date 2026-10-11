@@ -157,6 +157,7 @@ const PANELS = {
   lossNotice: { mod: './loss-notice' },
   mirrorCounter: { mod: './mirror-counter' },
   betType: { mod: './bet-type' },                  // « Type de mise »
+  likeReact: { mod: './like-react' },              // « J'aime » (réactions automatiques)
   copyAnnounce: { mod: './copy-announce' },        // « Copie et annonce »
   game21Strategies: { mod: './game21-strategies' }, // stratégies Jeu 21 (liste lue directement dans data.json)
 };
