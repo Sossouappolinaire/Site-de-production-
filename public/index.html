@@ -4051,7 +4051,17 @@ Faites-en bon usage !
         if (x.armed) return `Type ${n} : prochaine prédiction`;
         return `Type ${n} : ${x.lossCount || 0}/${n === 3 ? 2 : 1} perte(s)`;
       };
-      const rows = all.length ? all.map(ch => { const pr = (p.progress || {})[String(ch.id)]; return `<label class="check" style="align-items:flex-start;margin:8px 0"><input type="checkbox" class="lr-ch" value="${esc(ch.id)}" ${checked.includes(String(ch.id)) ? 'checked' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}${pr ? `<br><span class="small muted">${[1, 2, 3, 4].map(n => esc(lrState(n, pr[n]))).join(' · ')}</span>` : ''}</span></label>`; }).join('')
+      const lrDiag = (ch) => {
+        const d = (p.diag || {})[String(ch.id)];
+        if (!checked.includes(String(ch.id))) return '';
+        if (!d) return '<br><span class="small muted">En attente du premier passage du bot…</span>';
+        const bits = [`${d.followed || 0} prédiction(s) suivie(s) dans ce canal (${d.pending || 0} en attente)`];
+        if ((d.recent || []).length) bits.push('dernières vues : ' + d.recent.map(x => `#N${x.target ?? ''} ${x.suit || ''} ${x.status || ''}`).join(', '));
+        if (d.lastFire) bits.push(`dernier déclenchement : type ${d.lastFire.type} ${d.lastFire.emoji} sur #N${d.lastFire.target ?? ''} ${d.lastFire.suit || ''}`);
+        if (!d.followed) bits.push('⚠ aucune prédiction du site trouvée dans ce canal : le bot n\'y a rien envoyé, ou ce n\'est pas le bon identifiant');
+        return `<br><span class="small muted">${bits.map(x => esc(x)).join(' · ')}</span>${d.lastError ? `<br><span class="small" style="color:var(--danger,#d33)">Erreur Telegram : ${esc(d.lastError)}</span>` : ''}<br><button type="button" class="button small ghost lr-test" data-id="${esc(ch.id)}" style="margin-top:4px">Tester les 4 emojis</button>`;
+      };
+      const rows = all.length ? all.map(ch => { const pr = (p.progress || {})[String(ch.id)]; return `<label class="check" style="align-items:flex-start;margin:8px 0"><input type="checkbox" class="lr-ch" value="${esc(ch.id)}" ${checked.includes(String(ch.id)) ? 'checked' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}${pr ? `<br><span class="small muted">${[1, 2, 3, 4].map(n => esc(lrState(n, pr[n]))).join(' · ')}</span>` : ''}${lrDiag(ch)}</span></label>`; }).join('')
         : '<p class="small muted">Aucun canal n\'envoie encore de prédictions.</p>';
       const hist = (p.history || []).slice(0, 8).map(h => `<div class="small"><span class="tag mono">${esc(h.emoji)}</span> Type ${esc(String(h.type))} · #N${esc(String(h.target ?? ''))} ${esc(h.suit || '')} · <span class="mono">${esc(String(h.chatId))}</span></div>`).join('');
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Réactions automatiques</span><h2 style="margin-top:7px">J'aime</h2><p class="small">Coche les canaux qui envoient des prédictions. Le bot suit leurs prédictions avec les règles de « Type de mise » et met l'emoji du type sur le message de prédiction qui déclenche : ${[1, 2, 3, 4].map(n => `<b>Type ${n}</b> ${esc(emojis[n])}`).join(' · ')}.</p></div><div class="toolbar"><button class="button ghost" onclick="likeReactRescan()">Revérifier les canaux</button></div></div>
@@ -4059,7 +4069,7 @@ Faites-en bon usage !
           <p class="small muted" style="margin:8px 0 0">Type 1 : deux prédictions de même costume de suite, puis dès que ce costume est prédit à nouveau → ${esc(emojis[1])}. Type 2 : même série, la prédiction suivante → ${esc(emojis[2])}. Type 3 : après 2 pertes, la suivante → ${esc(emojis[3])}. Type 4 : après 1 perte, la suivante → ${esc(emojis[4])}. Si plusieurs types se déclenchent sur la même prédiction, un seul emoji est mis (le plus petit numéro). Le bot doit être administrateur du canal et les réactions doivent y être autorisées. Seules les nouvelles prédictions comptent, pas l'historique déjà publié.</p>
           ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Canaux qui envoient des prédictions</span><h2 style="margin-top:7px">${all.length} canal(aux) · ${checked.length} coché(s)</h2></div></div>
-          <div class="panel"><div style="max-height:360px;overflow:auto">${rows}</div>
+          <div class="panel"><div id="lrList" style="max-height:360px;overflow:auto">${rows}</div>
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveLikeReact()">Enregistrer</button></div></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Dernières réactions</span><h2 style="margin-top:7px">${esc(String(p.reactedCount || 0))} au total</h2></div></div>
           <div class="panel">${hist || '<span class="small muted">Aucune réaction pour le moment.</span>'}</div></section>`;
@@ -4114,11 +4124,35 @@ Faites-en bon usage !
     })();
     async function saveLikeReact() {
       const channels = [...document.querySelectorAll('.lr-ch:checked')].map(x => x.value);
+      const scroll = document.getElementById('lrList')?.scrollTop || 0;
       try {
         await api('/api/like-react/config', 'POST', { enabled: !!document.getElementById('lrEnabled')?.checked, channels });
-        await refresh(); likeReactPage(); toast('Réglage enregistré.');
+        await refresh(); likeReactPage();
+        const list = document.getElementById('lrList'); if (list) list.scrollTop = scroll;
+        toast('Réglage enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
+    // Cocher ou décocher un canal (ou l'interrupteur) enregistre tout de suite :
+    // plus besoin d'appuyer sur « Enregistrer » (oublié, le canal n'était pas suivi).
+    let lrSaveTimer = null;
+    document.addEventListener('change', e => {
+      const t = e.target;
+      if (!t || !(t.classList?.contains('lr-ch') || t.id === 'lrEnabled')) return;
+      clearTimeout(lrSaveTimer);
+      lrSaveTimer = setTimeout(() => { if (location.hash === '#/like-react') saveLikeReact(); }, 700);
+    });
+    document.addEventListener('click', async e => {
+      const b = e.target && e.target.closest ? e.target.closest('.lr-test') : null;
+      if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      b.disabled = true;
+      try {
+        const r = await api('/api/like-react/test', 'POST', { chatId: b.dataset.id });
+        const det = r.results ? Object.values(r.results).map(x => `${x.emoji} ${x.ok ? 'OK' : 'refusé (' + x.error + ')'}`).join(' · ') : '';
+        toast(r.ok ? `Test OK : ${det || 'réaction mise'}.` : `Échec : ${det || r.error}`, r.ok ? undefined : 'error');
+      } catch (err) { toast(err.message, 'error'); }
+      b.disabled = false;
+    });
     async function likeReactRescan() {
       try { await api('/api/like-react/scan', 'POST', {}); await refresh(); likeReactPage(); toast('Canaux revérifiés.'); }
       catch (e) { toast(e.message, 'error'); }
