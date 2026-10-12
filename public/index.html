@@ -294,6 +294,7 @@
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
+        <a href="#/test" data-nav="test">🧪 Test</a>
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
@@ -520,6 +521,8 @@
         ${card('#/canaux', '📡', 'Canaux', 'Fil des prédictions, style Telegram')}
         ${card('#/strategies', '🎯', 'Stratégies', `${(snapshot.strategies||[]).length} stratégie(s)`)}
         ${card('#/best-weak', '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · voir / modifier`)}
+        ${card('#/test', '🧪', 'Test', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'test').length} configuration(s) · meilleur / 2ᵉ meilleur`)}
+        ${card('#/scan', '🔎', 'Détection auto', `${((snapshot.bestWeakTop || {}).detected || []).length} canal(aux) détecté(s) · ${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'scan').length} configuration(s)`)}
         ${card('#/best-weak', '👁️', 'Suivre des canaux', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'follow').length} configuration(s) · voir / modifier`)}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
         ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
@@ -1798,9 +1801,11 @@ Faites-en bon usage !
       trigger: { icon: '⚡', title: 'Envoi sur déclencheur', sub: '2 pertes de suite · 2× rattrapage 2 ou 3 de suite · costume absent 13 jeux (prédit à +1 et +5).' },
       follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne en ✅0️⃣/✅1️⃣ ; sinon il passe au 2ᵉ. Si un costume sort directement (✅0️⃣) sans l’autre, l’autre est prédit à N+2 ; si les deux sortent, on ignore.' },
       cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
+      scan: { icon: '🔎', title: 'Détection auto des canaux', sub: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Tu en sélectionnes un puis tu règles le canal Telegram d’envoi, les rattrapages et le format. Surveillance : si le 1ᵉʳ costume sort directement (✅0️⃣), le 2ᵉ est prédit à N+2 — et inversement. Les deux sortis, ou aucun : rien n’est envoyé.' },
+      test: { icon: '🧪', title: 'Test meilleur / 2ᵉ meilleur', sub: 'Tu choisis 2 à 4 parmi : le meilleur, le 2ᵉ, le 3ᵉ, le plus faible. On commence par le premier et on y reste tant qu’il gagne. Après une perte, la prochaine prédiction vient du suivant ; avec 2 choix (meilleur et 2ᵉ), on alterne entre les deux.' },
     };
     let bwWizard = { mode: 'multi', strategy: null };
-    const bwModeOf = (c) => (c && ['trigger', 'cycle', 'follow'].includes(c.mode) ? c.mode : 'multi');
+    const bwModeOf = (c) => (c && ['trigger', 'cycle', 'follow', 'test', 'scan'].includes(c.mode) ? c.mode : 'multi');
     function bestWeakButtons() {
       const d = snapshot.bestWeakTop || {};
       const list = d.configs || [];
@@ -1811,11 +1816,87 @@ Faites-en bon usage !
       const cycle = btn("startBwWizard('cycle')", BW_MODES.cycle, tag('cycle'));
       const trig = btn("startBwWizard('trigger')", BW_MODES.trigger, tag('trigger'));
       const follow = btn("startBwWizard('follow')", BW_MODES.follow, tag('follow'));
+      const test = btn("location.hash='#/test'", BW_MODES.test, tag('test'));
+      const scan = btn("location.hash='#/scan'", BW_MODES.scan, `<span class="strategy-stats"><span class="tag">${count('scan')} configuration(s)</span><span class="tag good">${esc((d.detected || []).length)} canal(aux) détecté(s)</span></span>`);
       const each = list.map(c => `<button class="strategy-button" onclick="location.hash='#/best-weak'">
         <span class="eyebrow">${BW_MODES[bwModeOf(c)].icon} ${esc(BW_MODES[bwModeOf(c)].title)}${c.enabled ? '' : ' · en pause'}</span><b>${esc(c.name || c.strategyLabel)}</b><span>${esc(c.strategyLabel)} · Canal : ${esc((c.channelNames || []).join(', '))} · ${esc(c.maxR)} rattrapage(s)</span>
         <span class="strategy-stats"><span class="tag good">${esc(c.wins || 0)} gagné(s)</span><span class="tag bad">${esc(c.losses || 0)} perdu(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`).join('');
-      return main + cycle + trig + follow + each;
+      return main + cycle + trig + follow + scan + test + each;
+    }
+    function testCyclePage() {
+      setNav('test');
+      const p = snapshot.bestWeakTop || {};
+      const list = (p.configs || []).filter(c => bwModeOf(c) === 'test');
+      const cards = list.length ? list.map(c => {
+        const total = (Number(c.wins) || 0) + (Number(c.losses) || 0);
+        const rate = total ? Math.round((Number(c.wins) || 0) * 100 / total) : null;
+        return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
+          <span class="eyebrow">🧪 ${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}${esc((c.channelNames || []).join(', ') || 'Canal non nommé')}</h3>
+          <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s) · format ${esc(c.format || 1)} · ${esc(c.sentCount || 0)} prédiction(s) · <b class="good">${esc(c.wins || 0)}</b> gagnée(s) · <b class="bad">${esc(c.losses || 0)}</b> perdue(s)${rate === null ? '' : ` · taux de réussite ${rate}%`}</p>
+          <p class="small">${esc(c.testLabel || '')}</p></div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`;
+      }).join('') : '<div class="empty">Aucun test configuré. Clique sur « Créer un test » pour choisir la stratégie (Dizaine ou Costume faible), le canal Telegram, les rattrapages, le format et les meilleurs à suivre (2 à 4).</div>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Meilleur / 2ᵉ meilleur</span><h2 style="margin-top:7px">🧪 Test</h2>
+        <p class="small">${esc(BW_MODES.test.sub)} Une seule prédiction à la fois. Chaque prédiction est vérifiée avec le nombre de rattrapages choisi ; les victoires, pertes et le taux sont affichés ici.</p></div>
+        <div class="toolbar"><button class="button primary" onclick="startBwFlow('test')">Créer un test</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} test(s)</h2></div></div>${cards}</section>`;
+    }
+    // -------------------------------------------------------------------
+    // 🔎 « Détection auto » : canaux qui publient le format à deux costumes + configurations qui les surveillent
+    // -------------------------------------------------------------------
+    const bwAgo = (ts) => { if (!ts) return '—'; const m = Math.max(0, Math.round((Date.now() - ts) / 60000)); return m < 1 ? 'à l’instant' : m < 60 ? `il y a ${m} min` : m < 1440 ? `il y a ${Math.round(m / 60)} h` : `il y a ${Math.round(m / 1440)} j`; };
+    function bwDetectedRows(list, selectable) {
+      if (!list.length) return '<p class="small">Aucun canal détecté pour le moment. Le bot repère un canal dès qu’il y voit un message de ce format (♦️ 100%─────┐ / ├ N°1438 / ♣️ 92% ─────┘). Il doit donc être <b>administrateur</b> du canal : ajoute-le, puis attends la prochaine prédiction du canal et clique sur « Rechercher ».</p>';
+      return list.map(c => `<${selectable ? 'label class="check" style="display:block;margin:8px 0"' : 'div class="card" style="margin-bottom:10px"'}>
+        ${selectable ? `<input type="checkbox" class="bwSrc" value="${esc(c.id)}"> ` : ''}<b>${esc(c.title || 'Canal sans nom')}</b> · <code>${esc(c.id)}</code>
+        ${c.own ? ' <span class="tag">ce bot</span>' : ''} <span class="tag good">${esc(c.count || 0)} message(s) vu(s)</span><br>
+        <small>Dernier : ${esc(c.sample || '')} · ${esc(bwAgo(c.lastAt))}</small>
+        ${selectable ? '' : `<div class="toolbar" style="margin-top:8px"><button class="button small primary" onclick="startBwFlow('scan','${esc(c.id)}')">Sélectionner ce canal</button><button class="button small ghost" onclick="forgetDetected('${esc(c.id)}')">Oublier</button></div>`}
+      </${selectable ? 'label' : 'div'}>`).join('');
+    }
+    async function scanPage() {
+      setNav('strategies');
+      try { await refresh(); } catch (_) {}
+      const p = snapshot.bestWeakTop || {};
+      const detected = p.detected || [];
+      const list = (p.configs || []).filter(c => bwModeOf(c) === 'scan');
+      const cards = list.length ? list.map(c => {
+        const total = (Number(c.wins) || 0) + (Number(c.losses) || 0);
+        const rate = total ? Math.round((Number(c.wins) || 0) * 100 / total) : null;
+        return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
+          <span class="eyebrow">🔎 Détection auto${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}Envoi dans : ${esc((c.channelNames || []).join(', '))}</h3>
+          <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s) · format ${esc(c.format || 1)} · ${esc(c.sentCount || 0)} prédiction(s) · <b class="good">${esc(c.wins || 0)}</b> gagnée(s) · <b class="bad">${esc(c.losses || 0)}</b> perdue(s)${rate === null ? '' : ` · taux de réussite ${rate}%`}</p></div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`;
+      }).join('') : '<div class="empty">Aucune configuration. Sélectionne un canal détecté ci-dessus pour en créer une.</div>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Détection automatique</span><h2 style="margin-top:7px">🔎 Détection auto des canaux</h2>
+        <p class="small">${esc(BW_MODES.scan.sub)}</p></div>
+        <div class="toolbar"><button class="button primary" onclick="scanPage()">🔍 Rechercher les canaux</button><button class="button ghost" onclick="startBwFlow('scan')">Créer une configuration</button><button class="button ghost" onclick="location.hash='#/strategies'">← Stratégies</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Trouvés automatiquement</span><h2 style="margin-top:7px">${detected.length} canal(aux) détecté(s)</h2></div></div>${bwDetectedRows(detected, false)}</section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
+    }
+    async function forgetDetected(id) {
+      try { await api(`/api/best-weak/detected/${encodeURIComponent(id)}`, 'DELETE'); scanPage(); } catch (e) { toast(e.message, 'error'); }
+    }
+    // assistant : liste des canaux détectés → on en sélectionne un (ou plusieurs) → ID du canal d'envoi, rattrapages, format
+    async function bwWizardDetected(preselect) {
+      let list = [];
+      try { list = (await api('/api/best-weak/detected')).channels || []; } catch (e) { toast(e.message, 'error'); return; }
+      openModal(`<div class="modal-head"><div><span class="eyebrow">${BW_MODES.scan.icon} ${esc(BW_MODES.scan.title)} · étape 1/2</span><h3 style="margin-top:8px">Quel canal surveiller ?</h3></div></div>
+        <p class="small">Canaux trouvés automatiquement : ils publient le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%).</p>
+        <div style="max-height:46vh;overflow:auto;margin-top:8px">${bwDetectedRows(list, true)}</div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="bwWizardChannelsNext()">Suivant</button><button class="button small ghost" onclick="bwWizardDetected()">🔍 Rechercher à nouveau</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+      if (preselect) document.querySelectorAll('.bwSrc').forEach(x => { if (x.value === String(preselect)) x.checked = true; });
     }
     function bestWeakPage() {
       setNav('strategies');
@@ -1836,10 +1917,10 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
     }
     async function reloadBestWeak() { await refresh(); bestWeakPage(); }
-    function bestWeakRanksHtml(prefix, ranks) {
+    function bestWeakRanksHtml(prefix, ranks, forTest) {
       const labels = (snapshot.bestWeakTop || {}).rankLabels || { 1: 'Le meilleur', 2: 'Le 2ᵉ meilleur', 3: 'Le 3ᵉ meilleur', 4: 'Le plus faible (4ᵉ)' };
-      const on = Array.isArray(ranks) && ranks.length ? ranks : [1, 4];
-      return `<div class="field"><label>Costumes à proposer (coche au moins 2, jusqu'à 4)</label>
+      const on = Array.isArray(ranks) && ranks.length ? ranks : (forTest ? [1, 2] : [1, 4]);
+      return `<div class="field"><label>${forTest ? 'Parmi les 4 : lesquels suivre ? (coche 2 à 4 · on passe au suivant après une perte)' : 'Costumes à proposer (coche au moins 2, jusqu\'à 4)'}</label>
         ${[1, 2, 3, 4].map(r => `<label class="check" style="display:block;margin:4px 0"><input id="${prefix}Rank${r}" type="checkbox" ${on.includes(r) ? 'checked' : ''}> ${esc(labels[r])}</label>`).join('')}</div>`;
     }
     function readBestWeakRanks(prefix) {
@@ -1852,7 +1933,7 @@ Faites-en bon usage !
     // « Créer » depuis la page : on choisit d'abord le type
     function chooseBwType() {
       openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Quel type de configuration ?</h3></div></div>
-        <div style="display:grid;gap:10px;margin-top:10px">${['multi', 'trigger', 'cycle', 'follow'].map(m => `<button class="button primary" style="text-align:left" onclick="closeModal();startBwFlow('${m}')">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)}<br><small>${esc(BW_MODES[m].sub)}</small></button>`).join('')}</div>
+        <div style="display:grid;gap:10px;margin-top:10px">${['multi', 'trigger', 'cycle', 'follow', 'scan'].map(m => `<button class="button primary" style="text-align:left" onclick="closeModal();startBwFlow('${m}')">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)}<br><small>${esc(BW_MODES[m].sub)}</small></button>`).join('')}</div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     // assistant : confirmation → stratégie (celles qui utilisent meilleur et faible) → configuration → enregistrer
@@ -1864,9 +1945,9 @@ Faites-en bon usage !
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="closeModal();startBwFlow('${mode}')">Oui, créer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     // après confirmation : « suivi » → liste des canaux à cocher ; les autres types → choix de la stratégie
-    function startBwFlow(mode) {
+    function startBwFlow(mode, preselect) {
       bwWizard = { mode, strategy: null, sources: [] };
-      if (mode === 'follow') bwWizardChannels(); else bwWizardStrategy();
+      if (mode === 'follow') bwWizardChannels(); else if (mode === 'scan') bwWizardDetected(preselect); else bwWizardStrategy();
     }
     async function bwWizardChannels() {
       let list = [];
@@ -1895,21 +1976,21 @@ Faites-en bon usage !
       const labels = (snapshot.bestWeakTop || {}).strategies || {};
       const mode = bwWizard.mode;
       closeModal();
-      openModal(`<div class="modal-head"><div><span class="eyebrow">${BW_MODES[mode].icon} ${esc(BW_MODES[mode].title)} · étape 2/2</span><h3 style="margin-top:8px">${mode === 'follow' ? esc(`${bwWizard.sources.length} canal(aux) suivi(s)`) : esc(labels[strategy] || strategy)}</h3></div></div>
+      openModal(`<div class="modal-head"><div><span class="eyebrow">${BW_MODES[mode].icon} ${esc(BW_MODES[mode].title)} · étape 2/2</span><h3 style="margin-top:8px">${(mode === 'follow' || mode === 'scan') ? esc(`${bwWizard.sources.length} canal(aux) ${mode === 'scan' ? 'surveillé(s)' : 'suivi(s)'}`) : esc(labels[strategy] || strategy)}</h3></div></div>
         ${mode === 'multi' ? '' : bwSimpleFields('bwNew')}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwNewChannels" placeholder="-1001234567890 ou @nomducanal"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwNewMaxR" type="number" min="0" max="9" value="2"></div>
-        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : bwFormatField('bwNew')}
+        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : (mode === 'test' ? bestWeakRanksHtml('bwNew', [1, 2], true) + bwFormatField('bwNew') : bwFormatField('bwNew'))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addBestWeak()">Enregistrer</button><button class="button small ghost" onclick="closeModal();startBwFlow('${mode}')">← Retour</button></div>`);
     }
     async function addBestWeak() {
       try {
         const mode = bwWizard.mode;
         const body = { mode, strategy: bwWizard.strategy, channels: ids(val('bwNewChannels')), maxR: val('bwNewMaxR') };
-        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); }
-        if (mode === 'follow') body.sources = bwWizard.sources;
+        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') body.ranks = readBestWeakRanks('bwNew'); }
+        if (mode === 'follow' || mode === 'scan') body.sources = bwWizard.sources;
         await api('/api/best-weak/configs', 'POST', body);
-        closeModal(); await refresh(); if (location.hash === '#/best-weak') bestWeakPage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
+        closeModal(); await refresh(); if (location.hash === '#/best-weak') bestWeakPage(); else if (location.hash === '#/scan') scanPage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
       } catch (e) { toast(e.message, 'error'); }
     }
     function editBestWeakModal(id) {
@@ -1919,23 +2000,25 @@ Faites-en bon usage !
       const labels = (snapshot.bestWeakTop || {}).strategies || {};
       openModal(`<div class="modal-head"><div><span class="eyebrow">Modifier · ${esc(BW_MODES[m].title)}</span><h3 style="margin-top:8px">${esc(c.name || c.strategyLabel)}</h3></div></div>
         ${m === 'multi' ? '' : bwSimpleFields('bwEdit', c)}
-        ${m === 'follow' ? `<div class="field"><label>Canaux suivis (ID séparés par des virgules)</label><input id="bwEditSources" value="${esc((c.sources || []).join(', '))}"></div>` : `<div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>`}
+        ${(m === 'follow' || m === 'scan') ? `<div class="field"><label>Canaux ${m === 'scan' ? 'surveillés' : 'suivis'} (ID séparés par des virgules)</label><input id="bwEditSources" value="${esc((c.sources || []).join(', '))}"></div>` : `<div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>`}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwEditChannels" value="${esc((c.channels || []).join(', '))}"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwEditMaxR" type="number" min="0" max="9" value="${esc(String(c.maxR))}"></div>
-        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : bwFormatField('bwEdit', c)}
+        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : (m === 'test' ? bestWeakRanksHtml('bwEdit', c.ranks, true) + bwFormatField('bwEdit', c) : bwFormatField('bwEdit', c))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateBestWeak('${esc(id)}','${m}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function updateBestWeak(id, m) {
       try {
         const body = { channels: ids(val('bwEditChannels')), maxR: val('bwEditMaxR') };
-        if (m === 'follow') body.sources = ids(val('bwEditSources')); else body.strategy = val('bwEditStrategy');
-        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); }
+        if (m === 'follow' || m === 'scan') body.sources = ids(val('bwEditSources')); else body.strategy = val('bwEditStrategy');
+        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); if (m === 'test') body.ranks = readBestWeakRanks('bwEdit'); }
         await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', body);
-        closeModal(); await refresh(); bestWeakPage(); toast('Configuration mise à jour.');
+        closeModal(); await refresh(); bwRerender(); toast('Configuration mise à jour.');
       } catch (e) { toast(e.message, 'error'); }
     }
+    // ré-affiche la page courante (Meilleur + faible, Test ou Détection auto)
+    function bwRerender() { if (location.hash === '#/scan') return scanPage(); if (location.hash === '#/test') return testCyclePage(); return bestWeakPage(); }
     async function toggleBestWeak(id, enabled) {
-      try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); bestWeakPage(); }
+      try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); bwRerender(); }
       catch (e) { toast(e.message, 'error'); }
     }
     async function testBestWeak(id) {
@@ -1944,7 +2027,7 @@ Faites-en bon usage !
     }
     async function removeBestWeak(id) {
       if (!confirm('Supprimer cette configuration ?')) return;
-      try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); bestWeakPage(); toast('Configuration supprimée.'); }
+      try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); bwRerender(); toast('Configuration supprimée.'); }
       catch (e) { toast(e.message, 'error'); }
     }
     function dizaineTopSiteOptions(currentId) {
@@ -2185,6 +2268,8 @@ Faites-en bon usage !
             <div class="field"><label>Lien du canal <span class="small">(affiché dans le bilan)</span></label><input id="cfBestLink" value="${esc(p.best?.link || '')}" placeholder="https://t.me/+AbCdEf… ou https://t.me/nomducanal"></div>
             <div class="field"><label>Format de prédiction (1 → ${fc})</label><input id="cfBestFormat" type="number" min="1" max="${fc}" value="${esc(String(p.best?.format ?? 1))}"></div>
             <div class="field"><label>Nombre de rattrapages</label><input id="cfBestMaxR" type="number" min="0" max="9" value="${esc(String(p.best?.maxR ?? 2))}"></div>
+            <div class="field"><label>Envoyer seulement les prédictions de ce canal</label><select id="cfBestOnly"><option value="">Tous les canaux (le meilleur du moment)</option>${(p.best?.candidates || []).map(c => `<option value="${esc(c.key)}" ${p.best?.onlyKey === c.key ? 'selected' : ''}>${esc(c.name)}${c.channel != null ? ' · ' + esc(c.channel) : ''}</option>`).join('')}</select>
+              <span class="small muted">Si le meilleur du moment est un autre canal, rien n'est envoyé dans le canal des meilleures.</span></div>
           </div>
           <p class="small muted">Dernier événement « membre » reçu de Telegram : ${p.lastMember ? esc(`${new Date(p.lastMember.at).toLocaleString('fr-FR')} · ${p.lastMember.chat} · ${p.lastMember.from} → ${p.lastMember.to}${p.lastMember.isBest ? '' : ' (autre canal)'}`) : 'aucun pour l\'instant — rejoins le canal avec un autre compte pour tester'}</p>
           <div class="toolbar"><button class="button primary" onclick="saveCostumeFaibleTopBest()">Enregistrer le canal des meilleures prédictions</button><button class="button ghost" onclick="testCostumeFaibleTopWelcome()">Tester la bienvenue</button></div></section>
@@ -2233,7 +2318,7 @@ Faites-en bon usage !
     }
     async function saveCostumeFaibleTopBest() {
       try {
-        await api('/api/costume-faible-top/config', 'POST', { bestEnabled: $('#cfBestOn')?.checked, bestWelcome: $('#cfBestWelcome')?.checked, bestRecap: $('#cfBestRecap')?.checked, bestRecapMin: val('cfBestRecapMin'), bestDelayEnabled: $('#cfBestDelay')?.checked, bestDelaySec: val('cfBestDelaySec'), bestChannels: ids(val('cfBestChannels')), bestLink: val('cfBestLink'), bestFormat: val('cfBestFormat'), bestMaxR: val('cfBestMaxR') });
+        await api('/api/costume-faible-top/config', 'POST', { bestEnabled: $('#cfBestOn')?.checked, bestWelcome: $('#cfBestWelcome')?.checked, bestRecap: $('#cfBestRecap')?.checked, bestRecapMin: val('cfBestRecapMin'), bestDelayEnabled: $('#cfBestDelay')?.checked, bestDelaySec: val('cfBestDelaySec'), bestChannels: ids(val('cfBestChannels')), bestLink: val('cfBestLink'), bestFormat: val('cfBestFormat'), bestMaxR: val('cfBestMaxR'), bestOnlyKey: val('cfBestOnly') });
         await refresh(); costumeFaibleTopPage(); toast('Canal des meilleures prédictions enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -4042,14 +4127,22 @@ Faites-en bon usage !
       const p = snapshot.likeReact || {};
       const emojis = p.emojis || { 1: '👍', 2: '🔥', 3: '\u2764', 4: '🍾' };
       const checked = (p.channels || []).map(String);
-      const all = (p.allChannels || []).slice();
-      for (const id of checked) if (!all.some(x => String(x.id) === id)) all.push({ id, title: '', sources: [] });
+      const all = (p.bestChannels || []).slice();
+      for (const id of checked) if (!all.some(x => String(x.id) === id)) all.push({ id, title: 'Canal conservé du réglage précédent', sources: [] });
       const lrState = (n, x) => {
         if (!x) return `Type ${n} : —`;
         if (n === 1) return x.waitingSuit ? `Type 1 : attend ${x.waitingSuit}` : `Type 1 : série ${x.streakCount || 0}/2`;
         if (n === 2) return x.armed ? 'Type 2 : prochaine prédiction' : `Type 2 : série ${x.streakCount || 0}/2`;
         if (x.armed) return `Type ${n} : prochaine prédiction`;
         return `Type ${n} : ${x.lossCount || 0}/${n === 3 ? 2 : 1} perte(s)`;
+      };
+      const lrTypeStats = (id) => {
+        const stats = ((p.typeStats || {})[String(id)] || {});
+        return `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">${[1, 2, 3, 4].map(n => {
+          const s = stats[n] || {};
+          const rate = s.ratePct === null || s.ratePct === undefined ? '—' : `${s.ratePct}%`;
+          return `<span class="tag">${esc(emojis[n])} Type ${n} · ${esc(String(s.verified || 0))} vérifiée(s) · ${esc(String(s.wins || 0))}✅ ${esc(String(s.losses || 0))}❌ · ${rate}</span>`;
+        }).join('')}</div>`;
       };
       const lrDiag = (ch) => {
         const d = (p.diag || {})[String(ch.id)];
@@ -4061,14 +4154,14 @@ Faites-en bon usage !
         if (!d.followed) bits.push('⚠ aucune prédiction du site trouvée dans ce canal : le bot n\'y a rien envoyé, ou ce n\'est pas le bon identifiant');
         return `<br><span class="small muted">${bits.map(x => esc(x)).join(' · ')}</span>${d.lastError ? `<br><span class="small" style="color:var(--danger,#d33)">Erreur Telegram : ${esc(d.lastError)}</span>` : ''}<br><button type="button" class="button small ghost lr-test" data-id="${esc(ch.id)}" style="margin-top:4px">Tester les 4 emojis</button>`;
       };
-      const rows = all.length ? all.map(ch => { const pr = (p.progress || {})[String(ch.id)]; return `<label class="check" style="align-items:flex-start;margin:8px 0"><input type="checkbox" class="lr-ch" value="${esc(ch.id)}" ${checked.includes(String(ch.id)) ? 'checked' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}${pr ? `<br><span class="small muted">${[1, 2, 3, 4].map(n => esc(lrState(n, pr[n]))).join(' · ')}</span>` : ''}${lrDiag(ch)}</span></label>`; }).join('')
-        : '<p class="small muted">Aucun canal n\'envoie encore de prédictions.</p>';
+      const rows = all.length ? all.map(ch => { const pr = (p.progress || {})[String(ch.id)]; return `<label class="check" style="align-items:flex-start;margin:8px 0"><input type="checkbox" class="lr-ch" value="${esc(ch.id)}" ${checked.includes(String(ch.id)) ? 'checked' : ''} ${checked.length >= 4 && !checked.includes(String(ch.id)) ? 'disabled' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}${pr ? `<br><span class="small muted">${[1, 2, 3, 4].map(n => esc(lrState(n, pr[n]))).join(' · ')}</span>` : ''}${lrTypeStats(ch.id)}${lrDiag(ch)}</span></label>`; }).join('')
+        : '<p class="small muted">Aucun canal actif dans « Test ». Crée d’abord une configuration Test avec son canal Telegram.</p>';
       const hist = (p.history || []).slice(0, 8).map(h => `<div class="small"><span class="tag mono">${esc(h.emoji)}</span> Type ${esc(String(h.type))} · #N${esc(String(h.target ?? ''))} ${esc(h.suit || '')} · <span class="mono">${esc(String(h.chatId))}</span></div>`).join('');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Réactions automatiques</span><h2 style="margin-top:7px">J'aime</h2><p class="small">Coche les canaux qui envoient des prédictions. Le bot suit leurs prédictions avec les règles de « Type de mise » et met l'emoji du type sur le message de prédiction qui déclenche : ${[1, 2, 3, 4].map(n => `<b>Type ${n}</b> ${esc(emojis[n])}`).join(' · ')}.</p></div><div class="toolbar"><button class="button ghost" onclick="likeReactRescan()">Revérifier les canaux</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Réactions automatiques</span><h2 style="margin-top:7px">J'aime</h2><p class="small">Choisis au plus 4 canaux actifs configurés dans « Test ». Le bot suit les prédictions de ces canaux et ajoute l'emoji du type déclenché : ${[1, 2, 3, 4].map(n => `<b>Type ${n}</b> ${esc(emojis[n])}`).join(' · ')}. Le bilan indique, par type, les prédictions vérifiées, gagnées, perdues et le taux de réussite.</p></div><div class="toolbar"><button class="button ghost" onclick="likeReactRescan()">Revérifier les canaux</button></div></div>
         <div class="panel"><label class="check"><input id="lrEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''}> Activer « J'aime »</label>
-          <p class="small muted" style="margin:8px 0 0">Type 1 : deux prédictions de même costume de suite, puis dès que ce costume est prédit à nouveau → ${esc(emojis[1])}. Type 2 : même série, la prédiction suivante → ${esc(emojis[2])}. Type 3 : après 2 pertes, la suivante → ${esc(emojis[3])}. Type 4 : après 1 perte, la suivante → ${esc(emojis[4])}. Si plusieurs types se déclenchent sur la même prédiction, un seul emoji est mis (le plus petit numéro). Le bot doit être administrateur du canal et les réactions doivent y être autorisées. Seules les nouvelles prédictions comptent, pas l'historique déjà publié.</p>
+          <p class="small muted" style="margin:8px 0 0">Type 1 : deux prédictions de même costume de suite, puis dès que ce costume est prédit à nouveau → ${esc(emojis[1])}. Type 2 : même série, la prédiction suivante → ${esc(emojis[2])}. Type 3 : après 2 pertes, la suivante → ${esc(emojis[3])}. Type 4 : après 1 perte, la suivante → ${esc(emojis[4])}. Si plusieurs types se déclenchent sur la même prédiction, un seul emoji est mis (le plus petit numéro). Le bot doit être administrateur du canal et les réactions doivent y être autorisées. Les statistiques commencent quand le canal est suivi ; les prédictions antérieures ne sont pas recalculées.</p>
           ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Canaux qui envoient des prédictions</span><h2 style="margin-top:7px">${all.length} canal(aux) · ${checked.length} coché(s)</h2></div></div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Canaux Test actifs</span><h2 style="margin-top:7px">${all.length} canal(aux) · ${checked.length}/4 coché(s)</h2></div></div>
           <div class="panel"><div id="lrList" style="max-height:360px;overflow:auto">${rows}</div>
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveLikeReact()">Enregistrer</button></div></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Dernières réactions</span><h2 style="margin-top:7px">${esc(String(p.reactedCount || 0))} au total</h2></div></div>
@@ -4138,6 +4231,11 @@ Faites-en bon usage !
     document.addEventListener('change', e => {
       const t = e.target;
       if (!t || !(t.classList?.contains('lr-ch') || t.id === 'lrEnabled')) return;
+      if (t.classList?.contains('lr-ch') && t.checked && document.querySelectorAll('.lr-ch:checked').length > 4) {
+        t.checked = false;
+        toast('J’aime peut suivre au maximum 4 canaux.', 'error');
+        return;
+      }
       clearTimeout(lrSaveTimer);
       lrSaveTimer = setTimeout(() => { if (location.hash === '#/like-react') saveLikeReact(); }, 700);
     });
@@ -4422,6 +4520,8 @@ Faites-en bon usage !
         else if (h === '#/suit-streak') suitStreakPage();
         else if (h === '#/dizaine-top') dizaineTopPage();
         else if (h === '#/best-weak') bestWeakPage();
+        else if (h === '#/test') testCyclePage();
+        else if (h === '#/scan') scanPage();
         else if (h === '#/costume-faible-top') costumeFaibleTopPage();
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/overlap') overlapPage();
