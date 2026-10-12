@@ -34,6 +34,7 @@ const panel = {
   enabled: true,
   channels: [],          // canaux cochés (id)
   states: {},            // id canal -> { 1..4 : état de suivi de chaque type }
+  typeResults: {},        // canal -> type -> prédictions déclenchées et résultat vérifié
   known: [],             // canaux détectés comme envoyant des prédictions : { id, title, sources }
   reacted: [],           // clés « chatId:messageId » déjà traitées
   attempts: {},          // clé -> nombre d'essais ratés
@@ -99,6 +100,15 @@ function parseChannels(value) {
     }
   }
   return out;
+}
+
+const MAX_TRACKED_CHANNELS = 4;
+function testChannels() {
+  const bw = lazy('./best-weak-top');
+  const configs = bw && bw.panel && Array.isArray(bw.panel.configs) ? bw.panel.configs : [];
+  return [...new Set(configs
+    .filter((c) => c && c.enabled !== false && c.mode === 'test')
+    .flatMap((c) => Array.isArray(c.channels) ? c.channels.map(String) : []))];
 }
 
 // ---------------------------------------------------------------------------
@@ -252,14 +262,15 @@ function entriesOf(id) {
   const have = new Set();
   for (const e of entries) for (const m of (e.messages || [])) have.add(`${canon(m.chatId)}:${m.messageId}`);
   const addExtra = (prefix, e) => {
-    if (!e || !Array.isArray(e.messages) || !e.suit) return;
+    const suit = e && (e.suit || (Array.isArray(e.suits) && e.suits[0] && e.suits[0].suit));
+    if (!e || !Array.isArray(e.messages) || !suit) return;
     const messages = e.messages.filter((m) => m && m.messageId !== null && m.messageId !== undefined && sameCh(m.chatId, id));
     if (!messages.length) return;
     if (messages.every((m) => have.has(`${canon(m.chatId)}:${m.messageId}`))) return; // déjà lu ailleurs
     messages.forEach((m) => have.add(`${canon(m.chatId)}:${m.messageId}`));
     entries.push({
       uid: `${prefix}:${e.id || e.uid || `${e.trackerId || ''}:${e.scope || ''}:${e.target || ''}:${e.createdAt || ''}`}`,
-      target: e.target, suit: e.suit, status: e.status, step: e.step || 0, messages,
+      target: e.target, suit, status: e.status, step: e.step || 0, messages,
     });
   };
   for (const [file, prop, prefix] of EXTRA_SOURCES) {
@@ -287,9 +298,15 @@ const keyOf = (id) => String(id);
 const stateKey = (id) => Object.keys(panel.states).find((k) => sameChannel(k, id));
 
 function configure(patch = {}) {
+  const next = patch.channels === undefined ? null : parseChannels(patch.channels);
+  if (next !== null) {
+    if (next.length > MAX_TRACKED_CHANNELS) throw new Error(`J'aime peut suivre au maximum ${MAX_TRACKED_CHANNELS} canaux.`);
+    const eligible = testChannels();
+    const invalid = next.filter((id) => !eligible.some((x) => sameCh(x, id)) && !panel.channels.some((x) => sameCh(x, id)));
+    if (invalid.length) throw new Error('J’aime suit uniquement les canaux configurés dans « Test ». Configure d’abord le canal dans Test.');
+  }
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
-  if (patch.channels !== undefined) {
-    const next = parseChannels(patch.channels);
+  if (next !== null) {
     const states = {};
     for (const id of next) {
       const k = stateKey(id);
@@ -373,6 +390,52 @@ async function setReaction(bot, chatId, messageId, emoji) {
   throw new Error('Cette version de la bibliothèque Telegram ne gère pas les réactions');
 }
 
+function rememberTypeResult(channelId, type, entry) {
+  const key = keyOf(channelId);
+  const channel = panel.typeResults[key] || (panel.typeResults[key] = {});
+  const bucket = channel[type] && !Array.isArray(channel[type]) ? channel[type] : (channel[type] = { wins: 0, losses: 0, pending: [] });
+  const pending = bucket.pending || (bucket.pending = []);
+  if (pending.some((x) => x.uid === entry.uid)) return;
+  if (entry.status === 'gagné') bucket.wins = (Number(bucket.wins) || 0) + 1;
+  else if (entry.status === 'perdu') bucket.losses = (Number(bucket.losses) || 0) + 1;
+  else if (entry.status === 'en attente') pending.push({ uid: entry.uid, target: entry.target, suit: entry.suit, at: Date.now() });
+}
+
+function syncTypeResults(channelId, entries) {
+  const results = new Map((entries || []).map((e) => [e.uid, e]));
+  for (const [id, channel] of Object.entries(panel.typeResults)) {
+    if (!sameCh(id, channelId)) continue;
+    for (const type of [1, 2, 3, 4]) {
+      const bucket = channel[type];
+      if (!bucket || Array.isArray(bucket)) continue;
+      const keep = [];
+      for (const row of (bucket.pending || [])) {
+        const current = results.get(row.uid);
+        if (!row.at) row.at = Date.now(); // sauvegardes plus anciennes : on date maintenant
+        if (!current && Date.now() - row.at > 36 * 3600 * 1000) continue; // plus visible depuis 36 h : abandonnée
+        if (!current || current.status === 'en attente') { keep.push(row); continue; }
+        if (current.status === 'gagné') bucket.wins = (Number(bucket.wins) || 0) + 1;
+        else if (current.status === 'perdu') bucket.losses = (Number(bucket.losses) || 0) + 1;
+      }
+      bucket.pending = keep;
+    }
+  }
+}
+
+function typeStatsFor(channelId) {
+  const rows = {};
+  const matching = Object.entries(panel.typeResults).filter(([id]) => sameCh(id, channelId)).map(([, data]) => data);
+  for (const type of [1, 2, 3, 4]) {
+    const buckets = matching.map((data) => data[type]).filter((x) => x && !Array.isArray(x));
+    const wins = buckets.reduce((sum, x) => sum + (Number(x.wins) || 0), 0);
+    const losses = buckets.reduce((sum, x) => sum + (Number(x.losses) || 0), 0);
+    const pending = buckets.reduce((sum, x) => sum + (Array.isArray(x.pending) ? x.pending.length : 0), 0);
+    const verified = wins + losses;
+    rows[type] = { total: verified + pending, verified, wins, losses, pending, ratePct: verified ? Math.round(wins * 100 / verified) : null };
+  }
+  return rows;
+}
+
 async function processChannel(bot, id) {
   const k = keyOf(id);
   const key0 = stateKey(id);
@@ -386,8 +449,10 @@ async function processChannel(bot, id) {
     runType(type, states[type], entries, (e) => {
       const old = fired.get(e.uid);
       if (!old || type < old.type) fired.set(e.uid, { entry: e, type });
+      rememberTypeResult(id, type, e);
     });
   }
+  syncTypeResults(id, entries);
   const dg = panel.diag[k] || (panel.diag[k] = {});
   dg.followed = entries.length;
   dg.pending = entries.filter((e) => e.status === 'en attente').length;
@@ -520,6 +585,7 @@ function persist() {
   const saved = {
     config: { enabled: panel.enabled }, channels: panel.channels, seen,
     reacted: panel.reacted.slice(-1000), reactedCount: panel.reactedCount, lastReactAt: panel.lastReactAt,
+    typeResults: panel.typeResults,
   };
   const json = JSON.stringify(saved);
   if (json === lastPersisted) return;
@@ -531,7 +597,8 @@ function persist() {
 function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
   if (saved.config) panel.enabled = saved.config.enabled !== false;
-  panel.channels = parseChannels(saved.channels);
+  // aucun filtre ici : un import ou un redémarrage ne doit jamais vider la sélection (seul le plafond de 4 s'applique)
+  panel.channels = parseChannels(saved.channels).slice(0, MAX_TRACKED_CHANNELS);
   panel.states = {};
   for (const id of panel.channels) {
     const k = saved.seen && Object.keys(saved.seen).find((x) => sameChannel(x, id));
@@ -545,6 +612,7 @@ function applySaved(saved) {
   panel.reacted = Array.isArray(saved.reacted) ? saved.reacted.map(String).slice(-1000) : [];
   panel.reactedCount = Number(saved.reactedCount) || 0;
   panel.lastReactAt = saved.lastReactAt || null;
+  panel.typeResults = saved.typeResults && typeof saved.typeResults === 'object' ? saved.typeResults : {};
 }
 
 // restore() sert aussi après un import : on revérifie alors les canaux.
@@ -577,6 +645,7 @@ function statusView() {
       const v = (t) => { const x = st[t] || {}; return { streakSuit: x.streakSuit || null, streakCount: x.streakCount || 0, waitingSuit: x.waitingSuit || null, armed: !!x.armed, lossCount: x.lossCount || 0 }; };
       return [String(id), { 1: v(1), 2: v(2), 3: v(3), 4: v(4) }];
     })),
+    typeStats: Object.fromEntries(panel.channels.map((id) => [String(id), typeStatsFor(id)])),
     diag: panel.diag,
     reactedCount: panel.reactedCount, lastReactAt: panel.lastReactAt,
     lastScanAt: panel.lastScanAt, lastError: panel.lastError,

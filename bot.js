@@ -421,6 +421,9 @@ function wire(b) {
   b.on('channel_post', (m) => {
     rememberChannel(m.chat);
     if (!m.text) return;
+    // « Détection auto » : un message au format à deux costumes (♦️ 100%─────┐ / N°1438 / ♣️ 92% ─────┘) enregistre ce canal
+    // dans la liste des canaux détectés et alimente les configurations qui le suivent (voir best-weak-top.js)
+    try { bestWeakTop.onChannelPost(m.chat, m.text); } catch (_) { /* détection seulement */ }
     const cmd = parsePredictionControlCommand(m.text);
     if (cmd) {
       const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`, m.chat);
@@ -440,6 +443,11 @@ function wire(b) {
     };
     try { b.processUpdate({ update_id: 0, message: asMessage }); }
     catch (e) { console.error('Commande de canal :', e.message); }
+  });
+
+  // Message de canal modifié (résultats ✅0️⃣ / ❌ ajoutés) : le canal reste « détecté », sans relancer la surveillance
+  b.on('edited_channel_post', (m) => {
+    try { if (m && m.text) { rememberChannel(m.chat); bestWeakTop.onChannelPost(m.chat, m.text, { edited: true }); } } catch (_) { /* détection seulement */ }
   });
 
   // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une

@@ -33,6 +33,42 @@ Baccarat `2050671`. Le module `api.js` découvre automatiquement le nouvel ident
 quand 1xBet le remplace, et affiche désormais le statut HTTP ou le type de réponse
 dans `lastError` au lieu de transformer une page Cloudflare en simple liste vide.
 
+### 🔎 Détection auto des canaux (bouton d'accueil « Détection auto »)
+
+Le bot repère tout seul les canaux qui publient le format à deux costumes :
+
+```
+♦️ 100%─────┐
+            ├ N°1438
+♣️ 92% ─────┘
+```
+
+- La détection se fait à la lecture des publications de canal : le bot doit être **administrateur** du canal ; le canal
+  apparaît dans la liste dès qu'un message de ce format y est publié (les messages déjà édités avec ✅0️⃣ / ❌ sont reconnus aussi).
+- On sélectionne un canal détecté, puis on règle : ID du canal Telegram d'envoi, nombre de rattrapages, format de prédiction.
+- Surveillance : une fois la main du joueur terminée au jeu N, si le **1ᵉʳ** costume est sorti directement (✅0️⃣) et pas le
+  2ᵉ, le 2ᵉ est prédit à **N+2** ; si c'est le 2ᵉ qui est sorti directement et pas le 1ᵉʳ, le 1ᵉʳ est prédit à N+2.
+  Les deux sortis, ou aucun : rien n'est envoyé. Si N+2 est déjà joué, rien n'est envoyé non plus.
+
+### Bouton « Meilleur + plus faible » : vérification des deux costumes
+
+Après vérification, le message garde les deux costumes avec leur résultat respectif (rattrapages jusqu'au nombre configuré) :
+
+```
+♦️✅0️⃣ 100%─────┐
+            ├ N°1438
+♣️✅3️⃣ 92% ─────┘
+```
+
+Un costume encore en vérification affiche ⏳, un costume jamais sorti affiche ❌. La configuration compte une victoire dès
+qu'un costume sort, une perte seulement si aucun ne sort.
+
+### Canal des meilleures prédictions : « seulement ce canal » (page Costume faible)
+
+Un menu liste les canaux (4 canaux d'une configuration, ou configurations classiques). Si l'un d'eux est choisi, le canal des
+meilleures ne reçoit QUE ses prédictions, et seulement quand il est le meilleur du moment : si le meilleur est un autre canal,
+rien n'est envoyé. « Tous les canaux » rétablit le comportement habituel.
+
 ## Persistance PostgreSQL
 
 Au démarrage, le service crée ou met à jour automatiquement ses tables. La base
@@ -64,6 +100,15 @@ chaque redémarrage.
   doublons de routage.
 - La vérification reste basée sur la main du joueur ; la main du banquier est
   conservée pour le contexte et les statistiques.
+- Le bouton « Test » suit une stratégie Dizaine ou Costume faible. On choisit 2 à
+  4 rangs parmi : le meilleur, le 2ᵉ, le 3ᵉ, le plus faible. On commence par le
+  premier, on y reste tant qu'il gagne ; après une perte, la prochaine prédiction
+  vient du rang suivant (avec 2 rangs : meilleur ↔ 2ᵉ meilleur, en boucle). Le
+  format, le canal et les rattrapages sont configurables ; le message garde le
+  format choisi une fois le résultat connu. Les configurations Test sont
+  exportées et importées avec le panneau « Meilleur + plus faible ».
+- « J'aime » peut suivre jusqu'à quatre canaux actifs de « Test » ; les 4 types
+  affichent leurs emojis, résultats vérifiés et taux de réussite.
 
 ## Utilisation
 
@@ -71,6 +116,8 @@ Ouvre le tableau de bord sur l'URL du service Render :
 
 - `/#/` : accueil
 - `/#/strategies` : catalogue et réglages
+- `/#/test` : configuration du suivi meilleur / 2ᵉ meilleur
+- `/#/like-react` : emojis et taux de réussite des quatre types sur les canaux Test
 - `/#/ai` : analyseur et création de plans
 - `/#/formats` : aperçu des formats
 - `/#/settings` : token Telegram, base et réglages globaux

@@ -403,7 +403,7 @@ app.get('/api/state', async (req, res) => {
     channelList,
     copyAnnounce: { ...copyAnnounce.status(), channels: channelList },
     betType: { ...betType.status(), allChannels: channelList },
-    likeReact: { ...likeReact.status(), allChannels: channelList },
+    likeReact: { ...likeReact.status(), allChannels: channelList, bestChannels: bestTestChannelList() },
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
@@ -1872,6 +1872,17 @@ app.get('/api/best-weak/channels', (req, res) => {
   rows.sort((a, b) => Number(b.multi) - Number(a.multi));
   res.json({ channels: rows });
 });
+// « Détection auto » : canaux qui ont publié le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Le bot ne les découvre que
+// lorsqu'il y est présent (administrateur) et qu'un message de ce format y est publié ; la liste se remplit toute seule.
+app.get('/api/best-weak/detected', (req, res) => {
+  const st = bestWeakTop.status();
+  res.json({ channels: st.detected || [], scanning: (st.configs || []).filter((c) => c.mode === 'scan').length });
+});
+app.delete('/api/best-weak/detected/:id', (req, res) => {
+  delete bestWeakTop.panel.detected[String(req.params.id)];
+  bestWeakTop.persist();
+  res.json({ channels: bestWeakTop.detectedList() });
+});
 app.post('/api/best-weak/configs', async (req, res) => {
   try {
     const b = req.body || {};
@@ -2522,12 +2533,20 @@ const betTypeSnapshot = () => ({ ...betType.status(), allChannels: configuredCha
 // « J'aime » (voir like-react.js) : canaux cochés dont les prédictions Type de
 // mise reçoivent une réaction automatique selon leur type (1 à 4).
 likeReact.setChannelSource(configuredChannelList);
-const likeReactSnapshot = () => ({ ...likeReact.status(), allChannels: configuredChannelList() });
+const bestTestChannelList = () => {
+  const ids = new Set((bestWeakTop.status().configs || [])
+    .filter((c) => c.mode === 'test' && c.enabled !== false)
+    .flatMap((c) => c.channels || []).map(String));
+  return configuredChannelList().filter((channel) => ids.has(String(channel.id)));
+};
+const likeReactSnapshot = () => ({ ...likeReact.status(), allChannels: configuredChannelList(), bestChannels: bestTestChannelList() });
 app.get('/api/like-react', (req, res) => { likeReact.scan(); res.json(likeReactSnapshot()); });
 app.post('/api/like-react/config', (req, res) => {
-  likeReact.configure(req.body || {});
-  likeReact.scan();
-  res.json({ ok: true, likeReact: likeReactSnapshot() });
+  try {
+    likeReact.configure(req.body || {});
+    likeReact.scan();
+    res.json({ ok: true, likeReact: likeReactSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/like-react/test', async (req, res) => {
   const chatId = (req.body || {}).chatId;

@@ -52,7 +52,7 @@ const panel = {
   bilan: { enabled: true, everyHours: 1, hourlyMigrated: true, minPreds: 5, lastSlot: null, lastSentAt: null, lastResult: null },
   // canal des MEILLEURES prédictions (voir en-tête) : configuré une fois, il reçoit les
   // prédictions de la configuration actuellement en tête du classement du jour.
-  best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 0, delayZeroed: true },
+  best: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, onlyKey: null, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 0, delayZeroed: true },
   weak: { enabled: false, channels: [], link: '', welcome: true, recap: true, recapMin: 125, lastRecapAt: null, wins: 0, losses: 0, format: 1, maxR: 2, rank: 4, currentTrackerId: null, switchedAt: null, sentCount: 0, lastSentAt: null, delayEnabled: true, delaySec: 0, delayZeroed: true },
 };
 
@@ -164,6 +164,8 @@ function configure(patch = {}) {
   if (patch.bestDelaySec !== undefined) panel.best.delaySec = sanitizeDelaySec(patch.bestDelaySec);
   if (patch.bestFormat !== undefined) panel.best.format = sanitizeFormat(patch.bestFormat);
   if (patch.bestMaxR !== undefined) panel.best.maxR = sanitizeMaxR(patch.bestMaxR);
+  // « seulement ce canal » : clé d'un concurrent (canal) ; vide = tous les canaux peuvent être relayés
+  if (patch.bestOnlyKey !== undefined) panel.best.onlyKey = patch.bestOnlyKey ? String(patch.bestOnlyKey) : null;
   if (patch.weakEnabled !== undefined) panel.weak.enabled = !!patch.weakEnabled;
   if (patch.weakChannels !== undefined) panel.weak.channels = parseChannels(patch.weakChannels);
   if (patch.weakLink !== undefined) panel.weak.link = sanitizeLink(patch.weakLink);
@@ -294,6 +296,7 @@ function applySaved(saved) {
       losses: Number(saved.best.losses) || 0,
       format: sanitizeFormat(saved.best.format),
       maxR: sanitizeMaxR(saved.best.maxR),
+      onlyKey: saved.best.onlyKey ? String(saved.best.onlyKey) : null,
       currentTrackerId: saved.best.currentTrackerId || null,
       switchedAt: saved.best.switchedAt || null,
       sentCount: Number(saved.best.sentCount) || 0,
@@ -691,6 +694,9 @@ function sanitizeDelaySec(v) {
 const bestHeld = [];
 let bestHeldTimer = null;
 let bestReleasing = false;
+// « Seulement ce canal » : si un canal est choisi, le canal des meilleures ne reçoit QUE ses prédictions, et seulement quand
+// il est le meilleur du moment. Si le meilleur est un autre canal, rien n'est envoyé.
+function bestAllowed(key) { const k = panel.best.onlyKey; return !k || String(k) === String(key); }
 function bestDelayOn() { return panel.best.delayEnabled !== false && sendDelay.enabled(); }
 const heldKey = (h) => (h.syn.slot !== undefined ? `${h.tracker.id}#${h.syn.slot}` : h.tracker.id);
 
@@ -706,7 +712,7 @@ async function releaseBestHeld(now = Date.now()) {
     const { done, dealing } = sendDelay.progress(state.games);
     for (let i = 0; i < bestHeld.length;) {
       const h = bestHeld[i];
-      if (!panel.best.enabled || String(panel.best.currentTrackerId) !== heldKey(h)) { bestHeld.splice(i, 1); cancelHeld(h); continue; } // plus le meilleur
+      if (!panel.best.enabled || String(panel.best.currentTrackerId) !== heldKey(h) || !bestAllowed(heldKey(h))) { bestHeld.splice(i, 1); cancelHeld(h); continue; } // plus le meilleur (ou canal non autorisé)
       if (Number.isFinite(h.target) && (done >= h.target || dealing >= h.target)) { bestHeld.splice(i, 1); cancelHeld(h); continue; } // jeu cible déjà lancé
       const prevOn = !Number.isFinite(h.target) || dealing >= h.target - 1 || done >= h.target - 1;
       if (!prevOn) { i++; continue; }
@@ -774,7 +780,7 @@ async function postToBest(tracker, syn, orig) {
 function relayNewBest(c) {
   try {
     const b = panel.best;
-    if (!b.enabled || !b.channels.length) return;
+    if (!b.enabled || !b.channels.length || !bestAllowed(c.key)) return;
     const today = bestDayKey();
     let orig = null;
     for (let i = panel.pendingMessages.length - 1; i >= 0; i--) {
@@ -799,6 +805,7 @@ async function forwardToBest(tracker, syn) {
   const best = currentBest();
   const myKey = syn.slot !== undefined ? `${tracker.id}#${syn.slot}` : tracker.id;
   if (!best || best.key !== myKey) return false; // ce n'est pas la meilleure stratégie (canal) du moment
+  if (!bestAllowed(best.key)) return false; // le meilleur n'est pas le canal choisi : on n'envoie rien
   const orig = findOriginalEntry(tracker, syn);
   if (orig && orig.bestRelayed) return false; // déjà relayée (par le changement de meilleur)
   // même costume que la précédente ET numéros qui se suivent (écart < 2) : ignorée. Écart d'au moins 2 : envoyée.
@@ -1716,6 +1723,8 @@ function statusView() {
     best: {
       ...panel.best,
       currentName: (() => { const c = contestantByKey(panel.best.currentTrackerId); return c ? contestantName(c) : null; })(),
+      candidates: contestants().map((c) => ({ key: c.key, name: contestantRealName(c), channel: c.slot !== undefined ? c.tracker.slots[c.slot].channel : null })),
+      onlyName: (() => { const c = panel.best.onlyKey ? contestantByKey(panel.best.onlyKey) : null; return c ? contestantRealName(c) : null; })(),
       channelNames: panel.best.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
       channelLinks: panel.best.channels.map((id, k) => (k === 0 && panel.best.link) ? panel.best.link : channelLinkOf(id)),
     },
@@ -1755,3 +1764,4 @@ module.exports.welcomeText = welcomeText;
 module.exports.testWelcome = testWelcome;
 module.exports.bumpEntry = bumpEntry;
 try { require('./best-weak-top').setRankProvider('costumeFaible', bwRankOfRef); } catch (_) { /* module facultatif */ }
+module.exports.forwardToBest = forwardToBest; // exposé pour les tests
