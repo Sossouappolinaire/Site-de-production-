@@ -770,7 +770,7 @@ Faites-en bon usage !
           ${s.key !== 'ombre' ? `<label class="check" style="margin-top:10px"><input id="cfgDelay" type="checkbox" ${c.delayEnabled ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfgDelaySec" type="number" min="0" max="120" value="${c.delaySec ?? 0}" style="width:64px"> secondes</label>` : ''}
           <label class="check" style="margin-top:10px"><input id="cfgLossNotice" type="checkbox" ${c.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
           <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé — les deux doivent être cochés à la fois.</p>
-          <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine','absenceJoueur','absenceDecalage'].includes(s.key)
+          <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine','absenceJoueur','absenceDecalage','troisiemeBanquier'].includes(s.key)
             ? "Désactivé (par défaut) : la stratégie prédit normalement. Activé : avant chaque envoi, l'IA compare le taux de réussite récent du costume que la stratégie s'apprête à jouer avec celui des 3 autres costumes POUR CETTE STRATÉGIE. Si un autre costume affiche un net avantage (échantillon et écart suffisants), il est substitué automatiquement — le motif de la prédiction indique alors clairement la substitution."
             : "Cette stratégie ne prédit pas de costume : ce réglage n'a aucun effet ici (laissez-le désactivé)."}</p>
           <div class="toolbar" style="margin-top:18px"><button class="button primary" onclick="saveStrategy('${s.key}')">Enregistrer les réglages</button><button class="button ghost" onclick="resetStrategy('${s.key}')">Réinitialiser</button><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester le canal</button>${s.key === 'ombre' ? '' : `<button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester canal silencieux</button>`}</div><div id="strategyMessage"></div></div>
@@ -1923,6 +1923,7 @@ Faites-en bon usage !
       return `<div class="field"><label>${forTest ? 'Parmi les 4 : lesquels suivre ? (coche 2 à 4 · on passe au suivant après une perte)' : 'Costumes à proposer (coche au moins 2, jusqu\'à 4)'}</label>
         ${[1, 2, 3, 4].map(r => `<label class="check" style="display:block;margin:4px 0"><input id="${prefix}Rank${r}" type="checkbox" ${on.includes(r) ? 'checked' : ''}> ${esc(labels[r])}</label>`).join('')}</div>`;
     }
+    const bwGateField = (prefix, c) => `<label class="check" style="display:block;margin:10px 0"><input id="${prefix}LossGate" type="checkbox" ${c && c.lossGate ? 'checked' : ''}> Envoyer seulement après une perte : prédit le 1ᵉʳ si le 2ᵉ a perdu, ou le 2ᵉ si le 1ᵉʳ a perdu (aucune perte → rien n'est envoyé)</label>`;
     function readBestWeakRanks(prefix) {
       const r = [1, 2, 3, 4].filter(n => document.getElementById(`${prefix}Rank${n}`)?.checked);
       if (r.length < 2) throw new Error('Coche au moins 2 costumes.');
@@ -1980,14 +1981,14 @@ Faites-en bon usage !
         ${mode === 'multi' ? '' : bwSimpleFields('bwNew')}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwNewChannels" placeholder="-1001234567890 ou @nomducanal"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwNewMaxR" type="number" min="0" max="9" value="2"></div>
-        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : (mode === 'test' ? bestWeakRanksHtml('bwNew', [1, 2], true) + bwFormatField('bwNew') : bwFormatField('bwNew'))}
+        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : (mode === 'test' ? bestWeakRanksHtml('bwNew', [1, 2], true) + bwGateField('bwNew') + bwFormatField('bwNew') : bwFormatField('bwNew'))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addBestWeak()">Enregistrer</button><button class="button small ghost" onclick="closeModal();startBwFlow('${mode}')">← Retour</button></div>`);
     }
     async function addBestWeak() {
       try {
         const mode = bwWizard.mode;
         const body = { mode, strategy: bwWizard.strategy, channels: ids(val('bwNewChannels')), maxR: val('bwNewMaxR') };
-        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') body.ranks = readBestWeakRanks('bwNew'); }
+        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') { body.ranks = readBestWeakRanks('bwNew'); body.lossGate = !!$('#bwNewLossGate')?.checked; } }
         if (mode === 'follow' || mode === 'scan') body.sources = bwWizard.sources;
         await api('/api/best-weak/configs', 'POST', body);
         closeModal(); await refresh(); if (location.hash === '#/best-weak') bestWeakPage(); else if (location.hash === '#/scan') scanPage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
@@ -2003,14 +2004,14 @@ Faites-en bon usage !
         ${(m === 'follow' || m === 'scan') ? `<div class="field"><label>Canaux ${m === 'scan' ? 'surveillés' : 'suivis'} (ID séparés par des virgules)</label><input id="bwEditSources" value="${esc((c.sources || []).join(', '))}"></div>` : `<div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>`}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwEditChannels" value="${esc((c.channels || []).join(', '))}"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwEditMaxR" type="number" min="0" max="9" value="${esc(String(c.maxR))}"></div>
-        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : (m === 'test' ? bestWeakRanksHtml('bwEdit', c.ranks, true) + bwFormatField('bwEdit', c) : bwFormatField('bwEdit', c))}
+        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : (m === 'test' ? bestWeakRanksHtml('bwEdit', c.ranks, true) + bwGateField('bwEdit', c) + bwFormatField('bwEdit', c) : bwFormatField('bwEdit', c))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateBestWeak('${esc(id)}','${m}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function updateBestWeak(id, m) {
       try {
         const body = { channels: ids(val('bwEditChannels')), maxR: val('bwEditMaxR') };
         if (m === 'follow' || m === 'scan') body.sources = ids(val('bwEditSources')); else body.strategy = val('bwEditStrategy');
-        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); if (m === 'test') body.ranks = readBestWeakRanks('bwEdit'); }
+        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); if (m === 'test') { body.ranks = readBestWeakRanks('bwEdit'); body.lossGate = !!$('#bwEditLossGate')?.checked; } }
         await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', body);
         closeModal(); await refresh(); bwRerender(); toast('Configuration mise à jour.');
       } catch (e) { toast(e.message, 'error'); }
