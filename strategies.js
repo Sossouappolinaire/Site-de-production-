@@ -1103,6 +1103,56 @@ const costumeFaible = {
 };
 
 // ---------------------------------------------------------------------------
+// 10 bis) 3ᵉ costume du banquier → joueur à +3 (demande admin)
+// ---------------------------------------------------------------------------
+// Filtre obligatoire : joueur 3 cartes ET banquier 3 cartes. On prend le
+// costume de la 3ᵉ carte du BANQUIER et on le prédit sur la main du JOUEUR au
+// jeu déclencheur + 3 (réglable). Vérification sur la main du joueur +
+// rattrapages.
+const troisiemeBanquier = {
+  key: 'troisiemeBanquier',
+  name: '3ᵉ costume du banquier → joueur (+3)',
+  about:
+    "Filtre obligatoire : joueur 3 cartes ET banquier 3 cartes. On relève le " +
+    "costume de la 3ᵉ carte du BANQUIER et on le prédit sur la main du JOUEUR " +
+    "au tour +3 (réglable). Exemple : jeu #N100, joueur 3 cartes, banquier " +
+    "♣️❤️♠️ → la 3ᵉ carte du banquier est ♠️ → prédiction ♠️ chez le joueur " +
+    "sur #N103. Vérification sur la main du joueur, rattrapages possibles.",
+  defaults: {
+    enabled: true,
+    format: config.DEFAULT_FORMAT,
+    maxR: config.DEFAULT_MAX_R,
+    b: 0,
+    lead: 3,
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg) {
+    if (!game || !game.finished) return null;
+    if (game.playerCards !== 3 || game.bankerCards !== 3) return null; // filtre obligatoire
+    const banker = suitsOf(game.bankerSuits);
+    if (banker.length < 3) return null; // cartes du banquier illisibles
+    const suit = banker[2]; // 3ᵉ carte du banquier
+    if (!suit) return null;
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 3));
+    return {
+      kind: 'suit',
+      target: game.number + lead,
+      suit,
+      label: suit,
+      trigger: game.number,
+      reason:
+        `Jeu #N${game.number} — joueur 3 cartes / banquier ${banker.join('')} — ` +
+        `3ᵉ carte du banquier : ${suit} → prédiction ${suit} chez le joueur sur ` +
+        `#N${game.number + lead} (+${lead})`,
+      meta: { bankerSuits: banker, thirdCard: suit, lead },
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
 // 11) Collecte IA — relais des meilleures stratégies existantes (demande admin)
 // ---------------------------------------------------------------------------
 // Ne détecte RIEN par elle-même : à chaque jeu terminé, elle regarde si une
@@ -1240,7 +1290,7 @@ const collecte = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, collecte];
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

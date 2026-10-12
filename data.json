@@ -1252,5 +1252,116 @@
       "sentCount": 0,
       "lastSentAt": null
     }
+  },
+  "bestWeakTop": {
+    "configs": [
+      {
+        "id": "bw-1791840097672-0tg6",
+        "mode": "test",
+        "name": "Test",
+        "strategy": "dizaine",
+        "channels": [
+          -100123
+        ],
+        "sources": [],
+        "rot": {},
+        "maxR": 2,
+        "format": 1,
+        "ranks": [
+          1,
+          2
+        ],
+        "cycleRole": 1,
+        "cycleWaiting": false,
+        "cycleDone": [],
+        "enabled": true,
+        "sentCount": 2,
+        "wins": 0,
+        "losses": 0,
+        "lastSentAt": 1791840097701,
+        "lossGate": true,
+        "gateFrom": null,
+        "testRank": 1
+      }
+    ],
+    "pending": [
+      {
+        "id": "bwt-1791840097696-hpka",
+        "configId": "bw-1791840097672-0tg6",
+        "mode": "test",
+        "reason": "test",
+        "role": 1,
+        "src": null,
+        "strategy": "dizaine",
+        "target": 11,
+        "suits": [
+          {
+            "suit": "♦️"
+          }
+        ],
+        "format": 1,
+        "strategyName": "Test",
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "perdu",
+        "messages": [
+          {
+            "chatId": -100123,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1791840097696,
+        "resolvedAt": null
+      },
+      {
+        "id": "bwt-1791840097701-n41b",
+        "configId": "bw-1791840097672-0tg6",
+        "mode": "test",
+        "reason": "test",
+        "role": 2,
+        "src": null,
+        "strategy": "dizaine",
+        "target": 16,
+        "suits": [
+          {
+            "suit": "♣️"
+          }
+        ],
+        "format": 1,
+        "strategyName": "Test",
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100123,
+            "messageId": 2
+          }
+        ],
+        "createdAt": 1791840097701,
+        "resolvedAt": null
+      }
+    ],
+    "recentSent": [
+      "bw-1791840097672-0tg6:11",
+      "bw-1791840097672-0tg6:16"
+    ],
+    "watch": [],
+    "detected": {},
+    "trig": {
+      "day": "2026-10-12",
+      "results": {},
+      "armed": {},
+      "absenceFired": {}
+    },
+    "duplicatesRemoved": 0,
+    "duplicatesBlocked": 0,
+    "sentCount": 2,
+    "lastSentAt": 1791840097701,
+    "channelTitles": {}
   }
 }

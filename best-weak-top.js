@@ -159,6 +159,7 @@ function applySaved(saved) {
       cycleDone: Array.isArray(c.cycleDone) ? c.cycleDone.map(Number).filter((r) => CYCLE_ORDER.includes(r)) : [],
       ranks: (mode !== 'multi' && mode !== 'test') ? [] : (() => { try { return sanitizeRanks(c.ranks); } catch (_) { return (mode === 'test' ? TEST_DEFAULT_RANKS : DEFAULT_RANKS).slice(); } })(),
       enabled: c.enabled !== false, sentCount: Number(c.sentCount) || 0, wins: Number(c.wins) || 0, losses: Number(c.losses) || 0, lastSentAt: c.lastSentAt || null,
+      lossGate: mode === 'test' && !!c.lossGate, gateFrom: [1, 2, 3, 4].includes(Number(c.gateFrom)) ? Number(c.gateFrom) : null,
     };
   }).filter((c) => c.channels.length);
   for (const c of panel.configs) if (modeOf(c) === 'test') c.testRank = (c.ranks || TEST_DEFAULT_RANKS).includes(Number(c.testRank)) ? Number(c.testRank) : (c.ranks || TEST_DEFAULT_RANKS)[0];
@@ -184,7 +185,7 @@ async function restoreFromDb() {
 // ---------------------------------------------------------------------------
 // Configurations + ANTI-DOUBLONS DE CONFIGURATION
 // ---------------------------------------------------------------------------
-const configKey = (c) => `${modeOf(c)}|${c.strategy}|${(modeOf(c) === 'multi' || modeOf(c) === 'test') ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}`;
+const configKey = (c) => `${modeOf(c)}|${c.strategy}|${(modeOf(c) === 'multi' || modeOf(c) === 'test') ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}${modeOf(c) === 'test' && c.lossGate ? '|gate' : ''}`;
 const shareChannel = (a, b) => { const mine = new Set((a.channels || []).map(String)); return (b.channels || []).some((ch) => mine.has(String(ch))); };
 function findDuplicate(cfg, excludeId) {
   return panel.configs.find((o) => o.id !== excludeId && configKey(o) === configKey(cfg) && shareChannel(o, cfg)) || null;
@@ -219,6 +220,7 @@ function addConfig(input = {}) {
     ranks: (mode !== 'multi' && mode !== 'test') ? [] : (input.ranks === undefined ? (mode === 'test' ? TEST_DEFAULT_RANKS : DEFAULT_RANKS).slice() : sanitizeRanks(input.ranks)),
     cycleRole: 1, cycleWaiting: false, cycleDone: [],
     enabled: true, sentCount: 0, wins: 0, losses: 0, lastSentAt: null,
+    lossGate: mode === 'test' && !!input.lossGate, gateFrom: null,
   };
   if (mode === 'test') cfg.testRank = cfg.ranks[0]; // on commence par le premier rang choisi (normalement le meilleur)
   const dup = findDuplicate(cfg);
@@ -240,6 +242,7 @@ function updateConfig(id, patch = {}) {
       c.ranks = sanitizeRanks(patch.ranks);
       if (modeOf(c) === 'test' && !c.ranks.includes(Number(c.testRank))) c.testRank = c.ranks[0];
     }
+    if (patch.lossGate !== undefined && modeOf(c) === 'test') { c.lossGate = !!patch.lossGate; c.gateFrom = null; }
     if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
     const dup = findDuplicate(c, c.id);
     if (dup) throw duplicateError(dup);
@@ -359,6 +362,16 @@ function recordResult(strategy, ref, field, step) {
         persist();
       }
     }
+    // mode Test avec « envoyer après une perte » : la perte d'un des rangs choisis ouvre l'envoi pour le rang suivant
+    if (field === 'losses' && rankProviders[strategy]) {
+      const gated = enabledOf(strategy, 'test').filter((cfg) => cfg.lossGate);
+      const lostRank = gated.length ? Number(rankProviders[strategy](ref)) : null;
+      if (lostRank) {
+        let touched = false;
+        for (const cfg of gated) { if ((cfg.ranks || []).includes(lostRank)) { cfg.gateFrom = lostRank; touched = true; } }
+        if (touched) persist();
+      }
+    }
     if (!enabledOf(strategy, 'trigger').length) return;
     const ts = ensureTrigDay();
     const key = `${strategy}:${ref}`;
@@ -391,10 +404,24 @@ async function handleCyclePrediction(strategy, rank, data) {
 }
 // Le mode « Test » commence par le premier rang choisi (le meilleur) et passe au rang suivant après une perte de SA prédiction
 // (2 rangs : meilleur ↔ 2ᵉ meilleur ; jusqu'à 4 : meilleur → 2ᵉ → 3ᵉ → plus faible → retour au meilleur).
+// Verrou par configuration : pendant l'envoi (asynchrone) d'une prédiction, la suivante n'est pas lancée — sinon deux
+// prédictions pouvaient partir avant que la 1ʳᵉ soit marquée « en attente » (le mode Test n'attendait alors pas le résultat).
+const testBusy = new Set();
 async function handleTestPrediction(strategy, rank, data) {
   for (const cfg of enabledOf(strategy, 'test')) {
-    if (rank !== cfg.testRank || cyclePending(cfg)) continue;
-    await sendTrigger(cfg, { target: data.target, suit: data.suit, reason: 'test', role: rank });
+    if (cyclePending(cfg) || testBusy.has(cfg.id)) continue;
+    if (cfg.lossGate) {
+      // « envoyer après une perte » : il faut qu'un des rangs choisis ait perdu ; on prédit alors l'AUTRE rang (le 1ᵉʳ si le 2ᵉ a perdu,
+      // le 2ᵉ si le 1ᵉʳ a perdu). Aucune perte → rien n'est envoyé. L'envoi consomme la perte : il en faut une nouvelle pour le suivant.
+      const ranks = Array.isArray(cfg.ranks) && cfg.ranks.length >= 2 ? cfg.ranks : TEST_DEFAULT_RANKS;
+      const i = ranks.indexOf(Number(cfg.gateFrom));
+      if (i < 0 || rank !== ranks[(i + 1) % ranks.length]) continue;
+    } else if (rank !== cfg.testRank) continue;
+    testBusy.add(cfg.id);
+    try {
+      const ok = await sendTrigger(cfg, { target: data.target, suit: data.suit, reason: 'test', role: rank });
+      if (ok && cfg.lossGate) { cfg.gateFrom = null; persist(); }
+    } finally { testBusy.delete(cfg.id); }
   }
 }
 // résultat de NOTRE prédiction : ✅0️⃣/✅1️⃣ → on reste ; ✅2️⃣/✅3️⃣… ou ❌ → on passe à la suivante ; les 4 passées → attente d'une perte
@@ -742,7 +769,7 @@ function status() {
     configs: panel.configs.map((c) => ({
       ...c, mode: modeOf(c), strategyLabel: modeOf(c) === 'follow' ? 'Suivi des canaux cochés' : (modeOf(c) === 'scan' ? 'Détection auto des canaux' : STRATEGIES[c.strategy]), sourceNames: (c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)),
       ranksLabel: modeOf(c) === 'follow' ? `Suit : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : modeOf(c) === 'scan' ? `Surveille : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')} · un costume ✅0️⃣ → l'autre à N+2` : modeOf(c) === 'trigger' ? TRIGGER_LABEL : (modeOf(c) === 'cycle' ? `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}` : (modeOf(c) === 'test' ? `Rangs : ${(c.ranks && c.ranks.length ? c.ranks : TEST_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' → ')} · rang suivant après une perte` : (c.ranks || DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + '))),
-      testLabel: modeOf(c) === 'test' ? `Prochaine source : ${RANK_LABELS[c.testRank] || RANK_LABELS[1]}` : null,
+      testLabel: modeOf(c) === 'test' ? (c.lossGate ? (c.gateFrom ? `Perte du « ${RANK_LABELS[c.gateFrom]} » → prochaine source : ${RANK_LABELS[(c.ranks || TEST_DEFAULT_RANKS)[((c.ranks || TEST_DEFAULT_RANKS).indexOf(c.gateFrom) + 1) % (c.ranks || TEST_DEFAULT_RANKS).length]]}` : 'Envoi après une perte : en attente d’une perte parmi les rangs choisis') : `Prochaine source : ${RANK_LABELS[c.testRank] || RANK_LABELS[1]}`) : null,
       cycleLabel: modeOf(c) === 'cycle' ? (c.cycleWaiting ? 'Les 4 sont passées : en attente d’une perte parmi les 4' : `Suit actuellement : ${RANK_LABELS[c.cycleRole] || RANK_LABELS[1]}${(c.cycleDone || []).length ? ` (déjà passés : ${c.cycleDone.map((r) => RANK_LABELS[r]).join(', ')})` : ''}`) : null,
       channelNames: c.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
     })),
