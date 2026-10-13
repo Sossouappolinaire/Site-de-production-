@@ -301,9 +301,9 @@ function configure(patch = {}) {
   const next = patch.channels === undefined ? null : parseChannels(patch.channels);
   if (next !== null) {
     if (next.length > MAX_TRACKED_CHANNELS) throw new Error(`J'aime peut suivre au maximum ${MAX_TRACKED_CHANNELS} canaux.`);
-    const eligible = testChannels();
-    const invalid = next.filter((id) => !eligible.some((x) => sameCh(x, id)) && !panel.channels.some((x) => sameCh(x, id)));
-    if (invalid.length) throw new Error('J’aime suit uniquement les canaux configurés dans « Test ». Configure d’abord le canal dans Test.');
+    // n'importe quel canal peut être suivi (liste des canaux du site ou identifiant saisi à la main)
+    const invalid = next.filter((id) => !validId(id));
+    if (invalid.length) throw new Error('Identifiant de canal invalide : utilise -100… ou @nomducanal.');
   }
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (next !== null) {

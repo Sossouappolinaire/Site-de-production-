@@ -403,7 +403,7 @@ app.get('/api/state', async (req, res) => {
     channelList,
     copyAnnounce: { ...copyAnnounce.status(), channels: channelList },
     betType: { ...betType.status(), allChannels: channelList },
-    likeReact: { ...likeReact.status(), allChannels: channelList, bestChannels: bestTestChannelList() },
+    likeReact: { ...likeReact.status(), allChannels: channelList, bestChannels: channelList },
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
@@ -2539,7 +2539,7 @@ const bestTestChannelList = () => {
     .flatMap((c) => c.channels || []).map(String));
   return configuredChannelList().filter((channel) => ids.has(String(channel.id)));
 };
-const likeReactSnapshot = () => ({ ...likeReact.status(), allChannels: configuredChannelList(), bestChannels: bestTestChannelList() });
+const likeReactSnapshot = () => { const list = configuredChannelList(); return { ...likeReact.status(), allChannels: list, bestChannels: list }; };
 app.get('/api/like-react', (req, res) => { likeReact.scan(); res.json(likeReactSnapshot()); });
 app.post('/api/like-react/config', (req, res) => {
   try {

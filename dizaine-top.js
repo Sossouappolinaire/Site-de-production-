@@ -1007,6 +1007,14 @@ function bwRankOfRef(ref) {
   const i = rest.findIndex((r) => r.t.id === ref);
   return i === 0 ? 2 : (i === 1 ? 3 : null);
 }
+// Rang du mode Test : POSITION de la configuration dans le classement du jour (1ᵉʳ, 2ᵉ, 3ᵉ ; le dernier = 4ᵉ s'il y en a au moins 4).
+function bwTestRankOfRef(ref) {
+  const ranked = rankedToday();
+  const idx = ranked.findIndex((r) => r.t.id === ref);
+  if (idx < 0) return null;
+  if (ranked.length >= 4 && idx === ranked.length - 1) return 4;
+  return idx < 3 ? idx + 1 : null;
+}
 async function comboHook(tracker, syn) {
   const bw = require('./best-weak-top');
   if (!bw.hasEnabled('dizaine')) return;
@@ -1014,7 +1022,8 @@ async function comboHook(tracker, syn) {
   const ranked = rankedToday();
   const pctOf = (t) => { const r = ranked.find((x) => x.t.id === t.id); return r ? r.rate * 100 : null; };
   const rank = bwRankOfRef(tracker.id); // 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
-  if (rank) await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker) });
+  const testRank = bwTestRankOfRef(tracker.id);
+  if (rank || testRank) await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker), testRank });
 }
 
 async function send(tracker, syn) {
@@ -1659,4 +1668,4 @@ module.exports.currentWeak = currentWeak;
 module.exports.welcomeText = welcomeText;
 module.exports.testWelcome = testWelcome;
 module.exports.bumpEntry = bumpEntry;
-try { require('./best-weak-top').setRankProvider('dizaine', bwRankOfRef); } catch (_) { /* module facultatif */ }
+try { require('./best-weak-top').setRankProvider('dizaine', bwRankOfRef); require('./best-weak-top').setTestRankProvider('dizaine', bwTestRankOfRef); } catch (_) { /* module facultatif */ }

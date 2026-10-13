@@ -1256,7 +1256,7 @@
   "bestWeakTop": {
     "configs": [
       {
-        "id": "bw-1791840097672-0tg6",
+        "id": "bw-1791878788731-pn1q",
         "mode": "test",
         "name": "Test",
         "strategy": "dizaine",
@@ -1277,23 +1277,23 @@
         "enabled": true,
         "sentCount": 2,
         "wins": 0,
-        "losses": 0,
-        "lastSentAt": 1791840097701,
-        "lossGate": true,
+        "losses": 1,
+        "lastSentAt": 1791878788770,
+        "lossGate": false,
         "gateFrom": null,
-        "testRank": 1
+        "testRank": 2
       }
     ],
     "pending": [
       {
-        "id": "bwt-1791840097696-hpka",
-        "configId": "bw-1791840097672-0tg6",
+        "id": "bwt-1791878788755-kqbb",
+        "configId": "bw-1791878788731-pn1q",
         "mode": "test",
         "reason": "test",
         "role": 1,
         "src": null,
         "strategy": "dizaine",
-        "target": 11,
+        "target": 10,
         "suits": [
           {
             "suit": "♦️"
@@ -1302,7 +1302,7 @@
         "format": 1,
         "strategyName": "Test",
         "maxR": 2,
-        "step": 0,
+        "step": 2,
         "gap": 0,
         "skipped": 0,
         "status": "perdu",
@@ -1312,21 +1312,21 @@
             "messageId": 1
           }
         ],
-        "createdAt": 1791840097696,
-        "resolvedAt": null
+        "createdAt": 1791878788755,
+        "resolvedAt": 1791878788768
       },
       {
-        "id": "bwt-1791840097701-n41b",
-        "configId": "bw-1791840097672-0tg6",
+        "id": "bwt-1791878788770-80tz",
+        "configId": "bw-1791878788731-pn1q",
         "mode": "test",
         "reason": "test",
         "role": 2,
         "src": null,
         "strategy": "dizaine",
-        "target": 16,
+        "target": 20,
         "suits": [
           {
-            "suit": "♣️"
+            "suit": "❤️"
           }
         ],
         "format": 1,
@@ -1342,18 +1342,18 @@
             "messageId": 2
           }
         ],
-        "createdAt": 1791840097701,
+        "createdAt": 1791878788770,
         "resolvedAt": null
       }
     ],
     "recentSent": [
-      "bw-1791840097672-0tg6:11",
-      "bw-1791840097672-0tg6:16"
+      "bw-1791878788731-pn1q:10",
+      "bw-1791878788731-pn1q:20"
     ],
     "watch": [],
     "detected": {},
     "trig": {
-      "day": "2026-10-12",
+      "day": "2026-10-13",
       "results": {},
       "armed": {},
       "absenceFired": {}
@@ -1361,7 +1361,34 @@
     "duplicatesRemoved": 0,
     "duplicatesBlocked": 0,
     "sentCount": 2,
-    "lastSentAt": 1791840097701,
+    "lastSentAt": 1791878788770,
     "channelTitles": {}
+  },
+  "likeReact": {
+    "config": {
+      "enabled": true
+    },
+    "channels": [
+      -1001234567890,
+      "@VIPcanal"
+    ],
+    "seen": {
+      "-1001234567890": {
+        "1": [],
+        "2": [],
+        "3": [],
+        "4": []
+      },
+      "@VIPcanal": {
+        "1": [],
+        "2": [],
+        "3": [],
+        "4": []
+      }
+    },
+    "reacted": [],
+    "reactedCount": 0,
+    "lastReactAt": null,
+    "typeResults": {}
   }
 }

@@ -103,6 +103,9 @@ function setPctProvider(strategy, fn) { if (typeof fn === 'function') pctProvide
 // fournisseurs de rang (1 meilleur · 2 · 3 · 4 plus faible) d'une configuration, par stratégie
 const rankProviders = {};
 function setRankProvider(strategy, fn) { if (typeof fn === 'function') rankProviders[strategy] = fn; }
+// rang du mode Test (position dans le classement du jour) : même règle que celle qui choisit la prédiction à envoyer
+const testRankProviders = {};
+function setTestRankProvider(strategy, fn) { if (typeof fn === 'function') testRankProviders[strategy] = fn; }
 
 // numéro de jeu → rangs ayant prédit (mode multi, mémoire seulement)
 const collector = new Map();
@@ -363,9 +366,9 @@ function recordResult(strategy, ref, field, step) {
       }
     }
     // mode Test avec « envoyer après une perte » : la perte d'un des rangs choisis ouvre l'envoi pour le rang suivant
-    if (field === 'losses' && rankProviders[strategy]) {
+    if (field === 'losses' && (testRankProviders[strategy] || rankProviders[strategy])) {
       const gated = enabledOf(strategy, 'test').filter((cfg) => cfg.lossGate);
-      const lostRank = gated.length ? Number(rankProviders[strategy](ref)) : null;
+      const lostRank = gated.length ? Number((testRankProviders[strategy] || rankProviders[strategy])(ref)) : null;
       if (lostRank) {
         let touched = false;
         for (const cfg of gated) { if ((cfg.ranks || []).includes(lostRank)) { cfg.gateFrom = lostRank; touched = true; } }
@@ -599,11 +602,18 @@ function onChannelPost(chat, text, opts = {}) {
 async function record(strategy, rank, data) {
   try {
     rank = Number(rank);
-    if (!hasEnabled(strategy) || !data || !Number.isFinite(Number(data.target)) || !data.suit || !(rank >= 1 && rank <= 4)) return;
-    await handleTriggerPrediction(strategy, data).catch((e) => { panel.lastError = e.message; });
-    await handleCyclePrediction(strategy, rank, data).catch((e) => { panel.lastError = e.message; });
-    await handleTestPrediction(strategy, rank, data).catch((e) => { panel.lastError = e.message; });
-    if (!enabledOf(strategy, 'multi').length) return;
+    // Mode Test : rang = POSITION dans le classement du jour (1er, 2ᵉ, 3ᵉ, dernier = 4ᵉ s'il y a au moins 4 configurations),
+    // même quand la configuration n'est ni « la meilleure » ni « la plus faible » désignées par les autres modes.
+    const testRank = data ? Number(data.testRank) : NaN;
+    const validRank = rank >= 1 && rank <= 4;
+    const validTest = testRank >= 1 && testRank <= 4;
+    if (!hasEnabled(strategy) || !data || !Number.isFinite(Number(data.target)) || !data.suit || !(validRank || validTest)) return;
+    if (validRank) {
+      await handleTriggerPrediction(strategy, data).catch((e) => { panel.lastError = e.message; });
+      await handleCyclePrediction(strategy, rank, data).catch((e) => { panel.lastError = e.message; });
+    }
+    await handleTestPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
+    if (!validRank || !enabledOf(strategy, 'multi').length) return;
     const now = Date.now();
     for (const [k, v] of collector) if (now - v.at > 60 * 60 * 1000) collector.delete(k);
     const key = `${strategy}:${Number(data.target)}`;
@@ -784,7 +794,7 @@ function config() { return { count: panel.configs.length }; }
 function configure() { persist(); } // import d'une sauvegarde : réécrit l'état en base
 
 module.exports = {
-  panel, config, configure, setSender, setPctProvider, setRankProvider, restore, restoreFromDb, persist, addConfig, updateConfig, removeConfig, setChannelTitle,
+  panel, config, configure, setSender, setPctProvider, setRankProvider, setTestRankProvider, restore, restoreFromDb, persist, addConfig, updateConfig, removeConfig, setChannelTitle,
   hasEnabled, hasMultiChannels, record, recordResult, tick, test, status, parseChannels, STRATEGIES, findDuplicate, dedupeConfigs,
   onChannelPost, parseDuo, detectedList, predictionText,
 };
