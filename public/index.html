@@ -1382,6 +1382,45 @@ Faites-en bon usage !
       if (cat === 3 || !cat) out.streak = readAfterLossStreak(prefix);
       return out;
     }
+    // Liste des stratégies suivies par « Prédiction après perte » : une carte par
+    // configuration, avec sa catégorie (liste déroulante), ses réglages, son nom,
+    // et les boutons Enregistrer / Optimiser / Retirer.
+    function afterLossCategoryOptions(cur, withNone) {
+      return (withNone ? `<option value="0" ${!cur ? 'selected' : ''}>Aucune catégorie (tous les réglages)</option>` : '')
+        + AFTER_LOSS_CATEGORIES.map(c => `<option value="${c.id}" ${Number(cur) === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+    }
+    function afterLossCategoryAbout(cat) {
+      const c = AFTER_LOSS_CATEGORIES.find(x => x.id === Number(cat));
+      return c ? c.about : 'Tous les types de réglages sont affichés ; choisis une catégorie pour n\'en garder qu\'une.';
+    }
+    function afterLossCategoryChanged(prefix, id) {
+      const cat = Number(val(`${prefix}-category`)) || 0;
+      const t = id ? ((snapshot.afterLoss || {}).trackers || []).find(x => x.id === id) : null;
+      const box = document.getElementById(`${prefix}-blocks`);
+      if (box) box.innerHTML = afterLossCategoryBlocks(prefix, cat, t);
+      const about = document.getElementById(`${prefix}-catAbout`);
+      if (about) about.textContent = afterLossCategoryAbout(cat);
+    }
+    function afterLossTrackerCard(t) {
+      const prefix = 'trk-' + t.id;
+      const cat = t.category || 0;
+      const tag = cat ? `<span class="tag">Catégorie ${esc(String(cat))}</span>` : '<span class="tag warn">Sans catégorie</span>';
+      return `<article class="proposal"><div class="split"><h3>${esc(t.name)}</h3>${tag}</div>
+        ${afterLossSummary(t)}${afterLossCounters(t)}${afterLossPredictionLists(t)}
+        <div class="field" style="margin-top:12px"><label>Catégorie</label>
+          <select id="${prefix}-category" onchange="afterLossCategoryChanged('${esc(prefix)}', '${esc(t.id)}')">${afterLossCategoryOptions(cat, true)}</select>
+          <p class="small muted" id="${prefix}-catAbout" style="margin:6px 0 0">${esc(afterLossCategoryAbout(cat))}</p></div>
+        <div id="${prefix}-blocks">${afterLossCategoryBlocks(prefix, cat, t)}</div>
+        ${afterLossChannelFormatRow(prefix, t)}
+        ${afterLossNameRow(prefix, t.name)}
+        <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="updateAfterLossTriggers('${esc(t.id)}')">Enregistrer</button><button class="button small ghost" onclick="optimizeAfterLossTracker('${esc(t.id)}')">Optimiser</button><button class="button small danger" onclick="removeAfterLossTracker('${esc(t.id)}')">Retirer</button></div>
+        <div id="opt-result-${esc(t.id)}"></div></article>`;
+    }
+    function afterLossCardsHtml() {
+      const trackers = (snapshot.afterLoss || {}).trackers || [];
+      if (!trackers.length) return '<div class="empty">Aucune stratégie suivie pour le moment. Clique sur « Ajouter une stratégie » pour commencer.</div>';
+      return `<div class="proposals">${trackers.map(afterLossTrackerCard).join('')}</div>`;
+    }
     // 10 dernières prédictions de la stratégie suivie + 10 dernières vérifiées
     // de cette configuration (la base n'en garde jamais plus de 10 : la plus
     // ancienne est supprimée dès qu'une nouvelle arrive).
@@ -1447,9 +1486,9 @@ Faites-en bon usage !
             <div class="toolbar" style="margin-top:16px"><button class="button primary" onclick="saveAfterLoss()">Enregistrer</button></div></div>
         </div>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Stratégies suivies</span><h2 style="margin-top:7px">${trackers.length} stratégie(s)</h2></div></div>
-          <div id="ssCards">${suitStreakCardsHtml()}</div></section>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers envois combinés</h2></div></div>
-          ${history.length ? `<table><thead><tr><th>Source</th><th>Déclenché par</th><th>Mode</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${esc(h.triggeredBy || '—')}</td><td>${h.mode === 'inverse' ? 'Inverse' : h.mode === 'meme' ? 'Même costume' : 'Relais'}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun envoi combiné pour le moment.</div>'}</section>`;
+          <div id="alCards">${afterLossCardsHtml()}</div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers relais envoyés</h2></div></div>
+          ${history.length ? `<table><thead><tr><th>Source</th><th>Catégorie</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${h.category ? esc('Cat. ' + h.category) : '—'}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun relais envoyé pour le moment.</div>'}</section>`;
     }
     function addCombinedTrackerModal() {
       const opts = optsHtmlGlobal(snapshot.combined?.options || []);
@@ -4156,14 +4195,14 @@ Faites-en bon usage !
         return `<br><span class="small muted">${bits.map(x => esc(x)).join(' · ')}</span>${d.lastError ? `<br><span class="small" style="color:var(--danger,#d33)">Erreur Telegram : ${esc(d.lastError)}</span>` : ''}<br><button type="button" class="button small ghost lr-test" data-id="${esc(ch.id)}" style="margin-top:4px">Tester les 4 emojis</button>`;
       };
       const rows = all.length ? all.map(ch => { const pr = (p.progress || {})[String(ch.id)]; return `<label class="check" style="align-items:flex-start;margin:8px 0"><input type="checkbox" class="lr-ch" value="${esc(ch.id)}" ${checked.includes(String(ch.id)) ? 'checked' : ''} ${checked.length >= 4 && !checked.includes(String(ch.id)) ? 'disabled' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}${pr ? `<br><span class="small muted">${[1, 2, 3, 4].map(n => esc(lrState(n, pr[n]))).join(' · ')}</span>` : ''}${lrTypeStats(ch.id)}${lrDiag(ch)}</span></label>`; }).join('')
-        : '<p class="small muted">Aucun canal actif dans « Test ». Crée d’abord une configuration Test avec son canal Telegram.</p>';
+        : '<p class="small muted">Aucun canal connu pour l’instant. Ajoute un canal avec son identifiant ci-dessous.</p>';
       const hist = (p.history || []).slice(0, 8).map(h => `<div class="small"><span class="tag mono">${esc(h.emoji)}</span> Type ${esc(String(h.type))} · #N${esc(String(h.target ?? ''))} ${esc(h.suit || '')} · <span class="mono">${esc(String(h.chatId))}</span></div>`).join('');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Réactions automatiques</span><h2 style="margin-top:7px">J'aime</h2><p class="small">Choisis au plus 4 canaux actifs configurés dans « Test ». Le bot suit les prédictions de ces canaux et ajoute l'emoji du type déclenché : ${[1, 2, 3, 4].map(n => `<b>Type ${n}</b> ${esc(emojis[n])}`).join(' · ')}. Le bilan indique, par type, les prédictions vérifiées, gagnées, perdues et le taux de réussite.</p></div><div class="toolbar"><button class="button ghost" onclick="likeReactRescan()">Revérifier les canaux</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Réactions automatiques</span><h2 style="margin-top:7px">J'aime</h2><p class="small">Choisis au plus 4 canaux à suivre (n'importe quel canal où le bot envoie des prédictions, ou ajoute-le avec son identifiant). Le bot suit les prédictions de ces canaux et ajoute l'emoji du type déclenché : ${[1, 2, 3, 4].map(n => `<b>Type ${n}</b> ${esc(emojis[n])}`).join(' · ')}. Le bilan indique, par type, les prédictions vérifiées, gagnées, perdues et le taux de réussite.</p></div><div class="toolbar"><button class="button ghost" onclick="likeReactRescan()">Revérifier les canaux</button></div></div>
         <div class="panel"><label class="check"><input id="lrEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''}> Activer « J'aime »</label>
           <p class="small muted" style="margin:8px 0 0">Type 1 : deux prédictions de même costume de suite, puis dès que ce costume est prédit à nouveau → ${esc(emojis[1])}. Type 2 : même série, la prédiction suivante → ${esc(emojis[2])}. Type 3 : après 2 pertes, la suivante → ${esc(emojis[3])}. Type 4 : après 1 perte, la suivante → ${esc(emojis[4])}. Si plusieurs types se déclenchent sur la même prédiction, un seul emoji est mis (le plus petit numéro). Le bot doit être administrateur du canal et les réactions doivent y être autorisées. Les statistiques commencent quand le canal est suivi ; les prédictions antérieures ne sont pas recalculées.</p>
           ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Canaux Test actifs</span><h2 style="margin-top:7px">${all.length} canal(aux) · ${checked.length}/4 coché(s)</h2></div></div>
-          <div class="panel"><div id="lrList" style="max-height:360px;overflow:auto">${rows}</div>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Canaux à suivre</span><h2 style="margin-top:7px">${all.length} canal(aux) · ${checked.length}/4 coché(s)</h2></div></div>
+          <div class="panel"><div class="field"><label>Ajouter un canal à suivre (ID -100… ou @nomducanal)</label><div style="display:flex;gap:8px"><input id="lrAddId" placeholder="-1001234567890 ou @nomducanal" style="flex:1"><button type="button" class="button small primary" onclick="addLikeReactChannel()">Ajouter</button></div></div><div id="lrList" style="max-height:360px;overflow:auto">${rows}</div>
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveLikeReact()">Enregistrer</button></div></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Dernières réactions</span><h2 style="margin-top:7px">${esc(String(p.reactedCount || 0))} au total</h2></div></div>
           <div class="panel">${hist || '<span class="small muted">Aucune réaction pour le moment.</span>'}</div></section>`;
@@ -4216,6 +4255,20 @@ Faites-en bon usage !
       const boot = () => { new MutationObserver(run).observe(document.body, { childList: true, subtree: true }); run(); };
       if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot);
     })();
+    // ajoute un canal saisi à la main (n'importe quel canal où le bot envoie des prédictions) et le coche tout de suite
+    async function addLikeReactChannel() {
+      const raw = (document.getElementById('lrAddId')?.value || '').trim();
+      if (!raw) { toast('Saisis l’identifiant du canal.', 'error'); return; }
+      const id = raw.replace(/^https?:\/\/t\.me\//i, '@');
+      const checked = [...document.querySelectorAll('.lr-ch:checked')].map(x => x.value);
+      if (checked.some(x => String(x).toLowerCase() === id.toLowerCase())) { toast('Ce canal est déjà suivi.', 'error'); return; }
+      if (checked.length >= 4) { toast('J’aime peut suivre au maximum 4 canaux.', 'error'); return; }
+      try {
+        await api('/api/like-react/config', 'POST', { enabled: !!document.getElementById('lrEnabled')?.checked, channels: [...checked, id] });
+        await refresh(); likeReactPage();
+        toast('Canal ajouté et suivi.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
     async function saveLikeReact() {
       const channels = [...document.querySelectorAll('.lr-ch:checked')].map(x => x.value);
       const scroll = document.getElementById('lrList')?.scrollTop || 0;
@@ -4362,23 +4415,33 @@ Faites-en bon usage !
     // --- fonctions de « Prédiction après perte » et « Prédiction combinée » (manquaient dans cette page) ---
     async function addAfterLossTracker() {
       const key = val('newTrackerKey');
-      const triggers = readAfterLossTriggers('new');
-      const repeat = readAfterLossRepeat('new');
-      const streak = readAfterLossStreak('new');
-      const decade = readAfterLossDecade('new');
+      const category = Number(val('new-category')) || 0;
+      const blocks = readAfterLossCategoryBlocks('new', category);
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
-      try { await api('/api/after-loss/trackers', 'POST', { key, triggers, repeat, streak, decade, channels, siteChannelId, format }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
-      catch (e) { toast(e.message, 'error'); }
+      const name = val('new-name');
+      const body = { key, category, name, ...blocks, channels, siteChannelId, format };
+      try { await api('/api/after-loss/trackers', 'POST', body); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+      catch (e) {
+        // configuration identique à une autre déjà suivie : confirmation avant de créer quand même
+        if (e.status === 409 && e.data && e.data.code === 'DUPLICATE_CONFIG') {
+          const list = (e.data.conflicts || []).map(c => `• ${c.name || c.id || c}`).join('\n');
+          if (confirm(`${e.message}\n\n${list}\n\nCréer quand même ?`)) {
+            try { await api('/api/after-loss/trackers', 'POST', { ...body, force: true }); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
+            catch (e2) { toast(e2.message, 'error'); }
+          }
+          return;
+        }
+        toast(e.message, 'error');
+      }
     }
     function addAfterLossTrackerModal() {
       const opts = (snapshot.afterLoss?.options || []).map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('');
       openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot ou la stratégie IA, puis coche au moins un type de résultat déclencheur et le N à attendre pour chacun.</p></div></div>
         <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
-        ${afterLossTriggerRows('new', { perdue: { enabled: true, n: 0 } })}
-        ${afterLossRepeatRow('new', { enabled: false, lead: 5 })}
-        ${afterLossStreakRow('new', null, snapshot.formatCount)}
-        ${afterLossDecadeRow('new', null, snapshot.formatCount)}
+        <div class="field"><label>Catégorie</label><select id="new-category" onchange="afterLossCategoryChanged('new', null)">${afterLossCategoryOptions(2, false)}</select><p class="small muted" id="new-catAbout" style="margin:6px 0 0">${esc(afterLossCategoryAbout(2))}</p></div>
+        <div id="new-blocks">${afterLossCategoryBlocks('new', 2, null)}</div>
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
+        ${afterLossNameRow('new', '')}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     function combinedChannelFormatRow(prefix, tracker) {
@@ -4491,12 +4554,11 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
     async function updateAfterLossTriggers(id) {
-      const triggers = readAfterLossTriggers('trk-' + id);
-      const repeat = readAfterLossRepeat('trk-' + id);
-      const streak = readAfterLossStreak('trk-' + id);
-      const decade = readAfterLossDecade('trk-' + id);
-      const { channels, siteChannelId, format } = readAfterLossChannelFormat('trk-' + id);
-      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { triggers, repeat, streak, decade, channels, siteChannelId, format }); await refresh(); afterLossPage(); toast('Déclencheurs mis à jour.'); }
+      const category = Number(val(`trk-${id}-category`)) || 0;
+      const blocks = readAfterLossCategoryBlocks('trk-' + id, category);
+      const { channels, siteChannelId, format, maxR } = readAfterLossChannelFormat('trk-' + id);
+      const name = val(`trk-${id}-name`);
+      try { await api(`/api/after-loss/trackers/${encodeURIComponent(id)}`, 'PUT', { category, name, ...blocks, channels, siteChannelId, format, maxR }); await refresh(); afterLossPage(); toast('Réglages enregistrés.'); }
       catch (e) { toast(e.message, 'error'); }
     }
 
