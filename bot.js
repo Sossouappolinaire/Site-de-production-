@@ -23,6 +23,7 @@ const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
+const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
 const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
@@ -200,8 +201,8 @@ const HELP =
   '*Prédiction*\n' +
   '/setb <n> — compteur B (apparitions consécutives max)\n' +
   '/setmaxr <n> — nombre de rattrapages vérifiés\n' +
-  '/setformat <1-87> — style du message de prédiction (87 = nouveau format)\n' +
-  '/formats [page] — liste des 87 styles (80-83 pair/impair, 84-86 ombre, 87 nouveau format)\n' +
+  '/setformat <1-101> — style du message de prédiction\n' +
+  '/formats [page] — liste des 101 styles\n' +
   '/apercu <n> — aperçu complet d\'un style (⌛ / ✅ / ❌)\n' +
   '/settemplate <texte> — style personnalisé ({game} {emoji} {suit} {status} {maxR})\n' +
   '/notemplate — revenir au style numéroté\n\n' +
@@ -334,7 +335,7 @@ function installChannelGuard(inst) {
   const edit = inst.editMessageText.bind(inst);
   inst.sendMessageUnguarded = send;
   inst.sendMessage = function guardedSend(chatId, ...rest) {
-    if (predictionControl.isChannelPaused(chatId)) {
+    if (predictionControl.isChannelPaused(chatId) || gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
     // prédiction « en cours » → animation du statut (status-animator.js)
@@ -2021,6 +2022,8 @@ async function tick() {
       dizaineTop.tick(),
       // « Meilleur + plus faible » : vérification des messages à deux costumes (voir best-weak-top.js)
       Promise.resolve(bestWeakTop.tick()),
+      // « Stabilité du jeu » : 7 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
+      Promise.resolve(gameStability.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
       // multiples (voir costume-faible-top.js).
       costumeFaibleTop.tick(),
@@ -2218,6 +2221,7 @@ async function applyDbConfigs() {
   await suitStreak.restoreFromDb();
   await dizaineTop.restoreFromDb();
   await bestWeakTop.restoreFromDb();
+  await gameStability.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
   await copyAnnounce.restoreFromDb();
@@ -2285,6 +2289,9 @@ async function startLoop() {
   dizaineTop.restore();
   bestWeakTop.restore();
   bestWeakTop.setSender(senderFor);
+  gameStability.restore();
+  gameStability.setSender(senderFor);
+  gameStability.setAdminId(() => state.adminId);
   costumeFaibleTop.restore();
   midnightReset.restore();
   midnightReset.setSender(senderFor);

@@ -344,21 +344,27 @@ async function processKey(key) {
     }
 
     // Série de même costume : le costume prédit est connu dès que la cible
-    // est fixée, pas besoin d'attendre le résultat.
-    if (pred.suit) {
+    // est fixée, pas besoin d'attendre le résultat. Chaque prédiction n'est
+    // comptée qu'UNE fois (suitSeenTarget), même si on la revoit « en attente ».
+    if (pred.suit && pred.target > (tr.suitSeenTarget || 0)) {
+      tr.suitSeenTarget = pred.target;
       if (pred.suit === tr.lastSuit) tr.suitStreak += 1; else { tr.lastSuit = pred.suit; tr.suitStreak = 1; }
-    }
-    if (panel.suitNeed && tr.suitStreak >= panel.suitNeed) {
-      tr.lastSeenTarget = pred.target;
-      tr.remaining = panel.suitRelay;
-      tr.armedKind = 'costume';
-      tr.suitStreak = 0;
-      tr.lossStreak = 0;
-      continue; // le relais démarre à la PROCHAINE prédiction, pas celle-ci
+      if (panel.suitNeed && tr.suitStreak >= panel.suitNeed) {
+        tr.lastSeenTarget = pred.target;
+        tr.remaining = panel.suitRelay;
+        tr.armedKind = 'costume';
+        tr.suitStreak = 0;
+        tr.lossStreak = 0;
+        continue; // le relais démarre à la PROCHAINE prédiction, pas celle-ci
+      }
     }
 
     // Série de pertes : il faut attendre le résultat de chaque prédiction.
-    if (pred.status === 'en attente') { tr.lastSeenTarget = pred.target; continue; }
+    // CORRECTIF : une prédiction « en attente » n'est PAS marquée comme vue —
+    // on s'arrête ici et on la traite au prochain tour, une fois son résultat
+    // connu (avant, elle était marquée vue trop tôt et sa perte n'était jamais
+    // comptée : la série de pertes ne se déclenchait jamais en fonctionnement réel).
+    if (pred.status === 'en attente') break;
     tr.lastSeenTarget = pred.target;
     if (pred.status === 'perdu') tr.lossStreak += 1;
     else if (pred.status === 'gagné') tr.lossStreak = 0;
@@ -427,7 +433,7 @@ async function verifyPending() {
 setOnShoeReset(() => {
   for (const key of Object.keys(panel.trackers)) {
     const tr = panel.trackers[key];
-    tr.lastSeenTarget = 0; tr.lossStreak = 0; tr.suitStreak = 0; tr.lastSuit = null;
+    tr.lastSeenTarget = 0; tr.suitSeenTarget = 0; tr.lossStreak = 0; tr.suitStreak = 0; tr.lastSuit = null;
     tr.remaining = 0; tr.armedKind = null;
   }
   for (const entry of panel.pendingMessages) {

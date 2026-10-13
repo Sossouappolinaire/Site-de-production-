@@ -19,6 +19,27 @@
 //   Un costume pas encore sorti affiche ⏳ tant que l'autre est vérifié ; un costume jamais sorti dans les rattrapages
 //   affiche ❌. La configuration compte UNE victoire dès que l'un des costumes sort, une perte si aucun ne sort.
 //
+// ─── Mode « relance » (🔄 Relance +3) : choisir 1, 2 ou 3 des 4 meilleurs, relancer à +3 ce qui n'est pas sorti ─────
+//   « Créer » → stratégie (Dizaine ou Costume faible) → ID du canal, rattrapages, et 1, 2 ou 3 costumes parmi les 4
+//   (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés, le message est le même que le mode « multi » :
+//
+//       ♣️ 95% ─────┐
+//                   ├ N°1135
+//       ♦️ 94% ─────┘
+//
+//   Règle : si un costume est sorti directement (✅0️⃣) au jeu N ET que l'autre n'est toujours pas sorti au jeu N+1, le MÊME
+//   message est édité : on y ajoute seulement le numéro de la relance (N+3), le costume pas venu reste ⏳ :
+//
+//       ♣️✅0️⃣ 95% ─────┐
+//                   ├ N°1135
+//                   ├ N°1138
+//       ♦️⏳ 94% ─────┘
+//
+//   Pas de relance si les deux costumes sortent, si l'autre sort à N ou N+1, ou si aucun ne sort directement (perdu, ou un
+//   seul costume sorti à un rattrapage). Si l'autre sort à N+2 (avant N+3), le N° de la relance est retiré du message.
+//   Avec 3 costumes, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Sans rattrapage (0),
+//   on ne peut pas attendre N+1 : la relance part dès le jeu N.
+//
 // ─── Mode « détection auto » (🔎) : trouver tout seul les canaux qui publient ce format à deux costumes ────────────
 //       ♦️ 100%─────┐
 //                   ├ N°1438            (avec ou sans résultats ✅0️⃣ / ❌ déjà édités dans le message)
@@ -83,7 +104,10 @@ const TZ = process.env.RESET_TZ || 'Africa/Abidjan';
 const KEYCAP = (n) => `${Number(n)}\uFE0F\u20E3`;
 const dayKey = (ts = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
 
-const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan']; // + « multi » (par défaut)
+const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance']; // + « multi » (par défaut)
+const RELAUNCH_OFFSET = 3;   // mode relance : le costume pas sorti est relancé à N+3
+const RELAUNCH_MAX_DEPTH = 3; // relances en chaîne (3 costumes → 2 puis 1)
+const RELAUNCH_DEFAULT_RANKS = [1, 2];
 const SRC_MODES = ['follow', 'scan'];                          // modes qui surveillent des canaux sources (c.sources)
 const DETECT_MAX = 200;                                         // canaux détectés conservés
 
@@ -127,12 +151,19 @@ const sanitizeMode = (v) => (MODES.includes(v) ? v : 'multi');
 const sanitizeFormat = (v) => fmt.clampFormat(v);
 const sanitizeName = (v) => String(v == null ? '' : v).trim().slice(0, 60);
 const modeOf = (c) => (c && MODES.includes(c.mode) ? c.mode : 'multi');
-const simpleMode = (c) => modeOf(c) !== 'multi'; // tout sauf « multi » : message simple au format choisi
+const multiLike = (c) => modeOf(c) === 'multi' || modeOf(c) === 'relance'; // messages à plusieurs costumes (♦️ 95% ─┐ / N° / ♣️ 94% ─┘)
+const simpleMode = (c) => !multiLike(c); // tout sauf « multi » et « relance » : message simple au format choisi
+const hasRanksMode = (m) => m === 'multi' || m === 'test' || m === 'relance';
+const defaultRanks = (m) => (m === 'test' ? TEST_DEFAULT_RANKS : m === 'relance' ? RELAUNCH_DEFAULT_RANKS : DEFAULT_RANKS).slice();
 const srcMode = (c) => SRC_MODES.includes(modeOf(c));
 // rangs choisis (mode multi) : au moins 2, au plus 4, parmi 1 (meilleur) · 2 · 3 · 4 (plus faible)
-function sanitizeRanks(v) {
+function sanitizeRanks(v, mode) {
   const list = Array.isArray(v) ? v : String(v == null ? '' : v).split(/[\s,;]+/);
   const out = [...new Set(list.map((x) => parseInt(x, 10)).filter((n) => n >= 1 && n <= 4))].sort((a, b) => a - b);
+  if (mode === 'relance') { // relance : 1, 2 ou 3 costumes parmi les 4 meilleurs
+    if (out.length < 1 || out.length > 3) throw new Error('Coche 1, 2 ou 3 costumes parmi les 4 meilleurs.');
+    return out;
+  }
   if (out.length < 2) throw new Error('Coche au moins 2 costumes (meilleur, 2ᵉ, 3ᵉ ou plus faible).');
   return out;
 }
@@ -160,7 +191,7 @@ function applySaved(saved) {
       maxR: sanitizeMaxR(c.maxR), format: sanitizeFormat(c.format),
       cycleRole: CYCLE_ORDER.includes(Number(c.cycleRole)) ? Number(c.cycleRole) : 1, cycleWaiting: !!c.cycleWaiting,
       cycleDone: Array.isArray(c.cycleDone) ? c.cycleDone.map(Number).filter((r) => CYCLE_ORDER.includes(r)) : [],
-      ranks: (mode !== 'multi' && mode !== 'test') ? [] : (() => { try { return sanitizeRanks(c.ranks); } catch (_) { return (mode === 'test' ? TEST_DEFAULT_RANKS : DEFAULT_RANKS).slice(); } })(),
+      ranks: !hasRanksMode(mode) ? [] : (() => { try { return sanitizeRanks(c.ranks, mode); } catch (_) { return defaultRanks(mode); } })(),
       enabled: c.enabled !== false, sentCount: Number(c.sentCount) || 0, wins: Number(c.wins) || 0, losses: Number(c.losses) || 0, lastSentAt: c.lastSentAt || null,
       lossGate: mode === 'test' && !!c.lossGate, gateFrom: [1, 2, 3, 4].includes(Number(c.gateFrom)) ? Number(c.gateFrom) : null,
     };
@@ -188,7 +219,7 @@ async function restoreFromDb() {
 // ---------------------------------------------------------------------------
 // Configurations + ANTI-DOUBLONS DE CONFIGURATION
 // ---------------------------------------------------------------------------
-const configKey = (c) => `${modeOf(c)}|${c.strategy}|${(modeOf(c) === 'multi' || modeOf(c) === 'test') ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}${modeOf(c) === 'test' && c.lossGate ? '|gate' : ''}`;
+const configKey = (c) => `${modeOf(c)}|${c.strategy}|${hasRanksMode(modeOf(c)) ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}${modeOf(c) === 'test' && c.lossGate ? '|gate' : ''}`;
 const shareChannel = (a, b) => { const mine = new Set((a.channels || []).map(String)); return (b.channels || []).some((ch) => mine.has(String(ch))); };
 function findDuplicate(cfg, excludeId) {
   return panel.configs.find((o) => o.id !== excludeId && configKey(o) === configKey(cfg) && shareChannel(o, cfg)) || null;
@@ -218,9 +249,9 @@ function addConfig(input = {}) {
   const channels = parseChannels(input.channels);
   if (!channels.length) throw new Error('Renseigne au moins un ID de canal.');
   const cfg = {
-    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto' }[mode] || ''),
+    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto', relance: 'Relance +3' }[mode] || ''),
     strategy, channels, sources, rot: {}, maxR: sanitizeMaxR(input.maxR), format: sanitizeFormat(input.format),
-    ranks: (mode !== 'multi' && mode !== 'test') ? [] : (input.ranks === undefined ? (mode === 'test' ? TEST_DEFAULT_RANKS : DEFAULT_RANKS).slice() : sanitizeRanks(input.ranks)),
+    ranks: !hasRanksMode(mode) ? [] : (input.ranks === undefined ? defaultRanks(mode) : sanitizeRanks(input.ranks, mode)),
     cycleRole: 1, cycleWaiting: false, cycleDone: [],
     enabled: true, sentCount: 0, wins: 0, losses: 0, lastSentAt: null,
     lossGate: mode === 'test' && !!input.lossGate, gateFrom: null,
@@ -241,8 +272,8 @@ function updateConfig(id, patch = {}) {
     if (patch.maxR !== undefined) c.maxR = sanitizeMaxR(patch.maxR);
     if (patch.name !== undefined) c.name = sanitizeName(patch.name) || c.name;
     if (patch.format !== undefined) c.format = sanitizeFormat(patch.format);
-    if (patch.ranks !== undefined && (modeOf(c) === 'multi' || modeOf(c) === 'test')) {
-      c.ranks = sanitizeRanks(patch.ranks);
+    if (patch.ranks !== undefined && hasRanksMode(modeOf(c))) {
+      c.ranks = sanitizeRanks(patch.ranks, modeOf(c));
       if (modeOf(c) === 'test' && !c.ranks.includes(Number(c.testRank))) c.testRank = c.ranks[0];
     }
     if (patch.lossGate !== undefined && modeOf(c) === 'test') { c.lossGate = !!patch.lossGate; c.gateFrom = null; }
@@ -255,8 +286,9 @@ function updateConfig(id, patch = {}) {
 function removeConfig(id) { panel.configs = panel.configs.filter((c) => c.id !== id); persist(); return true; }
 function setChannelTitle(id, title) { const k = String(id == null ? '' : id).trim(); if (!k || !title) return; panel.channelTitles[k] = String(title).slice(0, 120); persist(); }
 const enabledOf = (strategy, mode) => panel.configs.filter((c) => c.enabled && c.strategy === strategy && modeOf(c) === mode);
+const multiConfigs = (strategy) => panel.configs.filter((c) => c.enabled && c.strategy === strategy && multiLike(c)); // « multi » + « relance »
 // canaux qui reçoivent aujourd'hui des messages à plusieurs costumes (utile pour guider le choix du suivi)
-const hasMultiChannels = () => [...new Set(panel.configs.filter((c) => c.enabled && modeOf(c) === 'multi').flatMap((c) => c.channels.map(String)))];
+const hasMultiChannels = () => [...new Set(panel.configs.filter((c) => c.enabled && multiLike(c) && (c.ranks || []).length >= 2).flatMap((c) => c.channels.map(String)))];
 const hasEnabled = (strategy) => panel.configs.some((c) => c.enabled && c.strategy === strategy);
 
 // ---------------------------------------------------------------------------
@@ -286,16 +318,19 @@ function suitMark(s, anyDone) {
 const markWidth = (m) => (!m ? 0 : m === '⏳' || m === '❌' ? 2 : 4); // colonnes occupées en police à chasse fixe
 // items : [{ suit, pct, res? }] dans l'ordre meilleur → plus faible (2 à 4). Une barre verticale relie tous les traits, N° au milieu.
 // withResults : affiche le résultat de chaque costume (vérification), ex. « ♦️✅0️⃣ 100%─────┐ »
-function predictionText(target, items, withResults) {
-  const anyDone = !!withResults && items.some((s) => s.res !== undefined && s.res !== null);
+function predictionText(target, items, withResults, forcePending, extraTargets) {
+  const anyDone = !!withResults && (!!forcePending || items.some((s) => s.res !== undefined && s.res !== null));
   const marks = items.map((s) => (withResults ? suitMark(s, anyDone) : ''));
   const maxMark = Math.max(0, ...marks.map(markWidth));
   const line = (s, i) => `${s.suit}${marks[i]}${' '.repeat(maxMark - markWidth(marks[i]))} ${pctText(s.pct).padEnd(4)}─────`;
   const pad = ' '.repeat(2 + maxMark + 1 + 4 + 5); // largeur de « ♦️✅0️⃣ 100%───── »
   const k = items.length; let rows;
-  if (k === 2) rows = [`${line(items[0], 0)}┐`, `${pad}├ N°${target}`, `${line(items[1], 1)}┘`];
+  if (k === 1) rows = [`${pad}├ N°${target}`, `${line(items[0], 0)}┘`]; // un seul costume (ou le reste d'une relance)
+  else if (k === 2) rows = [`${line(items[0], 0)}┐`, `${pad}├ N°${target}`, `${line(items[1], 1)}┘`];
   else if (k === 3) rows = [`${line(items[0], 0)}┐`, `${line(items[1], 1)}┼ N°${target}`, `${line(items[2], 2)}┘`];
   else rows = [`${line(items[0], 0)}┐`, `${line(items[1], 1)}┤`, `${pad}├ N°${target}`, `${line(items[2], 2)}┤`, `${line(items[3], 3)}┘`];
+  // relance : chaque relance ajoute SEULEMENT son numéro (├ N°1138) juste au-dessus du dernier costume, dans le même message
+  if (Array.isArray(extraTargets) && extraTargets.length) rows.splice(rows.length - 1, 0, ...extraTargets.map((t) => `${pad}├ N°${t}`));
   return `<pre>${rows.join('\n')}</pre>`;
 }
 // message simple du mode « déclencheur » (même moteur de formats que les autres stratégies)
@@ -613,14 +648,14 @@ async function record(strategy, rank, data) {
       await handleCyclePrediction(strategy, rank, data).catch((e) => { panel.lastError = e.message; });
     }
     await handleTestPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
-    if (!validRank || !enabledOf(strategy, 'multi').length) return;
+    if (!validRank || !multiConfigs(strategy).length) return;
     const now = Date.now();
     for (const [k, v] of collector) if (now - v.at > 60 * 60 * 1000) collector.delete(k);
     const key = `${strategy}:${Number(data.target)}`;
     const slot = collector.get(key) || { at: now, ranks: {}, sent: new Set() };
     slot.ranks[rank] = { suit: data.suit, ref: data.ref, pct: Number.isFinite(Number(data.pct)) ? Number(data.pct) : null };
     collector.set(key, slot);
-    for (const cfg of enabledOf(strategy, 'multi').filter((c) => !slot.sent.has(c.id))) {
+    for (const cfg of multiConfigs(strategy).filter((c) => !slot.sent.has(c.id))) {
       const want = cfg.ranks && cfg.ranks.length ? cfg.ranks : DEFAULT_RANKS;
       if (!want.every((r) => slot.ranks[r])) continue; // tous les costumes cochés doivent avoir prédit ce même jeu
       slot.sent.add(cfg.id);
@@ -635,7 +670,7 @@ async function record(strategy, rank, data) {
           return it;
         });
         const entry = {
-          id: `bwp-${now}-${Math.random().toString(36).slice(2, 6)}`, configId: cfg.id, mode: 'multi', strategy, target: Number(data.target),
+          id: `bwp-${now}-${Math.random().toString(36).slice(2, 6)}`, configId: cfg.id, mode: modeOf(cfg), strategy, target: Number(data.target),
           suits: items, maxR: cfg.maxR, step: 0, gap: 0, skipped: 0, status: 'en attente', messages: [], createdAt: now, resolvedAt: null,
         };
         entry.messages = await sendToChannels(cfg, predictionText(entry.target, items), 'HTML');
@@ -643,7 +678,7 @@ async function record(strategy, rank, data) {
         panel.pending.push(entry); rememberSent(cfg.id, data.target);
         cfg.sentCount = (cfg.sentCount || 0) + 1; cfg.lastSentAt = now;
         panel.sentCount += 1; panel.lastSentAt = now; panel.lastError = null;
-        for (const mm of entry.messages) await onMultiSent(mm.chatId, entry).catch((e) => { panel.lastError = e.message; }); // mode « suivi »
+        if (entry.suits.length >= 2) for (const mm of entry.messages) await onMultiSent(mm.chatId, entry).catch((e) => { panel.lastError = e.message; }); // mode « suivi »
       } finally { inflight.delete(lock); }
     }
     persist();
@@ -657,9 +692,41 @@ function maxFinishedGameNumber() { let m = 0; for (const g of state.games.values
 // Mode « multi » : VÉRIFICATION DES DEUX COSTUMES (ou plus). Chaque costume a son propre résultat (s.res : numéro du rattrapage
 // où il est sorti, -1 = jamais sorti). Le message est édité à chaque nouveau résultat et garde tous les costumes.
 // La configuration compte une victoire dès que l'un des costumes sort, une perte seulement si aucun ne sort.
-function editMulti(entry) { editAll(entry, predictionText(entry.target, entry.suits, true), 'HTML'); }
+// Relance : la chaîne = message d'origine (racine) + relances successives (même message, on n'y ajoute que le N°)
+function relaunchChain(entry) {
+  let root = entry; const seen = new Set();
+  while (root.parentId && !seen.has(root.id)) { seen.add(root.id); const par = panel.pending.find((e) => e.id === root.parentId); if (!par) break; root = par; }
+  const chain = [root];
+  for (let guard = 0; guard < 10; guard++) { const last = chain[chain.length - 1]; const next = panel.pending.find((e) => e.parentId === last.id); if (!next) break; chain.push(next); }
+  return chain;
+}
+// résultat affiché d'un costume : celui du message d'origine, sinon celui de la relance qui le reprend (⏳ tant qu'elle est en cours)
+function chainRes(chain, suit) {
+  let res = null;
+  for (const e of chain) {
+    const s = e.suits.find((x) => x.suit === suit);
+    if (!s) break;
+    res = s.res;
+    if (res !== undefined && res !== null && res >= 0) break;
+  }
+  return res;
+}
+function editMulti(entry) {
+  const chain = relaunchChain(entry);
+  const root = chain[0];
+  if (chain.length === 1) { editAll(root, predictionText(root.target, root.suits, true, !!root.relaunch), 'HTML'); return; }
+  const items = root.suits.map((s) => ({ ...s, res: chainRes(chain, s.suit) }));
+  // une relance dont tous les costumes sont déjà sortis avant son jeu n'est plus affichée
+  const shown = chain.filter((e, i) => i > 0 && !e.suits.every((s) => chain.slice(0, i).some((p) => p.suits.some((x) => x.suit === s.suit && x.res >= 0))));
+  editAll(root, predictionText(root.target, items, true, true, shown.map((e) => `${e.target}${e.status === 'gagné' ? '✅' : e.status === 'perdu' ? '❌' : '⏳'}`)), 'HTML');
+}
 function verifyMulti(entry, cfg, maxDone) {
   let changed = false;
+  if (entry.relaunch && entry.status === 'en attente') { // le costume est sorti entre-temps (rattrapage du message d'origine) : relance sans objet
+    const chain = relaunchChain(entry); const idx = chain.indexOf(entry);
+    const prev = chain.slice(0, Math.max(0, idx));
+    if (entry.suits.every((s) => prev.some((e) => e.suits.some((x) => x.suit === s.suit && x.res >= 0)))) { entry.status = 'annulé'; entry.resolvedAt = Date.now(); return true; }
+  }
   const unresolved = () => entry.suits.filter((s) => s.res === undefined || s.res === null);
   let guard = 0;
   while (entry.status === 'en attente' && guard++ <= entry.maxR + entry.gap + 8) {
@@ -687,6 +754,12 @@ function verifyMulti(entry, cfg, maxDone) {
     }
     if (newly.length) editMulti(entry); // un costume vient de sortir : on affiche son résultat, l'autre reste en vérification
     if (!done) break; // validation anticipée : le tour n'est pas fini, les autres ne peuvent pas être déclarés perdus
+    // mode « relance » : un costume est sorti directement (✅0️⃣) au jeu N et l'autre n'est TOUJOURS pas sorti au jeu N+1 → relance à N+3.
+    // (si l'autre sort à N ou à N+1 : pas de relance ; sans rattrapage (0), on ne peut pas attendre N+1 : on relance au jeu N)
+    if (entry.mode === 'relance' && cfg && entry.step === Math.min(1, entry.maxR) && !entry.relaunched && rest.length && entry.suits.some((s) => s.res === 0)) {
+      entry.relaunched = true; changed = true;
+      try { sendRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; }
+    }
     if (entry.step >= entry.maxR) { // rattrapages épuisés : ceux qui ne sont pas sortis sont perdus
       for (const s of rest) s.res = -1;
       entry.status = entry.won ? 'gagné' : 'perdu'; entry.resolvedAt = Date.now(); changed = true;
@@ -698,13 +771,39 @@ function verifyMulti(entry, cfg, maxDone) {
   }
   return changed;
 }
+// Mode « relance » : le MÊME message est édité : on y ajoute seulement le numéro de la relance (├ N°1138) ; le costume qui n'est pas
+// encore sorti reste ⏳ et il est vérifié au jeu N+3 par une entrée « relance » (sans nouveau message).
+function sendRelaunch(cfg, parent, remaining) {
+  const depth = (Number(parent.depth) || 0) + 1;
+  if (depth > RELAUNCH_MAX_DEPTH || !remaining.length) return false;
+  const target = Number(parent.target) + RELAUNCH_OFFSET;
+  if (target <= maxFinishedGameNumber()) return false; // jeu déjà joué : trop tard
+  if (alreadySent(cfg.id, target)) { blocked(); return false; } // doublon de prédiction
+  const items = remaining.map((s) => {
+    const it = { suit: s.suit, pct: s.pct, ref: s.ref, rank: s.rank };
+    try { const p = pctProviders[cfg.strategy] && s.ref ? pctProviders[cfg.strategy](s.ref) : null; if (Number.isFinite(p)) it.pct = p; } catch (_) { /* dernier connu */ }
+    return it;
+  });
+  const now = Date.now();
+  const entry = {
+    id: `bwr-${now}-${Math.random().toString(36).slice(2, 6)}`, configId: cfg.id, mode: 'relance', strategy: cfg.strategy, target,
+    suits: items, maxR: cfg.maxR, step: 0, gap: 0, skipped: 0, status: 'en attente', messages: [], createdAt: now, resolvedAt: null,
+    relaunch: true, depth, parentId: parent.id, // messages : vide, le message d'origine est modifié
+  };
+  panel.pending.push(entry); rememberSent(cfg.id, target);
+  cfg.sentCount = (cfg.sentCount || 0) + 1; cfg.lastSentAt = now;
+  panel.lastError = null;
+  editMulti(entry); // ajoute « ├ N°{target} » dans le message d'origine
+  persist();
+  return true;
+}
 function verifyPending() {
   const maxDone = maxFinishedGameNumber();
   let changed = false;
   for (const entry of panel.pending) {
     if (entry.status !== 'en attente') continue;
-    if (entry.mode === 'multi') { if (verifyMulti(entry, panel.configs.find((c) => c.id === entry.configId), maxDone)) changed = true; continue; }
-    const isTrigger = entry.mode !== 'multi'; // message simple au format choisi (déclencheur, cycle, suivi, test, détection auto)
+    if (entry.mode === 'multi' || entry.mode === 'relance') { if (verifyMulti(entry, panel.configs.find((c) => c.id === entry.configId), maxDone)) changed = true; continue; }
+    const isTrigger = entry.mode !== 'multi' && entry.mode !== 'relance'; // message simple au format choisi (déclencheur, cycle, suivi, test, détection auto)
     let guard = 0;
     while (entry.status === 'en attente' && guard++ <= entry.maxR + entry.gap + 8) {
       const num = entry.target + entry.step + entry.gap;
@@ -768,7 +867,12 @@ async function test(id) {
     const o = triggerMessage({ format: cfg.format, target: 464, suits: [{ suit: '♦️' }], strategyName: cfg.name || (modeOf(cfg) === 'test' ? 'Test meilleur / 2ᵉ' : 'Déclencheur'), maxR: cfg.maxR, step: 0 }, 'en attente');
     msgs = await sendToChannels(cfg, `🧪 Test\n${o.text}`, o.parse_mode);
   } else {
-    msgs = await sendToChannels(cfg, `🧪 Test\n${predictionText(464, (cfg.ranks || DEFAULT_RANKS).map((r, i) => ({ suit: SUITS[i], pct: [85, 80, 78, 70][i] })))}`, 'HTML');
+    const sample = (cfg.ranks || DEFAULT_RANKS).map((r, i) => ({ suit: SUITS[i], pct: [85, 80, 78, 70][i] }));
+    msgs = await sendToChannels(cfg, `🧪 Test\n${predictionText(464, sample)}`, 'HTML');
+    if (modeOf(cfg) === 'relance' && sample.length >= 2) { // aperçu de la relance : le 1ᵉʳ est sorti, le reste est relancé à +3
+      sample[0].res = 0;
+      await sendToChannels(cfg, `🧪 Test (après ✅0️⃣ à N, l'autre pas sorti à N+1 : le même message reçoit le N° de la relance à +${RELAUNCH_OFFSET})\n${predictionText(464, sample, true, true, [`${464 + RELAUNCH_OFFSET}⏳`])}`, 'HTML');
+    }
   }
   return msgs.length ? { ok: true, sent: msgs.length } : { ok: false, error: panel.lastError || 'Envoi impossible' };
 }
@@ -778,7 +882,7 @@ function status() {
     strategies: STRATEGIES, rankLabels: RANK_LABELS, triggerLabel: TRIGGER_LABEL, cycleLabel: `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}`, formatCount: fmt.FORMAT_COUNT,
     configs: panel.configs.map((c) => ({
       ...c, mode: modeOf(c), strategyLabel: modeOf(c) === 'follow' ? 'Suivi des canaux cochés' : (modeOf(c) === 'scan' ? 'Détection auto des canaux' : STRATEGIES[c.strategy]), sourceNames: (c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)),
-      ranksLabel: modeOf(c) === 'follow' ? `Suit : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : modeOf(c) === 'scan' ? `Surveille : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')} · un costume ✅0️⃣ → l'autre à N+2` : modeOf(c) === 'trigger' ? TRIGGER_LABEL : (modeOf(c) === 'cycle' ? `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}` : (modeOf(c) === 'test' ? `Rangs : ${(c.ranks && c.ranks.length ? c.ranks : TEST_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' → ')} · rang suivant après une perte` : (c.ranks || DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + '))),
+      ranksLabel: modeOf(c) === 'follow' ? `Suit : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : modeOf(c) === 'scan' ? `Surveille : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')} · un costume ✅0️⃣ → l'autre à N+2` : modeOf(c) === 'trigger' ? TRIGGER_LABEL : (modeOf(c) === 'cycle' ? `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}` : (modeOf(c) === 'relance' ? `Costumes : ${(c.ranks && c.ranks.length ? c.ranks : RELAUNCH_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + ')} · un costume ✅0️⃣ → ce qui n'est pas sorti est relancé à N+${RELAUNCH_OFFSET}` : modeOf(c) === 'test' ? `Rangs : ${(c.ranks && c.ranks.length ? c.ranks : TEST_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' → ')} · rang suivant après une perte` : (c.ranks || DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + '))),
       testLabel: modeOf(c) === 'test' ? (c.lossGate ? (c.gateFrom ? `Perte du « ${RANK_LABELS[c.gateFrom]} » → prochaine source : ${RANK_LABELS[(c.ranks || TEST_DEFAULT_RANKS)[((c.ranks || TEST_DEFAULT_RANKS).indexOf(c.gateFrom) + 1) % (c.ranks || TEST_DEFAULT_RANKS).length]]}` : 'Envoi après une perte : en attente d’une perte parmi les rangs choisis') : `Prochaine source : ${RANK_LABELS[c.testRank] || RANK_LABELS[1]}`) : null,
       cycleLabel: modeOf(c) === 'cycle' ? (c.cycleWaiting ? 'Les 4 sont passées : en attente d’une perte parmi les 4' : `Suit actuellement : ${RANK_LABELS[c.cycleRole] || RANK_LABELS[1]}${(c.cycleDone || []).length ? ` (déjà passés : ${c.cycleDone.map((r) => RANK_LABELS[r]).join(', ')})` : ''}`) : null,
       channelNames: c.channels.map((id) => panel.channelTitles[String(id)] || String(id)),

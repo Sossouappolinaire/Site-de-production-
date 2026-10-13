@@ -493,6 +493,44 @@ rattrapages, format de prédiction, nom) :
 Anti-doublons : deux configurations identiques (même type, stratégie, costumes et un canal en commun) sont refusées /
 fusionnées au chargement ; une configuration n'envoie jamais deux fois la prédiction du même jeu (mémoire persistée).
 
+### 🔄 Relance +3 (bouton « Relance +3 », page `/#/relance`)
+
+« Créer » → stratégie (Dizaine ou Costume faible) → ID du canal Telegram, rattrapages, nom, puis **1, 2 ou 3 costumes** à cocher
+parmi les 4 meilleurs (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés :
+
+    ♣️ 95% ─────┐
+                ├ N°1135
+    ♦️ 94% ─────┘
+
+**Règle** : si un costume sort **directement (✅0️⃣)** au jeu N **et** que l'autre n'est toujours pas sorti au jeu **N+1**, le **même
+message** est édité : on y ajoute seulement le numéro de la relance (N+3) ; le costume pas venu reste ⏳ :
+
+    ♣️✅0️⃣ 95% ─────┐
+                    ├ N°1135
+                    ├ N°1138⏳
+    ♦️⏳   94% ─────┘
+
+- **Pas de relance** : les deux costumes sortent ; l'autre sort à N ou à N+1 ; les deux sont perdus (❌) ; un seul sort à un rattrapage (✅2️⃣…) sans être sorti directement.
+- L'autre sort à N+2 (avant N+3) : le numéro de la relance est retiré du message. Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort à N+3 : ♦️✅0️⃣ ; jamais : ♦️❌.
+- Avec 3 costumes, la relance en contient 2, même règle pour la suite (3 relances au maximum). Sans rattrapage (0), la relance part dès le jeu N.
+- La relance compte comme une prédiction à part dans les gagnés / perdus de la configuration.
+- Avec 1 seul costume, pas de relance. Une configuration n'envoie jamais deux messages pour le même numéro de jeu.
+- Code : `best-weak-top.js` (mode `relance`, `sendRelaunch`, constante `RELAUNCH_OFFSET = 3`) ; mêmes routes `/api/best-weak/configs` avec `{ "mode": "relance", "ranks": [1, 2] }`.
+  Exportée / importée avec le reste du panneau « Meilleur + plus faible ».
+
+## 🛡️ Stabilité du jeu (page `/#/stability`, désactivée par défaut)
+
+Fonction **globale**, à activer sur la page « Stabilité » (aucun envoi ni blocage tant qu'elle est désactivée). Code : `game-stability.js`.
+- **Règle** : le jeu est *stable* quand, sur **7 jeux analysés** (fenêtre glissante, les mêmes jeux que l'Analyseur IA, main du joueur), les 4 costumes
+  ♣️ ♦️ ♠️ ❤️ sont sortis au moins une fois chez le joueur ; sinon il est *instable*. Moins de 7 jeux (début de sabot) : pas de jugement.
+- **Chat privé uniquement** (ADMIN_ID, jamais un canal) : « ⚠️ Jeu instable » dès que l'instabilité commence, « ✅ Jeu de nouveau stable » avec la
+  durée de l'instabilité, et un **bilan de stabilité toutes les heures** (à l'heure pile, fuseau `RESET_TZ`) : de tel jeu à tel jeu stable, de tel jeu à tel jeu instable.
+- **Blocage** : si le jeu reste instable **10 min**, l'envoi des nouveaux messages est suspendu **1 h** dans les canaux cochés sur la page (toutes les
+  configurations de tous les boutons). Les messages déjà publiés continuent d'être vérifiés / édités. Après l'heure, l'envoi reprend ; si le jeu est encore
+  instable, un nouveau blocage n'intervient qu'après 10 nouvelles minutes. Bouton « Lever le blocage » sur la page.
+- Le blocage passe par le garde central des envois de `bot.js` (comme l'arrêt par canal) : le chat privé n'est jamais bloqué.
+- API : `GET /api/stability`, `POST /api/stability/enabled`, `POST /api/stability/channels`, `POST /api/stability/release`. Réglages exportés / importés (panneau `gameStability`).
+
 ### Suivi des canaux (👁️)
 
 Carte « Suivre des canaux » à l'accueil (et page Stratégies) : confirmation → liste de tous les canaux (ID + nom) qui

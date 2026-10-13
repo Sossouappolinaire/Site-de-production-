@@ -45,6 +45,7 @@ const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
+const gameStability = require('./game-stability');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
 const betType = require('./bet-type');
@@ -397,6 +398,7 @@ app.get('/api/state', async (req, res) => {
     suitStreak: suitStreak.status(),
     dizaineTop: dizaineTop.status(),
     bestWeakTop: bestWeakTop.status(),
+    gameStability: gameStability.status(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
@@ -1901,6 +1903,21 @@ app.put('/api/best-weak/configs/:id', async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.delete('/api/best-weak/configs/:id', (req, res) => { bestWeakTop.removeConfig(req.params.id); res.json(bestWeakTop.status()); });
+// « Stabilité du jeu » (voir game-stability.js) : désactivée par défaut ; le blocage se choisit canal par canal
+app.get('/api/stability', (req, res) => res.json({ ...gameStability.status(), channels: configuredChannelList() }));
+app.post('/api/stability/enabled', (req, res) => {
+  gameStability.setEnabled(!!(req.body && req.body.enabled));
+  res.json({ ...gameStability.status(), channels: configuredChannelList() });
+});
+app.post('/api/stability/channels', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (Array.isArray(b.ids)) gameStability.setBlockChannels(b.ids);
+    else gameStability.toggleChannel(b.id, !!b.enabled);
+    res.json({ ...gameStability.status(), channels: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/stability/release', (req, res) => { gameStability.releaseBlock(); res.json(gameStability.status()); });
 app.post('/api/best-weak/configs/:id/test', async (req, res) => {
   const r = await bestWeakTop.test(req.params.id);
   res.status(r.ok ? 200 : 400).json(r);
