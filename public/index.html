@@ -1914,7 +1914,7 @@ Faites-en bon usage !
     // 🔄 « Relance +3 » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
     // celui qui n'est pas venu est relancé dans un nouveau message à N+3 (voir best-weak-top.js, mode « relance »)
     // -------------------------------------------------------------------
-    const BW_RELANCE_DEMO = ['♣️ 95% ─────┐', '            ├ N°1135', '♦️ 94% ─────┘', '', '↓ ♣️ sort directement et ♦️ n’est pas sorti à N+1', '', '♣️✅0️⃣ 95% ─────┐', '                ├ N°1135', '                ├ N°1138⏳', '♦️⏳   94% ─────┘'].join('\n');
+    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort directement et ♦️ n’est pas sorti à N+1', '', '♣️✅0️⃣ 95%', ' ┣━ N°1135', ' ┣━ N°1138⏳', '♦️⏳ 94%'].join('\n');
     function relancePage() {
       setNav('relance');
       const p = snapshot.bestWeakTop || {};
