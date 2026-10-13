@@ -55,9 +55,9 @@ Le bot repère tout seul les canaux qui publient le format à deux costumes :
 Après vérification, le message garde les deux costumes avec leur résultat respectif (rattrapages jusqu'au nombre configuré) :
 
 ```
-♦️✅0️⃣ 100%─────┐
-            ├ N°1438
-♣️✅3️⃣ 92% ─────┘
+♦️✅0️⃣ 100%
+ ┣━ N°1438
+♣️✅3️⃣ 92%
 ```
 
 Un costume encore en vérification affiche ⏳, un costume jamais sorti affiche ❌. La configuration compte une victoire dès
@@ -471,9 +471,9 @@ Bouton **🎯 Meilleur + plus faible** dans la page Stratégies. « Créer » de
 (Dizaine ou Costume faible), puis l'ID du canal et le nombre de rattrapages. Quand la meilleure configuration du jour et
 le plus faible (4ᵉ du classement) de cette stratégie prédisent le **même numéro de jeu**, le bot envoie :
 
-    ♦️ 85% ─────┐
-                ├ N°464
-    ❤️ 78% ─────┘
+    ♦️ 85%
+     ┣━ N°464
+    ❤️ 78%
 
 (pourcentage = taux de réussite du jour). Après vérification (main du joueur, avec les rattrapages), le message est
 modifié : on garde le costume sorti (`⚜️ #464 | ♦️ | ✅0️⃣`), les deux s'ils sortent ensemble, ou `⚜️ #464 | ♦️ ❤️ | ❌`.
@@ -498,17 +498,17 @@ fusionnées au chargement ; une configuration n'envoie jamais deux fois la préd
 « Créer » → stratégie (Dizaine ou Costume faible) → ID du canal Telegram, rattrapages, nom, puis **1, 2 ou 3 costumes** à cocher
 parmi les 4 meilleurs (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés :
 
-    ♣️ 95% ─────┐
-                ├ N°1135
-    ♦️ 94% ─────┘
+    ♣️ 95%
+     ┣━ N°1135
+    ♦️ 94%
 
 **Règle** : si un costume sort **directement (✅0️⃣)** au jeu N **et** que l'autre n'est toujours pas sorti au jeu **N+1**, le **même
 message** est édité : on y ajoute seulement le numéro de la relance (N+3) ; le costume pas venu reste ⏳ :
 
-    ♣️✅0️⃣ 95% ─────┐
-                    ├ N°1135
-                    ├ N°1138⏳
-    ♦️⏳   94% ─────┘
+    ♣️✅0️⃣ 95%
+     ┣━ N°1135
+     ┣━ N°1138⏳
+    ♦️⏳ 94%
 
 - **Pas de relance** : les deux costumes sortent ; l'autre sort à N ou à N+1 ; les deux sont perdus (❌) ; un seul sort à un rattrapage (✅2️⃣…) sans être sorti directement.
 - L'autre sort à N+2 (avant N+3) : le numéro de la relance est retiré du message. Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort à N+3 : ♦️✅0️⃣ ; jamais : ♦️❌.

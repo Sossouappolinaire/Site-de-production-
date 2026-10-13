@@ -1272,7 +1272,7 @@
         "losses": 0,
         "format": 1,
         "sentCount": 2,
-        "lastSentAt": 1791920405498
+        "lastSentAt": 1791925353459
       }
     ],
     "pending": [
@@ -1313,13 +1313,13 @@
             "messageId": 1
           }
         ],
-        "createdAt": 1791920405471,
-        "resolvedAt": 1791920405485,
+        "createdAt": 1791925353432,
+        "resolvedAt": 1791925353446,
         "won": true,
         "relaunched": true
       },
       {
-        "id": "bwr-1791920405477-yfns",
+        "id": "bwr-1791925353439-87oe",
         "configId": "c1",
         "mode": "relance",
         "strategy": "dizaine",
@@ -1344,8 +1344,8 @@
         "skipped": 0,
         "status": "gagné",
         "messages": [],
-        "createdAt": 1791920405477,
-        "resolvedAt": 1791920405506,
+        "createdAt": 1791925353439,
+        "resolvedAt": 1791925353466,
         "relaunch": true,
         "depth": 1,
         "parentId": "e1",
@@ -1353,7 +1353,7 @@
         "relaunched": true
       },
       {
-        "id": "bwr-1791920405498-y7c6",
+        "id": "bwr-1791925353459-88h3",
         "configId": "c1",
         "mode": "relance",
         "strategy": "dizaine",
@@ -1371,11 +1371,11 @@
         "skipped": 0,
         "status": "en attente",
         "messages": [],
-        "createdAt": 1791920405498,
+        "createdAt": 1791925353459,
         "resolvedAt": null,
         "relaunch": true,
         "depth": 2,
-        "parentId": "bwr-1791920405477-yfns"
+        "parentId": "bwr-1791925353439-87oe"
       }
     ],
     "recentSent": [

@@ -23,17 +23,17 @@
 //   « Créer » → stratégie (Dizaine ou Costume faible) → ID du canal, rattrapages, et 1, 2 ou 3 costumes parmi les 4
 //   (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés, le message est le même que le mode « multi » :
 //
-//       ♣️ 95% ─────┐
-//                   ├ N°1135
-//       ♦️ 94% ─────┘
+//       ♣️ 95%
+//        ┣━ N°1135
+//       ♦️ 94%
 //
 //   Règle : si un costume est sorti directement (✅0️⃣) au jeu N ET que l'autre n'est toujours pas sorti au jeu N+1, le MÊME
 //   message est édité : on y ajoute seulement le numéro de la relance (N+3), le costume pas venu reste ⏳ :
 //
-//       ♣️✅0️⃣ 95% ─────┐
-//                   ├ N°1135
-//                   ├ N°1138
-//       ♦️⏳ 94% ─────┘
+//       ♣️✅0️⃣ 95%
+//        ┣━ N°1135
+//        ┣━ N°1138⏳
+//       ♦️⏳ 94%
 //
 //   Pas de relance si les deux costumes sortent, si l'autre sort à N ou N+1, ou si aucun ne sort directement (perdu, ou un
 //   seul costume sorti à un rattrapage). Si l'autre sort à N+2 (avant N+3), le N° de la relance est retiré du message.
@@ -315,22 +315,18 @@ function suitMark(s, anyDone) {
   if (s.res === undefined || s.res === null) return anyDone ? '⏳' : '';
   return s.res >= 0 ? `✅${KEYCAP(s.res)}` : '❌';
 }
-const markWidth = (m) => (!m ? 0 : m === '⏳' || m === '❌' ? 2 : 4); // colonnes occupées en police à chasse fixe
-// items : [{ suit, pct, res? }] dans l'ordre meilleur → plus faible (2 à 4). Une barre verticale relie tous les traits, N° au milieu.
-// withResults : affiche le résultat de chaque costume (vérification), ex. « ♦️✅0️⃣ 100%─────┐ »
+// items : [{ suit, pct, res? }] dans l'ordre meilleur → plus faible (1 à 4). Format « arbre » : un costume par ligne, et les
+// numéros de jeu en branche (┣━ N°…) entre les costumes. withResults : affiche le résultat de chaque costume (vérification).
+//   ♦️✅0️⃣ 94%
+//    ┣━ N°1250
+//    ┣━ N°1253⏳        ← relance (extraTargets), chaque relance ajoute seulement son numéro
+//   ❤️✅0️⃣ 94%
 function predictionText(target, items, withResults, forcePending, extraTargets) {
   const anyDone = !!withResults && (!!forcePending || items.some((s) => s.res !== undefined && s.res !== null));
-  const marks = items.map((s) => (withResults ? suitMark(s, anyDone) : ''));
-  const maxMark = Math.max(0, ...marks.map(markWidth));
-  const line = (s, i) => `${s.suit}${marks[i]}${' '.repeat(maxMark - markWidth(marks[i]))} ${pctText(s.pct).padEnd(4)}─────`;
-  const pad = ' '.repeat(2 + maxMark + 1 + 4 + 5); // largeur de « ♦️✅0️⃣ 100%───── »
-  const k = items.length; let rows;
-  if (k === 1) rows = [`${pad}├ N°${target}`, `${line(items[0], 0)}┘`]; // un seul costume (ou le reste d'une relance)
-  else if (k === 2) rows = [`${line(items[0], 0)}┐`, `${pad}├ N°${target}`, `${line(items[1], 1)}┘`];
-  else if (k === 3) rows = [`${line(items[0], 0)}┐`, `${line(items[1], 1)}┼ N°${target}`, `${line(items[2], 2)}┘`];
-  else rows = [`${line(items[0], 0)}┐`, `${line(items[1], 1)}┤`, `${pad}├ N°${target}`, `${line(items[2], 2)}┤`, `${line(items[3], 3)}┘`];
-  // relance : chaque relance ajoute SEULEMENT son numéro (├ N°1138) juste au-dessus du dernier costume, dans le même message
-  if (Array.isArray(extraTargets) && extraTargets.length) rows.splice(rows.length - 1, 0, ...extraTargets.map((t) => `${pad}├ N°${t}`));
+  const lines = items.map((s) => `${s.suit}${withResults ? suitMark(s, anyDone) : ''} ${pctText(s.pct)}`);
+  const branches = [` ┣━ N°${target}`, ...(Array.isArray(extraTargets) ? extraTargets : []).map((t) => ` ┣━ N°${t}`)];
+  const cut = Math.ceil(lines.length / 2); // les numéros se placent après la moitié des costumes (1 costume : en tête)
+  const rows = [...lines.slice(0, cut), ...branches, ...lines.slice(cut)];
   return `<pre>${rows.join('\n')}</pre>`;
 }
 // message simple du mode « déclencheur » (même moteur de formats que les autres stratégies)
