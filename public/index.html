@@ -146,6 +146,20 @@
     .check { display: flex; align-items: center; gap: 9px; color: var(--soft); font-size: 12px; }
     .check input { width: auto; accent-color: var(--cyan); }
     .toolbar { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+    .help-item { border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.04); margin-bottom: 10px; overflow: hidden; }
+    .help-item > summary { display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; list-style: none; }
+    .help-item > summary::-webkit-details-marker { display: none; }
+    .help-item > summary::after { content: '▾'; margin-left: auto; opacity: .6; }
+    .help-item[open] > summary::after { content: '▴'; }
+    .help-ico { font-size: 20px; }
+    .help-body { padding: 0 16px 16px; line-height: 1.55; }
+    .help-body h4 { margin: 14px 0 6px; font-size: 13px; opacity: .8; }
+    .help-body ol, .help-body ul { margin: 0; padding-left: 20px; }
+    .help-body li { margin: 5px 0; }
+    .help-body .button { margin-top: 14px; }
+    .help-sub { border-top: 1px solid var(--line); padding: 8px 0; }
+    .help-sub summary { cursor: pointer; font-weight: 600; }
+    .help-sub p { margin: 8px 0 0; font-size: 13px; opacity: .85; }
     .notice { padding: 13px 15px; margin: 14px 0; border-radius: 12px; color: var(--soft); background: rgba(112,225,229,.06); border: 1px solid rgba(112,225,229,.18); font-size: 12px; line-height: 1.55; }
     .notice.warn { border-color: rgba(245,184,107,.28); background: rgba(245,184,107,.06); }
     .notice.error { border-color: rgba(255,131,144,.28); background: rgba(255,131,144,.06); }
@@ -279,6 +293,7 @@
       </a>
       <nav>
         <a href="#/" data-nav="home">Accueil</a>
+        <a href="#/help" data-nav="help">❓ Aide</a>
         <a href="#/canaux" data-nav="canaux">Canaux</a>
         <a href="#/strategies" data-nav="strategies">Stratégies</a>
         <a href="#/ai" data-nav="ai">Analyseur IA</a>
@@ -295,6 +310,8 @@
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
         <a href="#/test" data-nav="test">🧪 Test</a>
+        <a href="#/relance" data-nav="relance">🔄 Relance +3</a>
+        <a href="#/stability" data-nav="stability">🛡️ Stabilité</a>
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
@@ -518,10 +535,13 @@
 
       <div class="home-section-label">Opérations</div>
       <div class="home-grid">
+        ${card('#/help', '❓', 'Aide', 'Mode d\'emploi de tous les boutons')}
         ${card('#/canaux', '📡', 'Canaux', 'Fil des prédictions, style Telegram')}
         ${card('#/strategies', '🎯', 'Stratégies', `${(snapshot.strategies||[]).length} stratégie(s)`)}
         ${card('#/best-weak', '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · voir / modifier`)}
         ${card('#/test', '🧪', 'Test', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'test').length} configuration(s) · meilleur / 2ᵉ meilleur`)}
+        ${card('#/relance', '🔄', 'Relance +3', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'relance').length} configuration(s) · 1 à 3 costumes, relance à +3`)}
+        ${card('#/stability', '🛡️', 'Stabilité du jeu', (snapshot.gameStability || {}).enabled ? `Activée · jeu ${((snapshot.gameStability || {}).state === 'unstable') ? 'instable' : ((snapshot.gameStability || {}).state === 'stable' ? 'stable' : 'en analyse')}` : 'Désactivée · à activer')}
         ${card('#/scan', '🔎', 'Détection auto', `${((snapshot.bestWeakTop || {}).detected || []).length} canal(aux) détecté(s) · ${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'scan').length} configuration(s)`)}
         ${card('#/best-weak', '👁️', 'Suivre des canaux', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'follow').length} configuration(s) · voir / modifier`)}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
@@ -1836,32 +1856,35 @@ Faites-en bon usage !
     //   🔁 cycle    : on suit une configuration à la fois (meilleur → faible → 2ᵉ → 3ᵉ…), elle reste tant que ✅0️⃣/✅1️⃣
     // -------------------------------------------------------------------
     const BW_MODES = {
-      multi: { icon: '🎯', title: 'Message à plusieurs costumes', sub: 'Un message avec 2 à 4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) et leur pourcentage ; seul le costume sorti reste.' },
+      multi: { icon: '🎯', title: 'Message à plusieurs costumes', sub: 'Un message avec 2 à 4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) et leur pourcentage ; chaque costume garde son résultat (✅ ou ⏳ / ❌) dans le même message.' },
       trigger: { icon: '⚡', title: 'Envoi sur déclencheur', sub: '2 pertes de suite · 2× rattrapage 2 ou 3 de suite · costume absent 13 jeux (prédit à +1 et +5).' },
       follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne en ✅0️⃣/✅1️⃣ ; sinon il passe au 2ᵉ. Si un costume sort directement (✅0️⃣) sans l’autre, l’autre est prédit à N+2 ; si les deux sortent, on ignore.' },
       cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
       scan: { icon: '🔎', title: 'Détection auto des canaux', sub: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Tu en sélectionnes un puis tu règles le canal Telegram d’envoi, les rattrapages et le format. Surveillance : si le 1ᵉʳ costume sort directement (✅0️⃣), le 2ᵉ est prédit à N+2 — et inversement. Les deux sortis, ou aucun : rien n’est envoyé.' },
+      relance: { icon: '🔄', title: 'Relance +3', sub: 'Tu choisis 1, 2 ou 3 costumes parmi les 4 meilleurs : un message les affiche avec leur pourcentage. Quand un costume sort directement (✅0️⃣) et que l’autre n’est toujours pas sorti à N+1, le même message est modifié : on y ajoute le numéro de la relance (N+3).' },
       test: { icon: '🧪', title: 'Test meilleur / 2ᵉ meilleur', sub: 'Tu choisis 2 à 4 parmi : le meilleur, le 2ᵉ, le 3ᵉ, le plus faible. On commence par le premier et on y reste tant qu’il gagne. Après une perte, la prochaine prédiction vient du suivant ; avec 2 choix (meilleur et 2ᵉ), on alterne entre les deux.' },
     };
     let bwWizard = { mode: 'multi', strategy: null };
-    const bwModeOf = (c) => (c && ['trigger', 'cycle', 'follow', 'test', 'scan'].includes(c.mode) ? c.mode : 'multi');
+    const bwModeOf = (c) => (c && ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance'].includes(c.mode) ? c.mode : 'multi');
     function bestWeakButtons() {
       const d = snapshot.bestWeakTop || {};
-      const list = d.configs || [];
+      const all = d.configs || [];
+      const list = all.filter(c => !['test', 'scan', 'relance'].includes(bwModeOf(c))); // Test, Relance et Détection auto : listées dans leur propre bouton
       const btn = (onclick, m, extra) => `<button class="strategy-button" onclick="${onclick}"><span class="eyebrow">${m.icon} Meilleur + plus faible</span><b>${esc(m.title)}</b><span>${esc(m.sub)}</span>${extra || ''}<em>Ouvrir →</em></button>`;
-      const count = (mode) => list.filter(c => bwModeOf(c) === mode).length;
+      const count = (mode) => all.filter(c => bwModeOf(c) === mode).length;
       const tag = (mode) => `<span class="strategy-stats"><span class="tag">${count(mode)} configuration(s)</span></span>`;
       const main = btn("location.hash='#/best-weak'", BW_MODES.multi, `<span class="strategy-stats"><span class="tag">${esc(list.length)} configuration(s)</span><span class="tag">${esc(d.sentCount || 0)} envoyée(s)</span></span>`);
       const cycle = btn("startBwWizard('cycle')", BW_MODES.cycle, tag('cycle'));
       const trig = btn("startBwWizard('trigger')", BW_MODES.trigger, tag('trigger'));
       const follow = btn("startBwWizard('follow')", BW_MODES.follow, tag('follow'));
       const test = btn("location.hash='#/test'", BW_MODES.test, tag('test'));
+      const relance = btn("location.hash='#/relance'", BW_MODES.relance, tag('relance'));
       const scan = btn("location.hash='#/scan'", BW_MODES.scan, `<span class="strategy-stats"><span class="tag">${count('scan')} configuration(s)</span><span class="tag good">${esc((d.detected || []).length)} canal(aux) détecté(s)</span></span>`);
       const each = list.map(c => `<button class="strategy-button" onclick="location.hash='#/best-weak'">
         <span class="eyebrow">${BW_MODES[bwModeOf(c)].icon} ${esc(BW_MODES[bwModeOf(c)].title)}${c.enabled ? '' : ' · en pause'}</span><b>${esc(c.name || c.strategyLabel)}</b><span>${esc(c.strategyLabel)} · Canal : ${esc((c.channelNames || []).join(', '))} · ${esc(c.maxR)} rattrapage(s)</span>
         <span class="strategy-stats"><span class="tag good">${esc(c.wins || 0)} gagné(s)</span><span class="tag bad">${esc(c.losses || 0)} perdu(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`).join('');
-      return main + cycle + trig + follow + scan + test + each;
+      return main + cycle + trig + follow + scan + test + relance + each;
     }
     function testCyclePage() {
       setNav('test');
@@ -1885,6 +1908,82 @@ Faites-en bon usage !
         <div class="toolbar"><button class="button primary" onclick="startBwFlow('test')">Créer un test</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button></div></div>
         ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} test(s)</h2></div></div>${cards}</section>`;
+    }
+    // -------------------------------------------------------------------
+    // -------------------------------------------------------------------
+    // 🔄 « Relance +3 » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
+    // celui qui n'est pas venu est relancé dans un nouveau message à N+3 (voir best-weak-top.js, mode « relance »)
+    // -------------------------------------------------------------------
+    const BW_RELANCE_DEMO = ['♣️ 95% ─────┐', '            ├ N°1135', '♦️ 94% ─────┘', '', '↓ ♣️ sort directement et ♦️ n’est pas sorti à N+1', '', '♣️✅0️⃣ 95% ─────┐', '                ├ N°1135', '                ├ N°1138⏳', '♦️⏳   94% ─────┘'].join('\n');
+    function relancePage() {
+      setNav('relance');
+      const p = snapshot.bestWeakTop || {};
+      const list = (p.configs || []).filter(c => bwModeOf(c) === 'relance');
+      const cards = list.length ? list.map(c => {
+        const total = (Number(c.wins) || 0) + (Number(c.losses) || 0);
+        const rate = total ? Math.round((Number(c.wins) || 0) * 100 / total) : null;
+        return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
+          <span class="eyebrow">🔄 ${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}${esc((c.channelNames || []).join(', ') || 'Canal non nommé')}</h3>
+          <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s) · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)${rate === null ? '' : ` · taux de réussite ${rate}%`}</p></div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`;
+      }).join('') : '<div class="empty">Aucune configuration. Clique sur « Créer » : choisis la stratégie (Dizaine ou Costume faible), le canal Telegram, les rattrapages, puis 1, 2 ou 3 costumes parmi les 4 meilleurs.</div>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Meilleur + plus faible</span><h2 style="margin-top:7px">🔄 Relance +3</h2>
+        <p class="small">${esc(BW_MODES.relance.sub)}</p>
+        <pre class="small" style="white-space:pre;overflow:auto;margin-top:10px">${esc(BW_RELANCE_DEMO)}</pre></div>
+        <div class="toolbar"><button class="button primary" onclick="startBwFlow('relance')">Créer</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
+    }
+    // -------------------------------------------------------------------
+    // -------------------------------------------------------------------
+    // 🛡️ « Stabilité du jeu » (voir game-stability.js) : désactivée par défaut.
+    // Stable = sur 7 jeux analysés, les 4 costumes sont sortis au moins une fois chez le joueur.
+    // Alertes et bilan horaire : chat privé uniquement. Instable 10 min → blocage de 1 h dans les canaux cochés.
+    // -------------------------------------------------------------------
+    async function stabilityPage() {
+      setNav('stability');
+      let d;
+      try { d = await api('/api/stability'); } catch (e) { toast(e.message, 'error'); return; }
+      const label = { stable: '✅ Stable', unstable: '⚠️ Instable', unknown: '⏳ Analyse en cours (moins de 7 jeux)' }[d.state] || d.state;
+      const picked = new Set((d.blockChannels || []).map(String));
+      const rows = (d.channels || []).length ? d.channels.map(c => `<label class="check" style="display:block;margin:8px 0"><input type="checkbox" ${picked.has(String(c.id)) ? 'checked' : ''} onchange="toggleStabilityChannel('${esc(c.id)}', this.checked)"> <b>${esc(c.title || 'Canal sans nom')}</b> · <code>${esc(c.id)}</code><br><small>${esc((c.sources || []).join(' · '))}</small></label>`).join('') : '<p class="small">Aucun canal configuré pour le moment.</p>';
+      const segs = (d.segments || []).length ? d.segments.map(x => `<li>${x.status === 'stable' ? '✅ Stable' : '⚠️ Instable'} : jeux N°${esc(x.fromGame)} → N°${esc(x.toGame)} · ${esc(x.durText)}${x.to == null ? ' · en cours' : ''} <small>(depuis ${esc(x.fromText)})</small></li>`).join('') : '<li class="small">Aucune période enregistrée pour le moment.</li>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Fonction globale · désactivée par défaut</span><h2 style="margin-top:7px">🛡️ Stabilité du jeu</h2>
+        <p class="small">Le jeu est <b>stable</b> quand, sur ${esc(d.window)} jeux analysés (les mêmes jeux que l’Analyseur IA), le joueur a reçu au moins une fois chacun des 4 costumes ♣️ ♦️ ♠️ ❤️. Sinon il est <b>instable</b>. Les alertes « jeu instable » (avec la durée) et le bilan de stabilité envoyé toutes les heures partent <b>uniquement dans le chat privé</b>, jamais dans un canal. Si le jeu reste instable ${esc(d.blockAfterMin)} min, l’envoi dans les canaux cochés ci-dessous est bloqué pendant ${esc(d.blockForMin)} min (1 h).</p></div>
+        <div class="toolbar"><button class="button ${d.enabled ? 'danger' : 'primary'}" onclick="setStabilityEnabled(${d.enabled ? 'false' : 'true'})">${d.enabled ? 'Désactiver la fonction' : 'Activer la fonction'}</button><button class="button ghost" onclick="stabilityPage()">Actualiser</button></div></div>
+        ${d.lastError ? `<div class="notice error">${esc(d.lastError)}</div>` : ''}
+        <section class="section"><div class="card"><span class="eyebrow">${d.enabled ? '🟢 Fonction activée' : '⚪ Fonction désactivée (aucun envoi, aucun blocage)'}</span>
+          <h3 style="margin-top:6px">${esc(label)}${d.sinceText ? ` · depuis ${esc(d.sinceText)}` : ''}</h3>
+          <p class="small">${d.lastGame != null ? `Dernier jeu analysé : N°${esc(d.lastGame)}${d.windowFrom != null ? ` (fenêtre N°${esc(d.windowFrom)} → N°${esc(d.windowTo)})` : ''}` : 'Aucun jeu analysé pour le moment.'}${(d.missing || []).length ? ` · costume(s) absent(s) : ${esc(d.missing.join(' '))}` : ''}</p>
+          ${d.blockedUntil ? `<p class="small"><b class="bad">🚫 Envoi bloqué jusqu’à ${esc(d.blockedUntilText)}</b> dans ${esc((d.blockChannels || []).length)} canal(aux) <button class="button small ghost" onclick="releaseStabilityBlock()">Lever le blocage</button></p>` : ''}
+          <p class="small">${esc(d.blockCount || 0)} blocage(s) déclenché(s) depuis le début.</p></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations concernées</span><h2 style="margin-top:7px">Canaux à bloquer quand le jeu est instable</h2>
+          <p class="small">Coche les canaux de tes configurations (toutes les stratégies et boutons) dont l’envoi doit être suspendu. Seuls les nouveaux envois sont retenus ; les messages déjà publiés continuent d’être vérifiés. Un canal partagé par plusieurs configurations est bloqué pour toutes.</p></div>
+          <div class="toolbar"><button class="button small ghost" onclick="setStabilityAll(true)">Tout cocher</button><button class="button small ghost" onclick="setStabilityAll(false)">Tout décocher</button></div></div>
+          <div class="card" style="max-height:50vh;overflow:auto">${rows}</div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique récent</span><h2 style="margin-top:7px">Périodes stables / instables</h2></div></div><div class="card"><ul style="margin:0;padding-left:18px">${segs}</ul></div></section>`;
+      window.__stabilityChannels = (d.channels || []).map(c => String(c.id));
+    }
+    async function setStabilityEnabled(on) {
+      if (on && !confirm('Activer la stabilité du jeu ? Les alertes et le bilan horaire seront envoyés dans le chat privé, et les canaux cochés seront bloqués 1 h après 10 min d’instabilité.')) return;
+      try { await api('/api/stability/enabled', 'POST', { enabled: on }); await refresh(); await stabilityPage(); toast(on ? 'Stabilité du jeu activée.' : 'Stabilité du jeu désactivée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function toggleStabilityChannel(id, on) {
+      try { await api('/api/stability/channels', 'POST', { id, enabled: on }); }
+      catch (e) { toast(e.message, 'error'); stabilityPage(); }
+    }
+    async function setStabilityAll(on) {
+      try { await api('/api/stability/channels', 'POST', { ids: on ? (window.__stabilityChannels || []) : [] }); await stabilityPage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function releaseStabilityBlock() {
+      try { await api('/api/stability/release', 'POST'); await stabilityPage(); toast('Blocage levé.'); }
+      catch (e) { toast(e.message, 'error'); }
     }
     // -------------------------------------------------------------------
     // 🔎 « Détection auto » : canaux qui publient le format à deux costumes + configurations qui les surveillent
@@ -1937,10 +2036,281 @@ Faites-en bon usage !
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="bwWizardChannelsNext()">Suivant</button><button class="button small ghost" onclick="bwWizardDetected()">🔍 Rechercher à nouveau</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
       if (preselect) document.querySelectorAll('.bwSrc').forEach(x => { if (x.value === String(preselect)) x.checked = true; });
     }
+    // ---------------------------------------------------------------------
+    // Page « Aide » : mode d'emploi de tous les boutons du site
+    // ---------------------------------------------------------------------
+    const HELP_GROUPS = [
+      { id: 'start', title: 'Pour commencer' },
+      { id: 'ops', title: 'Opérations' },
+      { id: 'auto', title: 'Prédictions automatiques (déclencheurs)' },
+      { id: 'ai', title: 'Intelligence artificielle' },
+      { id: 'g21', title: 'Jeu 21' },
+      { id: 'sys', title: 'Système' },
+      { id: 'gloss', title: 'Mots à connaître' },
+    ];
+    const HELP_ITEMS = [
+      // ----- Pour commencer -----
+      { g: 'start', icon: '🚀', title: 'Mise en route en 5 étapes',
+        what: 'Les étapes dans l’ordre pour que le site envoie ses premières prédictions.',
+        steps: [
+          'Ouvre « Configuration » et renseigne le token du bot Telegram (le statut passe à « Bot actif »). L’URL PostgreSQL est facultative : elle sert à garder les données de façon permanente.',
+          'Dans Telegram, ajoute le bot comme administrateur de ton canal.',
+          'Ouvre « Stratégies », choisis une stratégie, active-la et règle son canal public, son format et ses rattrapages.',
+          'Ouvre « Envois » pour contrôler le token, les canaux et ce que chaque stratégie envoie.',
+          'Surveille les résultats dans « Canaux » (fil des prédictions) et dans « Statistiques ».',
+        ],
+        tips: ['Une nouvelle stratégie démarre sans canal : tant qu’aucun canal n’est renseigné, elle calcule mais n’envoie rien.', 'Chaque bouton garde sa propre liste de configurations ; seul le groupe « Meilleur + plus faible » réunit plusieurs modes.'] },
+      // ----- Opérations -----
+      { g: 'ops', icon: '📡', title: 'Canaux', hash: '#/canaux',
+        what: 'Fil des prédictions mis en forme comme sur Telegram. Chaque canal affiche les prédictions d’une stratégie.',
+        steps: ['Ouvre « Canaux » et clique sur un canal pour voir son fil.', 'Tu peux écrire un message dans le fil : l’IA (Bak Sossou IA) répond directement.'] },
+      { g: 'ops', icon: '🎯', title: 'Stratégies', hash: '#/strategies',
+        what: 'Le catalogue de toutes les stratégies du bot. Chaque stratégie a sa fiche de réglages.',
+        steps: [
+          'Clique sur une stratégie pour ouvrir sa fiche.',
+          'Active-la, puis règle son canal public, son format de message et son nombre de rattrapages.',
+          'Règle ses paramètres propres (par exemple le nombre de jeux d’absence ou le décalage) et enregistre.',
+        ],
+        tips: ['La liste complète des stratégies et leur règle est dans la section « Catalogue des stratégies » plus bas.'] },
+      { g: 'ops', icon: '⚡', title: 'Meilleur + plus faible', hash: '#/best-weak',
+        what: 'Configurations qui s’appuient sur le classement du jour des stratégies « Dizaine » et « Costume faible ». Quatre types : message à plusieurs costumes, envoi sur déclencheur, cycle meilleur / faible, suivi de canaux.',
+        steps: [
+          'Clique sur « Créer » et choisis le type de configuration.',
+          'Choisis la stratégie (Dizaine ou Costume faible), puis les costumes ou les canaux à suivre selon le type.',
+          'Renseigne le canal Telegram d’envoi, le nombre de rattrapages et le format, puis enregistre.',
+          'Sur chaque carte : Mettre en pause / Activer, Modifier, Envoyer un test, Supprimer.',
+        ],
+        tips: [
+          'Message à plusieurs costumes : un message avec 2 à 4 costumes et leur pourcentage ; seul le costume sorti reste. Chaque costume est vérifié séparément sur la main du joueur.',
+          'Envoi sur déclencheur : par exemple 2 pertes de suite, ou un costume absent 13 jeux.',
+          'Cycle : on suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣, puis on passe au suivant au premier ✅2️⃣/✅3️⃣ ou ❌.',
+          'Les doublons (deux configurations identiques) sont bloqués. Test, Relance +3 et Détection auto ont leur propre bouton.',
+        ] },
+      { g: 'ops', icon: '🧪', title: 'Test', hash: '#/test',
+        what: 'Suit un classement et alterne entre plusieurs rangs : on reste sur un rang tant qu’il gagne ; après une perte, la prochaine prédiction vient du rang suivant.',
+        steps: [
+          'Ouvre « Test », clique sur « Créer » et choisis la stratégie (Dizaine ou Costume faible).',
+          'Coche 2 à 4 rangs : le meilleur, le 2ᵉ, le 3ᵉ, le plus faible. Par défaut : le meilleur et le 2ᵉ.',
+          'Renseigne le canal d’envoi, le nombre de rattrapages et le format.',
+          'Option « Envoyer seulement après une perte » : une perte sur un des rangs ouvre l’envoi du rang suivant, une seule fois.',
+        ],
+        tips: [
+          'Un rang est une position dans le classement du jour des configurations (1ʳᵉ, 2ᵉ, 3ᵉ ; le dernier est le 4ᵉ s’il y en a au moins 4).',
+          'Une perte, c’est ❌ après tous les rattrapages. Un ✅ à un rattrapage compte comme gagné.',
+          'Une seule prédiction à la fois : la suivante attend le résultat de la précédente.',
+          'Il faut au moins 2 configurations classées aujourd’hui, sinon rien n’est envoyé.',
+        ] },
+      { g: 'ops', icon: '🔄', title: 'Relance +3', hash: '#/relance',
+        what: 'Un message avec 1, 2 ou 3 costumes parmi les 4 meilleurs. Si un costume sort directement (✅0️⃣) et que l’autre n’est toujours pas sorti au jeu suivant (N+1), le même message est modifié : on y ajoute seulement le numéro de la relance à +3.',
+        steps: [
+          'Ouvre « Relance +3 » et clique sur « Créer ».',
+          'Choisis la stratégie qui utilise meilleur et faible : Dizaine ou Costume faible.',
+          'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible.',
+        ],
+        tips: [
+          'Exemple avec 2 cochés : ♣️ 95% / N°1135 / ♦️ 94%. ♣️ sort directement et ♦️ n’est pas sorti à N+1 : le message devient ♣️✅0️⃣ 95% / N°1135 / N°1138⏳ / ♦️⏳ 94%. Le ⏳ à côté du numéro devient ✅ ou ❌ une fois la relance jouée.',
+          'Pas de relance si les deux costumes sortent, si l’autre sort à N ou à N+1, si les deux sont perdus ❌, ou si un seul sort à un rattrapage sans être sorti directement (✅0️⃣).',
+          'Si l’autre costume sort au rattrapage 2 (N+2), avant le jeu de la relance, le numéro de la relance est retiré du message.',
+          'Avec 3 costumes cochés, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Sans rattrapage (0), la relance part dès le jeu N.',
+          'La relance est comptée comme une prédiction à part dans les gagnés / perdus de la configuration.',
+        ] },
+      { g: 'ops', icon: '🛡️', title: 'Stabilité du jeu', hash: '#/stability',
+        what: 'Fonction désactivée par défaut. Elle surveille si le jeu est stable (sur 7 jeux analysés, les 4 costumes sont sortis chez le joueur) et peut bloquer l’envoi dans les canaux choisis quand il reste instable.',
+        steps: [
+          'Ouvre « Stabilité » et clique sur « Activer la fonction ».',
+          'Coche les canaux (de toutes tes configurations) dont l’envoi doit être bloqué en cas d’instabilité.',
+          'Le chat privé reçoit « jeu instable » avec la durée, puis un bilan de stabilité toutes les heures.',
+        ],
+        tips: [
+          'Les alertes et le bilan ne vont jamais dans un canal : uniquement dans le chat privé de l’admin.',
+          'Instable pendant 10 min → envoi bloqué 1 h dans les canaux cochés (seuls les nouveaux envois sont retenus).',
+          'Début de sabot : pas de jugement tant que 7 jeux ne sont pas analysés.',
+        ] },
+      { g: 'ops', icon: '🔎', title: 'Détection auto', hash: '#/scan',
+        what: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (par exemple ♦️ 100 % / N°1438 / ♣️ 92 %).',
+        steps: ['Ouvre « Détection auto » et attends que des canaux soient détectés (le bot doit être administrateur du canal).', 'Sélectionne un canal détecté.', 'Renseigne le canal Telegram où envoyer, le nombre de rattrapages et le format, puis enregistre la configuration.'],
+        tips: ['Règle : si le 1ᵉʳ costume sort directement (✅0️⃣) et pas le 2ᵉ, le 2ᵉ est prédit à N+2 — et inversement. Les deux sortis ou aucun : rien n’est envoyé.'] },
+      { g: 'ops', icon: '👁️', title: 'Suivre des canaux', hash: '#/best-weak',
+        what: 'Mode « Suivi des canaux » du groupe Meilleur + plus faible : on coche des canaux qui reçoivent des messages à plusieurs costumes ; le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne.',
+        steps: ['Dans « Meilleur + plus faible », clique sur « Créer » puis « Suivi des canaux ».', 'Coche les canaux à suivre.', 'Règle le canal d’envoi et les rattrapages, puis enregistre.'] },
+      { g: 'ops', icon: '📣', title: 'Annonces', hash: '#/announcements',
+        what: 'Les prédictions annoncées par la stratégie « Prédiction dans l’ombre » (costume absent surveillé en silence), avec leur décompte.',
+        steps: ['Ouvre « Annonces » pour voir les annonces en cours et celles déjà faites.', 'Les réglages de l’ombre se font dans sa fiche, dans « Stratégies ».'] },
+      { g: 'ops', icon: '📨', title: 'Envois', hash: '#/diagnostics',
+        what: 'Contrôle du token, des canaux et de chaque stratégie ou configuration suivie : où elle envoie, et si ses prédictions sont arrêtées ou planifiées.',
+        steps: ['Ouvre « Envois » après chaque nouvelle configuration.', 'Si une ligne affiche une erreur (par exemple « Aucun canal configuré »), corrige-la dans la fiche concernée.'] },
+      // ----- Prédictions automatiques -----
+      { g: 'auto', icon: '↩️', title: 'Prédiction après perte', hash: '#/after-loss',
+        what: 'Suit une stratégie existante et, après un résultat déclencheur, relaie une nouvelle prédiction.',
+        steps: [
+          'Clique sur « Ajouter une stratégie » et choisis la stratégie à suivre.',
+          'Choisis la catégorie : 1 comptage dizaine, 2 rattrapage / perte, 3 série de même costume. Les réglages affichés changent selon la catégorie.',
+          'Catégorie 2 : coche les déclencheurs (rattrapage 1, 2, 3 ou perdue ❌) et le nombre N de prédictions à laisser passer avant de relayer la suivante. Tu peux aussi re-prédire le même costume N jeux plus loin.',
+          'Renseigne le canal, le format et le nom, puis enregistre.',
+          'Sur chaque carte : Enregistrer, Optimiser, Retirer.',
+        ],
+        tips: [
+          'Comment compte N : avec « Perdue » et N=2, dès la première prédiction perdue, les 2 suivantes passent en silence et c’est la 3ᵉ qui est relayée. Ce n’est pas « après 2 pertes consécutives ».',
+          'Pour réagir après plusieurs pertes d’affilée, utilise « Prédiction combinée » (niveau « Perdue », N d’affilée, mode « Relayer la prochaine prédiction naturelle »). « VIP » et le mode « Envoi sur déclencheur » de Meilleur + plus faible le font aussi.',
+        ] },
+      { g: 'auto', icon: '🧩', title: 'Prédiction combinée', hash: '#/combined',
+        what: 'Réagit après N résultats consécutifs d’une stratégie (rattrapage 1, 2, 3 ou perdue). Par défaut, elle relaie alors la prochaine prédiction de cette stratégie. Toujours vérifié sur la main du joueur.',
+        steps: [
+          'Clique sur « Ajouter une source » et sélectionne une ou plusieurs stratégies (ou formations).',
+          'Coche un ou plusieurs niveaux de rattrapage avec un nombre N : N = combien de fois ce niveau doit arriver d’affilée (N=2 : deux fois de suite).',
+          'Choisis le mode : « Relayer la prochaine prédiction naturelle » (par défaut), ou même costume / costume inverse avec un décalage +w jeux.',
+          'Renseigne le canal et enregistre.',
+        ],
+        tips: ['Exemple « après 2 pertes, prédire la prochaine prédiction de la stratégie » : niveau « Perdue », N=2, mode « Relayer la prochaine prédiction naturelle ». Une victoire entre deux pertes casse la série.'] },
+      { g: 'auto', icon: '🔁', title: 'Répétition de costume', hash: '#/suit-streak',
+        what: 'Observe N prédictions consécutives du même costume pour une source.',
+        steps: [
+          'Clique sur « Ajouter une source » : stratégie existante, IA « Prédit » ou Formation.',
+          'Définis N. Une prédiction d’un autre costume casse la série.',
+          'Sans perte parmi les N, le même costume est prédit tout de suite. Avec au moins une perte, le panneau attend que ce costume revienne, une seule fois.',
+          'Renseigne le canal et enregistre.',
+        ] },
+      { g: 'auto', icon: '⚡', title: 'Rupture de costume', hash: '#/suit-break',
+        what: 'Après N prédictions consécutives du même costume, attend la première rupture pour prédire le costume d’origine de la série.',
+        steps: ['Clique sur « Ajouter une source » et choisis la source.', 'Définis N, le canal et le format, puis enregistre.', 'Une fois N atteint, le panneau attend un costume différent et prédit alors le costume original sur ce même numéro.'] },
+      { g: 'auto', icon: '⏱️', title: 'Chevauchement de prédictions', hash: '#/overlap',
+        what: 'Quand une source publie une 2ᵉ prédiction alors que la 1ʳᵉ n’est pas encore vérifiée, le panneau déclenche sur cette 2ᵉ.',
+        steps: ['Clique sur « Ajouter une source » et choisis la source.', 'Choisis le mode : même prédiction, costume miroir, ou +Z jeux.', 'Renseigne le canal et enregistre.'] },
+      { g: 'auto', icon: '🎲', title: 'Type de mise', hash: '#/bet-type',
+        what: 'Associe des canaux qui envoient des prédictions à un type de mise (1 à 4) et envoie dans le canal choisi. « Meilleur type de mise » envoie les prédictions de la configuration au meilleur taux de réussite.',
+        steps: ['Clique sur « Créer ».', 'Choisis un ou plusieurs canaux qui envoient des prédictions.', 'Choisis le type (1 à 4) et le canal où envoyer, puis enregistre.'] },
+      { g: 'auto', icon: '👍', title: 'J’aime', hash: '#/like-react',
+        what: 'Met automatiquement des réactions sur les prédictions des canaux suivis, selon 4 types de règles. Type 3 : ❤ après 2 pertes consécutives. Type 4 : 🍾 après 1 perte.',
+        steps: [
+          'Ouvre « J’aime » et active-le.',
+          'Coche les canaux à suivre (4 au maximum) ou ajoute-en un avec son identifiant -100… ou @nom.',
+          'Le bot doit être administrateur du canal, avec les réactions autorisées. Le bouton « Tester les 4 emojis » vérifie les droits.',
+        ],
+        tips: ['Seules les prédictions envoyées par le site dans le canal sont suivies, à partir du moment où le canal est coché.'] },
+      { g: 'auto', icon: '📣', title: 'Copie et annonce', hash: '#/copy-announce',
+        what: 'Copie les prédictions d’une source vers un autre canal, envoie des annonces planifiées, ou les deux.',
+        steps: ['Clique sur « Ajouter ».', 'Choisis la source (stratégie, stratégie enregistrée ou canal déjà configuré) et le canal de destination.', 'Active la copie, les annonces planifiées (toutes les 30 min, 1 h, 3 h… ou à heures pile), ou les deux.'] },
+      { g: 'auto', icon: '📊', title: 'Statistiques', hash: '#/statistics',
+        what: 'Relaie automatiquement vers un canal Telegram les costumes et cartes bruts reçus de l’API Baccara, en direct. Un message est envoyé au début du jeu, puis mis à jour au fil des cartes jusqu’au résultat.',
+        steps: ['Ouvre « Statistiques ».', 'Renseigne le canal Telegram de destination et active le relais.'] },
+      { g: 'auto', icon: '🧮', title: 'Comptage 2/2', hash: '#/cards-count',
+        what: 'Analyse les catégories 3/2, 3/3 et 2/2 sur chaque lot de jeux et prédit la catégorie la plus faible si sa case est cochée.',
+        steps: ['Ouvre « Comptage 2/2 ».', 'Coche la ou les catégories à prédire, puis règle le nombre de prédictions, le rattrapage et le canal.'],
+        tips: ['En cas d’égalité entre les catégories les plus faibles, c’est la catégorie cochée qui est prédite.'] },
+      { g: 'auto', icon: '👑', title: 'VIP', hash: '#/vip',
+        what: 'Surveille ensemble toutes les stratégies de costumes et l’IA. Quand l’une enchaîne des pertes consécutives ou des prédictions consécutives du même costume, ses prochaines prédictions sont relayées dans le canal VIP.',
+        steps: ['Ouvre « VIP » et coche « Formation ».', 'Règle le nombre de pertes consécutives, le nombre de prédictions relayées ensuite, les mêmes valeurs pour les répétitions de costume, et le canal VIP, puis enregistre.'] },
+      { g: 'auto', icon: '🎓', title: 'Formation', hash: '#/formation',
+        what: 'Chaque stratégie (y compris « Prédit » et celles créées par l’IA) a sa formation et sa configuration d’envoi : titre, contenu et canal indépendants.',
+        steps: ['Ouvre « Formation » et choisis la stratégie.', 'Renseigne le titre, le contenu et le canal, puis enregistre.'] },
+      // ----- IA -----
+      { g: 'ai', icon: '🧠', title: 'Analyseur IA', hash: '#/ai',
+        what: 'Observe les jeux terminés en continu, écrit ses constats dans « Résultats » et envoie les stratégies qu’il trouve ou crée dans « Stratégies IA créées ».',
+        steps: ['Ouvre « Analyseur IA » et lance l’analyse en temps réel.', 'Consulte les résultats et les stratégies proposées.'] },
+      { g: 'ai', icon: '✨', title: 'Stratégies IA', hash: '#/ai-strategies',
+        what: 'Les stratégies dont l’analyse IA mesure au moins 75 % de réussite. Elles ne sont jamais activées seules : teste-les d’abord en mode silencieux.',
+        steps: ['Ouvre « Stratégies IA » et choisis une stratégie.', 'Teste-la en mode silencieux, puis active-la si les résultats te conviennent.'] },
+      { g: 'ai', icon: '🤖', title: 'Créé par moi avec IA', hash: '#/ai-created',
+        what: 'Regroupe les stratégies que tu as créées avec l’IA. Elles deviennent configurables ici dès que le redémarrage automatique est terminé.',
+        steps: ['Ouvre « Créé par moi avec IA ».', 'Si une stratégie est en attente, actualise la page dans quelques secondes.'] },
+      { g: 'ai', icon: '🔮', title: 'Prédit IA', hash: '#/predit',
+        what: 'Seules les stratégies créées par l’IA qui atteignent le seuil de réussite configuré prédisent ici (de 50 % à 100 %, 85 % par défaut).',
+        steps: ['Ouvre « Prédit IA » et règle le seuil de réussite.', 'Choisis le format et le canal d’envoi.'],
+        tips: ['Les déclencheurs à 100 % ont la priorité. Le message n’affiche jamais le motif : il reste dans l’historique de la stratégie.'] },
+      { g: 'ai', icon: '💬', title: 'Question IA', hash: '#/ai-ask',
+        what: 'Pose une question sur le projet, par exemple « Pourquoi la stratégie ombre a prédit le jeu 12 ? ». L’IA répond à partir des vraies prédictions envoyées.',
+        steps: ['Ouvre « Question IA », écris ta question et envoie.'] },
+      { g: 'ai', icon: '🛠', title: 'Réparation IA', hash: '#/ai-repair',
+        what: 'L’IA identifie les problèmes du site et les corrige.',
+        steps: ['Ouvre « Réparation IA » et lance l’analyse.', 'Lis les problèmes trouvés avant d’accepter les corrections.'] },
+      // ----- Jeu 21 -----
+      { g: 'g21', icon: '🃏', title: 'Game 21', hash: '#/game21',
+        what: 'Les tours du jeu 21 de 1xbet en direct : cartes du joueur et du croupier, costumes et total de chaque main. Actualisé toutes les 6 secondes.',
+        steps: ['Ouvre « Game 21 » : rien à configurer, c’est un affichage en direct.'] },
+      { g: 'g21', icon: '🤖', title: 'Analyse IA du 21', hash: '#/game21-ai',
+        what: 'L’IA cherche les déclencheurs : une carte vue dans un tour qui annonce, au tour suivant, une carte de valeur (A, K, Q, J) ou une carte exacte avec son costume.',
+        steps: ['Ouvre « Analyse IA du 21 », choisis la variante (21 classique ou 21 séparés) et lance l’analyse.'] },
+      { g: 'g21', icon: '🧠', title: 'Stratégies IA du 21', hash: '#/game21-strategies',
+        what: 'L’IA crée des stratégies à partir des déclencheurs réellement observés, écrites en clair : « quand tu vois telle carte, attends telle carte au tour suivant ».',
+        steps: ['Ouvre « Stratégies IA du 21 » et crée une stratégie à partir d’un déclencheur.'],
+        tips: ['Toute nouvelle stratégie est créée désactivée.'] },
+      { g: 'g21', icon: '🎯', title: 'Prédiction IA jeu 21', hash: '#/game21-predict',
+        what: 'Utilise les déclencheurs IA du jeu 21 et les stratégies activées. Le 21 classique et le 21 séparé sont prédits séparément, sur deux cibles : la carte exacte et la carte de valeur.',
+        steps: ['Ouvre « Prédiction IA jeu 21 », active les stratégies voulues et renseigne le canal d’envoi.'] },
+      // ----- Système -----
+      { g: 'sys', icon: '⚙️', title: 'Configuration', hash: '#/settings',
+        what: 'Réglages du bot, de la base de données et des paramètres généraux.',
+        steps: ['Renseigne le token du bot Telegram.', 'Renseigne l’URL PostgreSQL pour garder token, canaux, jeux et prédictions de façon permanente (facultatif).', 'Les réglages de chaque stratégie restent dans sa propre fiche.'] },
+      { g: 'sys', icon: '🗄', title: 'Base de données', hash: '#/database',
+        what: 'L’historique enregistré (jeux, prédictions).',
+        steps: ['Pour activer l’enregistrement permanent, renseigne l’URL PostgreSQL dans « Configuration ».'] },
+      { g: 'sys', icon: '📐', title: 'Formats', hash: '#/formats',
+        what: 'La liste des formats de message de prédiction disponibles. Chaque configuration choisit son format par son numéro.',
+        steps: ['Ouvre « Formats » pour voir l’aperçu de chaque format.', 'Note le numéro voulu et saisis-le dans le champ « Format » de ta configuration.'] },
+      { g: 'sys', icon: '♻️', title: 'Réinitialiser stratégies', onclick: 'resetAllStrategies()',
+        what: 'Restaure les valeurs d’origine du code pour les stratégies.',
+        steps: ['Clique sur la carte « Réinitialiser stratégies » de l’accueil et confirme.'],
+        tips: ['Tes réglages actuels des stratégies sont remplacés : à utiliser avec précaution.'] },
+      { g: 'sys', icon: '👥', title: 'Utilisateurs (administrateur)', hash: '#/users', admin: true,
+        what: 'Un compte apparaît ici une fois son email Gmail confirmé. Tu l’acceptes puis tu accordes un temps d’accès ; passé ce délai, le compte est bloqué automatiquement.',
+        steps: ['Ouvre « Utilisateurs ».', 'Accepte le compte, puis accorde un temps d’accès en minutes ou en heures.'] },
+      { g: 'sys', icon: '🚀', title: 'Déploiement (administrateur)', hash: '#/deploy', admin: true,
+        what: 'Génère un fichier ZIP contenant un bot Telegram autonome pour une ou plusieurs stratégies, prêt à déployer sur n’importe quelle plateforme.',
+        steps: ['Ouvre « Déploiement » et choisis une ou plusieurs stratégies.', 'Génère le ZIP, puis déploie-le : il demande seulement le token API et l’ID du canal.'] },
+      // ----- Glossaire -----
+      { g: 'gloss', icon: '🎯', title: 'Jeu cible et numéro (N°)', what: 'Le numéro du jeu sur lequel la prédiction doit se réaliser, par exemple #N1280.' },
+      { g: 'gloss', icon: '✅', title: 'Rattrapage et résultats', what: 'Si le costume ne sort pas au jeu cible, on le cherche aux jeux suivants, jusqu’au nombre de rattrapages réglé. ✅0️⃣ = gagné au jeu cible, ✅1️⃣ = au 1ᵉʳ rattrapage, ✅2️⃣ = au 2ᵉ, ✅3️⃣ = au 3ᵉ. ❌ PERDU = absent après le dernier rattrapage.' },
+      { g: 'gloss', icon: '🂡', title: 'Main du joueur', what: 'Sauf indication contraire, la vérification se fait sur les costumes de la main du joueur.' },
+      { g: 'gloss', icon: '📢', title: 'Canal', what: 'Le canal Telegram où part la prédiction. Le bot doit en être administrateur. On le saisit avec son identifiant -100… ou son @nom.' },
+      { g: 'gloss', icon: '🏅', title: 'Rang', what: 'Position d’une configuration dans le classement du jour de la stratégie, trié par taux de réussite : 1 = le meilleur, 2 = le 2ᵉ, 3 = le 3ᵉ, et le dernier = le plus faible (4ᵉ). Seules les configurations qui ont assez de prédictions vérifiées aujourd’hui sont classées.' },
+      { g: 'gloss', icon: '⚡', title: 'Déclencheur', what: 'L’événement qui lance une prédiction : une perte, un rattrapage, une absence de costume, une série de même costume, etc.' },
+      { g: 'gloss', icon: '📐', title: 'Format', what: 'Le modèle de message de la prédiction, choisi par son numéro dans la page « Formats ».' },
+    ];
+    function helpCatalogItem() {
+      const list = (snapshot && snapshot.strategies) || [];
+      if (!list.length) return null;
+      return { g: 'ops', icon: '📚', title: 'Catalogue des stratégies', hash: '#/strategies',
+        what: `Les ${list.length} stratégies du bot et leur règle. Ouvre « Stratégies » puis la fiche de celle que tu veux régler.`,
+        catalog: list.map(s => ({ name: s.name, about: s.about || '' })) };
+    }
+    function helpItemText(it) {
+      return [it.title, it.what, ...(it.steps || []), ...(it.tips || []), ...((it.catalog || []).flatMap(c => [c.name, c.about]))].join(' ').toLowerCase();
+    }
+    function helpItemHtml(it) {
+      const steps = (it.steps || []).length ? `<h4>Comment configurer</h4><ol>${it.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '';
+      const tips = (it.tips || []).length ? `<h4>À savoir</h4><ul>${it.tips.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+      const catalog = (it.catalog || []).length ? `<h4>Les stratégies</h4>${it.catalog.map(c => `<details class="help-sub"><summary>${esc(c.name)}</summary><p>${esc(c.about)}</p></details>`).join('')}` : '';
+      const open = it.onclick ? '' : (it.hash ? `<button class="button small primary" onclick="location.hash='${esc(it.hash)}'">Ouvrir cette page →</button>` : '');
+      return `<details class="help-item"><summary><span class="help-ico">${it.icon}</span><b>${esc(it.title)}</b></summary><div class="help-body"><p>${esc(it.what)}</p>${steps}${catalog}${tips}${open}</div></details>`;
+    }
+    function helpListHtml(q) {
+      const query = String(q || '').trim().toLowerCase();
+      const items = HELP_ITEMS.concat([helpCatalogItem()].filter(Boolean)).filter(it => !it.admin || (snapshot && snapshot.role === 'admin'));
+      const shown = query ? items.filter(it => helpItemText(it).includes(query)) : items;
+      if (!shown.length) return '<div class="empty">Aucun résultat. Essaie un autre mot (ex. « rattrapage », « canal », « test »).</div>';
+      return HELP_GROUPS.map(gr => {
+        const rows = shown.filter(it => it.g === gr.id);
+        if (!rows.length) return '';
+        return `<div class="home-section-label">${esc(gr.title)}</div>${rows.map(helpItemHtml).join('')}`;
+      }).join('');
+    }
+    function helpFilter(q) {
+      const box = document.getElementById('helpList');
+      if (box) box.innerHTML = helpListHtml(q);
+    }
+    function helpPage() {
+      setNav('help');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Mode d’emploi</span><h2 style="margin-top:7px">❓ Aide</h2>
+        <p class="small">La liste des fonctions du site, à quoi sert chaque bouton et comment créer ses configurations. Clique sur un bouton pour déplier son explication, ou cherche un mot.</p></div></div>
+        <div class="field"><input id="helpSearch" type="search" placeholder="Rechercher : rattrapage, canal, test, après perte…" oninput="helpFilter(this.value)" autocomplete="off"></div>
+        <div id="helpList">${helpListHtml('')}</div>`;
+    }
+
     function bestWeakPage() {
       setNav('strategies');
       const p = snapshot.bestWeakTop || {};
-      const list = p.configs || [];
+      // « Test » et « Détection auto » ont leur propre page : leurs configurations ne sont pas répétées ici
+      const list = (p.configs || []).filter(c => !['test', 'scan', 'relance'].includes(bwModeOf(c)));
       const cards = list.length ? list.map(c => { const m = bwModeOf(c); return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div><span class="eyebrow">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)} · ${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
           <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}Envoi dans : ${esc((c.channelNames || []).join(', '))}</h3>
           <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s)${m === 'multi' ? '' : ` · format ${esc(c.format || 1)}`} · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)${c.cycleLabel ? ` · <b>${esc(c.cycleLabel)}</b>` : ''}</p></div></div>
@@ -1956,15 +2326,17 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
     }
     async function reloadBestWeak() { await refresh(); bestWeakPage(); }
-    function bestWeakRanksHtml(prefix, ranks, forTest) {
+    function bestWeakRanksHtml(prefix, ranks, kind) {
+      const forTest = kind === true || kind === 'test', forRelance = kind === 'relance';
       const labels = (snapshot.bestWeakTop || {}).rankLabels || { 1: 'Le meilleur', 2: 'Le 2ᵉ meilleur', 3: 'Le 3ᵉ meilleur', 4: 'Le plus faible (4ᵉ)' };
-      const on = Array.isArray(ranks) && ranks.length ? ranks : (forTest ? [1, 2] : [1, 4]);
-      return `<div class="field"><label>${forTest ? 'Parmi les 4 : lesquels suivre ? (coche 2 à 4 · on passe au suivant après une perte)' : 'Costumes à proposer (coche au moins 2, jusqu\'à 4)'}</label>
+      const on = Array.isArray(ranks) && ranks.length ? ranks : (forTest || forRelance ? [1, 2] : [1, 4]);
+      return `<div class="field"><label>${forRelance ? 'Parmi les 4 meilleurs : lesquels proposer ? (coche 1, 2 ou 3 · ce qui n\'est pas sorti est relancé à +3)' : forTest ? 'Parmi les 4 : lesquels suivre ? (coche 2 à 4 · on passe au suivant après une perte)' : 'Costumes à proposer (coche au moins 2, jusqu\'à 4)'}</label>
         ${[1, 2, 3, 4].map(r => `<label class="check" style="display:block;margin:4px 0"><input id="${prefix}Rank${r}" type="checkbox" ${on.includes(r) ? 'checked' : ''}> ${esc(labels[r])}</label>`).join('')}</div>`;
     }
     const bwGateField = (prefix, c) => `<label class="check" style="display:block;margin:10px 0"><input id="${prefix}LossGate" type="checkbox" ${c && c.lossGate ? 'checked' : ''}> Envoyer seulement après une perte : prédit le 1ᵉʳ si le 2ᵉ a perdu, ou le 2ᵉ si le 1ᵉʳ a perdu (aucune perte → rien n'est envoyé)</label>`;
-    function readBestWeakRanks(prefix) {
+    function readBestWeakRanks(prefix, kind) {
       const r = [1, 2, 3, 4].filter(n => document.getElementById(`${prefix}Rank${n}`)?.checked);
+      if (kind === 'relance') { if (r.length < 1 || r.length > 3) throw new Error('Coche 1, 2 ou 3 costumes parmi les 4 meilleurs.'); return r; }
       if (r.length < 2) throw new Error('Coche au moins 2 costumes.');
       return r;
     }
@@ -1973,7 +2345,7 @@ Faites-en bon usage !
     // « Créer » depuis la page : on choisit d'abord le type
     function chooseBwType() {
       openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Quel type de configuration ?</h3></div></div>
-        <div style="display:grid;gap:10px;margin-top:10px">${['multi', 'trigger', 'cycle', 'follow', 'scan'].map(m => `<button class="button primary" style="text-align:left" onclick="closeModal();startBwFlow('${m}')">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)}<br><small>${esc(BW_MODES[m].sub)}</small></button>`).join('')}</div>
+        <div style="display:grid;gap:10px;margin-top:10px">${['multi', 'trigger', 'cycle', 'follow'].map(m => `<button class="button primary" style="text-align:left" onclick="closeModal();startBwFlow('${m}')">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)}<br><small>${esc(BW_MODES[m].sub)}</small></button>`).join('')}</div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     // assistant : confirmation → stratégie (celles qui utilisent meilleur et faible) → configuration → enregistrer
@@ -2020,17 +2392,17 @@ Faites-en bon usage !
         ${mode === 'multi' ? '' : bwSimpleFields('bwNew')}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwNewChannels" placeholder="-1001234567890 ou @nomducanal"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwNewMaxR" type="number" min="0" max="9" value="2"></div>
-        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : (mode === 'test' ? bestWeakRanksHtml('bwNew', [1, 2], true) + bwGateField('bwNew') + bwFormatField('bwNew') : bwFormatField('bwNew'))}
+        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : mode === 'relance' ? bestWeakRanksHtml('bwNew', [1, 2], 'relance') : (mode === 'test' ? bestWeakRanksHtml('bwNew', [1, 2], true) + bwGateField('bwNew') + bwFormatField('bwNew') : bwFormatField('bwNew'))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addBestWeak()">Enregistrer</button><button class="button small ghost" onclick="closeModal();startBwFlow('${mode}')">← Retour</button></div>`);
     }
     async function addBestWeak() {
       try {
         const mode = bwWizard.mode;
         const body = { mode, strategy: bwWizard.strategy, channels: ids(val('bwNewChannels')), maxR: val('bwNewMaxR') };
-        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') { body.ranks = readBestWeakRanks('bwNew'); body.lossGate = !!$('#bwNewLossGate')?.checked; } }
+        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else if (mode === 'relance') { body.name = val('bwNewName'); body.ranks = readBestWeakRanks('bwNew', 'relance'); } else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') { body.ranks = readBestWeakRanks('bwNew'); body.lossGate = !!$('#bwNewLossGate')?.checked; } }
         if (mode === 'follow' || mode === 'scan') body.sources = bwWizard.sources;
         await api('/api/best-weak/configs', 'POST', body);
-        closeModal(); await refresh(); if (location.hash === '#/best-weak') bestWeakPage(); else if (location.hash === '#/scan') scanPage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
+        closeModal(); await refresh(); if (location.hash === '#/best-weak') bestWeakPage(); else if (location.hash === '#/scan') scanPage(); else if (location.hash === '#/relance') relancePage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
       } catch (e) { toast(e.message, 'error'); }
     }
     function editBestWeakModal(id) {
@@ -2043,20 +2415,20 @@ Faites-en bon usage !
         ${(m === 'follow' || m === 'scan') ? `<div class="field"><label>Canaux ${m === 'scan' ? 'surveillés' : 'suivis'} (ID séparés par des virgules)</label><input id="bwEditSources" value="${esc((c.sources || []).join(', '))}"></div>` : `<div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>`}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwEditChannels" value="${esc((c.channels || []).join(', '))}"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwEditMaxR" type="number" min="0" max="9" value="${esc(String(c.maxR))}"></div>
-        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : (m === 'test' ? bestWeakRanksHtml('bwEdit', c.ranks, true) + bwGateField('bwEdit', c) + bwFormatField('bwEdit', c) : bwFormatField('bwEdit', c))}
+        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : m === 'relance' ? bestWeakRanksHtml('bwEdit', c.ranks, 'relance') : (m === 'test' ? bestWeakRanksHtml('bwEdit', c.ranks, true) + bwGateField('bwEdit', c) + bwFormatField('bwEdit', c) : bwFormatField('bwEdit', c))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateBestWeak('${esc(id)}','${m}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function updateBestWeak(id, m) {
       try {
         const body = { channels: ids(val('bwEditChannels')), maxR: val('bwEditMaxR') };
         if (m === 'follow' || m === 'scan') body.sources = ids(val('bwEditSources')); else body.strategy = val('bwEditStrategy');
-        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); if (m === 'test') { body.ranks = readBestWeakRanks('bwEdit'); body.lossGate = !!$('#bwEditLossGate')?.checked; } }
+        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else if (m === 'relance') { body.name = val('bwEditName'); body.ranks = readBestWeakRanks('bwEdit', 'relance'); } else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); if (m === 'test') { body.ranks = readBestWeakRanks('bwEdit'); body.lossGate = !!$('#bwEditLossGate')?.checked; } }
         await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', body);
         closeModal(); await refresh(); bwRerender(); toast('Configuration mise à jour.');
       } catch (e) { toast(e.message, 'error'); }
     }
     // ré-affiche la page courante (Meilleur + faible, Test ou Détection auto)
-    function bwRerender() { if (location.hash === '#/scan') return scanPage(); if (location.hash === '#/test') return testCyclePage(); return bestWeakPage(); }
+    function bwRerender() { if (location.hash === '#/scan') return scanPage(); if (location.hash === '#/test') return testCyclePage(); if (location.hash === '#/relance') return relancePage(); return bestWeakPage(); }
     async function toggleBestWeak(id, enabled) {
       try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); bwRerender(); }
       catch (e) { toast(e.message, 'error'); }
@@ -4461,7 +4833,7 @@ Faites-en bon usage !
         for (const o of (opt || [])) { (groups[o.group] = groups[o.group] || []).push(o); }
         return Object.keys(groups).map(g => `<optgroup label="${esc(g)}">${groups[g].map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</optgroup>`).join('');
       };
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Sources multiples</span><h2 style="margin-top:7px">Prédiction combinée pour costume joueur</h2><p class="small">Sélectionne une ou plusieurs stratégies (ou formations) existantes. Pour chacune, coche un ou plusieurs niveaux de rattrapage avec un nombre N — N = combien de fois ce niveau doit arriver D'AFFILÉE avant de déclencher (N=2 → 2 rattrapages 2 consécutifs déclenchent au 2ᵉ ; N=1 → dès le 1ᵉʳ). Une fois déclenché, une nouvelle prédiction est envoyée automatiquement : même costume ou son inverse, +w jeux plus loin. Toujours sur la main du JOUEUR.</p></div><div class="toolbar"><button class="button primary" onclick="addCombinedTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="combinedPage()">Actualiser</button></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Sources multiples</span><h2 style="margin-top:7px">Prédiction combinée pour costume joueur</h2><p class="small">Sélectionne une ou plusieurs stratégies (ou formations) existantes. Pour chacune, coche un ou plusieurs niveaux de rattrapage avec un nombre N — N = combien de fois ce niveau doit arriver D'AFFILÉE avant de déclencher (N=2 → 2 rattrapages 2 consécutifs déclenchent au 2ᵉ ; N=1 → dès le 1ᵉʳ). Une fois déclenché, trois modes au choix pour chaque niveau : relayer la prochaine prédiction de la stratégie (mode par défaut), ou envoyer une nouvelle prédiction du même costume ou de son inverse, +w jeux plus loin. Toujours sur la main du JOUEUR.</p></div><div class="toolbar"><button class="button primary" onclick="addCombinedTrackerModal()">Ajouter une source</button><button class="button ghost" onclick="combinedPage()">Actualiser</button></div></div>
         <div class="two-col">
           <div class="route-card public"><div class="route-title"><i></i><strong>Canal Telegram du panneau</strong></div><p>Ce canal reçoit les prédictions combinées, sauf source avec son propre canal.</p>
             <div class="field"><label>ID ou @nom du canal</label><input id="combinedChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
@@ -4570,6 +4942,7 @@ Faites-en bon usage !
         if (h !== '#/game21') stopGame21Refresh();
         if (h.startsWith('#/strategy/')) await strategyPage(decodeURIComponent(h.split('/')[2]));
         else if (h.startsWith('#/canal/')) await canalPage(decodeURIComponent(h.split('/')[2]));
+        else if (h === '#/help') helpPage();
         else if (h === '#/canaux') await canauxPage();
         else if (h === '#/strategies') strategiesPage();
         else if (h === '#/ai') aiPage();
@@ -4584,6 +4957,8 @@ Faites-en bon usage !
         else if (h === '#/dizaine-top') dizaineTopPage();
         else if (h === '#/best-weak') bestWeakPage();
         else if (h === '#/test') testCyclePage();
+        else if (h === '#/relance') relancePage();
+        else if (h === '#/stability') await stabilityPage();
         else if (h === '#/scan') scanPage();
         else if (h === '#/costume-faible-top') costumeFaibleTopPage();
         else if (h === '#/suit-break') suitBreakPage();
