@@ -1862,7 +1862,7 @@ Faites-en bon usage !
       follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne en ✅0️⃣/✅1️⃣ ; sinon il passe au 2ᵉ. Si un costume sort directement (✅0️⃣) sans l’autre, l’autre est prédit à N+2 ; si les deux sortent, on ignore.' },
       cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
       scan: { icon: '🔎', title: 'Détection auto des canaux', sub: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Tu en sélectionnes un puis tu règles le canal Telegram d’envoi, les rattrapages et le format. Surveillance : si le 1ᵉʳ costume sort directement (✅0️⃣), le 2ᵉ est prédit à N+2 — et inversement. Les deux sortis, ou aucun : rien n’est envoyé.' },
-      relance: { icon: '🔄', title: 'Relance +3', sub: 'Tu choisis 1, 2 ou 3 costumes parmi les 4 meilleurs : un message les affiche avec leur pourcentage. Quand un costume sort directement (✅0️⃣) et que l’autre n’est toujours pas sorti à N+1, le même message est modifié : on y ajoute le numéro de la relance (N+3).' },
+      relance: { icon: '🔄', title: 'Relance +3', sub: 'Tu choisis 1, 2 ou 3 costumes parmi les 4 meilleurs : un message les affiche avec leur pourcentage. Dès qu’un costume est sorti (à n’importe quel rattrapage) et que l’autre n’est toujours pas sorti au jeu suivant, le même message est modifié : on y ajoute le numéro de la relance : le jeu où l’on a vérifié + 2 (N+3 si le premier est sorti direct).' },
       test: { icon: '🧪', title: 'Test meilleur / 2ᵉ meilleur', sub: 'Tu choisis 2 à 4 parmi : le meilleur, le 2ᵉ, le 3ᵉ, le plus faible. On commence par le premier et on y reste tant qu’il gagne. Après une perte, la prochaine prédiction vient du suivant ; avec 2 choix (meilleur et 2ᵉ), on alterne entre les deux.' },
     };
     let bwWizard = { mode: 'multi', strategy: null };
@@ -1915,7 +1915,7 @@ Faites-en bon usage !
     // 🔄 « Relance +3 » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
     // celui qui n'est pas venu est relancé dans un nouveau message à N+3 (voir best-weak-top.js, mode « relance »)
     // -------------------------------------------------------------------
-    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort directement et ♦️ n’est pas sorti à N+1', '', '♣️✅0️⃣ 95%', ' ┣━ N°1135', ' ┣━ N°1138⏳', '♦️⏳ 94%'].join('\n');
+    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas sorti au jeu suivant', '', '♣️✅0️⃣ 95%', ' ┣━ N°1135', ' ┣━ N°1138⏳', '♦️⏳ 94%'].join('\n');
     function relancePage() {
       setNav('relance');
       const p = snapshot.bestWeakTop || {};
@@ -2102,17 +2102,17 @@ Faites-en bon usage !
           'Il faut au moins 2 configurations classées aujourd’hui, sinon rien n’est envoyé.',
         ] },
       { g: 'ops', icon: '🔄', title: 'Relance +3', hash: '#/relance',
-        what: 'Un message avec 1, 2 ou 3 costumes parmi les 4 meilleurs. Si un costume sort directement (✅0️⃣) et que l’autre n’est toujours pas sorti au jeu suivant (N+1), le même message est modifié : on y ajoute seulement le numéro de la relance à +3.',
+        what: 'Un message avec 1, 2 ou 3 costumes parmi les 4 meilleurs. Dès qu’un costume est sorti (✅0️⃣, ✅1️⃣, ✅2️⃣… peu importe le rattrapage) et que l’autre n’est toujours pas sorti au jeu suivant, le même message est modifié : on y ajoute seulement le numéro de la relance : le jeu où l’on vient de vérifier (N+r+1) + 2, soit N+r+3 (N+3 si le premier est sorti direct).',
         steps: [
           'Ouvre « Relance +3 » et clique sur « Créer ».',
           'Choisis la stratégie qui utilise meilleur et faible : Dizaine ou Costume faible.',
           'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible.',
         ],
         tips: [
-          'Exemple avec 2 cochés : ♣️ 95% / N°1135 / ♦️ 94%. ♣️ sort directement et ♦️ n’est pas sorti à N+1 : le message devient ♣️✅0️⃣ 95% / N°1135 / N°1138⏳ / ♦️⏳ 94%. Le ⏳ à côté du numéro devient ✅ ou ❌ une fois la relance jouée.',
-          'Pas de relance si les deux costumes sortent, si l’autre sort à N ou à N+1, si les deux sont perdus ❌, ou si un seul sort à un rattrapage sans être sorti directement (✅0️⃣).',
-          'La relance est décidée à N+1 : si l’autre costume sort ensuite à N+2, la relance à +3 reste quand même (le costume garde son ✅2️⃣, le numéro de relance passe à ✅ ou ❌ après son jeu).',
-          'Avec 3 costumes cochés, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Sans rattrapage (0), la relance part dès le jeu N.',
+          'Exemple avec 2 cochés : ♣️ 95% / N°1135 / ♦️ 94%. ♣️ sort directement et ♦️ n’est pas sorti à N+1 : relance à N+3 (si ♣️ sort à N+1 et ♦️ pas à N+2 : relance à N+4, etc.). Le message devient ♣️✅0️⃣ 95% / N°1135 / N°1138⏳ / ♦️⏳ 94%. Le ⏳ à côté du numéro devient ✅ ou ❌ une fois la relance jouée.',
+          'Exemple : N°472, ♥️✅1️⃣ (jeu 473), ♣️ pas sorti au jeu 474 : ♣️ est relancé à N°476 (474 + 2). Pas de relance si les deux costumes sortent avant, si aucun ne sort (perdu ❌), ou si le jeu visé est déjà joué.',
+          'La relance est décidée au jeu suivant la sortie du premier costume : même si l’autre costume sort ensuite, la relance annoncée reste (le costume garde son ✅, le numéro de relance passe à ✅ ou ❌ après son jeu).',
+          'Avec 3 costumes cochés, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Si les rattrapages sont épuisés avant ce jeu suivant (ex. 0 rattrapage), la relance part tout de suite.',
           'La relance est comptée comme une prédiction à part dans les gagnés / perdus de la configuration.',
         ] },
       { g: 'ops', icon: '🛡️', title: 'Stabilité du jeu', hash: '#/stability',
