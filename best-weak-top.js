@@ -36,7 +36,7 @@
 //       ♦️⏳ 94%
 //
 //   Pas de relance si les deux costumes sortent, si l'autre sort à N ou N+1, ou si aucun ne sort directement (perdu, ou un
-//   seul costume sorti à un rattrapage). Si l'autre sort à N+2 (avant N+3), le N° de la relance est retiré du message.
+//   seul costume sorti à un rattrapage). La relance annoncée à N+1 reste, même si l'autre costume sort ensuite à N+2.
 //   Avec 3 costumes, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Sans rattrapage (0),
 //   on ne peut pas attendre N+1 : la relance part dès le jeu N.
 //
@@ -327,7 +327,7 @@ function predictionText(target, items, withResults, forcePending, extraTargets) 
   const branches = [` ┣━ N°${target}`, ...(Array.isArray(extraTargets) ? extraTargets : []).map((t) => ` ┣━ N°${t}`)];
   const cut = Math.ceil(lines.length / 2); // les numéros se placent après la moitié des costumes (1 costume : en tête)
   const rows = [...lines.slice(0, cut), ...branches, ...lines.slice(cut)];
-  return `<pre>${rows.join('\n')}</pre>`;
+  return rows.join('\n'); // texte normal (pas de bloc <pre> / code) : envoyé en HTML sans balise
 }
 // message simple du mode « déclencheur » (même moteur de formats que les autres stratégies)
 function triggerMessage(entryLike, statusFr) {
@@ -712,17 +712,11 @@ function editMulti(entry) {
   const root = chain[0];
   if (chain.length === 1) { editAll(root, predictionText(root.target, root.suits, true, !!root.relaunch), 'HTML'); return; }
   const items = root.suits.map((s) => ({ ...s, res: chainRes(chain, s.suit) }));
-  // une relance dont tous les costumes sont déjà sortis avant son jeu n'est plus affichée
-  const shown = chain.filter((e, i) => i > 0 && !e.suits.every((s) => chain.slice(0, i).some((p) => p.suits.some((x) => x.suit === s.suit && x.res >= 0))));
+  const shown = chain.slice(1); // chaque relance annoncée garde son numéro (⏳ → ✅ / ❌ une fois jouée)
   editAll(root, predictionText(root.target, items, true, true, shown.map((e) => `${e.target}${e.status === 'gagné' ? '✅' : e.status === 'perdu' ? '❌' : '⏳'}`)), 'HTML');
 }
 function verifyMulti(entry, cfg, maxDone) {
   let changed = false;
-  if (entry.relaunch && entry.status === 'en attente') { // le costume est sorti entre-temps (rattrapage du message d'origine) : relance sans objet
-    const chain = relaunchChain(entry); const idx = chain.indexOf(entry);
-    const prev = chain.slice(0, Math.max(0, idx));
-    if (entry.suits.every((s) => prev.some((e) => e.suits.some((x) => x.suit === s.suit && x.res >= 0)))) { entry.status = 'annulé'; entry.resolvedAt = Date.now(); return true; }
-  }
   const unresolved = () => entry.suits.filter((s) => s.res === undefined || s.res === null);
   let guard = 0;
   while (entry.status === 'en attente' && guard++ <= entry.maxR + entry.gap + 8) {

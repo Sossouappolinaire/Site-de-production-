@@ -230,7 +230,9 @@ app.use((req, res, next) => {
   });
 });
 
+const appVersion = require('./version');
 app.get('/health', (req, res) => res.send('ok'));
+app.get('/api/version', (req, res) => res.json(appVersion));
 
 // ---------------------------------------------------------------------------
 // Panneau administrateur « Utilisateurs » — réservé à l'administrateur :
@@ -337,6 +339,7 @@ app.get('/api/state', async (req, res) => {
   const channelList = configuredChannelList(); // liste unique des canaux (tous les boutons), partagée par toutes les pages
   const aiCreatedKeys = new Set(aiRepair.status().createdStrategyKeys || []);
   res.json({
+    appVersion,
     role: req.session ? req.session.role || null : null,
     b: state.B,
     maxR: state.maxR,
@@ -2351,12 +2354,84 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   }
   const globalChannels = await resolveIds(Array.isArray(state.activeChannels) ? state.activeChannels : []);
   globalChannels.forEach((c) => addSource(c, 'Canaux actifs globaux / référence'));
+  // boutons qui n'étaient pas dans cette vue (Meilleur + plus faible, Relance, Test, Dizaine, Costume faible, Type de mise, Copie…)
+  try { for (const c of configuredChannelList()) for (const src of c.sources) addSource({ id: c.id, title: c.title }, src); } catch (_) {}
   res.json({
     bot, control: predictionControl.status(),
     globalChannels,
     allChannels: [...channelSources.values()],
     strategies: out, panels,
   });
+});
+
+
+// ---------------------------------------------------------------------------
+// Supprimer un canal PARTOUT (page « Envois ») : il est retiré de chaque réglage où il figure
+// (stratégies public / silencieux, panneaux, configurations suivies, Meilleur + plus faible, Relance,
+// Test, Dizaine, Costume faible, Type de mise, Copie et annonce, Jeu 21, Formation, canaux actifs).
+// Les configurations elles-mêmes restent, mais sans ce canal.
+// ---------------------------------------------------------------------------
+const CHANNEL_LIST_KEY = /(channels|channelinfos?)$/i;
+const CHANNEL_SKIP_KEYS = new Set(['sources', 'detected', 'channelTitles', 'pending', 'recentSent', 'watch', 'history', 'messages', 'blockChannels']);
+function sameChannel(item, id) {
+  const v = item && typeof item === 'object' ? (item.id != null ? item.id : item.chatId) : item;
+  return v != null && String(v).trim().toLowerCase() === String(id).trim().toLowerCase();
+}
+// retire `id` de toutes les listes de canaux de `node` (récursif) ; retourne le nombre de retraits
+function stripChannelDeep(node, id, depth = 0, seen = new Set()) {
+  if (!node || typeof node !== 'object' || depth > 7 || seen.has(node)) return 0;
+  seen.add(node);
+  let n = 0;
+  if (Array.isArray(node)) { for (const x of node) n += stripChannelDeep(x, id, depth + 1, seen); return n; }
+  for (const key of Object.keys(node)) {
+    if (CHANNEL_SKIP_KEYS.has(key)) continue;
+    const v = node[key];
+    if (Array.isArray(v) && CHANNEL_LIST_KEY.test(key)) {
+      const kept = v.filter((x) => !sameChannel(x, id));
+      if (kept.length !== v.length) { n += v.length - kept.length; node[key] = kept; }
+    } else if (key === 'categoryChannels' && v && typeof v === 'object') {
+      for (const c of Object.keys(v)) if (Array.isArray(v[c])) { const kept = v[c].filter((x) => !sameChannel(x, id)); n += v[c].length - kept.length; v[c] = kept; }
+    } else if (v && typeof v === 'object') n += stripChannelDeep(v, id, depth + 1, seen);
+  }
+  return n;
+}
+async function removeChannelEverywhere(id) {
+  const removed = [];
+  const note = (label, n) => { if (n > 0) removed.push(label); };
+  for (const def of strategies.LIST) {
+    const cfg = state.strategies[def.key];
+    const n = stripChannelDeep(cfg, id);
+    if (n > 0) { removed.push(def.name); try { if (db.ready) await db.saveStrategy(def.key, def.name, cfg); } catch (_) {} }
+  }
+  const modules = [
+    ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
+    ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Statistiques', statistics],
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
+    ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+  ];
+  for (const [label, mod] of modules) {
+    try {
+      const n = stripChannelDeep(mod.panel, id);
+      if (n > 0) {
+        note(label, n);
+        if (typeof mod.persist === 'function') await mod.persist(); else if (typeof mod.configure === 'function') mod.configure({});
+      }
+    } catch (e) { console.error('[channel-remove]', label, e.message); }
+  }
+  if (Array.isArray(state.activeChannels)) {
+    const kept = state.activeChannels.filter((x) => !sameChannel(x, id));
+    if (kept.length !== state.activeChannels.length) { state.activeChannels = kept; note('Canaux actifs', 1); }
+  }
+  try { persist(); } catch (_) {}
+  return removed;
+}
+app.delete('/api/diagnostics/channels/:id', async (req, res) => {
+  try {
+    const id = decodeURIComponent(String(req.params.id || '')).trim();
+    if (!id) return res.status(400).json({ error: 'Identifiant de canal manquant' });
+    const removed = await removeChannelEverywhere(id);
+    res.json({ ok: true, id, removedFrom: removed });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // --- interrupteur global « arrêter / démarrer / planifier » (même logique

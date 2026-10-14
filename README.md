@@ -511,7 +511,7 @@ message** est édité : on y ajoute seulement le numéro de la relance (N+3) ; l
     ♦️⏳ 94%
 
 - **Pas de relance** : les deux costumes sortent ; l'autre sort à N ou à N+1 ; les deux sont perdus (❌) ; un seul sort à un rattrapage (✅2️⃣…) sans être sorti directement.
-- L'autre sort à N+2 (avant N+3) : le numéro de la relance est retiré du message. Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort à N+3 : ♦️✅0️⃣ ; jamais : ♦️❌.
+- L'autre sort à N+2 (après l'annonce de la relance) : la relance à N+3 reste affichée et jouée (le costume garde son ✅2️⃣). Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort à N+3 : ♦️✅0️⃣ ; jamais : ♦️❌.
 - Avec 3 costumes, la relance en contient 2, même règle pour la suite (3 relances au maximum). Sans rattrapage (0), la relance part dès le jeu N.
 - La relance compte comme une prédiction à part dans les gagnés / perdus de la configuration.
 - Avec 1 seul costume, pas de relance. Une configuration n'envoie jamais deux messages pour le même numéro de jeu.
@@ -538,3 +538,13 @@ reçoivent des prédictions, à cocher → nom, ID du canal où envoyer, rattrap
 messages à plusieurs costumes qu'il publie lui-même dans les canaux cochés (`♦️ 95% … N°884`) :
 - **rotation** : 1ᵉʳ costume au 1ᵉʳ message, 2ᵉ au suivant, 3ᵉ au suivant s'il y en a 3 ; avec 2 costumes, retour au 1ᵉʳ ;
 - **motif** : le 1ᵉʳ costume gagne (jeu N) puis le 2ᵉ gagne au rattrapage (jeu N+1) → le 2ᵉ costume est prédit au jeu N+2.
+
+## Version du ZIP et page « Envois » (v28)
+
+- **Numéro de version** : fichier `version.js` (ex. `v28 · relance-arbre-envois · 2026-10-14`). Il s'affiche en bas de l'accueil, dans « Aide », sur
+  « Envois », et `GET /api/version` le renvoie. Si le site affiche « Version inconnue », l'ancien fichier est encore déployé. À modifier à chaque nouveau ZIP.
+- **Envois → « Tous les canaux effectivement utilisés »** : liste complète, un canal une seule fois avec tous les boutons qui lui envoient
+  (stratégies, panneaux, Meilleur + plus faible, Relance, Test, Dizaine, Costume faible, Type de mise, Copie et annonce, Jeu 21, Formation…).
+- **🗑 Supprimer** : `DELETE /api/diagnostics/channels/:id` retire le canal de TOUS ces réglages (listes `channels`, `publishedChannels`,
+  `shadowChannels`, `destChannels`, `exactChannels`, `valueChannels`, `categoryChannels`, canaux actifs) et enregistre. Les configurations restent mais n'envoient
+  plus rien tant qu'un autre canal n'est pas renseigné. Les canaux « sources » surveillés (Suivi des canaux, Détection auto) ne sont pas touchés.
