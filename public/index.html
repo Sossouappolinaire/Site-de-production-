@@ -1864,7 +1864,7 @@ Faites-en bon usage !
       follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne en ✅0️⃣/✅1️⃣ ; sinon il passe au 2ᵉ. Si un costume sort directement (✅0️⃣) sans l’autre, l’autre est prédit à N+2 ; si les deux sortent, on ignore.' },
       cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
       scan: { icon: '🔎', title: 'Détection auto des canaux', sub: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Tu en sélectionnes un puis tu règles le canal Telegram d’envoi, les rattrapages et le format. Surveillance : si le 1ᵉʳ costume sort directement (✅0️⃣), le 2ᵉ est prédit à N+2 — et inversement. Les deux sortis, ou aucun : rien n’est envoyé.' },
-      relance: { icon: '🔄', title: 'Relance', sub: 'Tu choisis 1, 2 ou 3 costumes parmi les 4 meilleurs : un message les affiche avec leur pourcentage. Dès qu’un costume est sorti et que l’autre n’est toujours pas venu à N+2, le même message est modifié : on y ajoute le numéro de la relance (N+7 par défaut), placé à côté du costume relancé. Option : analyse auto du +n, et relance envoyée aussi vers un autre canal.' },
+      relance: { icon: '🔄', title: 'Relance', sub: 'Tu choisis 1, 2 ou 3 costumes parmi les 4 meilleurs : un message les affiche avec leur pourcentage. Dès qu’un costume est sorti et que l’autre n’est toujours pas venu au jeu suivant, le même message est modifié : on y ajoute le numéro de la relance (jeu du ✅ + 7 par défaut), placé à côté du costume relancé. Option : analyse auto du +n, et relance envoyée aussi vers un autre canal.' },
       test: { icon: '🧪', title: 'Test meilleur / 2ᵉ meilleur', sub: 'Tu choisis 2 à 4 parmi : le meilleur, le 2ᵉ, le 3ᵉ, le plus faible. On commence par le premier et on y reste tant qu’il gagne. Après une perte, la prochaine prédiction vient du suivant ; avec 2 choix (meilleur et 2ᵉ), on alterne entre les deux.' },
     };
     let bwWizard = { mode: 'multi', strategy: null };
@@ -1917,7 +1917,7 @@ Faites-en bon usage !
     // 🔄 « Relance » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
     // celui qui n'est pas venu est relancé dans un nouveau message à N+3 (voir best-weak-top.js, mode « relance »)
     // -------------------------------------------------------------------
-    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas venu jusqu’à N+2 → relance à N+7', '', '♦️⏳ 94%', ' ┣━ N°1142⏳', ' ┣━ N°1135✅', '♣️✅0️⃣ 95%'].join('\n');
+    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas venu au jeu suivant → relance à (jeu du ✅) + 7', '', '♦️⏳ 94%', ' ┣━ N°1142⏳', ' ┣━ N°1135✅', '♣️✅0️⃣ 95%'].join('\n');
     // résumé de la règle de relance, de l'analyse du +n et du canal de relance
     function relanceInfoHtml(c) {
       const r = c.relaunch || {};
@@ -1927,7 +1927,7 @@ Faites-en bon usage !
         ? `<p class="small"><b>Analyse du +n</b> (de +3 à +${esc(r.maxN)}) : ${rows.map(x => `<span ${x.rate === best ? 'class="good"' : ''}>+${esc(x.k)} : ${esc(x.rate)}% (${esc(x.hit)}/${esc(x.n)})</span>`).join(' · ')}<br>${r.autoOffset ? `✅ +${esc(r.autoOffset)} appliqué automatiquement` : `⏳ En attente du verdict (${esc(r.minSample)} situations minimum) : aucune relance n’est envoyée en attendant`}</p>`
         : `<p class="small"><b>Analyse du +n</b> : aucune situation observée pour l’instant (il faut ${esc(r.minSample)} situations pour que l’analyse rende son verdict) : aucune relance n’est envoyée en attendant</p>`) : '';
       const out = (r.channelNames || []).length ? `<p class="small">📣 Relance aussi vers ${esc(r.channelNames.join(', '))} · format ${esc(c.relFormat || 1)} · ${esc(c.relMaxR ?? 2)} rattrapage(s) · <b class="good">${esc(c.relOutWins || 0)}</b> gagné(s) · <b class="bad">${esc(c.relOutLosses || 0)}</b> perdu(s)</p>` : '';
-      return `<p class="small">Règle : attente jusqu’à N+${esc(r.wait)} → relance à <b>${r.awaiting ? 'N+? (verdict de l’analyse)' : 'N+' + esc(r.effective)}</b>${r.auto && !r.awaiting ? ' (auto)' : ''}</p>${analysis}${out}`;
+      return `<p class="small">Règle : attente de ${esc(r.wait)} jeu(x) après la sortie du 1ᵉʳ costume → relance à <b>${r.awaiting ? '(jeu du ✅) + ? (verdict de l’analyse)' : '(jeu du ✅) + ' + esc(r.effective)}</b>${r.auto && !r.awaiting ? ' (auto)' : ''}</p>${analysis}${out}`;
     }
     function relancePage() {
       setNav('relance');
@@ -2126,15 +2126,15 @@ Faites-en bon usage !
           'Il faut au moins 2 configurations classées aujourd’hui, sinon rien n’est envoyé.',
         ] },
       { g: 'ops', icon: '🔄', title: 'Relance', hash: '#/relance',
-        what: 'Un message avec 1, 2 ou 3 costumes parmi les 4 meilleurs. Dès qu’un costume est sorti (✅0️⃣, ✅1️⃣, ✅2️⃣…) et que l’autre n’est toujours pas venu à N+2, le même message est modifié : on y ajoute le numéro de la relance (N+7 par défaut), placé à côté du costume relancé. Attente et numéro sont réglables.',
+        what: 'Un message avec 1, 2 ou 3 costumes parmi les 4 meilleurs. Dès qu’un costume est sorti (✅0️⃣, ✅1️⃣, ✅2️⃣…) et que l’autre n’est toujours pas venu au jeu suivant, le même message est modifié : on y ajoute le numéro de la relance (jeu du ✅ + 7 par défaut), placé à côté du costume relancé. Attente et numéro sont réglables.',
         steps: [
           'Ouvre « Relance » et clique sur « Créer ».',
           'Choisis la stratégie qui utilise meilleur et faible : Dizaine ou Costume faible.',
-          'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible. Règle l’attente (N+2) et la relance (N+7) si besoin.',
+          'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible. Règle l’attente (jeux après la sortie du 1ᵉʳ costume) et la relance (+n) si besoin.',
         ],
         tips: [
-          'Exemple : N°1135, ♣️ sort directement, ♦️ n’est pas venu à N+1 ni à N+2 : ♦️ est relancé à N°1142 (1135 + 7). Le message devient ♦️⏳ 94% / N°1142⏳ / N°1135✅ / ♣️✅0️⃣ 95% : chaque numéro est à côté de son costume. Le ⏳ devient ✅ ou ❌ une fois la relance jouée.',
-          'Pas de relance si les deux costumes sortent avant N+2, si aucun ne sort (perdu ❌), ou si le jeu visé est déjà joué. Même si l’autre costume sort ensuite, la relance annoncée reste.',
+          'Exemple : N°1135, ♣️ sort directement, ♦️ n’est pas venu au jeu suivant (N°1136) : ♦️ est relancé à N°1142 (1135 + 7, le jeu où ♣️ est sorti + n). Le message devient ♦️⏳ 94% / N°1142⏳ / N°1135✅ / ♣️✅0️⃣ 95% : chaque numéro est à côté de son costume. Le ⏳ devient ✅ ou ❌ une fois la relance jouée.',
+          'Pas de relance si les deux costumes sortent pendant l’attente, si aucun ne sort (perdu ❌), ou si le jeu visé est déjà joué. Même si l’autre costume sort ensuite, la relance annoncée reste.',
           'Analyse auto du +n : coche l’option et choisis le +n maximum. À chaque relance, le bot regarde de +3 jusqu’à +n si le costume relancé est sorti (au jeu visé ou dans ses rattrapages). Après 8 situations minimum, le +n le plus réussi est appliqué tout seul (les résultats par +n sont affichés sur la carte). Analyse auto cochée : le N+7 fixe n’est plus utilisé, la relance attend le verdict de l’analyse (aucune relance n’est envoyée avant).',
           'Relance vers un autre canal : renseigne l’ID du canal, le format de prédiction et le nombre de rattrapages. Chaque costume relancé y est envoyé en message simple et vérifié à part (gagnés / perdus comptés à part).',
           'Avec 3 costumes cochés, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum).',
@@ -2379,13 +2379,13 @@ Faites-en bon usage !
     }
     const bwSimpleFields = (prefix, c) => `<div class="field"><label>Nom</label><input id="${prefix}Name" value="${esc((c && c.name) || '')}" placeholder="Ex. Cycle du soir"></div>`;
     const bwFormatField = (prefix, c) => { const n = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101; return `<div class="field"><label>Format de prédiction (1 → ${esc(n)})</label><input id="${prefix}Format" type="number" min="1" max="${esc(n)}" value="${esc(String((c && c.format) || 1))}"></div>`; };
-    // 🔄 Réglages de la relance : attente (N+2), numéro de la relance (N+7), analyse auto du +n, envoi vers un autre canal
+    // 🔄 Réglages de la relance : attente (jeux après le 1ᵉʳ ✅), numéro de la relance (+n), analyse auto du +n, envoi vers un autre canal
     function bwRelanceFields(prefix, c) {
       c = c || {};
       const n = (id, label, v, min, max) => `<div class="field"><label>${label}</label><input id="${prefix}${id}" type="number" min="${min}" max="${max}" value="${esc(String(v))}"></div>`;
       const fc = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101;
-      return `<div class="field" style="margin-top:14px"><b>🔄 Règle de relance</b><br><small>Un costume sort, l’autre ne vient pas jusqu’à N+… (attente) : il est alors relancé à N+….</small></div>
-        ${n('RelWait', 'Attendre que le costume pas venu ne sorte pas jusqu’à N+… (0 → 6)', c.relWait ?? 2, 0, 6)}
+      return `<div class="field" style="margin-top:14px"><b>🔄 Règle de relance</b><br><small>Un costume sort, l’autre ne vient pas pendant l’attente (jeux après le 1ᵉʳ ✅) : il est alors relancé à (jeu du ✅) + n.</small></div>
+        ${n('RelWait', 'Jeux à attendre après la sortie du 1ᵉʳ costume, avant de relancer (0 → 6)', c.relWait ?? 1, 0, 6)}
         ${n('RelOffset', 'Puis relancer à N+… (3 → 40 · ignoré si l’analyse auto est cochée)', c.relOffset ?? 7, 3, 40)}
         <label class="check" style="display:block;margin:10px 0"><input id="${prefix}RelAuto" type="checkbox" ${c.relAuto ? 'checked' : ''}> Analyse auto du +n : le bot vérifie de +3 jusqu’à +n si le costume relancé sort, puis applique tout seul le +n le plus réussi. Coché : le N+7 fixe n’est plus utilisé, la relance attend le verdict de l’analyse</label>
         ${n('RelMaxN', '+n maximum à analyser (de +3 jusqu’à +n)', c.relMaxN ?? 12, 3, 40)}
@@ -5033,6 +5033,7 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique</span><h2 style="margin-top:7px">Derniers envois combinés</h2></div></div>
           ${history.length ? `<table><thead><tr><th>Source</th><th>Déclenché par</th><th>Mode</th><th>Jeu</th><th>Costume</th><th>Envoyé</th></tr></thead><tbody>${history.map(h => `<tr><td>${esc(h.trackerName)}</td><td>${esc(h.triggeredBy || '—')}</td><td>${h.mode === 'inverse' ? 'Inverse' : h.mode === 'meme' ? 'Même costume' : 'Relais'}</td><td class="mono">#N${esc(h.target)}</td><td>${esc(h.suit || '—')}</td><td>${formatDate(h.sentAt)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Aucun envoi combiné pour le moment.</div>'}</section>`;
     }
+    const COMBINED_LEVEL_LABELS = { r1: 'Rattrapage 1', r2: 'Rattrapage 2', r3: 'Rattrapage 3', perdue: 'Perdue' };
     function combinedRuleRows(prefix, rules) {
       const r = rules || {};
       return ['r1', 'r2', 'r3', 'perdue'].map((k) => {
