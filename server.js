@@ -1944,6 +1944,7 @@ app.post('/api/best-weak/configs', async (req, res) => {
   try {
     const b = req.body || {};
     await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    if (b.relChannels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.relChannels)); // canal de relance (facultatif)
     const c = bestWeakTop.addConfig(b);
     res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1952,6 +1953,7 @@ app.put('/api/best-weak/configs/:id', async (req, res) => {
   try {
     const b = req.body || {};
     if (b.channels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    if (b.relChannels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.relChannels));
     const c = bestWeakTop.updateConfig(req.params.id, b);
     if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
     res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });

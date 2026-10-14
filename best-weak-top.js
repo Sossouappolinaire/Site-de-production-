@@ -39,6 +39,11 @@
 //   Pas de relance si les deux costumes sortent avant, si aucun ne sort (perdu), ou si le jeu visé est déjà joué. La relance annoncée reste,
 //   même si l'autre costume sort ensuite à N+2 / N+3. Avec 3 costumes, il en reste 2 dans la relance ; même règle pour la suite
 //   (3 relances au maximum). Rattrapages épuisés avant le jeu suivant (ex. 0 rattrapage) : la relance part tout de suite.
+//   v35 — NOUVELLE RÈGLE : on attend que le costume pas venu ne sorte pas jusqu'à N+2 (réglable), puis il est relancé à N+7 (réglable).
+//   « Analyse auto du +n » : à chaque relance décidée, on regarde pour +3 … +n si le costume pas venu est sorti ; le +k le plus réussi
+//   (après 8 situations minimum) est appliqué tout seul. Analyse auto cochée : le N+7 fixe n'est plus utilisé, aucune relance n'est envoyée
+//   tant que l'analyse n'a pas rendu son verdict (on observe seulement). Option « relance vers un autre canal » : un message simple par costume relancé,
+//   avec son propre format de prédiction et son propre nombre de rattrapages (gagnés / perdus comptés à part).
 //
 // ─── Mode « détection auto » (🔎) : trouver tout seul les canaux qui publient ce format à deux costumes ────────────
 //       ♦️ 100%─────┐
@@ -105,7 +110,11 @@ const KEYCAP = (n) => `${Number(n)}\uFE0F\u20E3`;
 const dayKey = (ts = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
 
 const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance']; // + « multi » (par défaut)
-const RELAUNCH_OFFSET = 3;   // mode relance : le costume pas sorti est relancé à N+r+3 (= jeu vérifié N+r+1, plus 2) ; r=0 : N+3
+const RELAUNCH_WAIT = 2;      // mode relance : le costume pas sorti ne doit pas venir jusqu'à N+2 …
+const RELAUNCH_OFFSET = 7;    // … alors il est relancé à N+7 (réglable ; ou choisi par l'analyse auto)
+const RELAUNCH_MIN_OFFSET = 3; // analyse auto : on teste les relances de +3 jusqu'à +n
+const RELAUNCH_N_MAX = 12;    // +n par défaut de l'analyse auto
+const RELAUNCH_MIN_SAMPLE = 8; // nombre minimum de situations observées avant d'appliquer le +n trouvé par l'analyse
 const RELAUNCH_MAX_DEPTH = 3; // relances en chaîne (3 costumes → 2 puis 1)
 const RELAUNCH_DEFAULT_RANKS = [1, 2];
 const SRC_MODES = ['follow', 'scan'];                          // modes qui surveillent des canaux sources (c.sources)
@@ -119,6 +128,8 @@ const panel = {
 const inflight = new Set(); // « configuration:jeu » en cours d'envoi (verrou anti-doublon)
 let sender = null;
 function setSender(fn) { sender = typeof fn === 'function' ? fn : null; }
+let adminIdFn = null; // chat privé de l'administrateur (verdict de l'analyse du +n)
+function setAdminId(fn) { adminIdFn = typeof fn === 'function' ? fn : null; }
 
 // fournisseurs de pourcentage « en direct » (un par stratégie, enregistrés par les stratégies elles-mêmes)
 const pctProviders = {};
@@ -156,6 +167,36 @@ const simpleMode = (c) => !multiLike(c); // tout sauf « multi » et « relance 
 const hasRanksMode = (m) => m === 'multi' || m === 'test' || m === 'relance';
 const defaultRanks = (m) => (m === 'test' ? TEST_DEFAULT_RANKS : m === 'relance' ? RELAUNCH_DEFAULT_RANKS : DEFAULT_RANKS).slice();
 const srcMode = (c) => SRC_MODES.includes(modeOf(c));
+// ── réglages du mode relance : attente (N+2), numéro de la relance (N+7), analyse auto du +n, envoi vers un autre canal ──
+const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
+function relaunchFields(input, cur) {
+  const o = cur || {};
+  const g = (k) => (input && input[k] !== undefined ? input[k] : o[k]);
+  const relWait = clampInt(g('relWait'), 0, 6, RELAUNCH_WAIT);
+  const relOffset = clampInt(g('relOffset'), RELAUNCH_MIN_OFFSET, 40, RELAUNCH_OFFSET);
+  const relMaxN = clampInt(g('relMaxN'), RELAUNCH_MIN_OFFSET, 40, RELAUNCH_N_MAX);
+  if (relOffset <= relWait) throw new Error(`La relance (N+${relOffset}) doit venir après l'attente (N+${relWait}).`);
+  if (relMaxN <= relWait) throw new Error(`Le +n de l'analyse (+${relMaxN}) doit être plus grand que l'attente (N+${relWait}).`);
+  return {
+    relWait, relOffset, relMaxN, relAuto: !!g('relAuto'),
+    relChannels: parseChannels(g('relChannels')), relFormat: sanitizeFormat(g('relFormat')), relMaxR: sanitizeMaxR(g('relMaxR')),
+  };
+}
+function loadRelaunch(c) { // configuration enregistrée : valeurs par défaut si un réglage manque ou est invalide
+  let f; try { f = relaunchFields(c, null); } catch (_) { f = relaunchFields({}, null); }
+  const stats = {};
+  if (c.relStats && typeof c.relStats === 'object') for (const [k, v] of Object.entries(c.relStats)) if (v && Number(v.n) > 0) stats[String(Number(k))] = { n: Number(v.n), hit: Number(v.hit) || 0 };
+  return { ...f, relStats: stats, relObs: Array.isArray(c.relObs) ? c.relObs.slice(-80) : [], relOffsetAuto: Number(c.relOffsetAuto) >= RELAUNCH_MIN_OFFSET ? Number(c.relOffsetAuto) : null,
+    relOutWins: Number(c.relOutWins) || 0, relOutLosses: Number(c.relOutLosses) || 0, relOutSent: Number(c.relOutSent) || 0 };
+}
+const relaunchWait = (c) => { const n = Number(c && c.relWait); return Number.isFinite(n) ? n : RELAUNCH_WAIT; };
+// numéro de la relance : +n trouvé par l'analyse auto (si activée et assez de situations observées), sinon le réglage fixe
+// analyse auto cochée mais pas encore de verdict : aucune relance n'est envoyée (on observe seulement), le N+7 fixe n'est PAS utilisé
+const relaunchAwaitingVerdict = (c) => !!(c && c.relAuto && !(Number(c.relOffsetAuto) >= RELAUNCH_MIN_OFFSET));
+function relaunchOffset(c) {
+  if (c && c.relAuto && Number(c.relOffsetAuto) >= RELAUNCH_MIN_OFFSET) return Number(c.relOffsetAuto);
+  return c && Number(c.relOffset) >= RELAUNCH_MIN_OFFSET ? Number(c.relOffset) : RELAUNCH_OFFSET;
+}
 // rangs choisis (mode multi) : au moins 2, au plus 4, parmi 1 (meilleur) · 2 · 3 · 4 (plus faible)
 function sanitizeRanks(v, mode) {
   const list = Array.isArray(v) ? v : String(v == null ? '' : v).split(/[\s,;]+/);
@@ -185,7 +226,7 @@ function applySaved(saved) {
   panel.configs = (Array.isArray(saved.configs) ? saved.configs : []).map((c) => {
     const mode = modeOf(c);
     const src = SRC_MODES.includes(mode);
-    return {
+    const o = {
       id: String(c.id), mode, name: sanitizeName(c.name), strategy: src ? mode : (sanitizeStrategy(c.strategy) || 'dizaine'), channels: parseChannels(c.channels),
       sources: src ? parseChannels(c.sources).map(String) : [], rot: c.rot && typeof c.rot === 'object' ? c.rot : {},
       maxR: sanitizeMaxR(c.maxR), format: sanitizeFormat(c.format),
@@ -195,6 +236,8 @@ function applySaved(saved) {
       enabled: c.enabled !== false, sentCount: Number(c.sentCount) || 0, wins: Number(c.wins) || 0, losses: Number(c.losses) || 0, lastSentAt: c.lastSentAt || null,
       lossGate: mode === 'test' && !!c.lossGate, gateFrom: [1, 2, 3, 4].includes(Number(c.gateFrom)) ? Number(c.gateFrom) : null,
     };
+    if (mode === 'relance') Object.assign(o, loadRelaunch(c));
+    return o;
   }).filter((c) => c.channels.length);
   for (const c of panel.configs) if (modeOf(c) === 'test') c.testRank = (c.ranks || TEST_DEFAULT_RANKS).includes(Number(c.testRank)) ? Number(c.testRank) : (c.ranks || TEST_DEFAULT_RANKS)[0];
   panel.pending = Array.isArray(saved.pending) ? saved.pending.slice(-300) : [];
@@ -249,13 +292,14 @@ function addConfig(input = {}) {
   const channels = parseChannels(input.channels);
   if (!channels.length) throw new Error('Renseigne au moins un ID de canal.');
   const cfg = {
-    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto', relance: 'Relance +3' }[mode] || ''),
+    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto', relance: 'Relance' }[mode] || ''),
     strategy, channels, sources, rot: {}, maxR: sanitizeMaxR(input.maxR), format: sanitizeFormat(input.format),
     ranks: !hasRanksMode(mode) ? [] : (input.ranks === undefined ? defaultRanks(mode) : sanitizeRanks(input.ranks, mode)),
     cycleRole: 1, cycleWaiting: false, cycleDone: [],
     enabled: true, sentCount: 0, wins: 0, losses: 0, lastSentAt: null,
     lossGate: mode === 'test' && !!input.lossGate, gateFrom: null,
   };
+  if (mode === 'relance') Object.assign(cfg, relaunchFields(input), { relStats: {}, relObs: [], relOffsetAuto: null, relOutWins: 0, relOutLosses: 0, relOutSent: 0 });
   if (mode === 'test') cfg.testRank = cfg.ranks[0]; // on commence par le premier rang choisi (normalement le meilleur)
   const dup = findDuplicate(cfg);
   if (dup) throw duplicateError(dup);
@@ -278,6 +322,10 @@ function updateConfig(id, patch = {}) {
     }
     if (patch.lossGate !== undefined && modeOf(c) === 'test') { c.lossGate = !!patch.lossGate; c.gateFrom = null; }
     if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
+    if (modeOf(c) === 'relance') {
+      if (['relWait', 'relOffset', 'relMaxN', 'relAuto', 'relChannels', 'relFormat', 'relMaxR'].some((k) => patch[k] !== undefined)) Object.assign(c, relaunchFields(patch, c));
+      if (patch.relResetStats) { c.relStats = {}; c.relObs = []; c.relOffsetAuto = null; }
+    }
     const dup = findDuplicate(c, c.id);
     if (dup) throw duplicateError(dup);
   } catch (e) { Object.assign(c, old); throw e; }
@@ -329,6 +377,37 @@ function predictionText(target, items, withResults, forcePending, extraTargets) 
   const rows = [...lines.slice(0, cut), ...branches, ...lines.slice(cut)];
   return rows.join('\n'); // texte normal (pas de bloc <pre> / code) : envoyé en HTML sans balise
 }
+// Mode « relance » : message avec relance(s). Chaque numéro de jeu est placé À CÔTÉ du costume auquel il se rapporte :
+//   - le N° du message d'origine (✅ dès qu'un costume est sorti) se place contre le costume sorti à l'origine ;
+//   - le N° de la relance (⏳ → ✅ / ❌) se place contre le costume relancé.
+//       ♦️⏳ 95%                     ♦️✅0️⃣ 95%
+//        ┣━ N°1084⏳                  ┣━ N°1081✅
+//        ┣━ N°1081✅                  ┣━ N°1084⏳
+//       ♣️✅0️⃣ 94%                   ♣️⏳ 94%
+// items : costumes (ordre meilleur → plus faible) avec leur résultat ; owners[i] : index (dans la chaîne) de la ligne N° du costume i ;
+// lines : une ligne ` ┣━ N°…` par entrée de la chaîne (origine d'abord, puis chaque relance).
+function relaunchText(items, owners, lines) {
+  const suitLines = items.map((s) => `${s.suit}${suitMark(s, true)} ${pctText(s.pct)}`);
+  let boundaries = 0;
+  for (let i = 1; i < items.length; i++) if (owners[i] !== owners[i - 1]) boundaries++;
+  if (!boundaries) { // un seul groupe : toutes les lignes N° après la moitié des costumes (comportement d'avant)
+    const cut = Math.ceil(suitLines.length / 2);
+    return [...suitLines.slice(0, cut), ...lines, ...suitLines.slice(cut)].join('\n');
+  }
+  const emitted = new Set();
+  const out = [];
+  let lastBoundary = -1;
+  for (let i = 0; i < items.length; i++) {
+    if (i > 0 && owners[i] !== owners[i - 1]) {
+      for (const o of [owners[i - 1], owners[i]]) if (!emitted.has(o)) { emitted.add(o); out.push(lines[o]); }
+      lastBoundary = out.length; // position juste après les lignes N° de cette frontière
+    }
+    out.push(suitLines[i]);
+  }
+  const rest = lines.filter((_, k) => !emitted.has(k)); // ligne sans costume propre : accrochée à la dernière frontière
+  if (rest.length) out.splice(lastBoundary, 0, ...rest);
+  return out.join('\n');
+}
 // message simple du mode « déclencheur » (même moteur de formats que les autres stratégies)
 function triggerMessage(entryLike, statusFr) {
   return fmt.renderMessage(entryLike.format, {
@@ -337,11 +416,11 @@ function triggerMessage(entryLike, statusFr) {
   }, null);
 }
 
-async function sendToChannels(cfg, text, parseMode) {
+async function sendToChannels(cfg, text, parseMode, channels) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return []; }
   const out = [];
-  const results = await Promise.all(cfg.channels.map((id) => bot.sendMessage(id, text, parseMode ? { parse_mode: parseMode } : {})
+  const results = await Promise.all((channels || cfg.channels).map((id) => bot.sendMessage(id, text, parseMode ? { parse_mode: parseMode } : {})
     .then((m) => (m && m.skipped ? { ok: false, skipped: true, id } : { ok: true, id, messageId: m.message_id }))
     .catch((e) => ({ ok: false, id, error: e.message }))));
   for (const r of results) { if (r.ok) out.push({ chatId: r.id, messageId: r.messageId }); else if (!r.skipped) panel.lastError = `${r.id} : ${r.error}`; }
@@ -696,24 +775,36 @@ function relaunchChain(entry) {
   for (let guard = 0; guard < 10; guard++) { const last = chain[chain.length - 1]; const next = panel.pending.find((e) => e.parentId === last.id); if (!next) break; chain.push(next); }
   return chain;
 }
-// résultat affiché d'un costume : celui du message d'origine, sinon celui de la relance qui le reprend (⏳ tant qu'elle est en cours)
-function chainRes(chain, suit) {
-  let res = null;
-  for (const e of chain) {
+// Résultat affiché d'un costume + ligne N° à laquelle il se rattache : celui du message d'origine, sinon celui de la relance qui le reprend
+// (⏳ tant qu'elle est en cours). Si le costume est sorti au jeu même visé par la relance (ou après), le résultat compte pour la RELANCE :
+// relancé à N°1115 et sorti à 1115 → ✅0️⃣ (rattrapage compté depuis le jeu de la relance, pas depuis le jeu d'origine → pas de ✅3️⃣).
+function chainResolve(chain, suit) {
+  let res = null; let owner = 0;
+  for (let k = 0; k < chain.length; k++) {
+    const e = chain[k];
     const s = e.suits.find((x) => x.suit === suit);
     if (!s) break;
-    res = s.res;
-    if (res !== undefined && res !== null && res >= 0) break;
+    res = s.res; owner = k;
+    if (res !== undefined && res !== null && res >= 0) {
+      const next = chain[k + 1];
+      const game = Number.isFinite(Number(s.resGame)) ? Number(s.resGame) : Number(e.target) + Number(res);
+      if (next && next.suits.some((x) => x.suit === suit) && game >= Number(next.target)) continue; // sorti au jeu de la relance (ou après) : c'est elle qui l'affiche
+      break;
+    }
   }
-  return res;
+  return { res, owner };
 }
 function editMulti(entry) {
   const chain = relaunchChain(entry);
   const root = chain[0];
   if (chain.length === 1) { editAll(root, predictionText(root.target, root.suits, true, !!root.relaunch), 'HTML'); return; }
-  const items = root.suits.map((s) => ({ ...s, res: chainRes(chain, s.suit) }));
-  const shown = chain.slice(1); // chaque relance annoncée garde son numéro (⏳ → ✅ / ❌ une fois jouée)
-  editAll(root, predictionText(root.target, items, true, true, shown.map((e) => `${e.target}${e.status === 'gagné' ? '✅' : e.status === 'perdu' ? '❌' : '⏳'}`)), 'HTML');
+  const resolved = root.suits.map((s) => ({ s, ...chainResolve(chain, s.suit) }));
+  const items = resolved.map((r) => ({ ...r.s, res: r.res }));
+  const owners = resolved.map((r) => r.owner); // ligne N° de chaque costume
+  const lines = chain.map((e, k) => (k === 0
+    ? ` ┣━ N°${e.target}✅` // jeu d'origine : au moins un costume est sorti (c'est ce qui a déclenché la relance)
+    : ` ┣━ N°${e.target}${e.status === 'gagné' ? '✅' : e.status === 'perdu' ? '❌' : '⏳'}`));
+  editAll(root, relaunchText(items, owners, lines), 'HTML');
 }
 function verifyMulti(entry, cfg, maxDone) {
   let changed = false;
@@ -733,7 +824,7 @@ function verifyMulti(entry, cfg, maxDone) {
       break;
     }
     const newly = unresolved().filter((s) => hasSuit(g, s.suit));
-    for (const s of newly) s.res = entry.step;
+    for (const s of newly) { s.res = entry.step; s.resGame = num; } // resGame : numéro du jeu où le costume est sorti
     if (newly.length) {
       changed = true;
       if (entry.firstRes === undefined || entry.firstRes === null) entry.firstRes = entry.step; // rattrapage où le 1er costume est sorti (mode relance)
@@ -745,12 +836,13 @@ function verifyMulti(entry, cfg, maxDone) {
     }
     if (newly.length) editMulti(entry); // un costume vient de sortir : on affiche son résultat, l'autre reste en vérification
     if (!done) break; // validation anticipée : le tour n'est pas fini, les autres ne peuvent pas être déclarés perdus
-    // mode « relance » : un costume est sorti (peu importe le rattrapage r, au jeu N+r) et l'autre n'est TOUJOURS pas sorti au jeu suivant
-    // (N+r+1) → relance du second à (N+r+1)+2 = N+r+3, si ce jeu n'est pas déjà joué (r=0 : N+3). Si les rattrapages sont épuisés avant
-    // N+r+1 (ex. maxR = r), on relance tout de suite. Les deux sortis, ou aucun : pas de relance.
+    // mode « relance » : un costume est sorti (peu importe le rattrapage) et l'autre n'est TOUJOURS pas sorti à N+2 (réglable) : on attend
+    // jusque-là, puis le costume pas venu est relancé à N+7 (réglable, ou +n choisi par l'analyse auto). Les deux sortis, ou aucun : pas
+    // de relance. Si les rattrapages sont épuisés avant N+2 (ex. 0 rattrapage), la relance part tout de suite.
     if (entry.mode === 'relance' && cfg && !entry.relaunched && rest.length && entry.firstRes !== undefined && entry.firstRes !== null
-      && (entry.step >= entry.firstRes + 1 || entry.step >= entry.maxR)) {
+      && entry.step >= Math.min(relaunchWait(cfg), entry.maxR)) {
       entry.relaunched = true; changed = true;
+      try { observeRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; } // alimente l'analyse du +n
       try { sendRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; }
     }
     if (entry.step >= entry.maxR) { // rattrapages épuisés : ceux qui ne sont pas sortis sont perdus
@@ -767,10 +859,10 @@ function verifyMulti(entry, cfg, maxDone) {
 // Mode « relance » : le MÊME message est édité : on y ajoute seulement le numéro de la relance (├ N°1138) ; le costume qui n'est pas
 // encore sorti reste ⏳ et il est vérifié au jeu N+3 par une entrée « relance » (sans nouveau message).
 function sendRelaunch(cfg, parent, remaining) {
+  if (relaunchAwaitingVerdict(cfg)) return false; // analyse auto : on attend son verdict avant de relancer
   const depth = (Number(parent.depth) || 0) + 1;
   if (depth > RELAUNCH_MAX_DEPTH || !remaining.length) return false;
-  // jeu vérifié en dernier = N + r + 1 (r = rattrapage où le 1er costume est sorti) ; la relance vise ce jeu + 2 = N + r + 3
-  const target = Number(parent.target) + (Number(parent.firstRes) || 0) + RELAUNCH_OFFSET;
+  const target = Number(parent.target) + relaunchOffset(cfg); // N + 7 par défaut (ou le +n de l'analyse auto)
   if (target <= maxFinishedGameNumber()) return false; // jeu déjà joué : trop tard
   if (alreadySent(cfg.id, target)) { blocked(); return false; } // doublon de prédiction
   const items = remaining.map((s) => {
@@ -788,12 +880,124 @@ function sendRelaunch(cfg, parent, remaining) {
   cfg.sentCount = (cfg.sentCount || 0) + 1; cfg.lastSentAt = now;
   panel.lastError = null;
   editMulti(entry); // ajoute « ├ N°{target} » dans le message d'origine
+  flashRelaunch(cfg, target, items).catch((e) => { panel.lastError = e.message; }); // fenêtre « Prédit … » qui disparaît après 10 s
+  if (cfg.relChannels && cfg.relChannels.length) sendRelayOut(cfg, items, target).catch((e) => { panel.lastError = e.message; });
   persist();
   return true;
+}
+// Fenêtre envoyée dans le canal à chaque relance : « Prédit : N°… costume », supprimée automatiquement après 10 secondes.
+const FLASH_MS = 10 * 1000;
+async function flashRelaunch(cfg, target, items) {
+  const bot = typeof sender === 'function' ? sender() : null;
+  if (!bot) return;
+  const suits = items.map((it) => it.suit).join('  ');
+  const text = [
+    '🔔 <b>Relance</b>  ·  <b>Повторный прогноз</b>',
+    '',
+    '🎯 <b>Prédit</b>  ·  <b>Прогноз</b>',
+    `🃏 Costume  ·  Масть :  ${suits}`,
+    `🔢 Numéro  ·  Номер :  <b>№${target}</b>`,
+    '',
+    '⏳ <i>Cette fenêtre disparaît dans 10 s</i>',
+    '⏳ <i>Это окно исчезнет через 10 с</i>',
+  ].join('\n');
+  const sent = await sendToChannels(cfg, text, 'HTML');
+  if (!sent.length || typeof bot.deleteMessage !== 'function') return;
+  const t = setTimeout(() => { for (const m of sent) Promise.resolve(bot.deleteMessage(m.chatId, m.messageId)).catch(() => {}); }, FLASH_MS);
+  if (t && typeof t.unref === 'function') t.unref(); // ne retient pas l'arrêt du serveur
+}
+// Relance aussi vers un AUTRE canal : un message simple par costume relancé, au format de prédiction et avec le nombre de rattrapages
+// choisis pour ce canal (vérifié comme une prédiction à part ; gagnés / perdus comptés à part).
+async function sendRelayOut(cfg, items, target) {
+  for (const it of items) {
+    const entry = {
+      id: `bwo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, configId: cfg.id, mode: 'relaycanal', relayOut: true, strategy: cfg.strategy, target: Number(target),
+      suits: [{ suit: it.suit }], format: cfg.relFormat, strategyName: `${cfg.name || 'Relance'} · relance`, maxR: cfg.relMaxR,
+      step: 0, gap: 0, skipped: 0, status: 'en attente', messages: [], createdAt: Date.now(), resolvedAt: null,
+    };
+    const out = triggerMessage(entry, 'en attente');
+    entry.messages = await sendToChannels(cfg, out.text, out.parse_mode, cfg.relChannels);
+    if (!entry.messages.length) continue;
+    panel.pending.push(entry); cfg.relOutSent = (cfg.relOutSent || 0) + 1; panel.lastError = null;
+  }
+  persist();
+}
+// ── Analyse du +n : à chaque relance décidée, on note le costume pas venu ; quand les jeux N+3 … N+n sont joués, on regarde pour chaque +k
+// s'il est sorti (au jeu N+k ou dans ses rattrapages). Le +k qui réussit le plus est retenu (et appliqué tout seul si « analyse auto »). ──
+function observeRelaunch(cfg, parent, rest) {
+  if (!Array.isArray(cfg.relObs)) cfg.relObs = [];
+  const lo = Math.max(RELAUNCH_MIN_OFFSET, relaunchWait(cfg) + 1);
+  cfg.relObs.push({ base: Number(parent.target), suits: rest.map((x) => x.suit), lo, hi: Math.max(lo, Number(cfg.relMaxN) || RELAUNCH_N_MAX), maxR: cfg.maxR, res: {}, at: Date.now() });
+  if (cfg.relObs.length > 80) cfg.relObs = cfg.relObs.slice(-80);
+}
+function relHit(num, suit, maxR, maxDone) { // 1 sorti · 0 pas sorti · undefined pas encore joué
+  for (let s = 0; s <= maxR; s++) {
+    const n = num + s; const g = state.games.get(n);
+    if (g && g.finished && g.complete !== false) { if (hasSuit(g, suit)) return 1; continue; }
+    if (n + 2 <= maxDone) continue; // jeu manquant : ignoré
+    return undefined;
+  }
+  return 0;
+}
+function bestRelaunchOffset(cfg) {
+  let best = null;
+  for (const [k, st] of Object.entries(cfg.relStats || {})) {
+    if (Number(k) > (Number(cfg.relMaxN) || RELAUNCH_N_MAX) || st.n < RELAUNCH_MIN_SAMPLE) continue;
+    const rate = st.hit / st.n;
+    if (!best || rate > best.rate + 1e-9 || (Math.abs(rate - best.rate) < 1e-9 && st.n > best.n)) best = { k: Number(k), rate, n: st.n }; // égalité : le plus petit +k
+  }
+  return best ? best.k : null;
+}
+// Verdict de l'analyse du +n : envoyé AUSSI au chat privé de l'administrateur (jamais dans un canal), à chaque fois que le +n retenu change
+function notifyVerdict(cfg, prev) {
+  try {
+    const bot = typeof sender === 'function' ? sender() : null;
+    const adminId = adminIdFn ? adminIdFn() : null;
+    if (!bot || !adminId) return;
+    const rows = Object.entries(cfg.relStats || {}).map(([k, st]) => ({ k: Number(k), n: st.n, hit: st.hit, rate: st.n ? Math.round(st.hit * 100 / st.n) : 0 }))
+      .filter((r) => r.k <= (Number(cfg.relMaxN) || RELAUNCH_N_MAX)).sort((a, b) => a.k - b.k);
+    const win = rows.find((r) => r.k === cfg.relOffsetAuto);
+    const dest = cfg.channels.map((id) => panel.channelTitles[String(id)] || String(id)).join(' + ');
+    const text = `🧠 Verdict de l'analyse du +n — ${cfg.name || 'Relance'}\n\n`
+      + `${prev ? `Le +n change : +${prev} → +${cfg.relOffsetAuto}` : `Premier verdict : les relances partent maintenant à N+${cfg.relOffsetAuto}`}\n`
+      + `${win ? `✅ +${win.k} : ${win.rate}% (${win.hit}/${win.n})\n` : ''}\n`
+      + `${rows.map((r) => `${r.k === cfg.relOffsetAuto ? '👉' : '▫️'} +${r.k} : ${r.rate}% (${r.hit}/${r.n})`).join('\n')}\n\n`
+      + `Canal : ${dest}`;
+    const raw = bot.sendMessageUnguarded || bot.sendMessage.bind(bot);
+    Promise.resolve(raw(adminId, text)).catch(() => {});
+  } catch (_) { /* une alerte ratée ne doit jamais bloquer les prédictions */ }
+}
+function resolveRelObs(maxDone) {
+  let changed = false;
+  for (const cfg of panel.configs) {
+    if (modeOf(cfg) !== 'relance' || !Array.isArray(cfg.relObs) || !cfg.relObs.length) continue;
+    if (!cfg.relStats || typeof cfg.relStats !== 'object') cfg.relStats = {};
+    const keep = []; let touched = false;
+    for (const ob of cfg.relObs) {
+      let open = 0;
+      for (const suit of ob.suits) for (let k = ob.lo; k <= ob.hi; k++) {
+        const key = `${suit}|${k}`;
+        if (key in ob.res) continue;
+        const r = relHit(ob.base + k, suit, ob.maxR, maxDone);
+        if (r === undefined) { open++; continue; }
+        ob.res[key] = r; touched = true;
+        const st = (cfg.relStats[k] = cfg.relStats[k] || { n: 0, hit: 0 }); st.n += 1; st.hit += r;
+      }
+      if (open && Date.now() - ob.at < 6 * 3600 * 1000) keep.push(ob);
+    }
+    cfg.relObs = keep;
+    if (touched) {
+      const prev = cfg.relOffsetAuto || null;
+      cfg.relOffsetAuto = bestRelaunchOffset(cfg); changed = true;
+      if (cfg.relAuto && cfg.relOffsetAuto && cfg.relOffsetAuto !== prev) notifyVerdict(cfg, prev);
+    }
+  }
+  return changed;
 }
 function verifyPending() {
   const maxDone = maxFinishedGameNumber();
   let changed = false;
+  try { if (resolveRelObs(maxDone)) changed = true; } catch (e) { panel.lastError = e.message; }
   for (const entry of panel.pending) {
     if (entry.status !== 'en attente') continue;
     if (entry.mode === 'multi' || entry.mode === 'relance') { if (verifyMulti(entry, panel.configs.find((c) => c.id === entry.configId), maxDone)) changed = true; continue; }
@@ -816,7 +1020,7 @@ function verifyPending() {
       const cfg = panel.configs.find((c) => c.id === entry.configId);
       if (hit.length) {
         entry.status = 'gagné'; entry.resolvedAt = Date.now(); changed = true;
-        if (cfg) cfg.wins = (cfg.wins || 0) + 1;
+        if (cfg) { if (entry.relayOut) cfg.relOutWins = (cfg.relOutWins || 0) + 1; else cfg.wins = (cfg.wins || 0) + 1; }
         if (isTrigger) editTrigger(entry, 'gagné');
         if (entry.mode === 'follow') advanceFollow(cfg, entry);
         if (entry.mode === 'cycle' && cfg) advanceCycle(cfg, entry);
@@ -825,7 +1029,7 @@ function verifyPending() {
       }
       if (entry.step >= entry.maxR) {
         entry.status = 'perdu'; entry.resolvedAt = Date.now(); changed = true;
-        if (cfg) cfg.losses = (cfg.losses || 0) + 1;
+        if (cfg) { if (entry.relayOut) cfg.relOutLosses = (cfg.relOutLosses || 0) + 1; else cfg.losses = (cfg.losses || 0) + 1; }
         if (isTrigger) editTrigger(entry, 'perdu');
         if (entry.mode === 'follow') advanceFollow(cfg, entry);
         if (entry.mode === 'cycle' && cfg) advanceCycle(cfg, entry);
@@ -848,6 +1052,7 @@ async function tick() {
 setOnShoeReset(() => {
   collector.clear();
   panel.watch = panel.watch.filter((w) => w.kind !== 'scan'); // la numérotation repart de zéro
+  for (const c of panel.configs) if (Array.isArray(c.relObs)) c.relObs = []; // observations du +n : la numérotation repart de zéro
   panel.trig.armed = {}; panel.trig.absenceFired = {}; // nouveau sabot : la numérotation repart de zéro
   for (const e of panel.pending) if (e.status === 'en attente') { e.status = 'annulé'; e.resolvedAt = Date.now(); }
   persist();
@@ -865,7 +1070,13 @@ async function test(id) {
     msgs = await sendToChannels(cfg, `🧪 Test\n${predictionText(464, sample)}`, 'HTML');
     if (modeOf(cfg) === 'relance' && sample.length >= 2) { // aperçu de la relance : le 1ᵉʳ est sorti, le reste est relancé à +3
       sample[0].res = 0;
-      await sendToChannels(cfg, `🧪 Test (un costume sorti direct, l'autre pas sorti à N+1 : le même message reçoit le N° de la relance, N+${RELAUNCH_OFFSET})\n${predictionText(464, sample, true, true, [`${464 + RELAUNCH_OFFSET}⏳`])}`, 'HTML');
+      const lines = [' ┣━ N°464✅', ` ┣━ N°${464 + relaunchOffset(cfg)}⏳`];
+      await sendToChannels(cfg, `🧪 Test (un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(cfg)} : relance à N+${relaunchOffset(cfg)}, le N° est placé à côté du costume relancé)\n${relaunchText(sample, sample.map((_, i) => (i === 0 ? 0 : 1)), lines)}`, 'HTML');
+      if (cfg.relChannels && cfg.relChannels.length) {
+        const o = triggerMessage({ format: cfg.relFormat, target: 464 + relaunchOffset(cfg), suits: [{ suit: sample[1].suit }], strategyName: `${cfg.name || 'Relance'} · relance`, maxR: cfg.relMaxR, step: 0 }, 'en attente');
+        const r2 = await sendToChannels(cfg, `🧪 Test (relance vers l'autre canal)\n${o.text}`, o.parse_mode, cfg.relChannels);
+        if (!r2.length) return { ok: false, error: panel.lastError || 'Envoi impossible vers le canal de relance' };
+      }
     }
   }
   return msgs.length ? { ok: true, sent: msgs.length } : { ok: false, error: panel.lastError || 'Envoi impossible' };
@@ -876,10 +1087,17 @@ function status() {
     strategies: STRATEGIES, rankLabels: RANK_LABELS, triggerLabel: TRIGGER_LABEL, cycleLabel: `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}`, formatCount: fmt.FORMAT_COUNT,
     configs: panel.configs.map((c) => ({
       ...c, mode: modeOf(c), strategyLabel: modeOf(c) === 'follow' ? 'Suivi des canaux cochés' : (modeOf(c) === 'scan' ? 'Détection auto des canaux' : STRATEGIES[c.strategy]), sourceNames: (c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)),
-      ranksLabel: modeOf(c) === 'follow' ? `Suit : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : modeOf(c) === 'scan' ? `Surveille : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')} · un costume ✅0️⃣ → l'autre à N+2` : modeOf(c) === 'trigger' ? TRIGGER_LABEL : (modeOf(c) === 'cycle' ? `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}` : (modeOf(c) === 'relance' ? `Costumes : ${(c.ranks && c.ranks.length ? c.ranks : RELAUNCH_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + ')} · un costume ✅0️⃣ → ce qui n'est pas sorti est relancé à N+${RELAUNCH_OFFSET}` : modeOf(c) === 'test' ? `Rangs : ${(c.ranks && c.ranks.length ? c.ranks : TEST_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' → ')} · rang suivant après une perte` : (c.ranks || DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + '))),
+      ranksLabel: modeOf(c) === 'follow' ? `Suit : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : modeOf(c) === 'scan' ? `Surveille : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')} · un costume ✅0️⃣ → l'autre à N+2` : modeOf(c) === 'trigger' ? TRIGGER_LABEL : (modeOf(c) === 'cycle' ? `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}` : (modeOf(c) === 'relance' ? `Costumes : ${(c.ranks && c.ranks.length ? c.ranks : RELAUNCH_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + ')} · un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(c)} → relancé à ${c.relAuto ? (relaunchAwaitingVerdict(c) ? `N+? (analyse auto de +${RELAUNCH_MIN_OFFSET} à +${c.relMaxN} : en attente du verdict)` : `N+${relaunchOffset(c)} (choisi par l'analyse auto)`) : `N+${relaunchOffset(c)}`}${(c.relChannels || []).length ? ` · aussi vers ${c.relChannels.map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : ''}` : modeOf(c) === 'test' ? `Rangs : ${(c.ranks && c.ranks.length ? c.ranks : TEST_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' → ')} · rang suivant après une perte` : (c.ranks || DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + '))),
       testLabel: modeOf(c) === 'test' ? (c.lossGate ? (c.gateFrom ? `Perte du « ${RANK_LABELS[c.gateFrom]} » → prochaine source : ${RANK_LABELS[(c.ranks || TEST_DEFAULT_RANKS)[((c.ranks || TEST_DEFAULT_RANKS).indexOf(c.gateFrom) + 1) % (c.ranks || TEST_DEFAULT_RANKS).length]]}` : 'Envoi après une perte : en attente d’une perte parmi les rangs choisis') : `Prochaine source : ${RANK_LABELS[c.testRank] || RANK_LABELS[1]}`) : null,
       cycleLabel: modeOf(c) === 'cycle' ? (c.cycleWaiting ? 'Les 4 sont passées : en attente d’une perte parmi les 4' : `Suit actuellement : ${RANK_LABELS[c.cycleRole] || RANK_LABELS[1]}${(c.cycleDone || []).length ? ` (déjà passés : ${c.cycleDone.map((r) => RANK_LABELS[r]).join(', ')})` : ''}`) : null,
       channelNames: c.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
+      relObs: undefined, relObsCount: Array.isArray(c.relObs) ? c.relObs.length : 0,
+      relaunch: modeOf(c) === 'relance' ? {
+        wait: relaunchWait(c), offset: Number(c.relOffset) || RELAUNCH_OFFSET, effective: relaunchAwaitingVerdict(c) ? null : relaunchOffset(c), awaiting: relaunchAwaitingVerdict(c), auto: !!c.relAuto, maxN: Number(c.relMaxN) || RELAUNCH_N_MAX,
+        minSample: RELAUNCH_MIN_SAMPLE, autoOffset: c.relOffsetAuto || null,
+        analysis: Object.entries(c.relStats || {}).map(([k, st]) => ({ k: Number(k), n: st.n, hit: st.hit, rate: st.n ? Math.round(st.hit * 100 / st.n) : 0 })).filter((r) => r.k <= (Number(c.relMaxN) || RELAUNCH_N_MAX)).sort((a, b) => a.k - b.k),
+        channelNames: (c.relChannels || []).map((id) => panel.channelTitles[String(id)] || String(id)),
+      } : null,
     })),
     sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, lastError: panel.lastError, channelTitles: panel.channelTitles,
     detected: detectedList(),
@@ -892,7 +1110,7 @@ function config() { return { count: panel.configs.length }; }
 function configure() { persist(); } // import d'une sauvegarde : réécrit l'état en base
 
 module.exports = {
-  panel, config, configure, setSender, setPctProvider, setRankProvider, setTestRankProvider, restore, restoreFromDb, persist, addConfig, updateConfig, removeConfig, setChannelTitle,
+  panel, config, configure, setSender, setAdminId, setPctProvider, setRankProvider, setTestRankProvider, restore, restoreFromDb, persist, addConfig, updateConfig, removeConfig, setChannelTitle,
   hasEnabled, hasMultiChannels, record, recordResult, tick, test, status, parseChannels, STRATEGIES, findDuplicate, dedupeConfigs,
   onChannelPost, parseDuo, detectedList, predictionText,
 };

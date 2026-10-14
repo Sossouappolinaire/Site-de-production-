@@ -2314,6 +2314,7 @@ async function startLoop() {
   dizaineTop.restore();
   bestWeakTop.restore();
   bestWeakTop.setSender(senderFor);
+  bestWeakTop.setAdminId(() => state.adminId);
   gameStability.restore();
   gameStability.setSender(senderFor);
   gameStability.setAdminId(() => state.adminId);
