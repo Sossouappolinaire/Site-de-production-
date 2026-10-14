@@ -29,6 +29,7 @@ const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
+const drawTwoThree = require('./draw-two-three');
 const vip = require('./vip');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
@@ -189,6 +190,7 @@ const HELP =
   '/activer <id> — activer les prédictions\n' +
   '/jaime — canaux qui reçoivent les réactions automatiques (👍 🔥 ❤ 🍾)\n' +
   '/jaime test <id> — tester les réactions (tous les canaux cochés si pas d\'id)\n' +
+  '/nul — liste cliquable des changements trouvés par l\'analyse « Nul / 2-3 » (ajouter / modifier / supprimer une règle)\n' +
   '/desactiver <id> — arrêter\n\n' +
   '*Interrupteur des prédictions* (commandes à taper DIRECTEMENT dans le ' +
   'canal — réservées de fait aux administrateurs de ce canal, Telegram ' +
@@ -558,6 +560,26 @@ function wire(b) {
   b.onText(/^\/reglages/, (msg) =>
     b.sendMessage(msg.chat.id, settingsText(), { parse_mode: 'Markdown' })
   );
+
+  // « Nul / 2-3 » : liste cliquable des trouvailles de l'analyse (ajouter / modifier / supprimer une règle),
+  // aussi envoyée toute seule dans le chat privé quand l'analyse trouve quelque chose (voir draw-two-three.js).
+  b.onText(/^\/nul\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const view = drawTwoThree.listView();
+    (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, view.text, { reply_markup: view.markup }).catch(() => {});
+  });
+  b.on('callback_query', async (q) => {
+    try {
+      const data = String((q && q.data) || '');
+      if (!data.startsWith('dtn:')) return;
+      if (!q.from || q.from.id !== Number(state.adminId)) { b.answerCallbackQuery(q.id, { text: 'Réservé à l\'administrateur' }).catch(() => {}); return; }
+      const r = drawTwoThree.handleCallback(data);
+      await b.answerCallbackQuery(q.id, { text: r.answer || '' }).catch(() => {});
+      if (q.message && r.text) {
+        await b.editMessageText(r.text, { chat_id: q.message.chat.id, message_id: q.message.message_id, reply_markup: r.markup || { inline_keyboard: [] } }).catch(() => {});
+      }
+    } catch (_) { /* un bouton ne doit jamais faire tomber le bot */ }
+  });
 
   b.onText(/^\/canaux/, (msg) => {
     if (!isAdmin(msg)) return deny(msg.chat.id);
@@ -2047,6 +2069,8 @@ async function tick() {
       // début+34 déclenchées quand le jeu en live arrive à −3/−2 de la
       // cible (voir cards-count.js).
       cardsCount.tick(),
+      // panneau « Nul / 2-3 » : prédit ensemble le match nul (X) ou le 2/3 (voir draw-two-three.js)
+      drawTwoThree.tick(),
       // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
       // relais des 2 prochaines prédictions d'une stratégie cochée après 3
       // pertes consécutives, ou après 3 prédictions consécutives du même
@@ -2231,6 +2255,7 @@ async function applyDbConfigs() {
   await overlap.restoreFromDb();
   await statistics.restoreFromDb();
   await cardsCount.restoreFromDb();
+  await drawTwoThree.restoreFromDb();
   await vip.restoreFromDb();
   await predictionControl.restoreFromDb();
   // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
@@ -2335,6 +2360,9 @@ async function startLoop() {
   statistics.setSender(senderFor);
   cardsCount.restore();
   cardsCount.setSender(senderFor);
+  drawTwoThree.restore();
+  drawTwoThree.setSender(senderFor);
+  drawTwoThree.setAdminId(() => state.adminId);
   vip.restore();
   vip.setSender(senderFor);
   formationRelay.restore();

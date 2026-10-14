@@ -152,6 +152,7 @@ const PANELS = {
   overlap: { mod: './overlap' },
   statistics: { mod: './statistics' },
   cardsCount: { mod: './cards-count' },
+  drawTwoThree: { mod: './draw-two-three' },          // « Nul / 2-3 »
   vip: { mod: './vip' },
   formationRelay: { mod: './formation-relay' },
   predictionControl: { mod: './prediction-control' },

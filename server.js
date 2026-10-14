@@ -54,6 +54,7 @@ const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
+const drawTwoThree = require('./draw-two-three');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
@@ -412,6 +413,7 @@ app.get('/api/state', async (req, res) => {
     overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
+    drawTwoThree: drawTwoThree.status(),
     vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
@@ -1670,6 +1672,56 @@ app.post('/api/cards-count/reset', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// « Nul / 2-3 » (voir draw-two-three.js) — prédit ensemble le match nul (X) ou la
+// distribution 2/3 (joueur 2 cartes, banquier 3), avec l'analyse des matchs nuls.
+// ---------------------------------------------------------------------------
+app.get('/api/draw-two-three', (req, res) => res.json(drawTwoThree.status()));
+
+app.post('/api/draw-two-three/config', (req, res) => {
+  drawTwoThree.configure(req.body || {});
+  res.json(drawTwoThree.status());
+});
+
+app.post('/api/draw-two-three/channel', async (req, res) => {
+  const idsList = drawTwoThree.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ ok: false, error: 'Identifiant de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ ok: false, error: check.error });
+  drawTwoThree.configure({ channels: idsList });
+  const notice = await drawTwoThree.test();
+  res.json({ ok: true, channel: check.chat, notice, drawTwoThree: drawTwoThree.status() });
+});
+
+app.delete('/api/draw-two-three/channel', (req, res) => {
+  drawTwoThree.configure({ channels: [] });
+  res.json(drawTwoThree.status());
+});
+
+app.post('/api/draw-two-three/test', async (req, res) => {
+  const r = await drawTwoThree.test();
+  res.status(r.ok ? 200 : 400).json({ ...r, drawTwoThree: drawTwoThree.status() });
+});
+
+app.post('/api/draw-two-three/scan', async (req, res) => {
+  await drawTwoThree.tick();
+  res.json(drawTwoThree.status());
+});
+
+app.post('/api/draw-two-three/apply', (req, res) => {
+  const r = drawTwoThree.applyBySid(String((req.body && req.body.sid) || ''));
+  res.status(r.ok ? 200 : 400).json({ ...r, drawTwoThree: drawTwoThree.status() });
+});
+
+app.post('/api/draw-two-three/send-list', async (req, res) => {
+  const ok = await drawTwoThree.sendListToAdmin();
+  res.status(ok ? 200 : 400).json({ ok, error: ok ? null : (drawTwoThree.status().lastError || 'Envoi impossible'), drawTwoThree: drawTwoThree.status() });
+});
+
+app.post('/api/draw-two-three/reset', (req, res) => {
+  res.json(drawTwoThree.resetStats());
+});
+
+// ---------------------------------------------------------------------------
 // « VIP » (voir vip.js) — liste à cocher de toutes les stratégies + IA :
 // après 3 pertes consécutives OU 3 prédictions consécutives du même costume
 // sur une stratégie cochée, relais de ses 2 prochaines prédictions dans le
@@ -2301,6 +2353,7 @@ app.get('/api/diagnostics/channels', async (req, res) => {
       categories,
     });
   }
+  panels.push(await singlePanel('draw-two-three', 'Nul / 2-3', drawTwoThree, 'draw-two-three'));
   panels.push(await singlePanel('vip', 'VIP', vip, 'vip'));
   panels.push(await singlePanel('predit', 'Prédit IA', predit, 'predit'));
   // Jeu 21 a DEUX canaux distincts (exacte / valeur), pas un seul comme les
@@ -2405,7 +2458,7 @@ async function removeChannelEverywhere(id) {
   }
   const modules = [
     ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
-    ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Statistiques', statistics],
+    ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
   ];
@@ -2527,7 +2580,7 @@ function configuredChannelList() {
   } catch (_) {}
   const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType],
     // sources qui manquaient : leurs canaux n'apparaissaient pas dans « Type de mise »
-    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Statistiques', statistics]];
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics]];
   for (const [label, mod] of panelsList) {
     try {
       const st = mod.status() || {};
