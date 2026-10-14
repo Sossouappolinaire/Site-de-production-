@@ -1,10 +1,16 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v40',
-  name: 'relance-corrige-rattrapage',
+  version: 'v46',
+  name: 'relance-format-aligne',
   date: '2026-10-14',
   features: [
+    'Relance : message et fenêtre de 10 s mieux organisés (même structure sur chaque ligne, espaces réguliers, texte normal sans bloc code) ; la fenêtre devient une petite carte bilingue français / russe avec séparateurs',
+    'Relance : nouvelle présentation du message (sans pourcentage) : ♣️✅0️⃣N°: 1158 / ┣━ N°1158✅ / ┣━♦️ N°1161⏳ / ♦️⏳ ; une fois la relance jouée : ┣━ N°1161✅ et ♦️✅0️⃣N°: 1161',
+    'Bouton « Combiné » corrigé : l’erreur « COMBINED_LEVEL_LABELS is not defined » est réglée (constante manquante dans public/index.html)',
+    'Relance : l’attente se compte APRÈS la sortie du 1ᵉʳ costume (✅0️⃣ / ✅1️⃣ / ✅2️⃣) : on regarde le jeu suivant ; si l’autre n’est pas venu, relance à (numéro du jeu où le 1ᵉʳ est sorti) + n ; s’il sort pendant l’attente, pas de relance',
+    'Relance : la vérification se fait maintenant à N+1 par défaut (au lieu de N+2) : si le 2ᵉ costume n’est pas venu à N+1, il est relancé à N+n (réglable)',
+    'Relance à N+3 corrigée : elle n’est plus bloquée par la prédiction normale du même jeu (et inversement), « relancé » n’est posé que si l’envoi a réussi, et la raison d’un refus s’affiche (jeu déjà joué)',
     'Relance : un costume relancé à N°1115 et sorti à 1115 affiche ✅0️⃣ (rattrapage compté depuis le jeu de la relance) au lieu de ✅3️⃣',
     'Relance : la fenêtre de 10 s est plus jolie (mise en forme) et bilingue français / russe',
     'Relance : le verdict de l’analyse du +n est aussi envoyé au chat privé ; à chaque relance, une fenêtre « Prédit : N° costume » est envoyée dans le canal et supprimée après 10 s',

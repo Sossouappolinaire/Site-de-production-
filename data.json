@@ -1281,7 +1281,7 @@
         "lastSentAt": 1792003193966,
         "lossGate": false,
         "gateFrom": null,
-        "relWait": 2,
+        "relWait": 1,
         "relOffset": 3,
         "relMaxN": 12,
         "relAuto": false,

@@ -110,8 +110,8 @@ const KEYCAP = (n) => `${Number(n)}\uFE0F\u20E3`;
 const dayKey = (ts = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
 
 const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance']; // + « multi » (par défaut)
-const RELAUNCH_WAIT = 2;      // mode relance : le costume pas sorti ne doit pas venir jusqu'à N+2 …
-const RELAUNCH_OFFSET = 7;    // … alors il est relancé à N+7 (réglable ; ou choisi par l'analyse auto)
+const RELAUNCH_WAIT = 1;      // mode relance : nombre de jeux attendus APRÈS la sortie du 1er costume (v43) : le costume pas sorti ne doit pas venir …
+const RELAUNCH_OFFSET = 7;    // … alors il est relancé à (jeu du 1er costume sorti) + 7 (réglable ; ou choisi par l'analyse auto)
 const RELAUNCH_MIN_OFFSET = 3; // analyse auto : on teste les relances de +3 jusqu'à +n
 const RELAUNCH_N_MAX = 12;    // +n par défaut de l'analyse auto
 const RELAUNCH_MIN_SAMPLE = 8; // nombre minimum de situations observées avant d'appliquer le +n trouvé par l'analyse
@@ -188,6 +188,13 @@ function loadRelaunch(c) { // configuration enregistrée : valeurs par défaut s
   if (c.relStats && typeof c.relStats === 'object') for (const [k, v] of Object.entries(c.relStats)) if (v && Number(v.n) > 0) stats[String(Number(k))] = { n: Number(v.n), hit: Number(v.hit) || 0 };
   return { ...f, relStats: stats, relObs: Array.isArray(c.relObs) ? c.relObs.slice(-80) : [], relOffsetAuto: Number(c.relOffsetAuto) >= RELAUNCH_MIN_OFFSET ? Number(c.relOffsetAuto) : null,
     relOutWins: Number(c.relOutWins) || 0, relOutLosses: Number(c.relOutLosses) || 0, relOutSent: Number(c.relOutSent) || 0 };
+}
+// v43 : numéro du jeu où le 1er costume est sorti (base de la relance) ; repli pour les anciennes entrées : jeu visé + rattrapage + décalage
+function relaunchBase(e) {
+  if (Number.isFinite(Number(e.firstGame))) return Number(e.firstGame);
+  const hits = (e.suits || []).map((s) => Number(s.resGame)).filter((n) => Number.isFinite(n));
+  if (hits.length) return Math.min(...hits);
+  return Number(e.target) + (Number(e.firstRes) || 0) + (Number(e.gap) || 0);
 }
 const relaunchWait = (c) => { const n = Number(c && c.relWait); return Number.isFinite(n) ? n : RELAUNCH_WAIT; };
 // numéro de la relance : +n trouvé par l'analyse auto (si activée et assez de situations observées), sinon le réglage fixe
@@ -345,7 +352,13 @@ const hasEnabled = (strategy) => panel.configs.some((c) => c.enabled && c.strate
 const sentKey = (cfgId, target) => `${cfgId}:${Number(target)}`;
 function alreadySent(cfgId, target) {
   const k = sentKey(cfgId, target);
-  return inflight.has(k) || panel.recentSent.includes(k) || panel.pending.some((e) => e.configId === cfgId && Number(e.target) === Number(target));
+  // v41 : les relances (et leurs envois vers un autre canal) ne comptent pas ici : elles ont leur propre clé (voir relaunchAlreadySent),
+  // sinon une relance à N+3 bloquait la prédiction normale du jeu N+3 (et l'inverse).
+  return inflight.has(k) || panel.recentSent.includes(k) || panel.pending.some((e) => e.configId === cfgId && !e.relaunch && !e.relayOut && Number(e.target) === Number(target));
+}
+const relaunchKey = (cfgId, target) => `${cfgId}:rel:${Number(target)}`;
+function relaunchAlreadySent(cfgId, target) {
+  return panel.recentSent.includes(relaunchKey(cfgId, target)) || panel.pending.some((e) => e.configId === cfgId && e.relaunch && Number(e.target) === Number(target));
 }
 function rememberSent(cfgId, target) {
   panel.recentSent.push(sentKey(cfgId, target));
@@ -386,8 +399,21 @@ function predictionText(target, items, withResults, forcePending, extraTargets) 
 //       ♣️✅0️⃣ 94%                   ♣️⏳ 94%
 // items : costumes (ordre meilleur → plus faible) avec leur résultat ; owners[i] : index (dans la chaîne) de la ligne N° du costume i ;
 // lines : une ligne ` ┣━ N°…` par entrée de la chaîne (origine d'abord, puis chaque relance).
-function relaunchText(items, owners, lines) {
-  const suitLines = items.map((s) => `${s.suit}${suitMark(s, true)} ${pctText(s.pct)}`);
+// v44 : nouvelle mise en forme (sans pourcentage) :
+//       ♣️ ✅0️⃣ N°: 1158             ♣️ ✅0️⃣ N°: 1158
+//        ┣━ N°1158 ✅                 ┣━ N°1158 ✅
+//        ┣━ ♦️ N°1161 ⏳              ┣━ N°1161 ✅     (relance jouée : le costume n'est plus rappelé sur la ligne)
+//       ♦️ ⏳                        ♦️ ✅0️⃣ N°: 1161
+// Texte normal en HTML (jamais de <pre> / <code>) : la police de Telegram n'est pas à chasse fixe, l'alignement vient donc d'une structure
+// identique sur chaque ligne (symbole · espace · résultat) et non d'espaces de remplissage.
+// targets[k] : numéro de jeu de la ligne k de la chaîne ; le N° affiché à côté d'un costume sorti est celui de SA ligne (rattrapage compté depuis lui).
+function relaunchText(items, owners, lines, targets) {
+  const suitLines = items.map((s, i) => {
+    const mk = suitMark(s, true);
+    const hit = Number.isFinite(Number(s.res)) && s.res !== null && s.res >= 0;
+    const n = Array.isArray(targets) ? targets[owners[i]] : undefined;
+    return hit && n !== undefined ? `${s.suit} ${mk} N°: ${n}` : `${s.suit} ${mk}`;
+  });
   let boundaries = 0;
   for (let i = 1; i < items.length; i++) if (owners[i] !== owners[i - 1]) boundaries++;
   if (!boundaries) { // un seul groupe : toutes les lignes N° après la moitié des costumes (comportement d'avant)
@@ -801,10 +827,13 @@ function editMulti(entry) {
   const resolved = root.suits.map((s) => ({ s, ...chainResolve(chain, s.suit) }));
   const items = resolved.map((r) => ({ ...r.s, res: r.res }));
   const owners = resolved.map((r) => r.owner); // ligne N° de chaque costume
+  const pendingSuits = (e) => e.suits.filter((x) => x.res === undefined || x.res === null).map((x) => x.suit).join('');
   const lines = chain.map((e, k) => (k === 0
-    ? ` ┣━ N°${e.target}✅` // jeu d'origine : au moins un costume est sorti (c'est ce qui a déclenché la relance)
-    : ` ┣━ N°${e.target}${e.status === 'gagné' ? '✅' : e.status === 'perdu' ? '❌' : '⏳'}`));
-  editAll(root, relaunchText(items, owners, lines), 'HTML');
+    ? ` ┣━ N°${e.target} ✅` // jeu d'origine : au moins un costume est sorti (c'est ce qui a déclenché la relance)
+    : e.status === 'gagné' ? ` ┣━ N°${e.target} ✅`
+      : e.status === 'perdu' ? ` ┣━ N°${e.target} ❌`
+        : ` ┣━ ${pendingSuits(e)} N°${e.target} ⏳`)); // relance en cours : le costume relancé est rappelé devant son N°
+  editAll(root, relaunchText(items, owners, lines, chain.map((e) => e.target)), 'HTML');
 }
 function verifyMulti(entry, cfg, maxDone) {
   let changed = false;
@@ -827,7 +856,7 @@ function verifyMulti(entry, cfg, maxDone) {
     for (const s of newly) { s.res = entry.step; s.resGame = num; } // resGame : numéro du jeu où le costume est sorti
     if (newly.length) {
       changed = true;
-      if (entry.firstRes === undefined || entry.firstRes === null) entry.firstRes = entry.step; // rattrapage où le 1er costume est sorti (mode relance)
+      if (entry.firstRes === undefined || entry.firstRes === null) { entry.firstRes = entry.step; entry.firstGame = num; } // rattrapage ET numéro du jeu où le 1er costume est sorti (mode relance)
       if (!entry.won) { entry.won = true; if (cfg) cfg.wins = (cfg.wins || 0) + 1; }
     }
     const rest = unresolved();
@@ -836,14 +865,16 @@ function verifyMulti(entry, cfg, maxDone) {
     }
     if (newly.length) editMulti(entry); // un costume vient de sortir : on affiche son résultat, l'autre reste en vérification
     if (!done) break; // validation anticipée : le tour n'est pas fini, les autres ne peuvent pas être déclarés perdus
-    // mode « relance » : un costume est sorti (peu importe le rattrapage) et l'autre n'est TOUJOURS pas sorti à N+2 (réglable) : on attend
-    // jusque-là, puis le costume pas venu est relancé à N+7 (réglable, ou +n choisi par l'analyse auto). Les deux sortis, ou aucun : pas
-    // de relance. Si les rattrapages sont épuisés avant N+2 (ex. 0 rattrapage), la relance part tout de suite.
+    // mode « relance » (v43) : un costume est sorti (✅0️⃣, ✅1️⃣, ✅2️⃣…) : on attend le(s) jeu(x) suivant(s) (réglage, 1 par défaut) pour voir si l'autre sort.
+    // S'il n'est toujours pas sorti, il est relancé à (numéro du jeu où le 1er est sorti) + n (réglable, ou +n choisi par l'analyse auto).
+    // Les deux sortis, ou aucun : pas de relance. Si les rattrapages sont épuisés avant la fin de l'attente (ex. 0 rattrapage), la relance part tout de suite.
     if (entry.mode === 'relance' && cfg && !entry.relaunched && rest.length && entry.firstRes !== undefined && entry.firstRes !== null
-      && entry.step >= Math.min(relaunchWait(cfg), entry.maxR)) {
-      entry.relaunched = true; changed = true;
-      try { observeRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; } // alimente l'analyse du +n
-      try { sendRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; }
+      && entry.step >= Math.min(Number(entry.firstRes) + relaunchWait(cfg), entry.maxR)) { // v43 : attente comptée APRÈS la sortie du 1er costume (✅0️⃣ ou ✅1️⃣ ou ✅2️⃣ : on regarde le jeu suivant)
+      // v41 : « relancé » n'est posé que si la relance est vraiment partie (avant : posé d'office, une relance refusée était perdue pour de bon)
+      if (!entry.relObserved) { entry.relObserved = true; changed = true; try { observeRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; } } // alimente l'analyse du +n (une seule fois)
+      let sentOk = false;
+      try { sentOk = sendRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; }
+      if (sentOk) { entry.relaunched = true; changed = true; }
     }
     if (entry.step >= entry.maxR) { // rattrapages épuisés : ceux qui ne sont pas sortis sont perdus
       for (const s of rest) s.res = -1;
@@ -862,9 +893,9 @@ function sendRelaunch(cfg, parent, remaining) {
   if (relaunchAwaitingVerdict(cfg)) return false; // analyse auto : on attend son verdict avant de relancer
   const depth = (Number(parent.depth) || 0) + 1;
   if (depth > RELAUNCH_MAX_DEPTH || !remaining.length) return false;
-  const target = Number(parent.target) + relaunchOffset(cfg); // N + 7 par défaut (ou le +n de l'analyse auto)
-  if (target <= maxFinishedGameNumber()) return false; // jeu déjà joué : trop tard
-  if (alreadySent(cfg.id, target)) { blocked(); return false; } // doublon de prédiction
+  const target = relaunchBase(parent) + relaunchOffset(cfg); // (jeu où le 1er costume est sorti) + n (ou le +n de l'analyse auto)
+  if (target <= maxFinishedGameNumber()) { panel.lastError = `Relance N°${target} non envoyée : jeu déjà joué.`; return false; } // jeu déjà joué : trop tard
+  if (relaunchAlreadySent(cfg.id, target)) return false; // cette relance existe déjà (pas une erreur)
   const items = remaining.map((s) => {
     const it = { suit: s.suit, pct: s.pct, ref: s.ref, rank: s.rank };
     try { const p = pctProviders[cfg.strategy] && s.ref ? pctProviders[cfg.strategy](s.ref) : null; if (Number.isFinite(p)) it.pct = p; } catch (_) { /* dernier connu */ }
@@ -876,7 +907,8 @@ function sendRelaunch(cfg, parent, remaining) {
     suits: items, maxR: cfg.maxR, step: 0, gap: 0, skipped: 0, status: 'en attente', messages: [], createdAt: now, resolvedAt: null,
     relaunch: true, depth, parentId: parent.id, // messages : vide, le message d'origine est modifié
   };
-  panel.pending.push(entry); rememberSent(cfg.id, target);
+  panel.pending.push(entry); panel.recentSent.push(relaunchKey(cfg.id, target));
+  if (panel.recentSent.length > 500) panel.recentSent = panel.recentSent.slice(-500);
   cfg.sentCount = (cfg.sentCount || 0) + 1; cfg.lastSentAt = now;
   panel.lastError = null;
   editMulti(entry); // ajoute « ├ N°{target} » dans le message d'origine
@@ -891,15 +923,16 @@ async function flashRelaunch(cfg, target, items) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return;
   const suits = items.map((it) => it.suit).join('  ');
+  const bar = '━━━━━━━━━━━━━━';
   const text = [
-    '🔔 <b>Relance</b>  ·  <b>Повторный прогноз</b>',
+    '🔔 <b>RELANCE  ·  ПОВТОР</b>',
+    bar,
+    '🎯 <b>Prédit  ·  Прогноз</b>',
     '',
-    '🎯 <b>Prédit</b>  ·  <b>Прогноз</b>',
-    `🃏 Costume  ·  Масть :  ${suits}`,
-    `🔢 Numéro  ·  Номер :  <b>№${target}</b>`,
-    '',
-    '⏳ <i>Cette fenêtre disparaît dans 10 s</i>',
-    '⏳ <i>Это окно исчезнет через 10 с</i>',
+    `🃏 <b>Costume</b>  ·  <b>Масть</b> :  ${suits}`,
+    `🔢 <b>Numéro</b>  ·  <b>Номер</b> :  <b>№${target}</b>`,
+    bar,
+    '⏳ <i>Disparaît dans 10 s  ·  Исчезнет через 10 с</i>',
   ].join('\n');
   const sent = await sendToChannels(cfg, text, 'HTML');
   if (!sent.length || typeof bot.deleteMessage !== 'function') return;
@@ -927,7 +960,7 @@ async function sendRelayOut(cfg, items, target) {
 function observeRelaunch(cfg, parent, rest) {
   if (!Array.isArray(cfg.relObs)) cfg.relObs = [];
   const lo = Math.max(RELAUNCH_MIN_OFFSET, relaunchWait(cfg) + 1);
-  cfg.relObs.push({ base: Number(parent.target), suits: rest.map((x) => x.suit), lo, hi: Math.max(lo, Number(cfg.relMaxN) || RELAUNCH_N_MAX), maxR: cfg.maxR, res: {}, at: Date.now() });
+  cfg.relObs.push({ base: relaunchBase(parent), suits: rest.map((x) => x.suit), lo, hi: Math.max(lo, Number(cfg.relMaxN) || RELAUNCH_N_MAX), maxR: cfg.maxR, res: {}, at: Date.now() });
   if (cfg.relObs.length > 80) cfg.relObs = cfg.relObs.slice(-80);
 }
 function relHit(num, suit, maxR, maxDone) { // 1 sorti · 0 pas sorti · undefined pas encore joué
@@ -1070,8 +1103,8 @@ async function test(id) {
     msgs = await sendToChannels(cfg, `🧪 Test\n${predictionText(464, sample)}`, 'HTML');
     if (modeOf(cfg) === 'relance' && sample.length >= 2) { // aperçu de la relance : le 1ᵉʳ est sorti, le reste est relancé à +3
       sample[0].res = 0;
-      const lines = [' ┣━ N°464✅', ` ┣━ N°${464 + relaunchOffset(cfg)}⏳`];
-      await sendToChannels(cfg, `🧪 Test (un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(cfg)} : relance à N+${relaunchOffset(cfg)}, le N° est placé à côté du costume relancé)\n${relaunchText(sample, sample.map((_, i) => (i === 0 ? 0 : 1)), lines)}`, 'HTML');
+      const lines = [' ┣━ N°464 ✅', ` ┣━ ${sample.slice(1).map((x) => x.suit).join('')} N°${464 + relaunchOffset(cfg)} ⏳`];
+      await sendToChannels(cfg, `🧪 Test (un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(cfg)} : relance à N+${relaunchOffset(cfg)}, le N° est placé à côté du costume relancé)\n${relaunchText(sample, sample.map((_, i) => (i === 0 ? 0 : 1)), lines, [464, 464 + relaunchOffset(cfg)])}`, 'HTML');
       if (cfg.relChannels && cfg.relChannels.length) {
         const o = triggerMessage({ format: cfg.relFormat, target: 464 + relaunchOffset(cfg), suits: [{ suit: sample[1].suit }], strategyName: `${cfg.name || 'Relance'} · relance`, maxR: cfg.relMaxR, step: 0 }, 'en attente');
         const r2 = await sendToChannels(cfg, `🧪 Test (relance vers l'autre canal)\n${o.text}`, o.parse_mode, cfg.relChannels);
