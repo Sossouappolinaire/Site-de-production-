@@ -583,6 +583,7 @@
         ${snapshot.role === 'admin' ? card('#/users', '👥', 'Utilisateurs', "Valider les inscriptions, accorder un temps") : ''}
         ${snapshot.role === 'admin' ? card('#/deploy', '🚀', 'Déploiement', 'Générer un bot autonome par stratégie') : ''}
       </div>
+      <p class="small muted" style="text-align:center;margin:14px 0 0">${snapshot.appVersion ? `Version ${esc(snapshot.appVersion.version)} · ${esc(snapshot.appVersion.name)} · ${esc(snapshot.appVersion.date)}` : 'Version inconnue'}</p>
       <button class="logout-home-btn" onclick="doLogout()">Se déconnecter</button>`;
     }
     function strategiesPage() { setNav('strategies'); $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Catalogue</span><h2 style="margin-top:7px">Choisir une stratégie</h2></div><button class="button ghost" onclick="resetAllStrategies()">Réinitialiser TOUT aux valeurs du code</button></div><div class="strategy-grid">${strategyButtons()}</div>`; }
@@ -2110,7 +2111,7 @@ Faites-en bon usage !
         tips: [
           'Exemple avec 2 cochés : ♣️ 95% / N°1135 / ♦️ 94%. ♣️ sort directement et ♦️ n’est pas sorti à N+1 : le message devient ♣️✅0️⃣ 95% / N°1135 / N°1138⏳ / ♦️⏳ 94%. Le ⏳ à côté du numéro devient ✅ ou ❌ une fois la relance jouée.',
           'Pas de relance si les deux costumes sortent, si l’autre sort à N ou à N+1, si les deux sont perdus ❌, ou si un seul sort à un rattrapage sans être sorti directement (✅0️⃣).',
-          'Si l’autre costume sort au rattrapage 2 (N+2), avant le jeu de la relance, le numéro de la relance est retiré du message.',
+          'La relance est décidée à N+1 : si l’autre costume sort ensuite à N+2, la relance à +3 reste quand même (le costume garde son ✅2️⃣, le numéro de relance passe à ✅ ou ❌ après son jeu).',
           'Avec 3 costumes cochés, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Sans rattrapage (0), la relance part dès le jeu N.',
           'La relance est comptée comme une prédiction à part dans les gagnés / perdus de la configuration.',
         ] },
@@ -2138,7 +2139,8 @@ Faites-en bon usage !
         steps: ['Ouvre « Annonces » pour voir les annonces en cours et celles déjà faites.', 'Les réglages de l’ombre se font dans sa fiche, dans « Stratégies ».'] },
       { g: 'ops', icon: '📨', title: 'Envois', hash: '#/diagnostics',
         what: 'Contrôle du token, des canaux et de chaque stratégie ou configuration suivie : où elle envoie, et si ses prédictions sont arrêtées ou planifiées.',
-        steps: ['Ouvre « Envois » après chaque nouvelle configuration.', 'Si une ligne affiche une erreur (par exemple « Aucun canal configuré »), corrige-la dans la fiche concernée.'] },
+        steps: ['Ouvre « Envois » après chaque nouvelle configuration.', 'Si une ligne affiche une erreur (par exemple « Aucun canal configuré »), corrige-la dans la fiche concernée.', 'Dans « Tous les canaux effectivement utilisés », chaque canal est listé une seule fois avec tous les boutons qui lui envoient. « 🗑 Supprimer » le retire de toutes ces configurations d’un coup.'],
+        tips: ['Une configuration dont le canal est supprimé reste en place mais n’envoie plus rien tant qu’on ne lui donne pas un autre canal.', 'La version du ZIP déployé (ex. v28) est affichée en bas de l’accueil, sur cette page et dans « Aide » : sert à vérifier que le bon fichier est en ligne.'] },
       // ----- Prédictions automatiques -----
       { g: 'auto', icon: '↩️', title: 'Prédiction après perte', hash: '#/after-loss',
         what: 'Suit une stratégie existante et, après un résultat déclencheur, relaie une nouvelle prédiction.',
@@ -2298,10 +2300,16 @@ Faites-en bon usage !
       const box = document.getElementById('helpList');
       if (box) box.innerHTML = helpListHtml(q);
     }
+    // Version du ZIP déployé (fichier version.js) : permet de vérifier que le bon fichier est en ligne
+    function versionBadge() {
+      const v = snapshot && snapshot.appVersion;
+      if (!v) return '<p class="small muted">Version : inconnue (ancien fichier déployé ?)</p>';
+      return `<p class="small"><span class="tag good">${esc(v.version)}</span> <b>${esc(v.name)}</b> · ${esc(v.date)}</p><ul class="small muted" style="margin:4px 0 0;padding-left:18px">${(v.features || []).map(f => `<li>${esc(f)}</li>`).join('')}</ul>`;
+    }
     function helpPage() {
       setNav('help');
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Mode d’emploi</span><h2 style="margin-top:7px">❓ Aide</h2>
-        <p class="small">La liste des fonctions du site, à quoi sert chaque bouton et comment créer ses configurations. Clique sur un bouton pour déplier son explication, ou cherche un mot.</p></div></div>
+        <p class="small">La liste des fonctions du site, à quoi sert chaque bouton et comment créer ses configurations. Clique sur un bouton pour déplier son explication, ou cherche un mot.</p>${versionBadge()}</div></div>
         <div class="field"><input id="helpSearch" type="search" placeholder="Rechercher : rattrapage, canal, test, après perte…" oninput="helpFilter(this.value)" autocomplete="off"></div>
         <div id="helpList">${helpListHtml('')}</div>`;
     }
@@ -3446,6 +3454,17 @@ Faites-en bon usage !
         try { await api('/api/prediction-control', 'POST', { action: 'schedule', stopAt, startAt }); toast('Planification enregistrée.', ''); await diagnosticsPage(); }
         catch (e) { toast(e.message, 'error'); }
       };
+      window.diagDeleteChannel = async function(id, title) {
+        const r0 = ((window.__diagAll || []).find(c => String(c.id) === String(id)) || {}).sources || [];
+        const where = r0.length ? `\n\nIl est utilisé dans :\n• ${r0.join('\n• ')}` : '';
+        if (!confirm(`Supprimer le canal ${title ? '« ' + title + ' » ' : ''}(${id}) ?\n\nIl sera retiré de TOUTES les configurations où il figure : elles ne lui enverront plus rien (les configurations elles-mêmes restent).${where}`)) return;
+        try {
+          const r = await api(`/api/diagnostics/channels/${encodeURIComponent(id)}`, 'DELETE');
+          const from = (r.removedFrom || []);
+          toast(from.length ? `Canal supprimé de : ${from.join(', ')}.` : 'Aucun réglage ne contenait ce canal (il apparaissait seulement dans l’historique des envois).', '');
+          await refresh(); await diagnosticsPage();
+        } catch (e) { toast(e.message, 'error'); }
+      };
       window.diagEditPanelDefault = async function(editBase) {
         const channelId = prompt('ID ou @lien du canal (laisser vide pour retirer) :', '');
         if (channelId == null) return;
@@ -3474,13 +3493,13 @@ Faites-en bon usage !
     async function diagnosticsPage() {
       setNav('settings'); $('#app').innerHTML = '<div class="loading">Vérification des canaux…</div>';
       try {
-        const r = await api('/api/diagnostics/channels');
-        $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vérification</span><h2 style="margin-top:7px">Envoi des prédictions</h2><p class="small">Contrôle du token, des canaux, et de chaque stratégie / configuration suivie — où elle envoie, et si les prédictions sont arrêtées ou planifiées.</p></div></div>
+        const r = await api('/api/diagnostics/channels'); window.__diagAll = r.allChannels || [];
+        $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vérification${snapshot.appVersion ? ' · ' + esc(snapshot.appVersion.version) + ' ' + esc(snapshot.appVersion.name) : ''}</span><h2 style="margin-top:7px">Envoi des prédictions</h2><p class="small">Contrôle du token, des canaux, et de chaque stratégie / configuration suivie — où elle envoie, et si les prédictions sont arrêtées ou planifiées.</p></div></div>
         <div class="notice ${r.bot.tokenSet ? '' : 'warn'}">${r.bot.tokenSet ? 'Token Telegram enregistré' + (r.bot.username ? ' (@' + esc(r.bot.username) + ')' : '') : 'Aucun token Telegram : aucune prédiction ne peut partir.'}</div>
         ${diagControlBlock(r.control)}
         <div class="panel" style="margin-bottom:16px"><div class="split"><b>Tous les canaux effectivement utilisés</b><span class="tag">${(r.allChannels || []).length} identifiant(s)</span></div>
           <p class="small muted">Cette liste inclut les canaux publics, silencieux, les panneaux secondaires, chaque configuration suivie et les canaux actifs utilisés comme fallback. Un même canal n'apparaît qu'une fois, avec toutes ses sources.</p>
-          ${(r.allChannels || []).length ? r.allChannels.map(c => `<div class="split" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)"><span>${diagChannelRow(c)}</span><span class="small muted">${c.sources.map(esc).join(' · ')}</span></div>`).join('') : '<p class="small muted">Aucun identifiant de canal configuré.</p>'}
+          ${(r.allChannels || []).length ? r.allChannels.map(c => `<div class="split" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);gap:8px;align-items:flex-start"><span>${diagChannelRow(c)}</span><span class="small muted" style="flex:1">${c.sources.map(esc).join(' · ')}</span><button class="button small danger" onclick="diagDeleteChannel(decodeURIComponent('${encodeURIComponent(String(c.id))}'), decodeURIComponent('${encodeURIComponent(String(c.title || ''))}'))">🗑 Supprimer</button></div>`).join('') : '<p class="small muted">Aucun identifiant de canal configuré.</p>'}
         </div>
         <h3 class="small eyebrow" style="margin:18px 0 8px">Stratégies de base</h3>
         ${r.strategies.map(s => `<div class="panel" style="margin-bottom:12px"><div class="split"><span><b>${esc(s.name)}</b> <span class="mono small">${esc(s.key)}</span></span><span class="tag ${s.enabled ? 'good' : 'warn'}">${s.enabled ? 'Active' : 'Désactivée'} · ${s.ready ? 'envoi opérationnel' : 'à configurer'}</span></div>
