@@ -1401,5 +1401,161 @@
     "sentCount": 0,
     "lastSentAt": null,
     "channelTitles": {}
+  },
+  "lossReturn": {
+    "configs": [
+      {
+        "id": "lr-1792013955444-0eg5",
+        "name": "Tout",
+        "enabled": true,
+        "sources": [
+          "-1005"
+        ],
+        "relances": [
+          "bw1"
+        ],
+        "channels": [
+          -1002
+        ],
+        "keyword": "",
+        "maxR": 1,
+        "maxD": 5,
+        "minSample": 1,
+        "bilanEvery": 0,
+        "sinceBilan": 2,
+        "stats": {
+          "♦️": {
+            "won": 0,
+            "lost": 1,
+            "resolved": 1,
+            "none": 0,
+            "miss": 1,
+            "mirror": 0,
+            "inverse": 1,
+            "missSuits": {
+              "♠️": 1
+            },
+            "hist": {
+              "4": 1
+            },
+            "proofN": 0,
+            "proofSame": 0,
+            "proofWin": 0
+          },
+          "♣️": {
+            "won": 0,
+            "lost": 1,
+            "resolved": 0,
+            "none": 1,
+            "miss": 1,
+            "mirror": 1,
+            "inverse": 0,
+            "missSuits": {
+              "♠️": 1
+            },
+            "hist": {},
+            "proofN": 0,
+            "proofSame": 0,
+            "proofWin": 0
+          }
+        },
+        "reportsSent": 2,
+        "lastReportAt": 1792013955472
+      },
+      {
+        "id": "lr-1792013955448-fwc7",
+        "name": "Filtre",
+        "enabled": true,
+        "sources": [
+          "-1005"
+        ],
+        "relances": [],
+        "channels": [
+          -1003
+        ],
+        "keyword": "dominant",
+        "maxR": 1,
+        "maxD": 5,
+        "minSample": 1,
+        "bilanEvery": 0,
+        "sinceBilan": 1,
+        "stats": {
+          "♦️": {
+            "won": 0,
+            "lost": 1,
+            "resolved": 1,
+            "none": 0,
+            "miss": 1,
+            "mirror": 0,
+            "inverse": 1,
+            "missSuits": {
+              "♠️": 1
+            },
+            "hist": {
+              "4": 1
+            },
+            "proofN": 0,
+            "proofSame": 0,
+            "proofWin": 0
+          }
+        },
+        "reportsSent": 1,
+        "lastReportAt": 1792013955471
+      }
+    ],
+    "pending": [
+      {
+        "id": "lr-1792013955450-36fl",
+        "cfgId": "lr-1792013955444-0eg5",
+        "src": "relance:bw1",
+        "suit": "♦️",
+        "target": 200,
+        "phase": "clos",
+        "status": "perdu",
+        "at": 1792013955450,
+        "relName": "Rel",
+        "bwId": "e9",
+        "maxR": 1,
+        "scanFrom": 202,
+        "lostAt": 1792013955466,
+        "nextChecked": true,
+        "returnD": 4
+      },
+      {
+        "id": "lr-1792013955450-4gbd",
+        "cfgId": "lr-1792013955448-fwc7",
+        "src": "-1005",
+        "suit": "♦️",
+        "target": 200,
+        "phase": "clos",
+        "status": "perdu",
+        "at": 1792013955450,
+        "scanFrom": 202,
+        "lostAt": 1792013955469,
+        "nextChecked": true,
+        "returnD": 4
+      },
+      {
+        "id": "lr-1792013955452-lb9v",
+        "cfgId": "lr-1792013955444-0eg5",
+        "src": "-1005",
+        "suit": "♣️",
+        "target": 210,
+        "phase": "clos",
+        "status": "perdu",
+        "at": 1792013955452,
+        "scanFrom": 212,
+        "lostAt": 1792013955471,
+        "nextChecked": true,
+        "returnD": null
+      }
+    ],
+    "seen": [
+      "lr-1792013955444-0eg5:-1005:200:♦️",
+      "lr-1792013955448-fwc7:-1005:200:♦️",
+      "lr-1792013955444-0eg5:-1005:210:♣️",
+      "lr-1792013955444-0eg5:rel:e9:♦️"
+    ],
+    "channelTitles": {}
   }
 }

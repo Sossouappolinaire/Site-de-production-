@@ -1,10 +1,12 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v46',
-  name: 'relance-format-aligne',
+  version: 'v47',
+  name: 'retour-apres-perte',
   date: '2026-10-14',
   features: [
+    'Nouveau bouton « Retour après perte » : suit les canaux cochés, vérifie le rattrapage configuré (ex. 12♦️ perdu, 3 rattrapages → 15 ; sorti au 16 → D=1 : « misez sur le jeu suivant »), note ce qui est venu si le costume n’est pas revenu, envoie un rapport par perte vers un autre canal et un bilan avec les taux tous les X rapports ; il suit n’importe quel canal où le bot publie (toute stratégie ou bouton, via le point d’envoi unique) avec filtre par mot-clé facultatif ; il peut aussi surveiller une configuration « Relance » (suivi interne) pour prouver le D : le D constaté est comparé au jeu de la relance',
+    'Relance : format sans espaces comme demandé (♣️✅0️⃣N°: 1158 / ┣━ N°1158✅ / ┣━♦️ N°1161⏳ / ♦️⏳) et exemple de la page Relance mis à jour',
     'Relance : message et fenêtre de 10 s mieux organisés (même structure sur chaque ligne, espaces réguliers, texte normal sans bloc code) ; la fenêtre devient une petite carte bilingue français / russe avec séparateurs',
     'Relance : nouvelle présentation du message (sans pourcentage) : ♣️✅0️⃣N°: 1158 / ┣━ N°1158✅ / ┣━♦️ N°1161⏳ / ♦️⏳ ; une fois la relance jouée : ┣━ N°1161✅ et ♦️✅0️⃣N°: 1161',
     'Bouton « Combiné » corrigé : l’erreur « COMBINED_LEVEL_LABELS is not defined » est réglée (constante manquante dans public/index.html)',

@@ -23,6 +23,7 @@ const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
+const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
 const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
@@ -343,6 +344,9 @@ function installChannelGuard(inst) {
     // prédiction « en cours » → animation du statut (status-animator.js)
     return Promise.resolve(send(chatId, ...rest)).then((m) => {
       try { statusAnimator.maybeTrack(edit, chatId, m, rest[0], rest[1]); } catch (_) { /* l'animation ne doit jamais bloquer l'envoi */ }
+      // « Retour après perte » : le bot ne reçoit pas ses propres publications de canal ; chaque message envoyé (toute stratégie,
+      // tout bouton) est donc transmis ici, depuis ce point d'envoi unique (voir loss-return.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') lossReturn.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       return m;
     });
   };
@@ -427,6 +431,7 @@ function wire(b) {
     // « Détection auto » : un message au format à deux costumes (♦️ 100%─────┐ / N°1438 / ♣️ 92% ─────┘) enregistre ce canal
     // dans la liste des canaux détectés et alimente les configurations qui le suivent (voir best-weak-top.js)
     try { bestWeakTop.onChannelPost(m.chat, m.text); } catch (_) { /* détection seulement */ }
+    try { lossReturn.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     const cmd = parsePredictionControlCommand(m.text);
     if (cmd) {
       const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`, m.chat);
@@ -2044,6 +2049,8 @@ async function tick() {
       dizaineTop.tick(),
       // « Meilleur + plus faible » : vérification des messages à deux costumes (voir best-weak-top.js)
       Promise.resolve(bestWeakTop.tick()),
+      // « Retour après perte » : vérification des prédictions des canaux suivis, retour N+D, rapport (voir loss-return.js)
+      Promise.resolve(lossReturn.tick()),
       // « Stabilité du jeu » : 4 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
       Promise.resolve(gameStability.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
@@ -2245,6 +2252,7 @@ async function applyDbConfigs() {
   await suitStreak.restoreFromDb();
   await dizaineTop.restoreFromDb();
   await bestWeakTop.restoreFromDb();
+  await lossReturn.restoreFromDb();
   await gameStability.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
@@ -2315,6 +2323,8 @@ async function startLoop() {
   bestWeakTop.restore();
   bestWeakTop.setSender(senderFor);
   bestWeakTop.setAdminId(() => state.adminId);
+  lossReturn.restore();
+  lossReturn.setSender(senderFor);
   gameStability.restore();
   gameStability.setSender(senderFor);
   gameStability.setAdminId(() => state.adminId);

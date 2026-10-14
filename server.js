@@ -45,6 +45,7 @@ const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
+const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const gameStability = require('./game-stability');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
@@ -402,6 +403,7 @@ app.get('/api/state', async (req, res) => {
     suitStreak: suitStreak.status(),
     dizaineTop: dizaineTop.status(),
     bestWeakTop: bestWeakTop.status(),
+    lossReturn: lossReturnView(),
     gameStability: gameStability.status(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
@@ -1913,6 +1915,50 @@ app.post('/api/dizaine-top/bilan/send', async (req, res) => {
   res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, dizaineTop: dizaineTop.status() });
 });
 
+// « Retour après perte » (voir loss-return.js) : suit un canal, mesure quand un costume perdu revient (N+D / miroir / inverse)
+// et envoie le rapport vers un autre canal.
+// vue du bouton + configurations « Relance » proposées comme source (suivi interne, sans lire le canal)
+function lossReturnView() {
+  let relanceOptions = [];
+  try { relanceOptions = (bestWeakTop.status().configs || []).filter((c) => c.mode === 'relance').map((c) => ({ id: c.id, name: c.name || 'Relance', channelNames: c.channelNames || [], maxR: c.maxR })); } catch (_) {}
+  return { ...lossReturn.status(), relanceOptions };
+}
+async function verifyLossReturnChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) lossReturn.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/loss-return', (req, res) => res.json(lossReturnView()));
+app.post('/api/loss-return/configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyLossReturnChannels(lossReturn.parseChannels(b.sources));
+    await verifyLossReturnChannels(lossReturn.parseChannels(b.channels));
+    const c = lossReturn.addConfig(b);
+    res.json({ ok: true, config: c, lossReturn: lossReturnView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/loss-return/configs/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.sources !== undefined) await verifyLossReturnChannels(lossReturn.parseChannels(b.sources));
+    if (b.channels !== undefined) await verifyLossReturnChannels(lossReturn.parseChannels(b.channels));
+    const c = lossReturn.updateConfig(req.params.id, b);
+    res.json({ ok: true, config: c, lossReturn: lossReturnView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/loss-return/configs/:id', (req, res) => { lossReturn.removeConfig(req.params.id); res.json(lossReturnView()); });
+app.post('/api/loss-return/configs/:id/bilan', async (req, res) => {
+  const r = await lossReturn.sendBilan(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/loss-return/configs/:id/test', async (req, res) => {
+  const r = await lossReturn.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
 // « Meilleur + plus faible » (voir best-weak-top.js) : un message à deux costumes (meilleur + plus faible) par jeu.
 async function verifyBestWeakChannels(list) {
   for (const id of (list || [])) {
@@ -2569,7 +2615,7 @@ function configuredChannelList() {
   let discovered = [];
   try { discovered = likeReact.discoverChannels(); } catch (_) {}
   for (const r of discovered) if (r.title) titles[r.id] = r.title;
-  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, overlap, copyAnnounce, betType]) {
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, lossReturn, overlap, copyAnnounce, betType]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {

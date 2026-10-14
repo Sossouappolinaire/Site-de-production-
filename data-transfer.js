@@ -146,6 +146,7 @@ const PANELS = {
   suitStreak: { mod: './suit-streak' },
   dizaineTop: { mod: './dizaine-top' },
   bestWeakTop: { mod: './best-weak-top' },
+  lossReturn: { mod: './loss-return' },
   gameStability: { mod: './game-stability' },        // « Stabilité du jeu »
   costumeFaibleTop: { mod: './costume-faible-top' },
   suitBreak: { mod: './suit-break' },

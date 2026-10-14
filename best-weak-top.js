@@ -400,10 +400,10 @@ function predictionText(target, items, withResults, forcePending, extraTargets) 
 // items : costumes (ordre meilleur → plus faible) avec leur résultat ; owners[i] : index (dans la chaîne) de la ligne N° du costume i ;
 // lines : une ligne ` ┣━ N°…` par entrée de la chaîne (origine d'abord, puis chaque relance).
 // v44 : nouvelle mise en forme (sans pourcentage) :
-//       ♣️ ✅0️⃣ N°: 1158             ♣️ ✅0️⃣ N°: 1158
-//        ┣━ N°1158 ✅                 ┣━ N°1158 ✅
-//        ┣━ ♦️ N°1161 ⏳              ┣━ N°1161 ✅     (relance jouée : le costume n'est plus rappelé sur la ligne)
-//       ♦️ ⏳                        ♦️ ✅0️⃣ N°: 1161
+//       ♣️✅0️⃣N°: 1158              ♣️✅0️⃣N°: 1158
+//        ┣━ N°1158✅                  ┣━ N°1158✅
+//        ┣━♦️ N°1161⏳               ┣━ N°1161✅     (relance jouée : le costume n'est plus rappelé sur la ligne)
+//       ♦️⏳                         ♦️✅0️⃣N°: 1161
 // Texte normal en HTML (jamais de <pre> / <code>) : la police de Telegram n'est pas à chasse fixe, l'alignement vient donc d'une structure
 // identique sur chaque ligne (symbole · espace · résultat) et non d'espaces de remplissage.
 // targets[k] : numéro de jeu de la ligne k de la chaîne ; le N° affiché à côté d'un costume sorti est celui de SA ligne (rattrapage compté depuis lui).
@@ -412,7 +412,7 @@ function relaunchText(items, owners, lines, targets) {
     const mk = suitMark(s, true);
     const hit = Number.isFinite(Number(s.res)) && s.res !== null && s.res >= 0;
     const n = Array.isArray(targets) ? targets[owners[i]] : undefined;
-    return hit && n !== undefined ? `${s.suit} ${mk} N°: ${n}` : `${s.suit} ${mk}`;
+    return hit && n !== undefined ? `${s.suit}${mk}N°: ${n}` : `${s.suit}${mk}`; // v47 : sans espace (♣️✅0️⃣N°: 1158 / ♦️⏳)
   });
   let boundaries = 0;
   for (let i = 1; i < items.length; i++) if (owners[i] !== owners[i - 1]) boundaries++;
@@ -780,6 +780,7 @@ async function record(strategy, rank, data) {
         cfg.sentCount = (cfg.sentCount || 0) + 1; cfg.lastSentAt = now;
         panel.sentCount += 1; panel.lastSentAt = now; panel.lastError = null;
         if (entry.suits.length >= 2) for (const mm of entry.messages) await onMultiSent(mm.chatId, entry).catch((e) => { panel.lastError = e.message; }); // mode « suivi »
+        if (entry.mode === 'relance') { try { require('./loss-return').onRelanceSent(cfg, entry); } catch (_) { /* bouton « Retour après perte » : suivi seulement */ } }
       } finally { inflight.delete(lock); }
     }
     persist();
@@ -829,10 +830,10 @@ function editMulti(entry) {
   const owners = resolved.map((r) => r.owner); // ligne N° de chaque costume
   const pendingSuits = (e) => e.suits.filter((x) => x.res === undefined || x.res === null).map((x) => x.suit).join('');
   const lines = chain.map((e, k) => (k === 0
-    ? ` ┣━ N°${e.target} ✅` // jeu d'origine : au moins un costume est sorti (c'est ce qui a déclenché la relance)
-    : e.status === 'gagné' ? ` ┣━ N°${e.target} ✅`
-      : e.status === 'perdu' ? ` ┣━ N°${e.target} ❌`
-        : ` ┣━ ${pendingSuits(e)} N°${e.target} ⏳`)); // relance en cours : le costume relancé est rappelé devant son N°
+    ? ` ┣━ N°${e.target}✅` // jeu d'origine : au moins un costume est sorti (c'est ce qui a déclenché la relance)
+    : e.status === 'gagné' ? ` ┣━ N°${e.target}✅`
+      : e.status === 'perdu' ? ` ┣━ N°${e.target}❌`
+        : ` ┣━${pendingSuits(e)} N°${e.target}⏳`)); // relance en cours : le costume relancé est rappelé devant son N°
   editAll(root, relaunchText(items, owners, lines, chain.map((e) => e.target)), 'HTML');
 }
 function verifyMulti(entry, cfg, maxDone) {
@@ -908,6 +909,7 @@ function sendRelaunch(cfg, parent, remaining) {
     relaunch: true, depth, parentId: parent.id, // messages : vide, le message d'origine est modifié
   };
   panel.pending.push(entry); panel.recentSent.push(relaunchKey(cfg.id, target));
+  try { require('./loss-return').onRelaunchSent(cfg, parent, entry); } catch (_) { /* bouton « Retour après perte » : suivi seulement */ }
   if (panel.recentSent.length > 500) panel.recentSent = panel.recentSent.slice(-500);
   cfg.sentCount = (cfg.sentCount || 0) + 1; cfg.lastSentAt = now;
   panel.lastError = null;
@@ -1103,7 +1105,7 @@ async function test(id) {
     msgs = await sendToChannels(cfg, `🧪 Test\n${predictionText(464, sample)}`, 'HTML');
     if (modeOf(cfg) === 'relance' && sample.length >= 2) { // aperçu de la relance : le 1ᵉʳ est sorti, le reste est relancé à +3
       sample[0].res = 0;
-      const lines = [' ┣━ N°464 ✅', ` ┣━ ${sample.slice(1).map((x) => x.suit).join('')} N°${464 + relaunchOffset(cfg)} ⏳`];
+      const lines = [' ┣━ N°464✅', ` ┣━${sample.slice(1).map((x) => x.suit).join('')} N°${464 + relaunchOffset(cfg)}⏳`];
       await sendToChannels(cfg, `🧪 Test (un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(cfg)} : relance à N+${relaunchOffset(cfg)}, le N° est placé à côté du costume relancé)\n${relaunchText(sample, sample.map((_, i) => (i === 0 ? 0 : 1)), lines, [464, 464 + relaunchOffset(cfg)])}`, 'HTML');
       if (cfg.relChannels && cfg.relChannels.length) {
         const o = triggerMessage({ format: cfg.relFormat, target: 464 + relaunchOffset(cfg), suits: [{ suit: sample[1].suit }], strategyName: `${cfg.name || 'Relance'} · relance`, maxR: cfg.relMaxR, step: 0 }, 'en attente');
