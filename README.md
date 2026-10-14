@@ -522,10 +522,13 @@ parmi les 4 meilleurs (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés :
 ## 🛡️ Stabilité du jeu (page `/#/stability`, désactivée par défaut)
 
 Fonction **globale**, à activer sur la page « Stabilité » (aucun envoi ni blocage tant qu'elle est désactivée). Code : `game-stability.js`.
-- **Règle** : le jeu est *stable* quand, sur **7 jeux analysés** (fenêtre glissante, les mêmes jeux que l'Analyseur IA, main du joueur), les 4 costumes
-  ♣️ ♦️ ♠️ ❤️ sont sortis au moins une fois chez le joueur ; sinon il est *instable*. Moins de 7 jeux (début de sabot) : pas de jugement.
+- **Règle** : le jeu est *stable* quand, sur **4 jeux analysés** (fenêtre glissante, les mêmes jeux que l'Analyseur IA, main du joueur), les 4 costumes
+  ♣️ ♦️ ♠️ ❤️ sont sortis au moins une fois chez le joueur ; sinon il est *instable*. Moins de 4 jeux (début de sabot) : pas de jugement.
 - **Chat privé uniquement** (ADMIN_ID, jamais un canal) : « ⚠️ Jeu instable » dès que l'instabilité commence, « ✅ Jeu de nouveau stable » avec la
   durée de l'instabilité, et un **bilan de stabilité toutes les heures** (à l'heure pile, fuseau `RESET_TZ`) : de tel jeu à tel jeu stable, de tel jeu à tel jeu instable.
+- **Évaluation toutes les 30 min** (v34) : à chaque xxh00 / xxh30, sur les **10 derniers jeux**, chaque jeu est jugé avec la règle des 4 jeux ; le
+  **taux de jeux stables** est comparé au **seuil** (80 % par défaut, réglable sur la page). Message dans le chat privé : « ✅ Jeu stable / ⚠️ Jeu instable ·
+  9/10 jeux stables = 90 % (seuil 80 %) ». Il faut 13 jeux (10 jugés + 3 de contexte). N'influence pas le blocage. API : `POST /api/stability/threshold`.
 - **Blocage** : si le jeu reste instable **10 min**, l'envoi des nouveaux messages est suspendu **1 h** dans les canaux cochés sur la page (toutes les
   configurations de tous les boutons). Les messages déjà publiés continuent d'être vérifiés / édités. Après l'heure, l'envoi reprend ; si le jeu est encore
   instable, un nouveau blocage n'intervient qu'après 10 nouvelles minutes. Bouton « Lever le blocage » sur la page.

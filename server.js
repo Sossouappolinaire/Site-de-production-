@@ -1972,6 +1972,12 @@ app.post('/api/stability/channels', (req, res) => {
     res.json({ ...gameStability.status(), channels: configuredChannelList() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+app.post('/api/stability/threshold', (req, res) => {
+  try {
+    gameStability.setThreshold(req.body && req.body.threshold);
+    res.json({ ...gameStability.status(), channels: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.post('/api/stability/release', (req, res) => { gameStability.releaseBlock(); res.json(gameStability.status()); });
 app.post('/api/best-weak/configs/:id/test', async (req, res) => {
   const r = await bestWeakTop.test(req.params.id);

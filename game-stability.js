@@ -2,13 +2,18 @@
 //
 // Source des jeux : les mêmes jeux terminés que ceux lus par l'Analyseur IA (predictor.state.history, main du JOUEUR).
 //
-// RÈGLE DE STABILITÉ : sur 7 jeux consécutifs analysés (fenêtre glissante), le joueur doit avoir reçu AU MOINS UNE FOIS
-// chacun des 4 costumes (♣️ ♦️ ♠️ ❤️). Exemple : jeux 1 à 7 → s'il manque un costume dans l'ensemble des cartes du joueur, le
-// jeu est INSTABLE. Moins de 7 jeux (début de sabot) : pas de jugement tant que la fenêtre n'est pas complète.
+// RÈGLE DE STABILITÉ : sur 4 jeux consécutifs analysés (fenêtre glissante), le joueur doit avoir reçu AU MOINS UNE FOIS
+// chacun des 4 costumes (♣️ ♦️ ♠️ ❤️). Exemple : jeux 1 à 4 → s'il manque un costume dans l'ensemble des cartes du joueur, le
+// jeu est INSTABLE. Moins de 4 jeux (début de sabot) : pas de jugement tant que la fenêtre n'est pas complète.
 //
 // ENVOIS — UNIQUEMENT dans le CHAT PRIVÉ de l'administrateur (jamais dans un canal) :
 //   • « ⚠️ Jeu instable » dès que le jeu devient instable, puis « ✅ Jeu de nouveau stable » avec la DURÉE de l'instabilité ;
 //   • un BILAN DE STABILITÉ toutes les heures (à l'heure pile) : de tel jeu à tel jeu c'était stable, de tel jeu à tel jeu instable.
+//
+// ÉVALUATION TOUTES LES 30 MIN (v34) : à chaque demi-heure pile (xxh00 / xxh30, fuseau RESET_TZ), le bot prend les 10 DERNIERS JEUX,
+// juge chacun avec la règle des 4 jeux ci-dessus, et calcule le TAUX DE JEUX STABLES. Taux ≥ seuil (80 % par défaut, réglable
+// sur la page) → période « stable », sinon « instable ». Message dans le CHAT PRIVÉ de l'admin uniquement. Il faut 13 jeux au
+// moins (10 jeux jugés + 3 jeux de contexte pour la fenêtre de 4) : pas de jugement avant. N'influence PAS le blocage des canaux.
 //
 // BLOCAGE : si le jeu reste instable 10 minutes, l'envoi des messages dans les canaux dont le blocage est ACTIVÉ est suspendu
 // pendant 1 heure (garde central de bot.js : installChannelGuard → isBlocked). Les messages déjà publiés continuent d'être
@@ -21,7 +26,10 @@ const db = require('./db');
 const predictor = require('./predictor');
 
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
-const WINDOW = 7;                       // jeux analysés
+const WINDOW = 4;                       // jeux analysés
+const EVAL_GAMES = 10;                  // jeux jugés à chaque évaluation périodique
+const EVAL_EVERY_MIN = 30;              // fréquence de l'évaluation (minutes, à la demi-heure pile)
+const DEFAULT_THRESHOLD = 80;           // % de jeux stables à atteindre pour dire « stable »
 const BLOCK_AFTER_MS = 10 * 60 * 1000;  // instabilité qui déclenche le blocage
 const BLOCK_FOR_MS = 60 * 60 * 1000;    // durée du blocage
 const MAX_SEGMENTS = 300;
@@ -30,11 +38,13 @@ const TZ = process.env.RESET_TZ || 'Africa/Abidjan';
 const panel = {
   enabled: false,              // désactivée par défaut
   blockChannels: [],           // canaux (ID) dont l'envoi est bloqué pendant l'instabilité prolongée
-  status: 'unknown',           // 'stable' | 'unstable' | 'unknown' (fenêtre de 7 jeux pas encore complète)
+  status: 'unknown',           // 'stable' | 'unstable' | 'unknown' (fenêtre de 4 jeux pas encore complète)
   since: null, lastGame: null, missing: [],
   segments: [],                // { status, fromGame, toGame, from, to } — le dernier est « en cours » (to = null)
   blockedUntil: null, blockRefAt: null, blockCount: 0,
   lastBilanKey: null, lastBilanAt: null, bilanFrom: null,
+  threshold: DEFAULT_THRESHOLD,  // seuil (%) de l'évaluation sur 10 jeux toutes les 30 min
+  lastEvalKey: null, lastEval: null, // { at, stable, rate, stableGames, total, from, number }
   lastError: null,
 };
 
@@ -67,6 +77,10 @@ function applySaved(saved) {
   panel.lastBilanKey = saved.lastBilanKey || null;
   panel.lastBilanAt = Number(saved.lastBilanAt) || null;
   panel.bilanFrom = Number(saved.bilanFrom) || null;
+  const th = Number(saved.threshold);
+  panel.threshold = Number.isFinite(th) && th >= 1 && th <= 100 ? Math.round(th) : DEFAULT_THRESHOLD;
+  panel.lastEvalKey = saved.lastEvalKey || null;
+  panel.lastEval = saved.lastEval && typeof saved.lastEval === 'object' ? saved.lastEval : null;
 }
 function restore() { try { const s = (store.read() || {}).gameStability; if (s) applySaved(s); } catch (_) {} }
 async function restoreFromDb() {
@@ -77,7 +91,7 @@ function config() { return { count: panel.blockChannels.length }; }
 function configure() { persist(); } // import d'une sauvegarde : réécrit l'état en base
 
 // ---------------------------------------------------------------------------
-// Analyse : 7 derniers jeux terminés
+// Analyse : 4 derniers jeux terminés
 // ---------------------------------------------------------------------------
 function normSuit(s) {
   const raw = String(s == null ? '' : s).replace(/\uFE0F/g, '').trim();
@@ -90,7 +104,7 @@ function normSuit(s) {
 const numberOf = (r) => Number(r && (r.number != null ? r.number : r.n));
 const suitsOf = (r) => (Array.isArray(r && (r.playerSuits || r.player_suits)) ? (r.playerSuits || r.player_suits) : []).map(normSuit).filter(Boolean);
 
-// history : jeux terminés, le plus récent en premier. Retourne null tant que 7 jeux complets ne sont pas disponibles.
+// history : jeux terminés, le plus récent en premier. Retourne null tant que 4 jeux complets ne sont pas disponibles.
 function analyse(history) {
   const games = (Array.isArray(history) ? history : []).filter((r) => r && Number.isFinite(numberOf(r)) && suitsOf(r).length);
   if (games.length < WINDOW) return null;
@@ -98,6 +112,20 @@ function analyse(history) {
   const seen = new Set(win.flatMap(suitsOf));
   const missing = SUITS.filter((s) => !seen.has(s));
   return { stable: missing.length === 0, missing, number: numberOf(win[0]), from: numberOf(win[WINDOW - 1]) };
+}
+
+// Évaluation sur 10 jeux : chaque jeu est jugé avec la règle des 4 jeux (lui + les 3 précédents) ; on compte les jeux stables.
+// Retourne null tant qu'il n'y a pas 13 jeux (10 jugés + 3 de contexte).
+function analyseWindow(history, threshold = panel.threshold) {
+  const games = (Array.isArray(history) ? history : []).filter((r) => r && Number.isFinite(numberOf(r)) && suitsOf(r).length);
+  if (games.length < EVAL_GAMES + WINDOW - 1) return null;
+  let stableGames = 0;
+  for (let i = 0; i < EVAL_GAMES; i += 1) {
+    const seen = new Set(games.slice(i, i + WINDOW).flatMap(suitsOf));
+    if (SUITS.every((s) => seen.has(s))) stableGames += 1;
+  }
+  const rate = Math.round((stableGames * 100) / EVAL_GAMES);
+  return { stable: rate >= threshold, rate, stableGames, total: EVAL_GAMES, threshold, number: numberOf(games[0]), from: numberOf(games[EVAL_GAMES - 1]) };
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +259,29 @@ async function checkBilan(now) {
 }
 
 // ---------------------------------------------------------------------------
+// Évaluation toutes les 30 min (xxh00 / xxh30) sur les 10 derniers jeux
+// ---------------------------------------------------------------------------
+function halfHourKey(ts = Date.now()) {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, minute: '2-digit' }).formatToParts(new Date(ts));
+  const min = Number((p.find((x) => x.type === 'minute') || {}).value || 0);
+  return `${hourKey(ts)}:${String(Math.floor(min / EVAL_EVERY_MIN) * EVAL_EVERY_MIN).padStart(2, '0')}`;
+}
+function buildEvalMessage(res, now) {
+  const from = now - EVAL_EVERY_MIN * 60 * 1000;
+  return `🕐 Stabilité ${fmtClock(from)} → ${fmtClock(now)}\n${res.stable ? '✅ Jeu stable' : '⚠️ Jeu instable'} sur les ${res.total} derniers jeux (N°${res.from} → N°${res.number})\n${res.stableGames}/${res.total} jeux stables = ${res.rate}% (seuil ${res.threshold}%)`;
+}
+async function checkEval(now) {
+  if (!panel.enabled) return;
+  const key = halfHourKey(now);
+  if (panel.lastEvalKey === key) return;
+  const first = !panel.lastEvalKey; // premier passage après l'activation : le premier message part à la demi-heure pile suivante
+  panel.lastEvalKey = key;
+  const res = analyseWindow(predictor.state.history);
+  panel.lastEval = res ? { ...res, at: now } : null;
+  if (!first && res) await toAdmin(buildEvalMessage(res, now));
+}
+
+// ---------------------------------------------------------------------------
 // Boucle
 // ---------------------------------------------------------------------------
 let running = false;
@@ -240,20 +291,21 @@ async function tick() {
   try {
     const now = Date.now();
     // l'analyse tourne toujours (état à jour dès l'activation) ; les envois et le blocage exigent l'activation
-    const sig = () => JSON.stringify([panel.enabled, panel.status, panel.lastGame, panel.blockedUntil, panel.blockCount, panel.lastBilanKey, panel.segments.length]);
+    const sig = () => JSON.stringify([panel.enabled, panel.status, panel.lastGame, panel.blockedUntil, panel.blockCount, panel.lastBilanKey, panel.segments.length, panel.lastEvalKey, panel.threshold]);
     const before = sig();
     const res = analyse(predictor.state.history);
     const changed = (res ? (res.stable ? 'stable' : 'unstable') : 'unknown') !== panel.status || (res && res.number !== panel.lastGame);
     if (changed) await onStatus(res, now);
     await checkBlock(now);
     await checkBilan(now);
+    await checkEval(now);
     if (sig() !== before) persist();
   } catch (e) { panel.lastError = e.message; } finally { running = false; }
 }
 if (typeof predictor.setOnShoeReset === 'function') {
-  predictor.setOnShoeReset(() => { // nouveau sabot : la numérotation repart de 1, la fenêtre de 7 jeux aussi
+  predictor.setOnShoeReset(() => { // nouveau sabot : la numérotation repart de 1, la fenêtre de 4 jeux aussi
     const now = Date.now();
-    closeOpen(now); panel.status = 'unknown'; panel.since = null; panel.lastGame = null; panel.missing = []; panel.bilanFrom = null;
+    closeOpen(now); panel.status = 'unknown'; panel.since = null; panel.lastGame = null; panel.missing = []; panel.bilanFrom = null; panel.lastEval = null;
     persist();
   });
 }
@@ -265,8 +317,8 @@ function setEnabled(on) {
   const v = !!on;
   if (v === panel.enabled) return panel.enabled;
   panel.enabled = v;
-  if (!v) { panel.blockedUntil = null; panel.blockRefAt = null; panel.lastBilanKey = null; panel.lastBilanAt = null; }
-  else { panel.lastBilanKey = null; panel.lastBilanAt = Date.now(); panel.bilanFrom = panel.lastGame; panel.blockRefAt = Date.now(); }
+  if (!v) { panel.blockedUntil = null; panel.blockRefAt = null; panel.lastBilanKey = null; panel.lastBilanAt = null; panel.lastEvalKey = null; }
+  else { panel.lastEvalKey = null; panel.lastBilanKey = null; panel.lastBilanAt = Date.now(); panel.bilanFrom = panel.lastGame; panel.blockRefAt = Date.now(); }
   persist();
   return panel.enabled;
 }
@@ -277,6 +329,14 @@ function toggleChannel(id, on) {
   const set = new Set(panel.blockChannels);
   if (on) set.add(k); else set.delete(k);
   return setBlockChannels([...set]);
+}
+function setThreshold(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < 1 || n > 100) throw new Error('Seuil invalide : entre 1 et 100 (%).');
+  panel.threshold = n;
+  if (panel.lastEval) panel.lastEval = { ...panel.lastEval, threshold: n, stable: panel.lastEval.rate >= n };
+  persist();
+  return panel.threshold;
 }
 function releaseBlock() { panel.blockedUntil = null; panel.blockRefAt = Date.now(); persist(); }
 
@@ -290,11 +350,14 @@ function status() {
     blockChannels: panel.blockChannels, blockedUntil: panel.blockedUntil && panel.blockedUntil > now ? panel.blockedUntil : null,
     blockedUntilText: panel.blockedUntil && panel.blockedUntil > now ? fmtClock(panel.blockedUntil) : null, blockCount: panel.blockCount,
     lastBilanAt: panel.lastBilanAt, lastError: panel.lastError,
+    evalGames: EVAL_GAMES, evalEveryMin: EVAL_EVERY_MIN, threshold: panel.threshold,
+    evalNow: analyseWindow(predictor.state.history), lastEval: panel.lastEval,
+    lastEvalText: panel.lastEval ? fmtClock(panel.lastEval.at) : null,
     segments: panel.segments.slice(-12).reverse().map((s) => ({ status: s.status, fromGame: s.fromGame, toGame: s.toGame, from: s.from, to: s.to, durText: fmtDur((s.to == null ? now : s.to) - s.from), fromText: fmtClock(s.from) })),
   };
 }
 
 module.exports = {
   panel, config, configure, restore, restoreFromDb, persist, setSender, setAdminId, tick, status, analyse, isBlocked,
-  setEnabled, setBlockChannels, toggleChannel, releaseBlock, buildBilan,
+  setEnabled, setBlockChannels, toggleChannel, releaseBlock, buildBilan, setThreshold, analyseWindow, buildEvalMessage,
 };
