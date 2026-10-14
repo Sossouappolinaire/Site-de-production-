@@ -306,6 +306,7 @@
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
+        <a href="#/loss-return" data-nav="loss-return">📉 Retour après perte</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
@@ -559,6 +560,7 @@
         ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
         ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
         ${card('#/copy-announce', '📣', 'Copie et annonce', `${(snapshot.copyAnnounce?.rules || []).length} règle(s)`)}
         ${card('#/bet-type', '🎲', 'Type de mise', `${(snapshot.betType?.trackers || []).length} configuration(s)`)}
@@ -1917,7 +1919,7 @@ Faites-en bon usage !
     // 🔄 « Relance » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
     // celui qui n'est pas venu est relancé dans un nouveau message à N+3 (voir best-weak-top.js, mode « relance »)
     // -------------------------------------------------------------------
-    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas venu au jeu suivant → relance à (jeu du ✅) + 7', '', '♦️⏳ 94%', ' ┣━ N°1142⏳', ' ┣━ N°1135✅', '♣️✅0️⃣ 95%'].join('\n');
+    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas venu au jeu suivant → relance à (jeu du ✅) + 7', '', '♣️✅0️⃣N°: 1135', ' ┣━ N°1135✅', ' ┣━♦️ N°1142⏳', '♦️⏳'].join('\n');
     // résumé de la règle de relance, de l'analyse du +n et du canal de relance
     function relanceInfoHtml(c) {
       const r = c.relaunch || {};
@@ -2133,7 +2135,7 @@ Faites-en bon usage !
           'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible. Règle l’attente (jeux après la sortie du 1ᵉʳ costume) et la relance (+n) si besoin.',
         ],
         tips: [
-          'Exemple : N°1135, ♣️ sort directement, ♦️ n’est pas venu au jeu suivant (N°1136) : ♦️ est relancé à N°1142 (1135 + 7, le jeu où ♣️ est sorti + n). Le message devient ♦️⏳ 94% / N°1142⏳ / N°1135✅ / ♣️✅0️⃣ 95% : chaque numéro est à côté de son costume. Le ⏳ devient ✅ ou ❌ une fois la relance jouée.',
+          'Exemple : N°1135, ♣️ sort directement, ♦️ n’est pas venu au jeu suivant (N°1136) : ♦️ est relancé à N°1142 (1135 + 7, le jeu où ♣️ est sorti + n). Le message devient ♣️✅0️⃣N°: 1135 / ┣━ N°1135✅ / ┣━♦️ N°1142⏳ / ♦️⏳ : chaque numéro est à côté de son costume. Le ⏳ devient ✅ ou ❌ une fois la relance jouée.',
           'Pas de relance si les deux costumes sortent pendant l’attente, si aucun ne sort (perdu ❌), ou si le jeu visé est déjà joué. Même si l’autre costume sort ensuite, la relance annoncée reste.',
           'Analyse auto du +n : coche l’option et choisis le +n maximum. À chaque relance, le bot regarde de +3 jusqu’à +n si le costume relancé est sorti (au jeu visé ou dans ses rattrapages). Après 8 situations minimum, le +n le plus réussi est appliqué tout seul (les résultats par +n sont affichés sur la carte). Analyse auto cochée : le N+7 fixe n’est plus utilisé, la relance attend le verdict de l’analyse (aucune relance n’est envoyée avant).',
           'Relance vers un autre canal : renseigne l’ID du canal, le format de prédiction et le nombre de rattrapages. Chaque costume relancé y est envoyé en message simple et vérifié à part (gagnés / perdus comptés à part).',
@@ -2485,6 +2487,83 @@ Faites-en bon usage !
     }
     // ré-affiche la page courante (Meilleur + faible, Test ou Détection auto)
     function bwRerender() { if (location.hash === '#/scan') return scanPage(); if (location.hash === '#/test') return testCyclePage(); if (location.hash === '#/relance') return relancePage(); return bestWeakPage(); }
+    // 📉 « Retour après perte » : suit un canal, vérifie le rattrapage configuré, mesure quand le costume perdu revient (N+D),
+    // le taux du miroir et de l'inverse, et envoie le rapport vers un autre canal (voir loss-return.js)
+    function lrSuitBlock(x) {
+      const tops = (x.top || []).map(t => `D=${esc(t.d)} : <b>${esc(t.n)}</b> (${esc(t.rate)}%)`).join(' · ') || 'aucun retour observé';
+      const came = (x.came || []).map(t => `${esc(t.suit)} ${esc(t.label)} ${esc(t.rate)}%`).join(' · ');
+      return `<p class="small" style="margin:6px 0"><b>${esc(x.suit)}</b> · ${esc(x.lost)} perdu(s) · ${esc(x.resolved)} retour(s) observé(s)${x.none ? ` · ${esc(x.none)} non revenu(s)` : ''}<br>
+        ${x.proofN ? `🧪 preuve Relance (${esc(x.proofN)} cas) : pile sur le jeu de la relance ${esc(Math.round(x.proofSame * 100 / x.proofN))}% · dans sa fenêtre ${esc(Math.round(x.proofWin * 100 / x.proofN))}%<br>` : ''}🎯 ${tops}${came ? `<br>🔎 pas venu au jeu suivant (${esc(x.miss)}×) : ${came}` : ''}${(x.advice || []).map(a => `<br>👉 ${esc(a)}`).join('')}</p>`;
+    }
+    async function lossReturnPage() {
+      setNav('loss-return');
+      try { await refresh(); } catch (_) {}
+      const p = snapshot.lossReturn || {};
+      const list = p.configs || [];
+      const cards = list.length ? list.map(c => `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
+          <span class="eyebrow">📉 Retour après perte${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}${esc((c.sourceNames || []).concat((c.relanceIds || []).map(id => { const r = (p.relanceOptions || []).find(o => o.id === id); return '🔄 ' + (r ? r.name : id); })).join(', '))} → ${esc((c.channelNames || []).join(', '))}</h3>
+          <p class="small">${esc(c.maxR)} rattrapage(s) · retour cherché jusqu'à D=${esc(c.maxD)} · rapport dès ${esc(c.minSample)} perte(s) du costume · bilan tous les ${esc(c.bilanEvery)} rapports · ${esc(c.reportsSent || 0)} rapport(s) envoyé(s) · ${esc(c.pending || 0)} prédiction(s) en cours de vérification</p>
+          ${(c.suits || []).length ? c.suits.map(lrSuitBlock).join('') : '<p class="small">Aucune prédiction vérifiée pour l’instant : les publications du canal suivi apparaissent ici dès qu’elles sont jouées.</p>'}</div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleLossReturn('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="lossReturnModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testLossReturn('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small ghost" onclick="bilanLossReturn('${esc(c.id)}')">Envoyer le bilan</button>
+          <button class="button small ghost" onclick="resetLossReturn('${esc(c.id)}')">Remettre les stats à zéro</button>
+          <button class="button small danger" onclick="removeLossReturn('${esc(c.id)}')">Supprimer</button></div></div>`).join('') : '<div class="empty">Aucune configuration. Clique sur « Créer ».</div>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse des pertes</span><h2 style="margin-top:7px">📉 Retour après perte</h2>
+        <p class="small">Le bot suit un canal : chaque prédiction (N° + costume) est vérifiée avec le nombre de rattrapages configuré. Quand un costume est perdu, on mesure D = le nombre de jeux après la fin des rattrapages où il revient (ex. 12 ♦️ perdu, 3 rattrapages : 12+3 = 15 ; s’il sort au jeu 16, D = 1 → « misez sur le jeu suivant »). S’il n’est pas venu au jeu suivant, on note ce qui est venu (miroir ❤️↔♦️ / ♠️↔♣️, inverse ❤️↔♣️ / ♦️↔♠️, ou l’autre costume). Un rapport part vers l’autre canal à chaque perte, et un bilan avec les taux tous les X rapports.</p></div>
+        <div class="toolbar"><button class="button primary" onclick="lossReturnModal()">Créer</button><button class="button ghost" onclick="lossReturnPage()">Actualiser</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section">${cards}</section>`;
+    }
+    function lossReturnModal(id) {
+      const c = id ? ((snapshot.lossReturn || {}).configs || []).find(x => x.id === id) : null;
+      const chosen = new Set(c ? (c.sources || []).map(String) : []);
+      const rows = (snapshot.channelList || []);
+      const known = new Set(rows.map(r => String(r.id)));
+      const boxes = rows.map(r => `<label class="check" style="display:block;margin:6px 0"><input type="checkbox" class="lrSrc" value="${esc(r.id)}" ${chosen.has(String(r.id)) ? 'checked' : ''}> ${esc(r.title || r.id)} <small>${esc(r.id)}${(r.sources || []).length ? ' · publie : ' + esc((r.sources || []).join(', ')) : ''}</small></label>`).join('');
+      const extra = [...chosen].filter(x => !known.has(x)).join(', ');
+      const chans = rows.map(r => `<option value="${esc(r.id)}">${esc(r.title || '')}</option>`).join('');
+      openModal(`<div class="modal-head"><div><span class="eyebrow">📉 Retour après perte</span><h3 style="margin-top:8px">${c ? 'Modifier' : 'Nouvelle configuration'}</h3></div></div>
+        <div class="field"><label>Nom (facultatif)</label><input id="lrName" value="${esc(c ? c.name : '')}"></div>
+        <div class="field"><label>Canal(aux) à suivre : coche (canaux où ce bot publie — toute stratégie ou bouton — ou canaux d’autres bots où il est administrateur)</label>${boxes || '<small>Aucun canal connu pour l’instant : saisis-le ci-dessous.</small>'}</div>
+        <div class="field"><label>🔄 Relances à suivre (suivi interne : le bot compare le D observé au jeu de la relance, pas besoin de lire le canal)</label>${(((snapshot.lossReturn || {}).relanceOptions) || []).map(r => `<label class="check" style="display:block;margin:6px 0"><input type="checkbox" class="lrRel" value="${esc(r.id)}" ${c && (c.relanceIds || []).includes(r.id) ? 'checked' : ''}> ${esc(r.name)} <small>→ ${esc((r.channelNames || []).join(', '))} · ${esc(r.maxR)} rattrapage(s)</small></label>`).join('') || '<small>Aucune configuration « Relance » : crée-en une dans 🔄 Relance.</small>'}</div>
+        <div class="field"><label>Autre canal à suivre (ID ou @nom, facultatif)</label><input id="lrSourcesExtra" value="${esc(extra)}" placeholder="-1001234567890 ou @nomducanal"></div>
+        <div class="field"><label>Mot-clé (facultatif) : ne suivre que les messages qui contiennent ce mot, par exemple le nom d’une stratégie</label><input id="lrKeyword" value="${esc(c ? (c.keyword || '') : '')}" placeholder="laisse vide pour tout suivre"></div>
+        <div class="field"><label>Canal qui reçoit les rapports</label><input id="lrChannels" list="lrChanList" value="${esc(c ? (c.channels || []).join(', ') : '')}" placeholder="-1009876543210 ou @nomducanal"><datalist id="lrChanList">${chans}</datalist></div>
+        <div class="field"><label>Rattrapages configurés pour ce canal (0 → 9) : N + rattrapages = fin de la prédiction, D = 1 est le jeu suivant</label><input id="lrMaxR" type="number" min="0" max="9" value="${esc(c ? c.maxR : 2)}"></div>
+        <div class="field"><label>Observer le retour du costume jusqu’à D = … (1 → 40)</label><input id="lrMaxD" type="number" min="1" max="40" value="${esc(c ? c.maxD : 10)}"></div>
+        <div class="field"><label>Envoyer le rapport à partir de … pertes du costume (0 = toujours)</label><input id="lrMinSample" type="number" min="0" max="500" value="${esc(c ? c.minSample : 10)}"></div>
+        <div class="field"><label>Envoyer un bilan avec les taux tous les … rapports (0 = jamais)</label><input id="lrBilanEvery" type="number" min="0" max="500" value="${esc(c ? c.bilanEvery : 10)}"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveLossReturn('${c ? esc(c.id) : ''}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function saveLossReturn(id) {
+      try {
+        const sources = [...document.querySelectorAll('.lrSrc:checked')].map(x => x.value).concat(ids(val('lrSourcesExtra')));
+        const relances = [...document.querySelectorAll('.lrRel:checked')].map(x => x.value);
+        const body = { name: val('lrName'), keyword: val('lrKeyword'), sources, relances, channels: ids(val('lrChannels')), maxR: val('lrMaxR'), maxD: val('lrMaxD'), minSample: val('lrMinSample'), bilanEvery: val('lrBilanEvery') };
+        await api(id ? `/api/loss-return/configs/${encodeURIComponent(id)}` : '/api/loss-return/configs', id ? 'PUT' : 'POST', body);
+        closeModal(); await refresh(); lossReturnPage(); toast('Configuration enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function toggleLossReturn(id, enabled) {
+      try { await api(`/api/loss-return/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); lossReturnPage(); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testLossReturn(id) {
+      try { await api(`/api/loss-return/configs/${encodeURIComponent(id)}/test`, 'POST'); toast('Rapport de test envoyé dans le canal.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function bilanLossReturn(id) {
+      try { await api(`/api/loss-return/configs/${encodeURIComponent(id)}/bilan`, 'POST'); await refresh(); lossReturnPage(); toast('Bilan envoyé dans le canal.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetLossReturn(id) {
+      if (!confirm('Remettre à zéro les statistiques de cette configuration ?')) return;
+      try { await api(`/api/loss-return/configs/${encodeURIComponent(id)}`, 'PUT', { resetStats: true }); await refresh(); lossReturnPage(); toast('Statistiques remises à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeLossReturn(id) {
+      if (!confirm('Supprimer cette configuration ?')) return;
+      try { await api(`/api/loss-return/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); lossReturnPage(); toast('Configuration supprimée.'); } catch (e) { toast(e.message, 'error'); }
+    }
     async function toggleBestWeak(id, enabled) {
       try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); bwRerender(); }
       catch (e) { toast(e.message, 'error'); }
@@ -5139,6 +5218,7 @@ Faites-en bon usage !
         else if (h === '#/scan') scanPage();
         else if (h === '#/costume-faible-top') costumeFaibleTopPage();
         else if (h === '#/suit-break') suitBreakPage();
+        else if (h === '#/loss-return') lossReturnPage();
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
         else if (h === '#/bet-type') betTypePage();
