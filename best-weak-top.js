@@ -27,18 +27,18 @@
 //        ┣━ N°1135
 //       ♦️ 94%
 //
-//   Règle : si un costume est sorti directement (✅0️⃣) au jeu N ET que l'autre n'est toujours pas sorti au jeu N+1, le MÊME
-//   message est édité : on y ajoute seulement le numéro de la relance (N+3), le costume pas venu reste ⏳ :
+//   Règle : dès qu'un costume est sorti (peu importe le rattrapage : ✅0️⃣, ✅1️⃣, ✅2️⃣…) et que l'autre n'est toujours pas sorti au jeu
+//   suivant (N+r+1), le MÊME message est édité : on y ajoute seulement le numéro de la relance : (N+r+1)+2 = N+r+3 (N+3 si direct), le
+//   costume pas venu reste ⏳ :
 //
 //       ♣️✅0️⃣ 95%
 //        ┣━ N°1135
 //        ┣━ N°1138⏳
 //       ♦️⏳ 94%
 //
-//   Pas de relance si les deux costumes sortent, si l'autre sort à N ou N+1, ou si aucun ne sort directement (perdu, ou un
-//   seul costume sorti à un rattrapage). La relance annoncée à N+1 reste, même si l'autre costume sort ensuite à N+2.
-//   Avec 3 costumes, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Sans rattrapage (0),
-//   on ne peut pas attendre N+1 : la relance part dès le jeu N.
+//   Pas de relance si les deux costumes sortent avant, si aucun ne sort (perdu), ou si le jeu visé est déjà joué. La relance annoncée reste,
+//   même si l'autre costume sort ensuite à N+2 / N+3. Avec 3 costumes, il en reste 2 dans la relance ; même règle pour la suite
+//   (3 relances au maximum). Rattrapages épuisés avant le jeu suivant (ex. 0 rattrapage) : la relance part tout de suite.
 //
 // ─── Mode « détection auto » (🔎) : trouver tout seul les canaux qui publient ce format à deux costumes ────────────
 //       ♦️ 100%─────┐
@@ -105,7 +105,7 @@ const KEYCAP = (n) => `${Number(n)}\uFE0F\u20E3`;
 const dayKey = (ts = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
 
 const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance']; // + « multi » (par défaut)
-const RELAUNCH_OFFSET = 3;   // mode relance : le costume pas sorti est relancé à N+3
+const RELAUNCH_OFFSET = 3;   // mode relance : le costume pas sorti est relancé à N+r+3 (= jeu vérifié N+r+1, plus 2) ; r=0 : N+3
 const RELAUNCH_MAX_DEPTH = 3; // relances en chaîne (3 costumes → 2 puis 1)
 const RELAUNCH_DEFAULT_RANKS = [1, 2];
 const SRC_MODES = ['follow', 'scan'];                          // modes qui surveillent des canaux sources (c.sources)
@@ -736,6 +736,7 @@ function verifyMulti(entry, cfg, maxDone) {
     for (const s of newly) s.res = entry.step;
     if (newly.length) {
       changed = true;
+      if (entry.firstRes === undefined || entry.firstRes === null) entry.firstRes = entry.step; // rattrapage où le 1er costume est sorti (mode relance)
       if (!entry.won) { entry.won = true; if (cfg) cfg.wins = (cfg.wins || 0) + 1; }
     }
     const rest = unresolved();
@@ -744,9 +745,11 @@ function verifyMulti(entry, cfg, maxDone) {
     }
     if (newly.length) editMulti(entry); // un costume vient de sortir : on affiche son résultat, l'autre reste en vérification
     if (!done) break; // validation anticipée : le tour n'est pas fini, les autres ne peuvent pas être déclarés perdus
-    // mode « relance » : un costume est sorti directement (✅0️⃣) au jeu N et l'autre n'est TOUJOURS pas sorti au jeu N+1 → relance à N+3.
-    // (si l'autre sort à N ou à N+1 : pas de relance ; sans rattrapage (0), on ne peut pas attendre N+1 : on relance au jeu N)
-    if (entry.mode === 'relance' && cfg && entry.step === Math.min(1, entry.maxR) && !entry.relaunched && rest.length && entry.suits.some((s) => s.res === 0)) {
+    // mode « relance » : un costume est sorti (peu importe le rattrapage r, au jeu N+r) et l'autre n'est TOUJOURS pas sorti au jeu suivant
+    // (N+r+1) → relance du second à (N+r+1)+2 = N+r+3, si ce jeu n'est pas déjà joué (r=0 : N+3). Si les rattrapages sont épuisés avant
+    // N+r+1 (ex. maxR = r), on relance tout de suite. Les deux sortis, ou aucun : pas de relance.
+    if (entry.mode === 'relance' && cfg && !entry.relaunched && rest.length && entry.firstRes !== undefined && entry.firstRes !== null
+      && (entry.step >= entry.firstRes + 1 || entry.step >= entry.maxR)) {
       entry.relaunched = true; changed = true;
       try { sendRelaunch(cfg, entry, rest); } catch (e) { panel.lastError = e.message; }
     }
@@ -766,7 +769,8 @@ function verifyMulti(entry, cfg, maxDone) {
 function sendRelaunch(cfg, parent, remaining) {
   const depth = (Number(parent.depth) || 0) + 1;
   if (depth > RELAUNCH_MAX_DEPTH || !remaining.length) return false;
-  const target = Number(parent.target) + RELAUNCH_OFFSET;
+  // jeu vérifié en dernier = N + r + 1 (r = rattrapage où le 1er costume est sorti) ; la relance vise ce jeu + 2 = N + r + 3
+  const target = Number(parent.target) + (Number(parent.firstRes) || 0) + RELAUNCH_OFFSET;
   if (target <= maxFinishedGameNumber()) return false; // jeu déjà joué : trop tard
   if (alreadySent(cfg.id, target)) { blocked(); return false; } // doublon de prédiction
   const items = remaining.map((s) => {
@@ -861,7 +865,7 @@ async function test(id) {
     msgs = await sendToChannels(cfg, `🧪 Test\n${predictionText(464, sample)}`, 'HTML');
     if (modeOf(cfg) === 'relance' && sample.length >= 2) { // aperçu de la relance : le 1ᵉʳ est sorti, le reste est relancé à +3
       sample[0].res = 0;
-      await sendToChannels(cfg, `🧪 Test (après ✅0️⃣ à N, l'autre pas sorti à N+1 : le même message reçoit le N° de la relance à +${RELAUNCH_OFFSET})\n${predictionText(464, sample, true, true, [`${464 + RELAUNCH_OFFSET}⏳`])}`, 'HTML');
+      await sendToChannels(cfg, `🧪 Test (un costume sorti direct, l'autre pas sorti à N+1 : le même message reçoit le N° de la relance, N+${RELAUNCH_OFFSET})\n${predictionText(464, sample, true, true, [`${464 + RELAUNCH_OFFSET}⏳`])}`, 'HTML');
     }
   }
   return msgs.length ? { ok: true, sent: msgs.length } : { ok: false, error: panel.lastError || 'Envoi impossible' };

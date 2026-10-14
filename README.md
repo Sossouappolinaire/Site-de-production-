@@ -502,17 +502,18 @@ parmi les 4 meilleurs (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés :
      ┣━ N°1135
     ♦️ 94%
 
-**Règle** : si un costume sort **directement (✅0️⃣)** au jeu N **et** que l'autre n'est toujours pas sorti au jeu **N+1**, le **même
-message** est édité : on y ajoute seulement le numéro de la relance (N+3) ; le costume pas venu reste ⏳ :
+**Règle** : dès qu'un costume est sorti, **peu importe le rattrapage** (✅0️⃣, ✅1️⃣, ✅2️⃣… au jeu N+r), **et** que l'autre n'est toujours pas sorti au jeu
+**N+r+1**, le **même message** est édité : on y ajoute seulement le numéro de la relance, **(N+r+1) + 2 = N+r+3** (N+3 si le 1ᵉʳ est sorti direct) ; le costume pas venu reste ⏳ :
 
     ♣️✅0️⃣ 95%
      ┣━ N°1135
      ┣━ N°1138⏳
     ♦️⏳ 94%
 
-- **Pas de relance** : les deux costumes sortent ; l'autre sort à N ou à N+1 ; les deux sont perdus (❌) ; un seul sort à un rattrapage (✅2️⃣…) sans être sorti directement.
-- L'autre sort à N+2 (après l'annonce de la relance) : la relance à N+3 reste affichée et jouée (le costume garde son ✅2️⃣). Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort à N+3 : ♦️✅0️⃣ ; jamais : ♦️❌.
-- Avec 3 costumes, la relance en contient 2, même règle pour la suite (3 relances au maximum). Sans rattrapage (0), la relance part dès le jeu N.
+- Exemple : ♥️✅1️⃣ (jeu 473), ♣️ pas sorti au jeu 474 → ♣️ relancé à **N°476** (474 + 2) ; s'il sort à 476 : N°476✅.
+- **Pas de relance** : les deux costumes sortent avant ; aucun ne sort (perdu) ; le jeu visé N+r+3 est déjà joué. Rattrapages épuisés avant N+r+1 : la relance part tout de suite.
+- L'autre sort à N+2 (après l'annonce de la relance) : la relance reste affichée et jouée (le costume garde son ✅). Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort au jeu relancé : ♦️✅0️⃣ ; jamais : ♦️❌.
+- Avec 3 costumes, la relance en contient 2, même règle pour la suite (3 relances au maximum). Voir ci-dessus pour les rattrapages épuisés.
 - La relance compte comme une prédiction à part dans les gagnés / perdus de la configuration.
 - Avec 1 seul costume, pas de relance. Une configuration n'envoie jamais deux messages pour le même numéro de jeu.
 - Code : `best-weak-top.js` (mode `relance`, `sendRelaunch`, constante `RELAUNCH_OFFSET = 3`) ; mêmes routes `/api/best-weak/configs` avec `{ "mode": "relance", "ranks": [1, 2] }`.
