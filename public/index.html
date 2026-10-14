@@ -310,7 +310,7 @@
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
         <a href="#/test" data-nav="test">🧪 Test</a>
-        <a href="#/relance" data-nav="relance">🔄 Relance +3</a>
+        <a href="#/relance" data-nav="relance">🔄 Relance</a>
         <a href="#/stability" data-nav="stability">🛡️ Stabilité</a>
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
@@ -541,7 +541,7 @@
         ${card('#/strategies', '🎯', 'Stratégies', `${(snapshot.strategies||[]).length} stratégie(s)`)}
         ${card('#/best-weak', '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · voir / modifier`)}
         ${card('#/test', '🧪', 'Test', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'test').length} configuration(s) · meilleur / 2ᵉ meilleur`)}
-        ${card('#/relance', '🔄', 'Relance +3', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'relance').length} configuration(s) · 1 à 3 costumes, relance à +3`)}
+        ${card('#/relance', '🔄', 'Relance', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'relance').length} configuration(s) · 1 à 3 costumes, relance à N+7`)}
         ${card('#/stability', '🛡️', 'Stabilité du jeu', (snapshot.gameStability || {}).enabled ? `Activée · jeu ${((snapshot.gameStability || {}).state === 'unstable') ? 'instable' : ((snapshot.gameStability || {}).state === 'stable' ? 'stable' : 'en analyse')}` : 'Désactivée · à activer')}
         ${card('#/scan', '🔎', 'Détection auto', `${((snapshot.bestWeakTop || {}).detected || []).length} canal(aux) détecté(s) · ${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'scan').length} configuration(s)`)}
         ${card('#/best-weak', '👁️', 'Suivre des canaux', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'follow').length} configuration(s) · voir / modifier`)}
@@ -1864,7 +1864,7 @@ Faites-en bon usage !
       follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne en ✅0️⃣/✅1️⃣ ; sinon il passe au 2ᵉ. Si un costume sort directement (✅0️⃣) sans l’autre, l’autre est prédit à N+2 ; si les deux sortent, on ignore.' },
       cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
       scan: { icon: '🔎', title: 'Détection auto des canaux', sub: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Tu en sélectionnes un puis tu règles le canal Telegram d’envoi, les rattrapages et le format. Surveillance : si le 1ᵉʳ costume sort directement (✅0️⃣), le 2ᵉ est prédit à N+2 — et inversement. Les deux sortis, ou aucun : rien n’est envoyé.' },
-      relance: { icon: '🔄', title: 'Relance +3', sub: 'Tu choisis 1, 2 ou 3 costumes parmi les 4 meilleurs : un message les affiche avec leur pourcentage. Dès qu’un costume est sorti (à n’importe quel rattrapage) et que l’autre n’est toujours pas sorti au jeu suivant, le même message est modifié : on y ajoute le numéro de la relance : le jeu où l’on a vérifié + 2 (N+3 si le premier est sorti direct).' },
+      relance: { icon: '🔄', title: 'Relance', sub: 'Tu choisis 1, 2 ou 3 costumes parmi les 4 meilleurs : un message les affiche avec leur pourcentage. Dès qu’un costume est sorti et que l’autre n’est toujours pas venu à N+2, le même message est modifié : on y ajoute le numéro de la relance (N+7 par défaut), placé à côté du costume relancé. Option : analyse auto du +n, et relance envoyée aussi vers un autre canal.' },
       test: { icon: '🧪', title: 'Test meilleur / 2ᵉ meilleur', sub: 'Tu choisis 2 à 4 parmi : le meilleur, le 2ᵉ, le 3ᵉ, le plus faible. On commence par le premier et on y reste tant qu’il gagne. Après une perte, la prochaine prédiction vient du suivant ; avec 2 choix (meilleur et 2ᵉ), on alterne entre les deux.' },
     };
     let bwWizard = { mode: 'multi', strategy: null };
@@ -1914,10 +1914,21 @@ Faites-en bon usage !
     }
     // -------------------------------------------------------------------
     // -------------------------------------------------------------------
-    // 🔄 « Relance +3 » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
+    // 🔄 « Relance » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
     // celui qui n'est pas venu est relancé dans un nouveau message à N+3 (voir best-weak-top.js, mode « relance »)
     // -------------------------------------------------------------------
-    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas sorti au jeu suivant', '', '♣️✅0️⃣ 95%', ' ┣━ N°1135', ' ┣━ N°1138⏳', '♦️⏳ 94%'].join('\n');
+    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas venu jusqu’à N+2 → relance à N+7', '', '♦️⏳ 94%', ' ┣━ N°1142⏳', ' ┣━ N°1135✅', '♣️✅0️⃣ 95%'].join('\n');
+    // résumé de la règle de relance, de l'analyse du +n et du canal de relance
+    function relanceInfoHtml(c) {
+      const r = c.relaunch || {};
+      const rows = (r.analysis || []).filter(x => x.n > 0);
+      const best = rows.length ? Math.max(...rows.map(x => x.rate)) : null;
+      const analysis = r.auto ? (rows.length
+        ? `<p class="small"><b>Analyse du +n</b> (de +3 à +${esc(r.maxN)}) : ${rows.map(x => `<span ${x.rate === best ? 'class="good"' : ''}>+${esc(x.k)} : ${esc(x.rate)}% (${esc(x.hit)}/${esc(x.n)})</span>`).join(' · ')}<br>${r.autoOffset ? `✅ +${esc(r.autoOffset)} appliqué automatiquement` : `⏳ En attente du verdict (${esc(r.minSample)} situations minimum) : aucune relance n’est envoyée en attendant`}</p>`
+        : `<p class="small"><b>Analyse du +n</b> : aucune situation observée pour l’instant (il faut ${esc(r.minSample)} situations pour que l’analyse rende son verdict) : aucune relance n’est envoyée en attendant</p>`) : '';
+      const out = (r.channelNames || []).length ? `<p class="small">📣 Relance aussi vers ${esc(r.channelNames.join(', '))} · format ${esc(c.relFormat || 1)} · ${esc(c.relMaxR ?? 2)} rattrapage(s) · <b class="good">${esc(c.relOutWins || 0)}</b> gagné(s) · <b class="bad">${esc(c.relOutLosses || 0)}</b> perdu(s)</p>` : '';
+      return `<p class="small">Règle : attente jusqu’à N+${esc(r.wait)} → relance à <b>${r.awaiting ? 'N+? (verdict de l’analyse)' : 'N+' + esc(r.effective)}</b>${r.auto && !r.awaiting ? ' (auto)' : ''}</p>${analysis}${out}`;
+    }
     function relancePage() {
       setNav('relance');
       const p = snapshot.bestWeakTop || {};
@@ -1928,13 +1939,14 @@ Faites-en bon usage !
         return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
           <span class="eyebrow">🔄 ${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
           <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}${esc((c.channelNames || []).join(', ') || 'Canal non nommé')}</h3>
-          <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s) · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)${rate === null ? '' : ` · taux de réussite ${rate}%`}</p></div></div>
+          <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s) · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)${rate === null ? '' : ` · taux de réussite ${rate}%`}</p>
+          ${c.relaunch ? relanceInfoHtml(c) : ''}</div></div>
           <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
           <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
           <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
           <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`;
       }).join('') : '<div class="empty">Aucune configuration. Clique sur « Créer » : choisis la stratégie (Dizaine ou Costume faible), le canal Telegram, les rattrapages, puis 1, 2 ou 3 costumes parmi les 4 meilleurs.</div>';
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Meilleur + plus faible</span><h2 style="margin-top:7px">🔄 Relance +3</h2>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Meilleur + plus faible</span><h2 style="margin-top:7px">🔄 Relance</h2>
         <p class="small">${esc(BW_MODES.relance.sub)}</p>
         <pre class="small" style="white-space:pre;overflow:auto;margin-top:10px">${esc(BW_RELANCE_DEMO)}</pre></div>
         <div class="toolbar"><button class="button primary" onclick="startBwFlow('relance')">Créer</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button></div></div>
@@ -2097,7 +2109,7 @@ Faites-en bon usage !
           'Message à plusieurs costumes : un message avec 2 à 4 costumes et leur pourcentage ; seul le costume sorti reste. Chaque costume est vérifié séparément sur la main du joueur.',
           'Envoi sur déclencheur : par exemple 2 pertes de suite, ou un costume absent 13 jeux.',
           'Cycle : on suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣, puis on passe au suivant au premier ✅2️⃣/✅3️⃣ ou ❌.',
-          'Les doublons (deux configurations identiques) sont bloqués. Test, Relance +3 et Détection auto ont leur propre bouton.',
+          'Les doublons (deux configurations identiques) sont bloqués. Test, Relance et Détection auto ont leur propre bouton.',
         ] },
       { g: 'ops', icon: '🧪', title: 'Test', hash: '#/test',
         what: 'Suit un classement et alterne entre plusieurs rangs : on reste sur un rang tant qu’il gagne ; après une perte, la prochaine prédiction vient du rang suivant.',
@@ -2113,18 +2125,19 @@ Faites-en bon usage !
           'Une seule prédiction à la fois : la suivante attend le résultat de la précédente.',
           'Il faut au moins 2 configurations classées aujourd’hui, sinon rien n’est envoyé.',
         ] },
-      { g: 'ops', icon: '🔄', title: 'Relance +3', hash: '#/relance',
-        what: 'Un message avec 1, 2 ou 3 costumes parmi les 4 meilleurs. Dès qu’un costume est sorti (✅0️⃣, ✅1️⃣, ✅2️⃣… peu importe le rattrapage) et que l’autre n’est toujours pas sorti au jeu suivant, le même message est modifié : on y ajoute seulement le numéro de la relance : le jeu où l’on vient de vérifier (N+r+1) + 2, soit N+r+3 (N+3 si le premier est sorti direct).',
+      { g: 'ops', icon: '🔄', title: 'Relance', hash: '#/relance',
+        what: 'Un message avec 1, 2 ou 3 costumes parmi les 4 meilleurs. Dès qu’un costume est sorti (✅0️⃣, ✅1️⃣, ✅2️⃣…) et que l’autre n’est toujours pas venu à N+2, le même message est modifié : on y ajoute le numéro de la relance (N+7 par défaut), placé à côté du costume relancé. Attente et numéro sont réglables.',
         steps: [
-          'Ouvre « Relance +3 » et clique sur « Créer ».',
+          'Ouvre « Relance » et clique sur « Créer ».',
           'Choisis la stratégie qui utilise meilleur et faible : Dizaine ou Costume faible.',
-          'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible.',
+          'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible. Règle l’attente (N+2) et la relance (N+7) si besoin.',
         ],
         tips: [
-          'Exemple avec 2 cochés : ♣️ 95% / N°1135 / ♦️ 94%. ♣️ sort directement et ♦️ n’est pas sorti à N+1 : relance à N+3 (si ♣️ sort à N+1 et ♦️ pas à N+2 : relance à N+4, etc.). Le message devient ♣️✅0️⃣ 95% / N°1135 / N°1138⏳ / ♦️⏳ 94%. Le ⏳ à côté du numéro devient ✅ ou ❌ une fois la relance jouée.',
-          'Exemple : N°472, ♥️✅1️⃣ (jeu 473), ♣️ pas sorti au jeu 474 : ♣️ est relancé à N°476 (474 + 2). Pas de relance si les deux costumes sortent avant, si aucun ne sort (perdu ❌), ou si le jeu visé est déjà joué.',
-          'La relance est décidée au jeu suivant la sortie du premier costume : même si l’autre costume sort ensuite, la relance annoncée reste (le costume garde son ✅, le numéro de relance passe à ✅ ou ❌ après son jeu).',
-          'Avec 3 costumes cochés, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum). Si les rattrapages sont épuisés avant ce jeu suivant (ex. 0 rattrapage), la relance part tout de suite.',
+          'Exemple : N°1135, ♣️ sort directement, ♦️ n’est pas venu à N+1 ni à N+2 : ♦️ est relancé à N°1142 (1135 + 7). Le message devient ♦️⏳ 94% / N°1142⏳ / N°1135✅ / ♣️✅0️⃣ 95% : chaque numéro est à côté de son costume. Le ⏳ devient ✅ ou ❌ une fois la relance jouée.',
+          'Pas de relance si les deux costumes sortent avant N+2, si aucun ne sort (perdu ❌), ou si le jeu visé est déjà joué. Même si l’autre costume sort ensuite, la relance annoncée reste.',
+          'Analyse auto du +n : coche l’option et choisis le +n maximum. À chaque relance, le bot regarde de +3 jusqu’à +n si le costume relancé est sorti (au jeu visé ou dans ses rattrapages). Après 8 situations minimum, le +n le plus réussi est appliqué tout seul (les résultats par +n sont affichés sur la carte). Analyse auto cochée : le N+7 fixe n’est plus utilisé, la relance attend le verdict de l’analyse (aucune relance n’est envoyée avant).',
+          'Relance vers un autre canal : renseigne l’ID du canal, le format de prédiction et le nombre de rattrapages. Chaque costume relancé y est envoyé en message simple et vérifié à part (gagnés / perdus comptés à part).',
+          'Avec 3 costumes cochés, il en reste 2 dans la relance ; même règle pour la suite (3 relances au maximum).',
           'La relance est comptée comme une prédiction à part dans les gagnés / perdus de la configuration.',
         ] },
       { g: 'ops', icon: '🛡️', title: 'Stabilité du jeu', hash: '#/stability',
@@ -2354,7 +2367,7 @@ Faites-en bon usage !
       const forTest = kind === true || kind === 'test', forRelance = kind === 'relance';
       const labels = (snapshot.bestWeakTop || {}).rankLabels || { 1: 'Le meilleur', 2: 'Le 2ᵉ meilleur', 3: 'Le 3ᵉ meilleur', 4: 'Le plus faible (4ᵉ)' };
       const on = Array.isArray(ranks) && ranks.length ? ranks : (forTest || forRelance ? [1, 2] : [1, 4]);
-      return `<div class="field"><label>${forRelance ? 'Parmi les 4 meilleurs : lesquels proposer ? (coche 1, 2 ou 3 · ce qui n\'est pas sorti est relancé à +3)' : forTest ? 'Parmi les 4 : lesquels suivre ? (coche 2 à 4 · on passe au suivant après une perte)' : 'Costumes à proposer (coche au moins 2, jusqu\'à 4)'}</label>
+      return `<div class="field"><label>${forRelance ? 'Parmi les 4 meilleurs : lesquels proposer ? (coche 1, 2 ou 3 · ce qui n\'est pas venu est relancé plus tard)' : forTest ? 'Parmi les 4 : lesquels suivre ? (coche 2 à 4 · on passe au suivant après une perte)' : 'Costumes à proposer (coche au moins 2, jusqu\'à 4)'}</label>
         ${[1, 2, 3, 4].map(r => `<label class="check" style="display:block;margin:4px 0"><input id="${prefix}Rank${r}" type="checkbox" ${on.includes(r) ? 'checked' : ''}> ${esc(labels[r])}</label>`).join('')}</div>`;
     }
     const bwGateField = (prefix, c) => `<label class="check" style="display:block;margin:10px 0"><input id="${prefix}LossGate" type="checkbox" ${c && c.lossGate ? 'checked' : ''}> Envoyer seulement après une perte : prédit le 1ᵉʳ si le 2ᵉ a perdu, ou le 2ᵉ si le 1ᵉʳ a perdu (aucune perte → rien n'est envoyé)</label>`;
@@ -2366,6 +2379,25 @@ Faites-en bon usage !
     }
     const bwSimpleFields = (prefix, c) => `<div class="field"><label>Nom</label><input id="${prefix}Name" value="${esc((c && c.name) || '')}" placeholder="Ex. Cycle du soir"></div>`;
     const bwFormatField = (prefix, c) => { const n = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101; return `<div class="field"><label>Format de prédiction (1 → ${esc(n)})</label><input id="${prefix}Format" type="number" min="1" max="${esc(n)}" value="${esc(String((c && c.format) || 1))}"></div>`; };
+    // 🔄 Réglages de la relance : attente (N+2), numéro de la relance (N+7), analyse auto du +n, envoi vers un autre canal
+    function bwRelanceFields(prefix, c) {
+      c = c || {};
+      const n = (id, label, v, min, max) => `<div class="field"><label>${label}</label><input id="${prefix}${id}" type="number" min="${min}" max="${max}" value="${esc(String(v))}"></div>`;
+      const fc = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101;
+      return `<div class="field" style="margin-top:14px"><b>🔄 Règle de relance</b><br><small>Un costume sort, l’autre ne vient pas jusqu’à N+… (attente) : il est alors relancé à N+….</small></div>
+        ${n('RelWait', 'Attendre que le costume pas venu ne sorte pas jusqu’à N+… (0 → 6)', c.relWait ?? 2, 0, 6)}
+        ${n('RelOffset', 'Puis relancer à N+… (3 → 40 · ignoré si l’analyse auto est cochée)', c.relOffset ?? 7, 3, 40)}
+        <label class="check" style="display:block;margin:10px 0"><input id="${prefix}RelAuto" type="checkbox" ${c.relAuto ? 'checked' : ''}> Analyse auto du +n : le bot vérifie de +3 jusqu’à +n si le costume relancé sort, puis applique tout seul le +n le plus réussi. Coché : le N+7 fixe n’est plus utilisé, la relance attend le verdict de l’analyse</label>
+        ${n('RelMaxN', '+n maximum à analyser (de +3 jusqu’à +n)', c.relMaxN ?? 12, 3, 40)}
+        <div class="field" style="margin-top:14px"><b>📣 Relance vers un autre canal (facultatif)</b></div>
+        <div class="field"><label>ID du canal Telegram de la relance (laisse vide pour ne pas en envoyer)</label><input id="${prefix}RelChannels" value="${esc((c.relChannels || []).join(', '))}" placeholder="-1001234567890 ou @nomducanal"></div>
+        <div class="field"><label>Format de prédiction de la relance (1 → ${esc(fc)})</label><input id="${prefix}RelFormat" type="number" min="1" max="${esc(fc)}" value="${esc(String(c.relFormat || 1))}"></div>
+        ${n('RelMaxR', 'Nombre de rattrapages de la relance (0 → 9)', c.relMaxR ?? 2, 0, 9)}`;
+    }
+    function readBwRelance(prefix) {
+      return { relWait: val(prefix + 'RelWait'), relOffset: val(prefix + 'RelOffset'), relAuto: !!document.getElementById(prefix + 'RelAuto')?.checked, relMaxN: val(prefix + 'RelMaxN'),
+        relChannels: ids(val(prefix + 'RelChannels')), relFormat: val(prefix + 'RelFormat'), relMaxR: val(prefix + 'RelMaxR') };
+    }
     // « Créer » depuis la page : on choisit d'abord le type
     function chooseBwType() {
       openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Quel type de configuration ?</h3></div></div>
@@ -2416,14 +2448,14 @@ Faites-en bon usage !
         ${mode === 'multi' ? '' : bwSimpleFields('bwNew')}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwNewChannels" placeholder="-1001234567890 ou @nomducanal"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwNewMaxR" type="number" min="0" max="9" value="2"></div>
-        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : mode === 'relance' ? bestWeakRanksHtml('bwNew', [1, 2], 'relance') : (mode === 'test' ? bestWeakRanksHtml('bwNew', [1, 2], true) + bwGateField('bwNew') + bwFormatField('bwNew') : bwFormatField('bwNew'))}
+        ${mode === 'multi' ? bestWeakRanksHtml('bwNew', [1, 4]) : mode === 'relance' ? bestWeakRanksHtml('bwNew', [1, 2], 'relance') + bwRelanceFields('bwNew') : (mode === 'test' ? bestWeakRanksHtml('bwNew', [1, 2], true) + bwGateField('bwNew') + bwFormatField('bwNew') : bwFormatField('bwNew'))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addBestWeak()">Enregistrer</button><button class="button small ghost" onclick="closeModal();startBwFlow('${mode}')">← Retour</button></div>`);
     }
     async function addBestWeak() {
       try {
         const mode = bwWizard.mode;
         const body = { mode, strategy: bwWizard.strategy, channels: ids(val('bwNewChannels')), maxR: val('bwNewMaxR') };
-        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else if (mode === 'relance') { body.name = val('bwNewName'); body.ranks = readBestWeakRanks('bwNew', 'relance'); } else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') { body.ranks = readBestWeakRanks('bwNew'); body.lossGate = !!$('#bwNewLossGate')?.checked; } }
+        if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else if (mode === 'relance') { body.name = val('bwNewName'); body.ranks = readBestWeakRanks('bwNew', 'relance'); Object.assign(body, readBwRelance('bwNew')); } else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') { body.ranks = readBestWeakRanks('bwNew'); body.lossGate = !!$('#bwNewLossGate')?.checked; } }
         if (mode === 'follow' || mode === 'scan') body.sources = bwWizard.sources;
         await api('/api/best-weak/configs', 'POST', body);
         closeModal(); await refresh(); if (location.hash === '#/best-weak') bestWeakPage(); else if (location.hash === '#/scan') scanPage(); else if (location.hash === '#/relance') relancePage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
@@ -2439,14 +2471,14 @@ Faites-en bon usage !
         ${(m === 'follow' || m === 'scan') ? `<div class="field"><label>Canaux ${m === 'scan' ? 'surveillés' : 'suivis'} (ID séparés par des virgules)</label><input id="bwEditSources" value="${esc((c.sources || []).join(', '))}"></div>` : `<div class="field"><label>Stratégie</label><select id="bwEditStrategy"><option value="dizaine" ${c.strategy === 'dizaine' ? 'selected' : ''}>${esc(labels.dizaine || 'Dizaine')}</option><option value="costumeFaible" ${c.strategy === 'costumeFaible' ? 'selected' : ''}>${esc(labels.costumeFaible || 'Costume faible')}</option></select></div>`}
         <div class="field"><label>ID du canal Telegram où envoyer</label><input id="bwEditChannels" value="${esc((c.channels || []).join(', '))}"></div>
         <div class="field"><label>Nombre de rattrapages (0 → 9)</label><input id="bwEditMaxR" type="number" min="0" max="9" value="${esc(String(c.maxR))}"></div>
-        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : m === 'relance' ? bestWeakRanksHtml('bwEdit', c.ranks, 'relance') : (m === 'test' ? bestWeakRanksHtml('bwEdit', c.ranks, true) + bwGateField('bwEdit', c) + bwFormatField('bwEdit', c) : bwFormatField('bwEdit', c))}
+        ${m === 'multi' ? bestWeakRanksHtml('bwEdit', c.ranks) : m === 'relance' ? bestWeakRanksHtml('bwEdit', c.ranks, 'relance') + bwRelanceFields('bwEdit', c.relaunch ? { relWait: c.relWait, relOffset: c.relOffset, relAuto: c.relAuto, relMaxN: c.relMaxN, relChannels: c.relChannels, relFormat: c.relFormat, relMaxR: c.relMaxR } : c) + `<label class="check" style="display:block;margin:10px 0"><input id="bwEditRelReset" type="checkbox"> Remettre à zéro l’analyse du +n</label>` : (m === 'test' ? bestWeakRanksHtml('bwEdit', c.ranks, true) + bwGateField('bwEdit', c) + bwFormatField('bwEdit', c) : bwFormatField('bwEdit', c))}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="updateBestWeak('${esc(id)}','${m}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     async function updateBestWeak(id, m) {
       try {
         const body = { channels: ids(val('bwEditChannels')), maxR: val('bwEditMaxR') };
         if (m === 'follow' || m === 'scan') body.sources = ids(val('bwEditSources')); else body.strategy = val('bwEditStrategy');
-        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else if (m === 'relance') { body.name = val('bwEditName'); body.ranks = readBestWeakRanks('bwEdit', 'relance'); } else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); if (m === 'test') { body.ranks = readBestWeakRanks('bwEdit'); body.lossGate = !!$('#bwEditLossGate')?.checked; } }
+        if (m === 'multi') body.ranks = readBestWeakRanks('bwEdit'); else if (m === 'relance') { body.name = val('bwEditName'); body.ranks = readBestWeakRanks('bwEdit', 'relance'); Object.assign(body, readBwRelance('bwEdit')); if (document.getElementById('bwEditRelReset')?.checked) body.relResetStats = true; } else { body.name = val('bwEditName'); body.format = val('bwEditFormat'); if (m === 'test') { body.ranks = readBestWeakRanks('bwEdit'); body.lossGate = !!$('#bwEditLossGate')?.checked; } }
         await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', body);
         closeModal(); await refresh(); bwRerender(); toast('Configuration mise à jour.');
       } catch (e) { toast(e.message, 'error'); }
