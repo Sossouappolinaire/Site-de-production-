@@ -1944,24 +1944,29 @@ Faites-en bon usage !
     // -------------------------------------------------------------------
     // -------------------------------------------------------------------
     // 🛡️ « Stabilité du jeu » (voir game-stability.js) : désactivée par défaut.
-    // Stable = sur 7 jeux analysés, les 4 costumes sont sortis au moins une fois chez le joueur.
+    // Stable = sur 4 jeux analysés, les 4 costumes sont sortis au moins une fois chez le joueur.
     // Alertes et bilan horaire : chat privé uniquement. Instable 10 min → blocage de 1 h dans les canaux cochés.
     // -------------------------------------------------------------------
     async function stabilityPage() {
       setNav('stability');
       let d;
       try { d = await api('/api/stability'); } catch (e) { toast(e.message, 'error'); return; }
-      const label = { stable: '✅ Stable', unstable: '⚠️ Instable', unknown: '⏳ Analyse en cours (moins de 7 jeux)' }[d.state] || d.state;
+      const label = { stable: '✅ Stable', unstable: '⚠️ Instable', unknown: '⏳ Analyse en cours (moins de 4 jeux)' }[d.state] || d.state;
       const picked = new Set((d.blockChannels || []).map(String));
       const rows = (d.channels || []).length ? d.channels.map(c => `<label class="check" style="display:block;margin:8px 0"><input type="checkbox" ${picked.has(String(c.id)) ? 'checked' : ''} onchange="toggleStabilityChannel('${esc(c.id)}', this.checked)"> <b>${esc(c.title || 'Canal sans nom')}</b> · <code>${esc(c.id)}</code><br><small>${esc((c.sources || []).join(' · '))}</small></label>`).join('') : '<p class="small">Aucun canal configuré pour le moment.</p>';
       const segs = (d.segments || []).length ? d.segments.map(x => `<li>${x.status === 'stable' ? '✅ Stable' : '⚠️ Instable'} : jeux N°${esc(x.fromGame)} → N°${esc(x.toGame)} · ${esc(x.durText)}${x.to == null ? ' · en cours' : ''} <small>(depuis ${esc(x.fromText)})</small></li>`).join('') : '<li class="small">Aucune période enregistrée pour le moment.</li>';
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Fonction globale · désactivée par défaut</span><h2 style="margin-top:7px">🛡️ Stabilité du jeu</h2>
-        <p class="small">Le jeu est <b>stable</b> quand, sur ${esc(d.window)} jeux analysés (les mêmes jeux que l’Analyseur IA), le joueur a reçu au moins une fois chacun des 4 costumes ♣️ ♦️ ♠️ ❤️. Sinon il est <b>instable</b>. Les alertes « jeu instable » (avec la durée) et le bilan de stabilité envoyé toutes les heures partent <b>uniquement dans le chat privé</b>, jamais dans un canal. Si le jeu reste instable ${esc(d.blockAfterMin)} min, l’envoi dans les canaux cochés ci-dessous est bloqué pendant ${esc(d.blockForMin)} min (1 h).</p></div>
+        <p class="small">Le jeu est <b>stable</b> quand, sur ${esc(d.window)} jeux analysés (les mêmes jeux que l’Analyseur IA), le joueur a reçu au moins une fois chacun des 4 costumes ♣️ ♦️ ♠️ ❤️. Sinon il est <b>instable</b>. Les alertes « jeu instable » (avec la durée), le bilan de stabilité envoyé toutes les heures et l’évaluation toutes les 30 min (taux de jeux stables sur les 10 derniers jeux) partent <b>uniquement dans le chat privé</b>, jamais dans un canal. Si le jeu reste instable ${esc(d.blockAfterMin)} min, l’envoi dans les canaux cochés ci-dessous est bloqué pendant ${esc(d.blockForMin)} min (1 h).</p></div>
         <div class="toolbar"><button class="button ${d.enabled ? 'danger' : 'primary'}" onclick="setStabilityEnabled(${d.enabled ? 'false' : 'true'})">${d.enabled ? 'Désactiver la fonction' : 'Activer la fonction'}</button><button class="button ghost" onclick="stabilityPage()">Actualiser</button></div></div>
         ${d.lastError ? `<div class="notice error">${esc(d.lastError)}</div>` : ''}
         <section class="section"><div class="card"><span class="eyebrow">${d.enabled ? '🟢 Fonction activée' : '⚪ Fonction désactivée (aucun envoi, aucun blocage)'}</span>
           <h3 style="margin-top:6px">${esc(label)}${d.sinceText ? ` · depuis ${esc(d.sinceText)}` : ''}</h3>
           <p class="small">${d.lastGame != null ? `Dernier jeu analysé : N°${esc(d.lastGame)}${d.windowFrom != null ? ` (fenêtre N°${esc(d.windowFrom)} → N°${esc(d.windowTo)})` : ''}` : 'Aucun jeu analysé pour le moment.'}${(d.missing || []).length ? ` · costume(s) absent(s) : ${esc(d.missing.join(' '))}` : ''}</p>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line, rgba(128,128,128,.25))"><b>🕐 Évaluation toutes les ${esc(d.evalEveryMin)} min (sur les ${esc(d.evalGames)} derniers jeux)</b>
+            <p class="small" style="margin:6px 0">${d.evalNow ? `En ce moment : <b class="${d.evalNow.stable ? 'good' : 'bad'}">${d.evalNow.stable ? '✅ stable' : '⚠️ instable'}</b> · ${esc(d.evalNow.stableGames)}/${esc(d.evalNow.total)} jeux stables = ${esc(d.evalNow.rate)}% (jeux N°${esc(d.evalNow.from)} → N°${esc(d.evalNow.number)})` : `Pas encore assez de jeux : il en faut ${esc(d.evalGames + 3)} (${esc(d.evalGames)} jugés + 3 de contexte).`}</p>
+            ${d.lastEval ? `<p class="small" style="margin:6px 0">Dernière évaluation (${esc(d.lastEvalText)}) : ${d.lastEval.stable ? '✅ stable' : '⚠️ instable'} · ${esc(d.lastEval.rate)}%</p>` : ''}
+            <div class="toolbar" style="margin-top:8px;align-items:center"><label class="small">Seuil « stable » (% de jeux stables) <input id="stabThreshold" type="number" min="1" max="100" value="${esc(d.threshold)}" style="width:80px"></label><button class="button small primary" onclick="setStabilityThreshold()">Enregistrer le seuil</button></div>
+            <p class="small muted" style="margin:6px 0 0">À chaque xxh00 et xxh30 (chat privé uniquement) : sur les ${esc(d.evalGames)} derniers jeux, chaque jeu est jugé avec la règle des ${esc(d.window)} jeux ; si le taux de jeux stables atteint le seuil, la période est dite stable. Cette évaluation n’influence pas le blocage des canaux.</p></div>
           ${d.blockedUntil ? `<p class="small"><b class="bad">🚫 Envoi bloqué jusqu’à ${esc(d.blockedUntilText)}</b> dans ${esc((d.blockChannels || []).length)} canal(aux) <button class="button small ghost" onclick="releaseStabilityBlock()">Lever le blocage</button></p>` : ''}
           <p class="small">${esc(d.blockCount || 0)} blocage(s) déclenché(s) depuis le début.</p></div></section>
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations concernées</span><h2 style="margin-top:7px">Canaux à bloquer quand le jeu est instable</h2>
@@ -1971,8 +1976,13 @@ Faites-en bon usage !
         <section class="section"><div class="section-head"><div><span class="eyebrow">Historique récent</span><h2 style="margin-top:7px">Périodes stables / instables</h2></div></div><div class="card"><ul style="margin:0;padding-left:18px">${segs}</ul></div></section>`;
       window.__stabilityChannels = (d.channels || []).map(c => String(c.id));
     }
+    async function setStabilityThreshold() {
+      const v = Number(($('#stabThreshold') || {}).value);
+      try { await api('/api/stability/threshold', 'POST', { threshold: v }); await stabilityPage(); toast('Seuil enregistré : ' + v + ' %.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     async function setStabilityEnabled(on) {
-      if (on && !confirm('Activer la stabilité du jeu ? Les alertes et le bilan horaire seront envoyés dans le chat privé, et les canaux cochés seront bloqués 1 h après 10 min d’instabilité.')) return;
+      if (on && !confirm('Activer la stabilité du jeu ? Les alertes, le bilan horaire et l’évaluation toutes les 30 min seront envoyés dans le chat privé, et les canaux cochés seront bloqués 1 h après 10 min d’instabilité.')) return;
       try { await api('/api/stability/enabled', 'POST', { enabled: on }); await refresh(); await stabilityPage(); toast(on ? 'Stabilité du jeu activée.' : 'Stabilité du jeu désactivée.'); }
       catch (e) { toast(e.message, 'error'); }
     }
@@ -2118,7 +2128,7 @@ Faites-en bon usage !
           'La relance est comptée comme une prédiction à part dans les gagnés / perdus de la configuration.',
         ] },
       { g: 'ops', icon: '🛡️', title: 'Stabilité du jeu', hash: '#/stability',
-        what: 'Fonction désactivée par défaut. Elle surveille si le jeu est stable (sur 7 jeux analysés, les 4 costumes sont sortis chez le joueur) et peut bloquer l’envoi dans les canaux choisis quand il reste instable.',
+        what: 'Fonction désactivée par défaut. Elle surveille si le jeu est stable (sur 4 jeux analysés, les 4 costumes sont sortis chez le joueur) et peut bloquer l’envoi dans les canaux choisis quand il reste instable.',
         steps: [
           'Ouvre « Stabilité » et clique sur « Activer la fonction ».',
           'Coche les canaux (de toutes tes configurations) dont l’envoi doit être bloqué en cas d’instabilité.',
@@ -2127,7 +2137,7 @@ Faites-en bon usage !
         tips: [
           'Les alertes et le bilan ne vont jamais dans un canal : uniquement dans le chat privé de l’admin.',
           'Instable pendant 10 min → envoi bloqué 1 h dans les canaux cochés (seuls les nouveaux envois sont retenus).',
-          'Début de sabot : pas de jugement tant que 7 jeux ne sont pas analysés.',
+          'Début de sabot : pas de jugement tant que 4 jeux ne sont pas analysés.',
         ] },
       { g: 'ops', icon: '🔎', title: 'Détection auto', hash: '#/scan',
         what: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (par exemple ♦️ 100 % / N°1438 / ♣️ 92 %).',
