@@ -315,6 +315,7 @@
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
+        <a href="#/draw-two-three" data-nav="draw-two-three">⚖️ Nul / 2-3</a>
         <a href="#/vip" data-nav="vip">VIP</a>
         <a href="#/formation" data-nav="formation">Formation</a>
         <a href="#/diagnostics" data-nav="settings">Envois</a>
@@ -564,6 +565,7 @@
         ${card('#/like-react', '👍', 'J\'aime', `${(snapshot.likeReact?.channels || []).length} canal(aux) coché(s)`)}
         ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
+        ${card('#/draw-two-three', '⚖️', 'Nul / 2-3', `${(snapshot.drawTwoThree?.sentCount) || 0} prédiction(s) • ${(snapshot.drawTwoThree?.won) || 0} gagnée(s) • ${(snapshot.drawTwoThree?.lost) || 0} perdue(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
@@ -2199,6 +2201,10 @@ Faites-en bon usage !
         what: 'Analyse les catégories 3/2, 3/3 et 2/2 sur chaque lot de jeux et prédit la catégorie la plus faible si sa case est cochée.',
         steps: ['Ouvre « Comptage 2/2 ».', 'Coche la ou les catégories à prédire, puis règle le nombre de prédictions, le rattrapage et le canal.'],
         tips: ['En cas d’égalité entre les catégories les plus faibles, c’est la catégorie cochée qui est prédite.'] },
+      { g: 'auto', icon: '⚖️', title: 'Nul / 2-3', hash: '#/draw-two-three',
+        what: 'Prédit ensemble le match nul (noté X) ou la distribution 2/3 (joueur 2 cartes, banquier 3 cartes), dans un seul message. Dès que l’un des deux sort, le message est édité avec le rattrapage et l’autre est ignoré.',
+        steps: ['Ouvre « Nul / 2-3 », renseigne le canal et le rattrapage, puis active.', 'Déclencheurs : 2/3 → jeu +1 ; nul 2/2 → +1 ; nul 3/2 (joueur 3, banquier 2) → +2 ; nul 3/3 → +3.'],
+        tips: ['Les pourcentages sont les taux réellement observés (fenêtre jeu prédit + rattrapages) ; la page montre aussi l’analyse des matchs nuls.', 'Quand l’analyse trouve une règle à ajouter, modifier ou supprimer, elle l’envoie dans le chat privé avec un bouton « Appliquer » (liste cliquable, aussi avec /nul).'] },
       { g: 'auto', icon: '👑', title: 'VIP', hash: '#/vip',
         what: 'Surveille ensemble toutes les stratégies de costumes et l’IA. Quand l’une enchaîne des pertes consécutives ou des prédictions consécutives du même costume, ses prochaines prédictions sont relayées dans le canal VIP.',
         steps: ['Ouvre « VIP » et coche « Formation ».', 'Règle le nombre de pertes consécutives, le nombre de prédictions relayées ensuite, les mêmes valeurs pour les répétitions de costume, et le canal VIP, puis enregistre.'] },
@@ -3282,6 +3288,115 @@ Faites-en bon usage !
     }
     async function resetCardsCount() {
       try { await api('/api/cards-count/reset', 'POST', {}); await refresh(); cardsCountPage(); toast('Comptage réinitialisé.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // « Nul / 2-3 » (voir draw-two-three.js) : prédit ensemble le match nul (X) ou la distribution 2/3,
+    // avec l'analyse de la façon dont les matchs nuls viennent.
+    // -----------------------------------------------------------------------
+    function dtSiteOptions(currentId) {
+      const list = snapshot.drawTwoThree?.siteChannels || [];
+      const cur = currentId == null ? '' : String(currentId);
+      return ['<option value="">Aucun</option>']
+        .concat(list.map((c) => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`)).join('');
+    }
+    function drawTwoThreePage() {
+      setNav('draw-two-three');
+      const p = snapshot.drawTwoThree || {};
+      const a = p.analysis || {};
+      const badge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : '🚫 annulé';
+      const pend = (p.pending || []).slice().reverse();
+      const pc = (v) => (v == null ? '—' : `${v}%`);
+      const byCards = a.byCards || {};
+      const resultOf = (e) => {
+        const h = e.hit || {};
+        if (h.t23 != null && h.x != null) return `2/3 + X ✅${h.t23}`;
+        if (h.t23 != null) return `2/3 ✅${h.t23}`;
+        if (h.x != null) return `X ✅${h.x}`;
+        return e.status === 'perdu' ? '❌' : '—';
+      };
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Match nul · distribution 2/3</span><h2 style="margin-top:7px">⚖️ Nul / 2-3</h2><p class="small">Le bot prédit <b>toujours les deux ensemble</b> : le match nul (<b>X</b>) ou le <b>2/3</b> (joueur 2 cartes, banquier 3 cartes). Dès que l'un des deux sort, le message est édité avec le rattrapage (✅0️⃣, ✅1️⃣…) et l'autre est ignoré. Rien ne sort sur tous les rattrapages : les deux sont ❌.</p></div></div>
+        <div class="grid two">
+          <div class="card">
+            <h3>Canal et réglages</h3>
+            <div class="field"><label>ID ou @nom du canal</label><input id="dtChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="toolbar"><button class="button small primary" onclick="saveDrawTwoThreeChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="drawTwoThreeTest()">Envoyer un test</button><button class="button small danger" onclick="removeDrawTwoThreeChannel()">Retirer</button></div>
+            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine)</label><select id="dtSiteChannel">${dtSiteOptions(p.siteChannelId)}</select></div>
+            <div class="field"><label>Rattrapage maximum</label><input id="dtMaxR" type="number" min="0" max="9" value="${p.maxR ?? 2}"></div>
+            <label class="check"><input id="dtEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer « Nul / 2-3 »</label>
+            <label class="check"><input id="dtNotify" type="checkbox" ${p.notify !== false ? 'checked' : ''}> Prévenir dans le chat privé quand l'analyse trouve quelque chose (liste cliquable)</label>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveDrawTwoThree()">Enregistrer</button><button class="button small ghost" onclick="drawTwoThreeScan()">Analyser maintenant</button><button class="button small ghost" onclick="drawTwoThreeSendList()">Envoyer la liste au chat privé</button><button class="button small danger" onclick="resetDrawTwoThree()">Remettre les compteurs à zéro</button></div>
+            ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+            <h3 style="margin-top:18px">Format du message</h3>
+            <pre class="small" style="white-space:pre;margin:6px 0">2/3 40%\n ┣━ N°532⏳\nX 25%</pre>
+            <p class="small">Le plus probable est en haut. Après un résultat (ex. le nul au 1ᵉʳ rattrapage) :</p>
+            <pre class="small" style="white-space:pre;margin:6px 0">X ✅1️⃣ 25%\n ┣━ N°532</pre>
+          </div>
+          <div class="card">
+            <h3>Règles de départ (jeu terminé N → jeu prédit)</h3>
+            <table class="table"><thead><tr><th>Quand</th><th>Prédit à</th></tr></thead><tbody>
+              ${(p.rules || []).map((t) => `<tr><td>${esc(t.label)}${t.auto ? ' <span class="tag good">auto</span>' : ''}${t.enabled === false ? ' <span class="tag bad">désactivée</span>' : ''}</td><td>N+${t.offset}</td></tr>`).join('')}
+            </tbody></table>
+            <p class="small" style="margin-top:10px">Jeu en live : <b>№${esc(String(p.live || '—'))}</b> • envoyées <b>${p.sentCount || 0}</b> • gagnées ${p.won || 0} • perdues ${p.lost || 0}</p>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Trouvailles de l'analyse (ajouter / modifier / supprimer une règle)</h3>
+          ${(p.findings || []).length ? `<table class="table"><thead><tr><th>Proposition</th><th>Détail</th><th></th></tr></thead><tbody>
+            ${(p.findings || []).map((f) => `<tr><td><b>${esc(f.title)}</b></td><td class="small">${esc(f.detail)}</td><td><button class="button small primary" onclick="applyDrawTwoThree('${esc(f.sid)}')">Appliquer</button></td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Rien à proposer pour l\'instant (il faut au moins 15 cas observés et un écart net avec le taux général).</p>'}
+          <p class="small muted" style="margin-top:8px">La même liste arrive dans le chat privé avec des boutons (commande /nul). Dernière analyse : ${p.lastAnalysisAt ? new Date(p.lastAnalysisAt).toLocaleString('fr-FR') : '—'}.</p>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Analyse : comment les matchs nuls viennent</h3>
+          ${a.games ? `<p class="small">Sur <b>${a.games}</b> jeux enregistrés (${a.shoes || 1} sabot(s)) : <b>${a.ties}</b> match(s) nul(s) (${pc(a.tiePct)}) • 2/3 : <b>${a.all23}</b> (${pc(a.all23Pct)}) • écart moyen entre deux nuls : <b>${a.avgGap ?? '—'}</b> jeux (max ${a.maxGap ?? '—'}) • jeux depuis le dernier nul : <b>${a.sinceLastTie ?? '—'}</b></p>
+          <p class="small">Cartes des matchs nuls : 2/2 <b>${byCards['2/2'] || 0}</b> • 3/2 <b>${byCards['3/2'] || 0}</b> • 3/3 <b>${byCards['3/3'] || 0}</b> • 2/3 <b>${byCards['2/3'] || 0}</b>${(a.lastTies || []).length ? ` • derniers nuls : ${(a.lastTies || []).map((n) => '№' + n).join(', ')}` : ''}</p>
+          <table class="table"><thead><tr><th>Après un nul…</th><th>Nul au jeu suivant</th></tr></thead><tbody>
+            ${(a.afterTie || []).map((x) => `<tr><td>+${x.k} jeu(x)</td><td>${x.n ? `${x.hits}/${x.n} (${pc(x.pct)})` : '—'}</td></tr>`).join('')}
+          </tbody></table>
+          <h3 style="margin-top:14px">Probabilité par règle (fenêtre : jeu prédit + ${a.window?.maxR ?? p.maxR ?? 2} rattrapage(s))</h3>
+          <table class="table"><thead><tr><th>Règle</th><th>Échantillon</th><th>2/3 vient</th><th>X vient</th><th>Affiché</th><th>Envoyées</th><th>Gagnées</th><th>Perdues</th></tr></thead><tbody>
+            ${(a.rules || []).map((t) => `<tr><td>${esc(t.label)} → N+${t.offset}</td><td>${t.observed?.n || 0}</td><td>${t.observed?.n ? `${t.observed.t23}/${t.observed.n}` : '—'}</td><td>${t.observed?.n ? `${t.observed.tX}/${t.observed.n}` : '—'}</td><td>2/3 ${t.p23}% · X ${t.pX}%</td><td>${t.sent}</td><td>${t.won} <span class="small muted">(2/3 ${t.w23} · X ${t.wX})</span></td><td>${t.lost}</td></tr>`).join('')}
+          </tbody></table>
+          <p class="small muted" style="margin-top:8px">Avec moins de 5 cas observés, le pourcentage affiché utilise le taux général de la fenêtre (lissage de Laplace). Taux général : 2/3 ${a.window?.base?.n ? pc(Math.round(100 * a.window.base.t23 / a.window.base.n)) : '—'} • X ${a.window?.base?.n ? pc(Math.round(100 * a.window.base.tX / a.window.base.n)) : '—'}.</p>` : '<p class="small">Pas encore de jeu terminé dans le sabot.</p>'}
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Prédictions</h3>
+          ${pend.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Règle</th><th>Affiché</th><th>État</th><th>Résultat</th><th>Rattrapage</th></tr></thead><tbody>
+            ${pend.map((e) => `<tr><td>№${e.target}</td><td class="small">${esc(e.ruleLabel || e.trigger)} (№${e.source})</td><td>2/3 ${e.p23}% · X ${e.pX}%</td><td>${badge(e.status)}</td><td>${esc(resultOf(e))}</td><td>${e.step}/${e.maxR}</td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Aucune prédiction pour le moment.</p>'}
+        </div>`;
+    }
+    async function saveDrawTwoThree() {
+      const rawSite = val('dtSiteChannel');
+      try { await api('/api/draw-two-three/config', 'POST', { enabled: $('#dtEnabled')?.checked, notify: $('#dtNotify')?.checked, maxR: val('dtMaxR'), channels: ids(val('dtChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); drawTwoThreePage(); toast('Panneau « Nul / 2-3 » enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveDrawTwoThreeChannel() {
+      const list = ids(val('dtChannel'));
+      if (!list.length) return toast('Renseigne un ID de canal.', 'error');
+      try { const r = await api('/api/draw-two-three/channel', 'POST', { channelId: list[0] }); await refresh(); drawTwoThreePage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeDrawTwoThreeChannel() { try { await api('/api/draw-two-three/channel', 'DELETE'); await refresh(); drawTwoThreePage(); } catch (e) { toast(e.message, 'error'); } }
+    async function drawTwoThreeTest() {
+      try { const r = await api('/api/draw-two-three/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function applyDrawTwoThree(sid) {
+      try { const r = await api('/api/draw-two-three/apply', 'POST', { sid }); await refresh(); drawTwoThreePage(); toast(r.text || 'Appliqué.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function drawTwoThreeSendList() {
+      try { await api('/api/draw-two-three/send-list', 'POST', {}); toast('Liste envoyée dans le chat privé.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function drawTwoThreeScan() {
+      try { await api('/api/draw-two-three/scan', 'POST', {}); await refresh(); drawTwoThreePage(); toast('Analyse effectuée.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetDrawTwoThree() {
+      try { await api('/api/draw-two-three/reset', 'POST', {}); await refresh(); drawTwoThreePage(); toast('Compteurs remis à zéro.'); }
       catch (e) { toast(e.message, 'error'); }
     }
 
@@ -4987,6 +5102,7 @@ Faites-en bon usage !
         else if (h === '#/like-react') likeReactPage();
         else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
+        else if (h === '#/draw-two-three') drawTwoThreePage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
