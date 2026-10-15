@@ -535,19 +535,49 @@
         </div>
       </div>
 
-      <div class="home-section-label">Opérations</div>
+      <div class="home-section-label">Pilotage et envois</div>
       <div class="home-grid">
         ${card('#/help', '❓', 'Aide', 'Mode d\'emploi de tous les boutons')}
         ${card('#/canaux', '📡', 'Canaux', 'Fil des prédictions, style Telegram')}
+        ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
+        ${card('#/stability', '🛡️', 'Stabilité du jeu', (snapshot.gameStability || {}).enabled ? `Activée · jeu ${((snapshot.gameStability || {}).state === 'unstable') ? 'instable' : ((snapshot.gameStability || {}).state === 'stable' ? 'stable' : 'en analyse')}` : 'Désactivée · à activer')}
+        ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
+      </div>
+
+      <div class="home-section-label">Stratégies de prédiction</div>
+      <div class="home-grid">
         ${card('#/strategies', '🎯', 'Stratégies', `${(snapshot.strategies||[]).length} stratégie(s)`)}
         ${card('#/best-weak', '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · voir / modifier`)}
         ${card('#/test', '🧪', 'Test', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'test').length} configuration(s) · meilleur / 2ᵉ meilleur`)}
         ${card('#/relance', '🔄', 'Relance', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'relance').length} configuration(s) · 1 à 3 costumes, relance à N+7`)}
-        ${card('#/stability', '🛡️', 'Stabilité du jeu', (snapshot.gameStability || {}).enabled ? `Activée · jeu ${((snapshot.gameStability || {}).state === 'unstable') ? 'instable' : ((snapshot.gameStability || {}).state === 'stable' ? 'stable' : 'en analyse')}` : 'Désactivée · à activer')}
         ${card('#/scan', '🔎', 'Détection auto', `${((snapshot.bestWeakTop || {}).detected || []).length} canal(aux) détecté(s) · ${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'scan').length} configuration(s)`)}
         ${card('#/best-weak', '👁️', 'Suivre des canaux', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'follow').length} configuration(s) · voir / modifier`)}
-        ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
-        ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
+      </div>
+
+      <div class="home-section-label">Prédictions automatiques (déclencheurs)</div>
+      <div class="home-grid">
+        ${card('#/after-loss', '↩️', 'Prédiction après perte', `${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)`)}
+        ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
+        ${card('#/copy-announce', '📣', 'Copie et annonce', `${(snapshot.copyAnnounce?.rules || []).length} règle(s)`)}
+        ${card('#/bet-type', '🎲', 'Type de mise', `${(snapshot.betType?.trackers || []).length} configuration(s)`)}
+      </div>
+
+      <div class="home-section-label">Analyse des pertes</div>
+      <div class="home-grid">
+        ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
+      </div>
+
+      <div class="home-section-label">Suivi, statistiques et communauté</div>
+      <div class="home-grid">
+        ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
+        ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
+        ${card('#/draw-two-three', '⚖️', 'Nul / 2-3', `${(snapshot.drawTwoThree?.sentCount) || 0} prédiction(s) • ${(snapshot.drawTwoThree?.won) || 0} gagnée(s) • ${(snapshot.drawTwoThree?.lost) || 0} perdue(s)`)}
+        ${card('#/like-react', '👍', 'J\'aime', `${(snapshot.likeReact?.channels || []).length} canal(aux) coché(s)`)}
+        ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
+        ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
       </div>
 
       <div class="home-section-label">Intelligence artificielle</div>
@@ -556,22 +586,12 @@
         ${card('#/ai-strategies', '✨', 'Stratégies IA', `${created} créée(s)`)}
         ${card('#/ai-created', '🤖', 'Créé par moi avec IA', `${aiCreatedCount} stratégie(s) personnelle(s)`)}
         ${card('#/predit', '🔮', 'Prédit IA', `${(snapshot.predit?.activeCount || 0)} stratégie(s) certifiée(s)`)}
-        ${card('#/after-loss', '↩️', 'Prédiction après perte', `${(snapshot.afterLoss?.trackers || []).length} stratégie(s) suivie(s)`)}
-        ${card('#/combined', '🧩', 'Prédiction combinée pour costume joueur', `${(snapshot.combined?.trackers || []).length} source(s) suivie(s)`)}
-        ${card('#/suit-streak', '🔁', 'Répétition de costume', `${(snapshot.suitStreak?.trackers || []).length} source(s) suivie(s)`)}
-        ${card('#/suit-break', '⚡', 'Rupture de costume', `${(snapshot.suitBreak?.trackers || []).length} source(s) suivie(s)`)}
-        ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
-        ${card('#/overlap', '⏱️', 'Chevauchement de prédictions', `${(snapshot.overlap?.trackers || []).length} source(s) suivie(s)`)}
-        ${card('#/copy-announce', '📣', 'Copie et annonce', `${(snapshot.copyAnnounce?.rules || []).length} règle(s)`)}
-        ${card('#/bet-type', '🎲', 'Type de mise', `${(snapshot.betType?.trackers || []).length} configuration(s)`)}
-        ${card('#/like-react', '👍', 'J\'aime', `${(snapshot.likeReact?.channels || []).length} canal(aux) coché(s)`)}
-        ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
-        ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
-        ${card('#/draw-two-three', '⚖️', 'Nul / 2-3', `${(snapshot.drawTwoThree?.sentCount) || 0} prédiction(s) • ${(snapshot.drawTwoThree?.won) || 0} gagnée(s) • ${(snapshot.drawTwoThree?.lost) || 0} perdue(s)`)}
-        ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
-        ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
+      </div>
+
+      <div class="home-section-label">Jeu 21</div>
+      <div class="home-grid">
         ${card('#/game21', '🃏', 'Game 21', 'Les jeux 21 de 1xbet en direct')}
         ${card('#/game21-ai', '🤖', 'Analyse IA du 21', 'Déclencheurs A, K, Q, J et cartes exactes')}
         ${card('#/game21-strategies', '🧠', 'Stratégies IA du 21', 'Créer des stratégies à partir des déclencheurs')}
@@ -779,6 +799,16 @@ Faites-en bon usage !
       $('#app').innerHTML = `<div class="section-head"><div><span class="eyebrow">Configuration stratégie</span><h2 style="margin-top:7px">${esc(s.name)}</h2><p class="small">${esc(s.about)}</p></div><span class="tag ${c.enabled ? 'good' : 'bad'}">${c.enabled ? 'Active' : 'En pause'}</span></div>
         <div class="two-col"><div class="panel"><h3>Règles de calcul</h3><div class="three-col"><div class="field"><label>Format</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 2}"></div><div class="field"><label>Avance</label><input id="cfgLead" type="number" min="1" max="9" value="${c.lead ?? 2}"></div></div>
           ${s.usesB ? `<div class="field"><label>Compteur B</label><input id="cfgB" type="number" min="0" max="20" value="${c.b ?? 3}"></div>` : ''}
+          ${s.key === 'secondeCarte' ? `<div class="panel" style="margin:10px 0"><h3>Carte du joueur à prédire</h3>
+            <div class="field"><label>Prédire le costume de…</label><select id="cfgCardIndex"><option value="1" ${Number(c.cardIndex) === 1 ? 'selected' : ''}>la 1ʳᵉ carte du joueur</option><option value="2" ${![1, 3].includes(Number(c.cardIndex)) ? 'selected' : ''}>la 2ᵉ carte du joueur (par défaut)</option><option value="3" ${Number(c.cardIndex) === 3 ? 'selected' : ''}>la 3ᵉ carte du joueur</option></select></div>
+            <p class="small muted">Si la carte choisie n'existe pas dans le jeu (ex. pas de 3ᵉ carte), aucune prédiction n'est lancée pour ce jeu.</p></div>
+          <div class="panel" style="margin:10px 0"><h3>Série puis pause</h3>
+            <p class="small">${esc(s.gate?.run?.label || '')}</p>
+            <label class="check"><input id="cfgRunEnabled" type="checkbox" ${c.runEnabled !== false ? 'checked' : ''}> Activer « série puis pause » (sinon la stratégie publie en continu)</label>
+            <div class="three-col"><div class="field"><label>Réussites (✅0️⃣ ou ✅1️⃣) avant l'arrêt</label><input id="cfgRunTarget" type="number" min="1" max="50" value="${c.runTarget ?? 5}"></div>
+            <div class="field"><label>Prédictions de plus si une perte est tombée dans la série</label><input id="cfgRunExtra" type="number" min="0" max="50" value="${c.runExtra ?? 3}"></div></div>
+            <p class="small muted">Une seule prédiction à la fois (la suivante attend la vérification). À l'arrêt, la stratégie continue de prédire en silence ; à la première perte, elle reprend l'envoi.</p></div>
+          ${secondRelayPanel()}` : ''}
           ${s.key === 'parite' ? `<div class="three-col"><div class="field"><label>Départ</label><input id="cfgStart" type="number" min="1" value="${c.startGame ?? 1}"></div><div class="field"><label>Pas VAR</label><input id="cfgVar" type="number" min="0" value="${c.varStep ?? 0}"></div><div class="field"><label>Décalage</label><input id="cfgDec" type="number" min="1" value="${c.decalage ?? 1}"></div></div>` : ''}
           ${s.key === 'absenceDecalage' ? `<div class="three-col"><div class="field"><label>Nombre d'absences (jeux consécutifs sans le costume)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Décalage (+ jeux)</label><input id="cfgDec" type="number" min="1" max="99" value="${c.decalage ?? 2}"></div></div><p class="small">Exemple : absence 4 + décalage 2. Si ❤️ est absent aux jeux 2, 3, 4 et 5, on prédit ❤️ sur le jeu 5 + 2 = <b>7</b>. Main du joueur uniquement. La prédiction part une seule fois par série d'absence. Le format, les rattrapages et le canal se règlent ci-dessous comme pour les autres stratégies.</p>` : ''}
           ${s.key === 'absente' ? `<div class="field"><label>Jeux sans costume</label><input id="cfgStreak" type="number" min="2" max="10" value="${c.streak ?? 3}"></div>` : ''}
@@ -862,9 +892,31 @@ Faites-en bon usage !
     }
     async function refreshStrategyLive(key) { await refresh(); strategyPage(key); }
     function val(id) { return document.getElementById(id)?.value ?? ''; }
+    // Relais « après perte » de la stratégie « 2ᵉ carte du joueur » (configuration cachée qui travaille en arrière-plan)
+    function secondRelayPanel() {
+      const r = snapshot.secondCardRelay || {};
+      const counts = [1, 2, 3, 4]; if (r.count && !counts.includes(Number(r.count))) counts.push(Number(r.count));
+      const state = r.enabled ? (r.armed ? `<span class="tag warn">Armé : ${esc(String(r.remaining))} prédiction(s) à envoyer</span>` : '<span class="tag good">Actif — en attente d’une perte</span>') : '<span class="tag">Désactivé</span>';
+      return `<div class="panel" style="margin:10px 0"><div class="split"><h3>Relais après perte (arrière-plan)</h3>${state}</div>
+        <p class="small">Fonctionne comme une configuration cachée, sans rien à créer : elle suit toutes les prédictions de cette stratégie (publiées ou silencieuses). Dès qu’une est perdue, les prochaines prédictions partent dans le canal ci-dessous, puis le relais se remet en veille jusqu’à la perte suivante. Si la même prédiction (même numéro et même costume) a déjà été relayée, elle est ignorée.</p>
+        <label class="check"><input id="scrEnabled" type="checkbox" ${r.enabled ? 'checked' : ''}> Activer le relais après perte</label>
+        <div class="three-col"><div class="field"><label>Envoyer les prochaines prédictions</label><select id="scrCount">${counts.map(n => `<option value="${n}" ${Number(r.count || 2) === n ? 'selected' : ''}>${n === 1 ? 'la prochaine prédiction' : 'les ' + n + ' prochaines prédictions'}</option>`).join('')}</select></div>
+        <div class="field"><label>ID du canal (différent de celui de la stratégie)</label><input id="scrChannel" value="${esc((r.channels || []).join(', '))}" placeholder="-1001234567890"></div></div>
+        <div class="toolbar"><button class="button small primary" onclick="saveSecondRelay()">Enregistrer le relais</button><button class="button small ghost" onclick="testSecondRelay()">Envoyer un test</button></div>
+        <p class="small muted">${esc(String(r.sentCount || 0))} prédiction(s) relayée(s)${r.lastSentAt ? ' · dernier envoi : ' + esc(formatDate(r.lastSentAt)) : ''}${r.lastError ? ' · ⚠️ ' + esc(r.lastError) : ''}</p></div>`;
+    }
+    async function saveSecondRelay() {
+      try { await api('/api/second-card-relay/config', 'POST', { enabled: $('#scrEnabled')?.checked, count: val('scrCount'), channelId: val('scrChannel') }); await refresh(); await strategyPage('secondeCarte'); toast('Relais enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function testSecondRelay() {
+      try { await api('/api/second-card-relay/test', 'POST', {}); toast('Message de test envoyé dans le canal du relais.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     async function saveStrategy(key) {
       const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       if (key === 'absenceJoueur') patch.entries = readAbsenceEntries('cfg');
+      if (key === 'secondeCarte') Object.assign(patch, { cardIndex: val('cfgCardIndex'), runEnabled: $('#cfgRunEnabled')?.checked, runTarget: val('cfgRunTarget'), runExtra: val('cfgRunExtra') });
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
       try { await api(`/api/strategies/${key}`, 'POST', patch); await refresh(); await strategyPage(key); toast('Réglages enregistrés.'); } catch (e) { toast(e.message, 'error'); }
@@ -2182,6 +2234,15 @@ Faites-en bon usage !
           'Comment compte N : avec « Perdue » et N=2, dès la première prédiction perdue, les 2 suivantes passent en silence et c’est la 3ᵉ qui est relayée. Ce n’est pas « après 2 pertes consécutives ».',
           'Pour réagir après plusieurs pertes d’affilée, utilise « Prédiction combinée » (niveau « Perdue », N d’affilée, mode « Relayer la prochaine prédiction naturelle »). « VIP » et le mode « Envoi sur déclencheur » de Meilleur + plus faible le font aussi.',
         ] },
+      { g: 'auto', icon: '📉', title: 'Retour après perte', hash: '#/loss-return',
+        what: 'Suit des canaux (ou une configuration Relance), vérifie le rattrapage configuré et mesure quand le costume perdu revient : D = nombre de jeux après la fin des rattrapages. Un rapport part vers un autre canal.',
+        steps: [
+          'Clique sur « Créer », coche les canaux à suivre (ou une Relance) et choisis le canal qui reçoit les rapports.',
+          'Règle les rattrapages de ce canal : prédiction 12 ♦️ perdue avec 3 rattrapages → 12 + 3 = 15 ; s’il sort au jeu 16, D = 1 (« misez sur le jeu suivant »).',
+          'Si le costume n’est pas venu au jeu suivant, le bot note ce qui est venu (miroir, inverse ou l’autre costume).',
+          'Un rapport part à chaque perte, et un bilan avec les taux tous les X rapports.',
+        ],
+        tips: ['Un canal où le bot publie lui-même peut être coché : tous ses envois sont suivis, quelle que soit la stratégie. Le mot-clé permet de ne garder qu’une stratégie.'] },
       { g: 'auto', icon: '🧩', title: 'Prédiction combinée', hash: '#/combined',
         what: 'Réagit après N résultats consécutifs d’une stratégie (rattrapage 1, 2, 3 ou perdue). Par défaut, elle relaie alors la prochaine prédiction de cette stratégie. Toujours vérifié sur la main du joueur.',
         steps: [
@@ -3726,6 +3787,75 @@ Faites-en bon usage !
           toast('Canal de la catégorie mis à jour.', ''); await diagnosticsPage();
         } catch (e) { toast(e.message, 'error'); }
       };
+
+    // 🗂️ Organisation par canal (page Envois) : choisir un canal → ses configurations → modifier / retirer ce canal / supprimer
+    window.__cc = { channel: null, list: [] };
+    window.diagOrgOpen = async function(id) {
+      const box = document.getElementById('diagOrg'); if (!box) return;
+      box.innerHTML = '<p class="small muted">Chargement…</p>';
+      try {
+        const r = await api(`/api/diagnostics/channel-configs/${encodeURIComponent(id)}`);
+        window.__cc = { channel: id, list: r.configs || [] };
+        diagOrgRender();
+      } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+    };
+    function diagOrgRender() {
+      const box = document.getElementById('diagOrg'); if (!box) return;
+      const { channel, list } = window.__cc;
+      const info = (window.__diagAll || []).find(c => String(c.id) === String(channel)) || {};
+      const groups = {};
+      list.forEach((c, i) => { (groups[c.group] = groups[c.group] || []).push([c, i]); });
+      const other = (info.sources || []).length ? `<p class="small muted">Tous les usages de ce canal : ${esc((info.sources || []).join(' · '))}</p>` : '';
+      box.innerHTML = `<div class="panel" style="margin-top:10px"><div class="split"><b>${esc(info.title || channel)} <span class="mono small">${esc(channel)}</span></b><span class="tag">${list.length} configuration(s) modifiable(s)</span></div>
+        ${Object.keys(groups).length ? Object.entries(groups).map(([g, rows]) => `<h4 class="small eyebrow" style="margin:14px 0 6px">${esc(g)}</h4>${rows.map(([c, i]) => `<div class="split" style="gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--border)">
+            <span><b>${esc(c.name)}</b> ${c.enabled === null ? '' : `<span class="tag ${c.enabled ? 'good' : 'warn'}">${c.enabled ? 'active' : 'en pause'}</span>`}<br><span class="small muted">canaux : ${esc((c.channels || []).join(', ') || '—')}</span></span>
+            <span class="toolbar"><a class="button small ghost" href="${esc(c.page)}">Ouvrir</a>
+              <button class="button small ghost" onclick="diagOrgEdit(${i})">Modifier</button>
+              <button class="button small ghost" onclick="diagOrgRemoveHere(${i})">Retirer de ce canal</button>
+              ${c.canDelete ? `<button class="button small danger" onclick="diagOrgDelete(${i})">Supprimer</button>` : ''}</span></div>`).join('')}`).join('') : '<p class="small muted">Aucune configuration modifiable ici pour ce canal.</p>'}
+        ${other}</div>`;
+    }
+    window.diagOrgEdit = function(i) {
+      const c = window.__cc.list[i]; if (!c) return;
+      const known = (window.__diagAll || []);
+      const chosen = new Set((c.channels || []).map(String));
+      const boxes = known.map(k => `<label class="check" style="display:block;margin:5px 0"><input type="checkbox" class="ccChan" value="${esc(k.id)}" ${chosen.has(String(k.id)) ? 'checked' : ''}> ${esc(k.title || k.id)} <small>${esc(k.id)}</small></label>`).join('');
+      const extra = [...chosen].filter(x => !known.some(k => String(k.id) === x)).join(', ');
+      openModal(`<div class="modal-head"><div><span class="eyebrow">${esc(c.group)}</span><h3 style="margin-top:8px">Modifier la configuration</h3></div></div>
+        ${(c.kind === 'strategy' || c.fixedName) ? `<p class="small muted">${esc(c.name)}</p>` : `<div class="field"><label>Nom</label><input id="ccName" value="${esc(c.name)}"></div>`}
+        ${c.enabled === null ? '' : `<label class="check"><input id="ccEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Active</label>`}
+        <div class="field"><label>Canaux où elle publie (coche)</label>${boxes}</div>
+        <div class="field"><label>Autre canal (ID ou @nom, facultatif)</label><input id="ccExtra" value="${esc(extra)}"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="diagOrgSave(${i})">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    };
+    async function diagOrgPut(c, body) { await api('/api/diagnostics/channel-configs', 'PUT', { kind: c.kind, panel: c.panel, id: c.id, mode: c.mode, ...body }); }
+    window.diagOrgSave = async function(i) {
+      const c = window.__cc.list[i]; if (!c) return;
+      try {
+        const channels = [...document.querySelectorAll('.ccChan:checked')].map(x => x.value).concat(String(val('ccExtra')).split(/[\s,;]+/).filter(Boolean));
+        const body = { channels };
+        if (document.getElementById('ccEnabled')) body.enabled = !!document.getElementById('ccEnabled').checked;
+        if (c.kind !== 'strategy' && !c.fixedName) body.name = val('ccName');
+        await diagOrgPut(c, body);
+        closeModal(); toast('Configuration enregistrée.'); await refresh(); await diagnosticsPage(); await diagOrgOpen(window.__cc.channel);
+      } catch (e) { toast(e.message, 'error'); }
+    };
+    window.diagOrgRemoveHere = async function(i) {
+      const c = window.__cc.list[i]; if (!c) return;
+      if (!confirm(`Retirer ce canal de « ${c.name} » ? La configuration est conservée, sans ce canal.`)) return;
+      try {
+        await diagOrgPut(c, { channels: (c.channels || []).filter(x => String(x).toLowerCase() !== String(window.__cc.channel).toLowerCase()) });
+        toast('Canal retiré de la configuration.'); await refresh(); await diagnosticsPage(); await diagOrgOpen(window.__cc.channel);
+      } catch (e) { toast(e.message, 'error'); }
+    };
+    window.diagOrgDelete = async function(i) {
+      const c = window.__cc.list[i]; if (!c) return;
+      if (!confirm(`Supprimer définitivement la configuration « ${c.name} » (${c.group}) ?`)) return;
+      try {
+        await api(`/api/diagnostics/channel-configs?kind=${encodeURIComponent(c.kind)}&panel=${encodeURIComponent(c.panel || '')}&id=${encodeURIComponent(c.id)}`, 'DELETE');
+        toast('Configuration supprimée.'); await refresh(); await diagnosticsPage(); await diagOrgOpen(window.__cc.channel);
+      } catch (e) { toast(e.message, 'error'); }
+    };
     async function diagnosticsPage() {
       setNav('settings'); $('#app').innerHTML = '<div class="loading">Vérification des canaux…</div>';
       try {
@@ -3733,6 +3863,10 @@ Faites-en bon usage !
         $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vérification${snapshot.appVersion ? ' · ' + esc(snapshot.appVersion.version) + ' ' + esc(snapshot.appVersion.name) : ''}</span><h2 style="margin-top:7px">Envoi des prédictions</h2><p class="small">Contrôle du token, des canaux, et de chaque stratégie / configuration suivie — où elle envoie, et si les prédictions sont arrêtées ou planifiées.</p></div></div>
         <div class="notice ${r.bot.tokenSet ? '' : 'warn'}">${r.bot.tokenSet ? 'Token Telegram enregistré' + (r.bot.username ? ' (@' + esc(r.bot.username) + ')' : '') : 'Aucun token Telegram : aucune prédiction ne peut partir.'}</div>
         ${diagControlBlock(r.control)}
+        <div class="panel" style="margin-bottom:16px"><div class="split"><b>🗂️ Organisation par canal</b><span class="tag">${(r.allChannels || []).length} canal(aux)</span></div>
+          <p class="small muted">Choisis un canal : toutes les configurations qui y publient apparaissent, avec Modifier, Retirer de ce canal et Supprimer.</p>
+          <div class="toolbar" style="flex-wrap:wrap">${(r.allChannels || []).map(c => `<button class="button small ghost" onclick="diagOrgOpen('${esc(String(c.id))}')">${esc(c.title || c.id)} <span class="tag">${(c.sources || []).length}</span></button>`).join('') || '<span class="small muted">Aucun canal configuré.</span>'}</div>
+          <div id="diagOrg"></div></div>
         <div class="panel" style="margin-bottom:16px"><div class="split"><b>Tous les canaux effectivement utilisés</b><span class="tag">${(r.allChannels || []).length} identifiant(s)</span></div>
           <p class="small muted">Cette liste inclut les canaux publics, silencieux, les panneaux secondaires, chaque configuration suivie et les canaux actifs utilisés comme fallback. Un même canal n'apparaît qu'une fois, avec toutes ses sources.</p>
           ${(r.allChannels || []).length ? r.allChannels.map(c => `<div class="split" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);gap:8px;align-items:flex-start"><span>${diagChannelRow(c)}</span><span class="small muted" style="flex:1">${c.sources.map(esc).join(' · ')}</span><button class="button small danger" onclick="diagDeleteChannel(decodeURIComponent('${encodeURIComponent(String(c.id))}'), decodeURIComponent('${encodeURIComponent(String(c.title || ''))}'))">🗑 Supprimer</button></div>`).join('') : '<p class="small muted">Aucun identifiant de canal configuré.</p>'}
