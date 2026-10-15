@@ -797,18 +797,17 @@ Faites-en bon usage !
       catch (e) { s = { ...s, ...(strategyDetails[key] || {}) }; }
       setNav('strategies'); const c = s.config || {};
       $('#app').innerHTML = `<div class="section-head"><div><span class="eyebrow">Configuration stratégie</span><h2 style="margin-top:7px">${esc(s.name)}</h2><p class="small">${esc(s.about)}</p></div><span class="tag ${c.enabled ? 'good' : 'bad'}">${c.enabled ? 'Active' : 'En pause'}</span></div>
-        <div class="two-col"><div class="panel"><h3>Règles de calcul</h3><div class="three-col"><div class="field"><label>Format</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 2}"></div><div class="field"><label>Avance</label><input id="cfgLead" type="number" min="1" max="9" value="${c.lead ?? 2}"></div></div>
+        ${s.key === 'secondeCarte' ? (() => { const pubIds = (s.publishedChannels || s.channels || []); const rv = s.gate?.run;
+          return `<div class="panel"><h3>Réglages</h3>
+          <p class="small">${esc(rv?.label || '')}</p>
+          <div class="field"><label>ID ou @nom du canal</label><input id="pubChannel" value="${esc(pubIds.join(', '))}" placeholder="-1001234567890"></div>
+          <div class="three-col"><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 1}"></div>
+          <div class="field"><label>Format de prédiction</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div>
+          <div class="field"><label>Nombre de prédictions avant la pause</label><input id="cfgRunTarget" type="number" min="1" max="50" value="${c.runTarget ?? 5}"></div></div>
+          <label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
+          <p class="small muted">Après ce nombre de prédictions, la stratégie se met en pause : elle continue de prédire et de se vérifier en arrière-plan, sans rien envoyer, jusqu'à une prédiction perdue, puis elle reprend l'envoi.</p>
+          <div class="toolbar" style="margin-top:14px"><button class="button primary" onclick="saveSecondeCarte()">Enregistrer</button><button class="button small ghost" onclick="testStrategy('secondeCarte','published')">Tester le canal</button><button class="button small danger" onclick="removeChannel('secondeCarte','published')">Retirer le canal</button></div><div id="strategyMessage"></div></div>`; })() : `<div class="two-col"><div class="panel"><h3>Règles de calcul</h3><div class="three-col"><div class="field"><label>Format</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 2}"></div><div class="field"><label>Avance</label><input id="cfgLead" type="number" min="1" max="9" value="${c.lead ?? 2}"></div></div>
           ${s.usesB ? `<div class="field"><label>Compteur B</label><input id="cfgB" type="number" min="0" max="20" value="${c.b ?? 3}"></div>` : ''}
-          ${s.key === 'secondeCarte' ? `<div class="panel" style="margin:10px 0"><h3>Carte du joueur à prédire</h3>
-            <div class="field"><label>Prédire le costume de…</label><select id="cfgCardIndex"><option value="1" ${Number(c.cardIndex) === 1 ? 'selected' : ''}>la 1ʳᵉ carte du joueur</option><option value="2" ${![1, 3].includes(Number(c.cardIndex)) ? 'selected' : ''}>la 2ᵉ carte du joueur (par défaut)</option><option value="3" ${Number(c.cardIndex) === 3 ? 'selected' : ''}>la 3ᵉ carte du joueur</option></select></div>
-            <p class="small muted">Si la carte choisie n'existe pas dans le jeu (ex. pas de 3ᵉ carte), aucune prédiction n'est lancée pour ce jeu.</p></div>
-          <div class="panel" style="margin:10px 0"><h3>Série puis pause</h3>
-            <p class="small">${esc(s.gate?.run?.label || '')}</p>
-            <label class="check"><input id="cfgRunEnabled" type="checkbox" ${c.runEnabled !== false ? 'checked' : ''}> Activer « série puis pause » (sinon la stratégie publie en continu)</label>
-            <div class="three-col"><div class="field"><label>Réussites (✅0️⃣ ou ✅1️⃣) avant l'arrêt</label><input id="cfgRunTarget" type="number" min="1" max="50" value="${c.runTarget ?? 5}"></div>
-            <div class="field"><label>Prédictions de plus si une perte est tombée dans la série</label><input id="cfgRunExtra" type="number" min="0" max="50" value="${c.runExtra ?? 3}"></div></div>
-            <p class="small muted">Une seule prédiction à la fois (la suivante attend la vérification). À l'arrêt, la stratégie continue de prédire en silence ; à la première perte, elle reprend l'envoi.</p></div>
-          ${secondRelayPanel()}` : ''}
           ${s.key === 'parite' ? `<div class="three-col"><div class="field"><label>Départ</label><input id="cfgStart" type="number" min="1" value="${c.startGame ?? 1}"></div><div class="field"><label>Pas VAR</label><input id="cfgVar" type="number" min="0" value="${c.varStep ?? 0}"></div><div class="field"><label>Décalage</label><input id="cfgDec" type="number" min="1" value="${c.decalage ?? 1}"></div></div>` : ''}
           ${s.key === 'absenceDecalage' ? `<div class="three-col"><div class="field"><label>Nombre d'absences (jeux consécutifs sans le costume)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Décalage (+ jeux)</label><input id="cfgDec" type="number" min="1" max="99" value="${c.decalage ?? 2}"></div></div><p class="small">Exemple : absence 4 + décalage 2. Si ❤️ est absent aux jeux 2, 3, 4 et 5, on prédit ❤️ sur le jeu 5 + 2 = <b>7</b>. Main du joueur uniquement. La prédiction part une seule fois par série d'absence. Le format, les rattrapages et le canal se règlent ci-dessous comme pour les autres stratégies.</p>` : ''}
           ${s.key === 'absente' ? `<div class="field"><label>Jeux sans costume</label><input id="cfgStreak" type="number" min="2" max="10" value="${c.streak ?? 3}"></div>` : ''}
@@ -840,6 +839,7 @@ Faites-en bon usage !
           <div class="notice">${esc(s.gate?.auto?.label || 'Déclencheur automatique désactivé')}</div>
           <div class="toolbar" style="margin-top:10px"><button class="button primary" onclick="saveStrategy('${s.key}')">Enregistrer le déclencheur</button></div></div></section>`}
         <section class="section"><div class="section-head"><div><span class="eyebrow">${s.key === 'ombre' ? 'Sortie unique' : 'Séparation des sorties'}</span><h2 style="margin-top:7px">Canaux de cette stratégie</h2></div><span class="tag">${s.key === 'ombre' ? ((s.publishedChannels || s.channels || []).length ? 'Canal configuré' : 'Canal à configurer') : `${(s.publishedChannels || s.channels || []).length ? 'Public configuré' : 'Public à configurer'} · ${s.shadowChannels?.length ? 'Silencieux configuré' : 'Silencieux à configurer'}`}</span></div>${routeRows(s)}</section>
+        `}
         ${liveGamesSection(s)}
         <section class="section"><div class="section-head"><div><span class="eyebrow">Bilan de cette stratégie</span><h2 style="margin-top:7px">Bilan séparé — ${esc(s.name)}</h2></div><span class="tag ${(s.stats?.rate ?? 0) >= 50 ? 'good' : 'warn'}">${esc(String(s.stats?.rate ?? 0))}%</span></div>
           <div class="panel"><div class="stat-grid"><div class="stat"><span>Gains</span><b style="color:var(--green)">${esc(String(s.stats?.win ?? 0))}</b></div><div class="stat"><span>Pertes</span><b style="color:var(--red)">${esc(String(s.stats?.loss ?? 0))}</b></div><div class="stat"><span>En attente</span><b>${esc(String(s.stats?.pending ?? 0))}</b></div><div class="stat"><span>Taux</span><b>${esc(String(s.stats?.rate ?? 0))}%</b></div></div>
@@ -892,34 +892,21 @@ Faites-en bon usage !
     }
     async function refreshStrategyLive(key) { await refresh(); strategyPage(key); }
     function val(id) { return document.getElementById(id)?.value ?? ''; }
-    // Relais « après perte » de la stratégie « 2ᵉ carte du joueur » (configuration cachée qui travaille en arrière-plan)
-    function secondRelayPanel() {
-      const r = snapshot.secondCardRelay || {};
-      const counts = [1, 2, 3, 4]; if (r.count && !counts.includes(Number(r.count))) counts.push(Number(r.count));
-      const state = r.enabled ? (r.armed ? `<span class="tag warn">Armé : ${esc(String(r.remaining))} prédiction(s) à envoyer</span>` : '<span class="tag good">Actif — en attente d’une perte</span>') : '<span class="tag">Désactivé</span>';
-      return `<div class="panel" style="margin:10px 0"><div class="split"><h3>Relais après perte (arrière-plan)</h3>${state}</div>
-        <p class="small">Fonctionne comme une configuration cachée, sans rien à créer : elle suit toutes les prédictions de cette stratégie (publiées ou silencieuses). Dès qu’une est perdue, les prochaines prédictions partent dans le canal ci-dessous, puis le relais se remet en veille jusqu’à la perte suivante. Si la même prédiction (même numéro et même costume) a déjà été relayée, elle est ignorée.</p>
-        <label class="check"><input id="scrEnabled" type="checkbox" ${r.enabled ? 'checked' : ''}> Activer le relais après perte</label>
-        <div class="three-col"><div class="field"><label>Envoyer les prochaines prédictions</label><select id="scrCount">${counts.map(n => `<option value="${n}" ${Number(r.count || 2) === n ? 'selected' : ''}>${n === 1 ? 'la prochaine prédiction' : 'les ' + n + ' prochaines prédictions'}</option>`).join('')}</select></div>
-        <div class="field"><label>ID du canal (différent de celui de la stratégie)</label><input id="scrChannel" value="${esc((r.channels || []).join(', '))}" placeholder="-1001234567890"></div></div>
-        <div class="toolbar"><button class="button small primary" onclick="saveSecondRelay()">Enregistrer le relais</button><button class="button small ghost" onclick="testSecondRelay()">Envoyer un test</button></div>
-        <p class="small muted">${esc(String(r.sentCount || 0))} prédiction(s) relayée(s)${r.lastSentAt ? ' · dernier envoi : ' + esc(formatDate(r.lastSentAt)) : ''}${r.lastError ? ' · ⚠️ ' + esc(r.lastError) : ''}</p></div>`;
-    }
-    async function saveSecondRelay() {
-      try { await api('/api/second-card-relay/config', 'POST', { enabled: $('#scrEnabled')?.checked, count: val('scrCount'), channelId: val('scrChannel') }); await refresh(); await strategyPage('secondeCarte'); toast('Relais enregistré.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function testSecondRelay() {
-      try { await api('/api/second-card-relay/test', 'POST', {}); toast('Message de test envoyé dans le canal du relais.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
     async function saveStrategy(key) {
       const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       if (key === 'absenceJoueur') patch.entries = readAbsenceEntries('cfg');
-      if (key === 'secondeCarte') Object.assign(patch, { cardIndex: val('cfgCardIndex'), runEnabled: $('#cfgRunEnabled')?.checked, runTarget: val('cfgRunTarget'), runExtra: val('cfgRunExtra') });
+      if (key === 'secondeCarte') Object.assign(patch, { cardIndex: val('cfgCardIndex'), runEnabled: true, runTarget: val('cfgRunTarget') });
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
       try { await api(`/api/strategies/${key}`, 'POST', patch); await refresh(); await strategyPage(key); toast('Réglages enregistrés.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveSecondeCarte() {
+      try {
+        const chan = ids(val('pubChannel'));
+        if (chan.length) await api('/api/strategies/secondeCarte/channel', 'POST', { channelId: chan[0], mode: 'published' });
+        await api('/api/strategies/secondeCarte', 'POST', { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), runEnabled: true, runTarget: val('cfgRunTarget') });
+        await refresh(); await strategyPage('secondeCarte'); toast('Réglages enregistrés.');
+      } catch (e) { toast(e.message, 'error'); }
     }
     async function saveChannel(key, mode) {
       const inputId = mode === 'shadow' ? 'shadowChannel' : 'pubChannel';
@@ -2217,8 +2204,8 @@ Faites-en bon usage !
         what: 'Les prédictions annoncées par la stratégie « Prédiction dans l’ombre » (costume absent surveillé en silence), avec leur décompte.',
         steps: ['Ouvre « Annonces » pour voir les annonces en cours et celles déjà faites.', 'Les réglages de l’ombre se font dans sa fiche, dans « Stratégies ».'] },
       { g: 'ops', icon: '📨', title: 'Envois', hash: '#/diagnostics',
-        what: 'Contrôle du token, des canaux et de chaque stratégie ou configuration suivie : où elle envoie, et si ses prédictions sont arrêtées ou planifiées.',
-        steps: ['Ouvre « Envois » après chaque nouvelle configuration.', 'Si une ligne affiche une erreur (par exemple « Aucun canal configuré »), corrige-la dans la fiche concernée.', 'Dans « Tous les canaux effectivement utilisés », chaque canal est listé une seule fois avec tous les boutons qui lui envoient. « 🗑 Supprimer » le retire de toutes ces configurations d’un coup.'],
+        what: 'Contrôle du token et « Organisation par canal » : tous les canaux configurés sont recherchés automatiquement ; on choisit un canal pour voir, modifier, retirer ou supprimer les configurations qui y publient.',
+        steps: ['Ouvre « Envois » après chaque nouvelle configuration.', 'Clique sur un canal dans « Organisation par canal » : ses configurations apparaissent avec Modifier, Retirer de ce canal et Supprimer.', '« ↻ Rechercher » relance la recherche de tous les canaux configurés. « 🗑 Supprimer ce canal partout » le retire de toutes les configurations d’un coup.'],
         tips: ['Une configuration dont le canal est supprimé reste en place mais n’envoie plus rien tant qu’on ne lui donne pas un autre canal.', 'La version du ZIP déployé (ex. v28) est affichée en bas de l’accueil, sur cette page et dans « Aide » : sert à vérifier que le bon fichier est en ligne.'] },
       // ----- Prédictions automatiques -----
       { g: 'auto', icon: '↩️', title: 'Prédiction après perte', hash: '#/after-loss',
@@ -3806,12 +3793,12 @@ Faites-en bon usage !
       const groups = {};
       list.forEach((c, i) => { (groups[c.group] = groups[c.group] || []).push([c, i]); });
       const other = (info.sources || []).length ? `<p class="small muted">Tous les usages de ce canal : ${esc((info.sources || []).join(' · '))}</p>` : '';
-      box.innerHTML = `<div class="panel" style="margin-top:10px"><div class="split"><b>${esc(info.title || channel)} <span class="mono small">${esc(channel)}</span></b><span class="tag">${list.length} configuration(s) modifiable(s)</span></div>
+      box.innerHTML = `<div class="panel" style="margin-top:10px"><div class="split"><b>${esc(info.title || channel)} <span class="mono small">${esc(channel)}</span></b><span class="toolbar"><span class="tag">${list.length} configuration(s) modifiable(s)</span><button class="button small danger" onclick="diagDeleteChannel(decodeURIComponent('${encodeURIComponent(String(channel))}'), decodeURIComponent('${encodeURIComponent(String(info.title || ''))}'))">🗑 Supprimer ce canal partout</button></span></div>
         ${Object.keys(groups).length ? Object.entries(groups).map(([g, rows]) => `<h4 class="small eyebrow" style="margin:14px 0 6px">${esc(g)}</h4>${rows.map(([c, i]) => `<div class="split" style="gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--border)">
             <span><b>${esc(c.name)}</b> ${c.enabled === null ? '' : `<span class="tag ${c.enabled ? 'good' : 'warn'}">${c.enabled ? 'active' : 'en pause'}</span>`}<br><span class="small muted">canaux : ${esc((c.channels || []).join(', ') || '—')}</span></span>
             <span class="toolbar"><a class="button small ghost" href="${esc(c.page)}">Ouvrir</a>
-              <button class="button small ghost" onclick="diagOrgEdit(${i})">Modifier</button>
-              <button class="button small ghost" onclick="diagOrgRemoveHere(${i})">Retirer de ce canal</button>
+              ${c.readOnly ? '' : `<button class="button small ghost" onclick="diagOrgEdit(${i})">Modifier</button>
+              <button class="button small ghost" onclick="diagOrgRemoveHere(${i})">Retirer de ce canal</button>`}
               ${c.canDelete ? `<button class="button small danger" onclick="diagOrgDelete(${i})">Supprimer</button>` : ''}</span></div>`).join('')}`).join('') : '<p class="small muted">Aucune configuration modifiable ici pour ce canal.</p>'}
         ${other}</div>`;
     }
@@ -3863,22 +3850,10 @@ Faites-en bon usage !
         $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Vérification${snapshot.appVersion ? ' · ' + esc(snapshot.appVersion.version) + ' ' + esc(snapshot.appVersion.name) : ''}</span><h2 style="margin-top:7px">Envoi des prédictions</h2><p class="small">Contrôle du token, des canaux, et de chaque stratégie / configuration suivie — où elle envoie, et si les prédictions sont arrêtées ou planifiées.</p></div></div>
         <div class="notice ${r.bot.tokenSet ? '' : 'warn'}">${r.bot.tokenSet ? 'Token Telegram enregistré' + (r.bot.username ? ' (@' + esc(r.bot.username) + ')' : '') : 'Aucun token Telegram : aucune prédiction ne peut partir.'}</div>
         ${diagControlBlock(r.control)}
-        <div class="panel" style="margin-bottom:16px"><div class="split"><b>🗂️ Organisation par canal</b><span class="tag">${(r.allChannels || []).length} canal(aux)</span></div>
-          <p class="small muted">Choisis un canal : toutes les configurations qui y publient apparaissent, avec Modifier, Retirer de ce canal et Supprimer.</p>
+        <div class="panel" style="margin-bottom:16px"><div class="split"><b>🗂️ Organisation par canal</b><span class="toolbar"><span class="tag">${(r.allChannels || []).length} canal(aux) configuré(s)</span><button class="button small ghost" onclick="diagnosticsPage()">↻ Rechercher</button></span></div>
+          <p class="small muted">Tous les canaux configurés sont recherchés automatiquement (stratégies, boutons, relances, formation, copie, jeu 21…). Choisis un canal : toutes les configurations qui y publient apparaissent, avec Modifier, Retirer de ce canal et Supprimer.</p>
           <div class="toolbar" style="flex-wrap:wrap">${(r.allChannels || []).map(c => `<button class="button small ghost" onclick="diagOrgOpen('${esc(String(c.id))}')">${esc(c.title || c.id)} <span class="tag">${(c.sources || []).length}</span></button>`).join('') || '<span class="small muted">Aucun canal configuré.</span>'}</div>
-          <div id="diagOrg"></div></div>
-        <div class="panel" style="margin-bottom:16px"><div class="split"><b>Tous les canaux effectivement utilisés</b><span class="tag">${(r.allChannels || []).length} identifiant(s)</span></div>
-          <p class="small muted">Cette liste inclut les canaux publics, silencieux, les panneaux secondaires, chaque configuration suivie et les canaux actifs utilisés comme fallback. Un même canal n'apparaît qu'une fois, avec toutes ses sources.</p>
-          ${(r.allChannels || []).length ? r.allChannels.map(c => `<div class="split" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);gap:8px;align-items:flex-start"><span>${diagChannelRow(c)}</span><span class="small muted" style="flex:1">${c.sources.map(esc).join(' · ')}</span><button class="button small danger" onclick="diagDeleteChannel(decodeURIComponent('${encodeURIComponent(String(c.id))}'), decodeURIComponent('${encodeURIComponent(String(c.title || ''))}'))">🗑 Supprimer</button></div>`).join('') : '<p class="small muted">Aucun identifiant de canal configuré.</p>'}
-        </div>
-        <h3 class="small eyebrow" style="margin:18px 0 8px">Stratégies de base</h3>
-        ${r.strategies.map(s => `<div class="panel" style="margin-bottom:12px"><div class="split"><span><b>${esc(s.name)}</b> <span class="mono small">${esc(s.key)}</span></span><span class="tag ${s.enabled ? 'good' : 'warn'}">${s.enabled ? 'Active' : 'Désactivée'} · ${s.ready ? 'envoi opérationnel' : 'à configurer'}</span></div>
-           <p class="small">Public : ${s.published.length ? s.published.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>'}${s.publishedUsesGlobalFallback ? ' <span class="tag warn">configuration ancienne sans canal propre</span>' : ''} <button class="button small ghost" onclick="diagEditPanelDefault('strategies/${s.key}')">✏️</button></p>
-          <p class="small">Silencieux : ${s.shadow.length ? s.shadow.map(diagChannelRow).join(' ') : '<span class="muted">aucun canal</span>'}</p>
-           <p class="small muted">Messages envoyés : ${s.sentCount} · dernier ${formatDate(s.lastSentAt)}${s.sendError ? ' · ⚠️ ' + esc(s.sendError) : ''}</p>
-          <div class="toolbar"><button class="button small ghost" onclick="testStrategy('${s.key}','published')">Tester public</button><button class="button small ghost" onclick="testStrategy('${s.key}','shadow')">Tester silencieux</button></div></div>`).join('')}
-        <h3 class="small eyebrow" style="margin:18px 0 8px">Panneaux (après-perte, combinée, série/rupture de costume, etc.)</h3>
-        ${r.panels.map(p => `${diagPanelBlock(p)}<p class="small muted" style="margin:-7px 0 12px 4px">${p.sentCount != null ? `Messages envoyés : ${p.sentCount} · dernier ${formatDate(p.lastSentAt)}` : ''}${p.lastError ? ' · ⚠️ ' + esc(p.lastError) : ''}</p>`).join('')}`;
+          <div id="diagOrg"></div></div>`;
       } catch(e) { $('#app').innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     }
     function ordinalFr(n) { return n === 1 ? '1ʳᵉ' : `${n}ᵉ`; }
