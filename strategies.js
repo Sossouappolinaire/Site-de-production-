@@ -1294,20 +1294,20 @@ const collecte = {
 // 11) 2ᵉ carte du joueur → même costume à +2, UNE prédiction à la fois, « série puis pause » (demande admin)
 // ---------------------------------------------------------------------------
 // Après un jeu terminé, on prend le costume de la 2ᵉ carte du JOUEUR et on le prédit sur la main du joueur au jeu +2
-// (réglable). Vérification avec les rattrapages (✅0️⃣ / ✅1️⃣ par défaut : 1 rattrapage).
+// (réglable). Vérification avec les rattrapages.
 //  • Une seule prédiction à la fois : tant que la précédente n'est pas vérifiée, aucune autre n'est lancée.
-//  • « Série puis pause » (logique dans predictor.js : runState / noteClosedRun / canSend) : après N réussites (✅0️⃣ ou ✅1️⃣,
-//    5 par défaut) la stratégie passe en SILENCE (elle continue de prédire et de se vérifier, sans rien publier) jusqu'à la
-//    première perte, puis reprend l'envoi. Si une perte est tombée pendant la série, 3 prédictions de plus sont envoyées
-//    avant l'arrêt (réglable).
+//  • « N prédictions puis pause » (logique dans predictor.js : runState / noteClosedRun / canSend) : après N prédictions
+//    envoyées (5 par défaut) la stratégie se met en pause EN ARRIÈRE-PLAN (elle continue de prédire et de se vérifier, sans rien
+//    envoyer, sans canal silencieux) jusqu'à la première prédiction perdue, puis reprend l'envoi.
+//  • Réglages : ID du canal, rattrapages, format, nombre de prédictions avant la pause.
 const secondeCarte = {
   key: 'secondeCarte',
   name: '2ᵉ carte du joueur à +2 · série puis pause',
   about:
-    "On prend le costume d'une carte du joueur d'un jeu terminé (la 2ᵉ par défaut, réglable : 1ʳᵉ, 2ᵉ ou 3ᵉ) et on le prédit sur la main du joueur au jeu +2 " +
-    "(réglable), avec 1 rattrapage (✅0️⃣ / ✅1️⃣). Une seule prédiction à la fois : on attend sa vérification avant d'en lancer " +
-    "une autre. Après 5 réussites (✅0️⃣ ou ✅1️⃣) la stratégie passe en silence (elle prédit sans publier) jusqu'à la première perte, " +
-    "puis reprend l'envoi ; s'il y a eu une perte pendant la série, 3 prédictions de plus partent avant l'arrêt.",
+    "On prend le costume de la 2ᵉ carte du joueur d'un jeu terminé et on le prédit sur la main du joueur au jeu +2, " +
+    "avec le nombre de rattrapages choisi. Une seule prédiction à la fois : on attend sa vérification avant d'en lancer " +
+    "une autre. Après N prédictions envoyées la stratégie se met en pause : elle continue de prédire en arrière-plan " +
+    "(sans rien envoyer) jusqu'à une prédiction perdue, puis reprend l'envoi.",
   defaults: {
     enabled: true,
     format: config.DEFAULT_FORMAT,
@@ -1317,9 +1317,8 @@ const secondeCarte = {
     cardIndex: 2,       // carte du joueur prédite : 1 = 1ʳᵉ, 2 = 2ᵉ (par défaut), 3 = 3ᵉ
     template: null,
     channels: [],
-    runEnabled: true,   // « série puis pause »
-    runTarget: 5,       // réussites (✅0️⃣ / ✅1️⃣) avant l'arrêt
-    runExtra: 3,        // prédictions de plus après la série si une perte y est tombée
+    runEnabled: true,   // « N prédictions puis pause »
+    runTarget: 5,       // prédictions envoyées avant la pause (en attendant une perte en arrière-plan)
   },
   usesB: false,
   source: 'finished',

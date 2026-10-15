@@ -62,6 +62,7 @@ function initStrategies() {
     // Migration douce : l'ancien champ `channels` devient le canal public.
     if (!Array.isArray(cur.publishedChannels)) cur.publishedChannels = Array.isArray(cur.channels) ? cur.channels : [];
     if (!Array.isArray(cur.shadowChannels)) cur.shadowChannels = [];
+    if (s.key === 'secondeCarte') { cur.shadowChannels = []; cur.shadowChannelInfos = []; delete cur.runExtra; } // plus de canal silencieux ni de « prédictions de plus »
     // Nettoyage : le mode d'activation silencieux (2ᵉ mode) a été retiré du
     // projet, et le mode silencieux 1 (`silent`) est désormais réservé à la
     // stratégie « ombre ». On purge toute trace d'une config antérieure.
@@ -147,7 +148,6 @@ function setStrategyConfig(key, patch = {}) {
   if (key === RUN_KEY) {
     if (patch.runEnabled !== undefined) next.runEnabled = !!patch.runEnabled;
     if (patch.runTarget !== undefined) next.runTarget = Math.max(1, Math.min(50, parseInt(patch.runTarget, 10) || 5));
-    if (patch.runExtra !== undefined) next.runExtra = Math.max(0, Math.min(50, parseInt(patch.runExtra, 10) || 0));
     // carte du joueur à prédire : 1 = 1ʳᵉ, 2 = 2ᵉ (par défaut), 3 = 3ᵉ
     if (patch.cardIndex !== undefined) next.cardIndex = Math.max(1, Math.min(3, parseInt(patch.cardIndex, 10) || 2));
   }
@@ -189,7 +189,8 @@ function setStrategyConfig(key, patch = {}) {
       next.publishedChannelInfos = [];
     }
   }
-  if (patch.shadowChannels !== undefined || patch.shadowChannelId !== undefined) {
+  if (key === RUN_KEY) { next.shadowChannels = []; next.shadowChannelInfos = []; } // pas de canal silencieux pour cette stratégie
+  else   if (patch.shadowChannels !== undefined || patch.shadowChannelId !== undefined) {
     const value = patch.shadowChannels !== undefined ? patch.shadowChannels : patch.shadowChannelId;
     next.shadowChannels = parseChannels(value);
     if (JSON.stringify(next.shadowChannels) !== JSON.stringify(cur.shadowChannels || [])) {
@@ -224,7 +225,7 @@ function setStrategyConfig(key, patch = {}) {
   if (['silent', 'lossInterval', 'lossTrigger', 'lossWindow'].some(changed)) {
     resetGate(key);
   }
-  if (key === RUN_KEY && ['runEnabled', 'runTarget', 'runExtra', 'cardIndex'].some(changed)) resetRun(key); // nouvelle série avec les nouveaux réglages
+  if (key === RUN_KEY && ['runEnabled', 'runTarget', 'cardIndex'].some(changed)) resetRun(key); // nouvelle série avec les nouveaux réglages
   if (key === 'costume') pullCostume();
   return next;
 }
@@ -832,63 +833,47 @@ function autoView(key) {
 
 // une prédiction de cette stratégie peut-elle partir dans le canal ?
 // ---------------------------------------------------------------------------
-// Stratégie « 2ᵉ carte du joueur à +2 » — SÉRIE PUIS PAUSE (demande admin)
-//   phase 'active'  : les prédictions sont publiées ; on compte les réussites (✅0️⃣ / ✅1️⃣, c.-à-d. gagné avec ≤ 1 rattrapage).
-//                     Une perte (❌) ne remet pas le compte à zéro : elle note seulement qu'il y a eu une perte pendant la série.
-//   à N réussites   : sans perte pendant la série → phase 'silent' ; avec une perte → phase 'extra' (runExtra prédictions de plus)
-//   phase 'extra'   : les runExtra prédictions suivantes sont publiées (quel que soit leur résultat), puis → 'silent'
-//   phase 'silent'  : la stratégie continue de prédire et de se vérifier, sans rien publier ; dès la 1ʳᵉ perte → 'active' (série à zéro)
-// Un gain avec 2 rattrapages ou plus n'est ni une réussite ni une perte (neutre). L'état est gardé dans state.gates[key].run, donc
-// sauvegardé en base comme les autres filtres (voir setOnGateChange) et conservé après redémarrage.
+// Stratégie « 2ᵉ carte du joueur à +2 » — N PRÉDICTIONS PUIS PAUSE (demande admin)
+//   phase 'active'  : les prédictions sont publiées dans le canal ; chaque prédiction terminée (gagnée ou perdue) est comptée.
+//   à N prédictions : la stratégie passe en 'silent' (pause).
+//   phase 'silent'  : pause EN ARRIÈRE-PLAN — la stratégie continue de prédire et de se vérifier, mais rien n'est envoyé (aucun canal
+//                     silencieux : ces prédictions ne partent nulle part). Dès la 1ʳᵉ prédiction PERDUE → retour en 'active', compte à zéro.
+// L'état est gardé dans state.gates[key].run, donc sauvegardé en base comme les autres filtres et conservé après redémarrage.
 // ---------------------------------------------------------------------------
 const RUN_KEY = 'secondeCarte';
 function runOn(cfg) { return !!cfg && cfg.runEnabled !== false; }
 function runTargetOf(cfg) { return Math.max(1, Math.min(50, parseInt(cfg && cfg.runTarget, 10) || 5)); }
-function runExtraOf(cfg) { const n = parseInt(cfg && cfg.runExtra, 10); return Number.isFinite(n) ? Math.max(0, Math.min(50, n)) : 3; }
+function newRun() { return { phase: 'active', succ: 0, since: Date.now() }; }
 function runState(key) {
   const g = gate(key);
-  if (!g.run || typeof g.run !== 'object') g.run = { phase: 'active', succ: 0, hadLoss: false, extraLeft: 0, since: Date.now() };
+  if (!g.run || typeof g.run !== 'object') g.run = newRun();
+  if (g.run.phase !== 'silent') g.run.phase = 'active'; // ancienne phase « extra » supprimée
   return g.run;
 }
-function resetRun(key) { const g = gate(key); g.run = { phase: 'active', succ: 0, hadLoss: false, extraLeft: 0, since: Date.now() }; return g.run; }
+function resetRun(key) { const g = gate(key); g.run = newRun(); return g.run; }
 function noteClosedRun(pred) {
   if (pred.strategy !== RUN_KEY) return;
   const cfg = state.strategies[RUN_KEY];
   if (!runOn(cfg)) return;
   if (pred.status !== 'gagné' && pred.status !== 'perdu') return; // annulé : ignoré
   const r = runState(RUN_KEY);
-  const success = pred.status === 'gagné' && (pred.step || 0) <= 1;
-  const loss = pred.status === 'perdu';
   if (r.phase === 'silent') {
-    if (loss) { r.phase = 'active'; r.succ = 0; r.hadLoss = false; r.extraLeft = 0; r.since = Date.now(); }
+    if (pred.status === 'perdu') { r.phase = 'active'; r.succ = 0; r.since = Date.now(); }
     return;
   }
-  if (r.phase === 'extra') {
-    r.extraLeft = Math.max(0, (r.extraLeft || 0) - 1);
-    if (r.extraLeft <= 0) { r.phase = 'silent'; r.succ = 0; r.hadLoss = false; r.since = Date.now(); }
-    return;
-  }
-  // phase 'active'
-  if (loss) r.hadLoss = true;
-  if (success) r.succ += 1;
-  if (r.succ >= runTargetOf(cfg)) {
-    const extra = runExtraOf(cfg);
-    if (r.hadLoss && extra > 0) { r.phase = 'extra'; r.extraLeft = extra; }
-    else { r.phase = 'silent'; r.succ = 0; r.hadLoss = false; r.extraLeft = 0; }
-    r.since = Date.now();
-  }
+  // phase 'active' : on compte chaque prédiction terminée ; à N → pause
+  r.succ += 1;
+  if (r.succ >= runTargetOf(cfg)) { r.phase = 'silent'; r.succ = 0; r.since = Date.now(); }
 }
 function runView(key) {
   const cfg = state.strategies[key] || {};
   if (key !== RUN_KEY || !runOn(cfg)) return null;
   const r = runState(key);
-  const target = runTargetOf(cfg); const extra = runExtraOf(cfg);
+  const target = runTargetOf(cfg);
   const label = r.phase === 'silent'
-    ? `Silence — la stratégie prédit sans publier jusqu'à la prochaine perte (série de ${target} terminée)`
-    : r.phase === 'extra'
-      ? `Série terminée avec une perte : encore ${r.extraLeft} prédiction(s) publiée(s) sur ${extra} avant l'arrêt`
-      : `Envoi actif — ${r.succ}/${target} réussite(s) (✅0️⃣ ou ✅1️⃣)${r.hadLoss ? ` · une perte dans la série : +${extra} prédiction(s) avant l'arrêt` : ''}`;
-  return { phase: r.phase, succ: r.succ, target, hadLoss: !!r.hadLoss, extraLeft: r.extraLeft || 0, extra, sending: r.phase !== 'silent', label };
+    ? `Pause — la stratégie prédit en arrière-plan (sans envoyer) jusqu'à la prochaine perte`
+    : `Envoi actif — ${r.succ}/${target} prédiction(s) avant la pause`;
+  return { phase: r.phase, succ: r.succ, target, sending: r.phase !== 'silent', label };
 }
 
 function canSend(key) {

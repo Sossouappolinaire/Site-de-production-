@@ -32,7 +32,6 @@ const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const drawTwoThree = require('./draw-two-three');
 const vip = require('./vip');
-const secondCardRelay = require('./second-card-relay');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
@@ -1387,12 +1386,35 @@ function deactivate(id) {
   persist();
 }
 
-async function startBot(token) {
+// Un seul (re)démarrage à la fois : deux appels simultanés (démarrage + « Enregistrer et
+// redémarrer », ou import) créaient DEUX pollers sur le même token, d'où les réponses en double.
+let startChain = Promise.resolve();
+function startBot(token) {
+  const run = () => startBotInner(token);
+  const p = startChain.then(run, run);
+  startChain = p.catch(() => {});
+  return p;
+}
+
+// Anti-doublon : une même mise à jour Telegram (update_id) n'est traitée qu'une seule fois,
+// même si deux instances du bot la reçoivent.
+const seenUpdates = new Map();
+function isDuplicateUpdate(u) {
+  if (!u || u.update_id === undefined) return false;
+  const now = Date.now();
+  if (seenUpdates.has(u.update_id)) return true;
+  seenUpdates.set(u.update_id, now);
+  if (seenUpdates.size > 500) for (const [k, t] of seenUpdates) { if (now - t > 10 * 60 * 1000) seenUpdates.delete(k); }
+  return false;
+}
+
+async function startBotInner(token) {
   if (token) state.botToken = token.trim();
   persist();
   state.botError = null;
   if (bot) {
     try { await bot.stopPolling({ cancel: true }); } catch (_) {}
+    try { bot.removeAllListeners(); } catch (_) {}
     bot = null;
   }
   if (!state.botToken) {
@@ -1422,6 +1444,8 @@ async function startBot(token) {
       },
     });
     installChannelGuard(bot);
+    const rawProcessUpdate = bot.processUpdate.bind(bot);
+    bot.processUpdate = (u) => { if (isDuplicateUpdate(u)) return; return rawProcessUpdate(u); };
     wire(bot);
     const me = await bot.getMe(); // valide le token avant de lancer le polling
     state.botUsername = me.username;
@@ -1781,7 +1805,8 @@ async function broadcast(pred) {
     // « ombre » : un seul canal (public), utilisé uniquement une fois le mode
     // silencieux débloqué. Tant que le filtre est bloqué, rien n'est envoyé
     // nulle part (pas de canal silencieux séparé pour cette stratégie).
-    if (pred.strategy === 'ombre') return;
+    // « 2ᵉ carte du joueur » : la pause se fait en arrière-plan, sans aucun canal silencieux.
+    if (pred.strategy === 'ombre' || pred.strategy === 'secondeCarte') return;
     const shadowIds = strategyChannels(pred.strategy, 'shadow');
     if (!shadowIds.length) return;
     await sendPrediction(pred, sender, shadowIds);
@@ -2084,10 +2109,6 @@ async function tick() {
       // pertes consécutives, ou après 3 prédictions consécutives du même
       // costume, dans le canal VIP configuré (voir vip.js).
       vip.tick(),
-      // relais « après perte » de la stratégie « 2ᵉ carte du joueur » : configuration cachée qui travaille
-      // en arrière-plan ; après une perte, envoie les N prochaines prédictions dans un canal dédié
-      // (voir second-card-relay.js).
-      secondCardRelay.tick(),
     ]);
   } catch (e) {
     state.lastError = e.message;
@@ -2270,7 +2291,7 @@ async function applyDbConfigs() {
   await cardsCount.restoreFromDb();
   await drawTwoThree.restoreFromDb();
   await vip.restoreFromDb();
-  await secondCardRelay.restoreFromDb();
+  try { const raw = await db.getSetting('ignored_channels'); if (raw) store.patch({ ignoredChannels: JSON.parse(raw) }); } catch (_) {} // canaux supprimés (Envois)
   await predictionControl.restoreFromDb();
   // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
   // depuis la base les prédictions encore « en attente » + les dernières
@@ -2382,8 +2403,6 @@ async function startLoop() {
   drawTwoThree.setAdminId(() => state.adminId);
   vip.restore();
   vip.setSender(senderFor);
-  secondCardRelay.restore();
-  secondCardRelay.setSender(senderFor);
   formationRelay.restore();
   formationRelay.setSender(senderFor);
   predictionControl.restore();

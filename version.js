@@ -1,10 +1,13 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v49',
-  name: 'relais-apres-perte-2e-carte',
-  date: '2026-10-14',
+  version: 'v51',
+  name: 'organisation-tous-boutons-suppression',
+  date: '2026-10-15',
   features: [
+    'Organisation par canal : recherche dans le réglage de TOUS les boutons (J\'aime, Retour après perte, Compteur miroir, Jeu 21, Formation…) et importe leur ID de canal ; « Supprimer ce canal partout » retire aussi le canal de J\'aime, Retour après perte, Compteur miroir et de la liste « Bot ajouté », et les canaux qui ne sont plus qu’une trace de l’historique ne reviennent plus',
+    'Page Envois : il ne reste que « Organisation par canal » (tous les canaux configurés sont recherchés automatiquement, bouton ↻ Rechercher) ; « Supprimer ce canal partout » est dans la fiche du canal choisi',
+    'Stratégie « 2ᵉ carte du joueur » : fiche simplifiée (ID du canal, rattrapages, format, nombre de prédictions avant la pause) ; plus de canal silencieux ni de relais après perte ; après N prédictions la stratégie se met en pause en arrière-plan jusqu’à une perte, puis reprend l’envoi',
     'Stratégie « 2ᵉ carte du joueur » : relais après perte en arrière-plan (configuration cachée, rien à créer) — dès qu’une prédiction de la stratégie est perdue (publiée ou silencieuse), les 2 / 3 / 4 prochaines prédictions partent dans un canal (ID) différent de celui de la stratégie ; une prédiction identique (même numéro, même costume) déjà relayée est ignorée',
     'Stratégie « 2ᵉ carte du joueur » : nouveau réglage « Carte du joueur à prédire » (1ʳᵉ, 2ᵉ par défaut, ou 3ᵉ) ; s’il n’y a pas de 3ᵉ carte dans le jeu, aucune prédiction n’est lancée',
     'Page Envois : l’organisation par canal affiche maintenant aussi Prédit IA, Nul / 2-3, VIP, Statistiques, Comptage 2/2 (et ses catégories), Formation (canal général et par stratégie), Jeu 21, Type de mise (configurations et canal du meilleur) et Copie et annonce ; modifier / pause / retirer le canal, et supprimer pour Type de mise et Copie et annonce',

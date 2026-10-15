@@ -69,7 +69,6 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `overlap.js` — nouveau bouton « Chevauchement de prédictions » (demande
 - `mirror-counter.js` — « Taux Miroir » : compte, pour CHAQUE carte
 - `bet-type.js` — bouton « Type de mise » (demande admin).
-- `second-card-relay.js` — relais « après perte » de la stratégie « 2ᵉ carte du joueur » (arrière-plan, rien à créer) : une perte déclenche l’envoi des N prochaines prédictions dans un canal dédié ; anti-doublon (même numéro + même costume).
 - `vip.js` — nouveau bouton « VIP » (demande admin) :
 - `cards-count.js` — nouveau bouton « Comptage 2/2 » (demande admin).
 - `draw-two-three.js` — nouvelle stratégie « Nul / 2-3 » (demande admin).

@@ -17,6 +17,7 @@ const { state, initStrategies, setStrategyConfig } = require('./predictor');
 const strategies = require('./strategies');
 
 const store = require('./store');
+const channelHarvest = require('./channel-harvest');
 
 const SHEETS = {
   PANNEAUX: 'Panneaux',
@@ -155,7 +156,6 @@ const PANELS = {
   cardsCount: { mod: './cards-count' },
   drawTwoThree: { mod: './draw-two-three' },          // « Nul / 2-3 »
   vip: { mod: './vip' },
-  secondCardRelay: { mod: './second-card-relay' },   // relais après perte de la stratégie « 2ᵉ carte du joueur »
   formationRelay: { mod: './formation-relay' },
   predictionControl: { mod: './prediction-control' },
   lossNotice: { mod: './loss-notice' },
@@ -164,12 +164,32 @@ const PANELS = {
   likeReact: { mod: './like-react' },              // « J'aime » (réactions automatiques)
   copyAnnounce: { mod: './copy-announce' },        // « Copie et annonce »
   game21Strategies: { mod: './game21-strategies' }, // stratégies Jeu 21 (liste lue directement dans data.json)
+  secondCardRelay: { mod: './second-card-relay' },  // « Relais 2e carte » (module absent = réglage seulement conservé dans data.json)
 };
+
+// Clés de data.json qui NE sont PAS des panneaux (déjà exportées ailleurs, ou
+// données de jeu/clients qu'on n'exporte volontairement pas).
+const NOT_PANELS = new Set([
+  'botToken', 'shopBotToken', 'adminId', 'channels', 'activeChannels', 'siteChannels', 'B', 'maxR', 'hand',
+  'format', 'template', 'strategies', 'aiAnalyses', 'aiStrategies', 'lastBilanShoeSeq', 'databaseUrl',
+  'autoImportHash', 'ignoredChannels', 'midnightReset', 'paiement', 'shop',
+]);
+function isPanelKey(key) { return !!PANELS[key] || !NOT_PANELS.has(key); }
+// panneaux/boutons ajoutés plus tard : repérés automatiquement dans data.json
+function panelKeys(data) {
+  const keys = Object.keys(PANELS);
+  for (const k of Object.keys(data || {})) {
+    if (NOT_PANELS.has(k) || PANELS[k]) continue;
+    const v = data[k];
+    if (v && typeof v === 'object' && !Array.isArray(v)) keys.push(k);
+  }
+  return keys;
+}
 
 function panelRows() {
   const data = store.read() || {};
   const rows = [];
-  for (const key of Object.keys(PANELS)) {
+  for (const key of panelKeys(data)) {
     if (data[key] === undefined || data[key] === null) continue;
     const json = JSON.stringify(stripLive(data[key]));
     for (let i = 0, part = 1; i < json.length; i += CHUNK, part += 1) {
@@ -188,7 +208,7 @@ function readPanels(wb) {
   const parts = {};
   for (const r of rows) {
     const key = String(r.panneau || '').trim();
-    if (!PANELS[key]) continue;
+    if (!isPanelKey(key)) continue;
     (parts[key] = parts[key] || []).push({ n: Number(r.partie) || 0, json: String(r.json ?? '') });
   }
   const out = {};
@@ -201,7 +221,10 @@ function readPanels(wb) {
 
 function applyPanel(key, value) {
   store.patch({ [key]: keepLive(value, (store.read() || {})[key]) });
-  const m = require(PANELS[key].mod);
+  let m = null;
+  const modName = PANELS[key] ? PANELS[key].mod : './' + key.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+  try { m = require(modName); } catch (_) { m = null; } // pas de module : le réglage reste dans data.json
+  if (!m) return;
   // 1) recharge le module depuis data.json (mêmes contrôles qu'au démarrage)
   if (key === 'lossNotice') m.setSettings(value);
   else if (key === 'mirrorCounter') m.setChannel(value && value.channelId);
@@ -293,6 +316,62 @@ async function importSettings(wb, report) {
 }
 
 // ---------------------------------------------------------------------------
+// CANAUX — liste complète : state.channels + TOUS les canaux utilisés par
+// n'importe quel bouton (panneaux, stratégies, relances, Meilleur/Faible…).
+// ---------------------------------------------------------------------------
+function harvestAll() {
+  const data = store.read() || {};
+  const sources = [
+    { name: 'stratégies', value: state.strategies },
+    { name: 'canaux du site', value: state.siteChannels },
+    { name: 'stratégies IA', value: state.aiStrategies },
+  ];
+  for (const key of panelKeys(data)) {
+    if (data[key] !== undefined && data[key] !== null) sources.push({ name: key, value: data[key] });
+  }
+  return channelHarvest.harvest(sources);
+}
+
+function allChannelRows() {
+  const rows = [];
+  const seen = new Set();
+  const harvested = harvestAll();
+  const active = (state.activeChannels || []).map(String);
+  for (const c of state.channels || []) {
+    const id = String(c.id);
+    seen.add(id);
+    const h = harvested.get(id);
+    rows.push({
+      id: c.id,
+      titre: c.title || c.name || (h && h.title) || '',
+      actif: active.includes(id) ? 'oui' : 'non',
+      utilise_par: h ? [...h.usedBy].join(', ') : '',
+    });
+  }
+  for (const [id, h] of harvested) {
+    if (seen.has(id)) continue;
+    rows.push({ id: Number(id), titre: h.title, actif: active.includes(id) ? 'oui' : 'non', utilise_par: [...h.usedBy].join(', ') });
+  }
+  return rows;
+}
+
+function registerHarvestedChannels() {
+  const known = new Set((state.channels || []).map((c) => String(c.id)));
+  let added = 0;
+  for (const [id, h] of harvestAll()) {
+    if (known.has(id)) {
+      const cur = (state.channels || []).find((c) => String(c.id) === id);
+      if (cur && !cur.title && h.title) cur.title = h.title;
+      continue;
+    }
+    state.channels = state.channels || [];
+    state.channels.push({ id: Number(id), title: h.title });
+    added += 1;
+  }
+  return added;
+}
+
+// ---------------------------------------------------------------------------
 // EXPORT
 // ---------------------------------------------------------------------------
 async function buildWorkbook() {
@@ -307,14 +386,11 @@ async function buildWorkbook() {
     { cle: 'B', valeur: state.B },
     { cle: 'maxR', valeur: state.maxR },
     { cle: 'siteChannels', valeur: state.siteChannels || [] },
+    { cle: 'ignoredChannels', valeur: (store.read() || {}).ignoredChannels || [] },
   ];
   XLSX.utils.book_append_sheet(wb, toSheet(general), SHEETS.GENERAL);
 
-  const canaux = (state.channels || []).map((c) => ({
-    id: c.id,
-    titre: c.title || c.name || '',
-    actif: (state.activeChannels || []).includes(c.id) ? 'oui' : 'non',
-  }));
+  const canaux = allChannelRows();
   XLSX.utils.book_append_sheet(wb, toSheet(canaux), SHEETS.CANAUX);
 
   const stratRows = Object.keys(state.strategies || {}).map((key) => ({
@@ -360,6 +436,7 @@ function importWorkbook(wb) {
     if (map.B !== undefined && map.B !== '') state.B = Number(map.B) || state.B;
     if (map.maxR !== undefined && map.maxR !== '') state.maxR = Number(map.maxR);
     if (Array.isArray(map.siteChannels)) state.siteChannels = map.siteChannels;
+    if (Array.isArray(map.ignoredChannels)) store.patch({ ignoredChannels: map.ignoredChannels });
     applied.push(SHEETS.GENERAL);
   } else skipped.push(SHEETS.GENERAL);
 
@@ -405,6 +482,11 @@ function importWorkbook(wb) {
     applied.push(`${SHEETS.PANNEAUX} (${done.length} : ${done.join(', ')})`);
   } else skipped.push(SHEETS.PANNEAUX);
 
+  // Filet de sécurité : tout canal utilisé par un bouton/panneau/stratégie du
+  // fichier mais absent de la feuille « Canaux » rejoint la liste des canaux.
+  const added = registerHarvestedChannels();
+  if (added) applied.push(`Canaux retrouvés dans les boutons (${added})`);
+
   return { applied, skipped };
 }
 
@@ -421,4 +503,4 @@ async function importBufferAsync(buffer) {
   return report;
 }
 
-module.exports = { SHEETS, exportBuffer, importBuffer, importBufferAsync, stripLive, keepLive };
+module.exports = { SHEETS, harvestAll, allChannelRows, exportBuffer, importBuffer, importBufferAsync, stripLive, keepLive };

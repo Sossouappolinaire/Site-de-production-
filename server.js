@@ -23,6 +23,7 @@ const session = require('express-session');
 const { Pool } = require('pg');
 const pgSessionStore = require('connect-pg-simple')(session);
 const hybridStore = require('./session-store');
+const store = require('./store'); // liste des canaux supprimés (ignoredChannels)
 const { databaseUrl } = require('./database-url');
 const config = require('./config');
 const api = require('./api');
@@ -57,7 +58,6 @@ const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const drawTwoThree = require('./draw-two-three');
 const vip = require('./vip');
-const secondCardRelay = require('./second-card-relay');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const mirrorCounter = require('./mirror-counter');
@@ -418,7 +418,6 @@ app.get('/api/state', async (req, res) => {
     cardsCount: cardsCount.status(),
     drawTwoThree: drawTwoThree.status(),
     vip: vip.status(),
-    secondCardRelay: secondCardRelay.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
       target: p.target, suit: p.suit, hand: p.hand, step: p.step, maxR: p.maxR,
@@ -1731,39 +1730,6 @@ app.post('/api/draw-two-three/reset', (req, res) => {
 // sur une stratégie cochée, relais de ses 2 prochaines prédictions dans le
 // canal VIP configuré, puis arrêt jusqu'à la prochaine série.
 // ---------------------------------------------------------------------------
-// Relais « après perte » de la stratégie « 2ᵉ carte du joueur » (voir second-card-relay.js) : configuration cachée qui
-// travaille en arrière-plan ; après une perte, les N prochaines prédictions partent dans un canal (ID) différent de la stratégie.
-app.get('/api/second-card-relay', (req, res) => res.json(secondCardRelay.status()));
-function secondCardRelayClash(list) {
-  const own = [...strategyChannels('secondeCarte', 'published'), ...strategyChannels('secondeCarte', 'shadow')].map(String);
-  return list.filter((id) => own.some((o) => o.toLowerCase() === String(id).toLowerCase()));
-}
-app.post('/api/second-card-relay/config', async (req, res) => {
-  try {
-    const b = req.body || {};
-    const patch = {};
-    if (b.enabled !== undefined) patch.enabled = !!b.enabled;
-    if (b.count !== undefined) patch.count = b.count;
-    if (b.format !== undefined) patch.format = b.format;
-    const ids = b.channelId !== undefined ? b.channelId : b.channels;
-    if (ids !== undefined) {
-      const list = secondCardRelay.parseChannels(ids);
-      const clash = secondCardRelayClash(list);
-      if (clash.length) return res.status(400).json({ error: `Le canal du relais (${clash.join(', ')}) doit être différent des canaux de la stratégie.` });
-      if (list.length) { const check = await resolveChat(list[0]); if (!check.ok) return res.status(400).json({ error: check.error }); }
-      patch.channels = list;
-    }
-    const finalChannels = patch.channels !== undefined ? patch.channels : secondCardRelay.config().channels;
-    if (patch.enabled && !finalChannels.length) return res.status(400).json({ error: 'Renseigne d’abord l’ID du canal du relais.' });
-    secondCardRelay.configure(patch);
-    res.json({ ok: true, secondCardRelay: secondCardRelay.status() });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-app.post('/api/second-card-relay/test', async (req, res) => {
-  const r = await secondCardRelay.test();
-  res.status(r.ok ? 200 : 400).json({ ...r, secondCardRelay: secondCardRelay.status() });
-});
-
 app.get('/api/vip', (req, res) => res.json(vip.status()));
 
 app.post('/api/vip/config', (req, res) => {
@@ -2528,7 +2494,8 @@ function stripChannelDeep(node, id, depth = 0, seen = new Set()) {
   for (const key of Object.keys(node)) {
     if (CHANNEL_SKIP_KEYS.has(key)) continue;
     const v = node[key];
-    if (Array.isArray(v) && CHANNEL_LIST_KEY.test(key)) {
+    if (key === 'channelId' && typeof v !== 'object' && v != null && v !== '' && sameChannel(v, id)) { node[key] = ''; n += 1; }
+    else if (Array.isArray(v) && CHANNEL_LIST_KEY.test(key)) {
       const kept = v.filter((x) => !sameChannel(x, id));
       if (kept.length !== v.length) { n += v.length - kept.length; node[key] = kept; }
     } else if (key === 'categoryChannels' && v && typeof v === 'object') {
@@ -2550,7 +2517,7 @@ async function removeChannelEverywhere(id) {
     ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
-    ['2ᵉ carte · relais après perte', secondCardRelay],
+    ['J\'aime', likeReact], ['Retour après perte', lossReturn],
   ];
   for (const [label, mod] of modules) {
     try {
@@ -2565,6 +2532,28 @@ async function removeChannelEverywhere(id) {
     const kept = state.activeChannels.filter((x) => !sameChannel(x, id));
     if (kept.length !== state.activeChannels.length) { state.activeChannels = kept; note('Canaux actifs', 1); }
   }
+  // canaux où le bot a été ajouté (liste « Bot ajouté dans ce canal »)
+  if (Array.isArray(state.channels)) {
+    const kept = state.channels.filter((x) => !sameChannel(x, id));
+    if (kept.length !== state.channels.length) { state.channels = kept; note('Bot ajouté dans ce canal', 1); }
+  }
+  // Compteur miroir : canal unique
+  try { if (sameChannel(mirrorCounter.getChannel(), id)) { mirrorCounter.setChannel(''); note('Compteur miroir', 1); } } catch (_) {}
+  // suivi interne de « J'aime » : états / diagnostics / liste détectée de ce canal
+  try {
+    const lp = likeReact.panel;
+    for (const k of Object.keys(lp.states || {})) if (sameChannel(k, id)) delete lp.states[k];
+    for (const k of Object.keys(lp.diag || {})) if (sameChannel(k, id)) delete lp.diag[k];
+    lp.known = (lp.known || []).filter((r) => !sameChannel(r.id, id));
+    likeReact.persist();
+  } catch (_) {}
+  // Mémoire de suppression : un canal qui n'était plus qu'une trace de l'historique des envois ne revient pas dans la liste.
+  try {
+    const cur = new Set(((store.read() || {}).ignoredChannels || []).map(String));
+    cur.add(String(id).trim());
+    store.patch({ ignoredChannels: [...cur] });
+    if (db.ready) db.setSetting('ignored_channels', JSON.stringify([...cur])).catch(() => {});
+  } catch (_) {}
   try { persist(); } catch (_) {}
   return removed;
 }
@@ -2609,7 +2598,7 @@ const CC_SIMPLE_MODULES = [
   ['predit', 'Prédit IA', predit, '#/predit'], ['draw-two-three', 'Nul / 2-3', drawTwoThree, '#/draw-two-three'],
   ['vip', 'VIP', vip, '#/vip'], ['statistics', 'Statistiques', statistics, '#/statistics'],
   ['cards-count', 'Comptage 2/2', cardsCount, '#/cards-count'], ['formation', 'Formation', formationRelay, '#/formation'],
-  ['second-card-relay', '2ᵉ carte · relais après perte', secondCardRelay, '#/strategy/secondeCarte'],
+  ['like-react', 'J\'aime', likeReact, '#/like-react'],
 ];
 function channelConfigsFor(channelId) {
   const out = [];
@@ -2656,6 +2645,26 @@ function channelConfigsFor(channelId) {
   for (const r of ((copyAnnounce.panel && copyAnnounce.panel.rules) || [])) {
     if (has(r.destChannels)) out.push({ kind: 'copy-announce', id: r.id, group: 'Copie et annonce', name: r.name || r.id, enabled: r.enabled !== false, channels: (r.destChannels || []).map(String), page: '#/copy-announce', canDelete: true });
   }
+  // ---- Meilleur / plus faible de Dizaine et de Costume faible (canaux propres à chaque côté)
+  for (const [panelId, label, mod, page] of [['dizaine-top', 'Dizaine', dizaineTop, '#/dizaine-top'], ['costume-faible-top', 'Costume faible', costumeFaibleTop, '#/costume-faible-top']]) {
+    const p = mod.panel || {};
+    for (const side of ['best', 'weak']) {
+      const e = p[side] || {};
+      if (has(e.channels)) out.push({ kind: 'top-side', panel: panelId, id: side, group: label, name: `${label} · ${side === 'best' ? 'meilleur' : 'plus faible'}`, fixedName: true, enabled: !!e.enabled, channels: (e.channels || []).map(String), page, canDelete: false });
+    }
+    // Costume faible : canal propre à chaque emplacement (slots) d'une configuration suivie
+    for (const t of (p.trackers || [])) {
+      const sc = (t.slots || []).map((x) => x && x.channel).filter((x) => x != null);
+      if (has(sc)) out.push({ kind: 'slot', panel: panelId, id: t.id, group: label, name: `${label} · ${t.name || t.id} · emplacements`, fixedName: true, enabled: null, channels: sc.map(String), page, canDelete: false, readOnly: true });
+    }
+  }
+  // ---- Meilleur + plus faible : canaux de relance (relChannels)
+  for (const c of ((bestWeakTop.panel && bestWeakTop.panel.configs) || [])) {
+    if (has(c.relChannels)) out.push({ kind: 'best-weak-rel', id: c.id, group: 'Meilleur + plus faible / Relance / Test', name: `${c.name || c.id} · relance vers`, fixedName: true, enabled: null, channels: (c.relChannels || []).map(String), page: '#/relance', canDelete: false });
+  }
+  // ---- Stabilité du jeu (canaux bloqués) et Compteur miroir (canal unique)
+  try { const bc = (gameStability.panel && gameStability.panel.blockChannels) || []; if (has(bc)) out.push({ kind: 'game-stability', id: 'block', group: 'Stabilité du jeu', name: 'Stabilité du jeu · canaux bloqués', fixedName: true, enabled: null, channels: bc.map(String), page: '#/game-stability', canDelete: false }); } catch (_) {}
+  try { const mc = mirrorCounter.getChannel(); if (mc && sameChannel(mc, channelId)) out.push({ kind: 'mirror', id: 'mirror', group: 'Compteur miroir', name: 'Compteur miroir · canal', fixedName: true, enabled: null, channels: [String(mc)], page: '#/mirror-counter', canDelete: false }); } catch (_) {}
   return out;
 }
 app.get('/api/diagnostics/channel-configs/:id', (req, res) => {
@@ -2696,10 +2705,6 @@ app.put('/api/diagnostics/channel-configs', async (req, res) => {
     } else if (b.kind === 'module') {
       const row = CC_SIMPLE_MODULES.find((x) => x[0] === b.id);
       if (!row) return res.status(404).json({ error: 'Module inconnu' });
-      if (b.id === 'second-card-relay' && channels !== undefined) {
-        const clash = secondCardRelayClash(channels);
-        if (clash.length) return res.status(400).json({ error: `Le canal du relais (${clash.join(', ')}) doit être différent des canaux de la stratégie.` });
-      }
       const p = {};
       if (patch.enabled !== undefined && patch.enabled !== !!row[2].panel.enabled) p.enabled = patch.enabled; // seulement si ça change (évite de réinitialiser un suivi en cours)
       if (channels !== undefined) p.channels = channels;
@@ -2725,6 +2730,23 @@ app.put('/api/diagnostics/channel-configs', async (req, res) => {
     } else if (b.kind === 'bet-type') {
       const t = betType.updateConfig(b.id, { ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { destChannels: channels } : {}) });
       if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'top-side') {
+      const mod = b.panel === 'dizaine-top' ? dizaineTop : b.panel === 'costume-faible-top' ? costumeFaibleTop : null;
+      if (!mod || !['best', 'weak'].includes(String(b.id))) return res.status(404).json({ error: 'Configuration introuvable' });
+      const p = {};
+      if (patch.enabled !== undefined) p[`${b.id}Enabled`] = patch.enabled;
+      if (channels !== undefined) p[`${b.id}Channels`] = channels;
+      mod.configure(p);
+    } else if (b.kind === 'best-weak-rel') {
+      if (channels === undefined) return res.json({ ok: true });
+      const c = bestWeakTop.updateConfig(b.id, { relChannels: channels });
+      if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'game-stability') {
+      if (channels !== undefined) gameStability.setBlockChannels(channels);
+    } else if (b.kind === 'mirror') {
+      if (channels !== undefined) mirrorCounter.setChannel(channels[0] || '');
+    } else if (b.kind === 'slot') {
+      return res.status(400).json({ error: 'Les emplacements se modifient depuis le bouton Costume faible (lien « Ouvrir »).' });
     } else if (b.kind === 'copy-announce') {
       const r = copyAnnounce.updateRule(b.id, { ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { destChannels: channels } : {}) });
       if (!r) return res.status(404).json({ error: 'Règle introuvable' });
@@ -2830,7 +2852,7 @@ function configuredChannelList() {
   } catch (_) {}
   const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType],
     // sources qui manquaient : leurs canaux n'apparaissaient pas dans « Type de mise »
-    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics], ['2ᵉ carte · relais après perte', secondCardRelay]];
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics]];
   for (const [label, mod] of panelsList) {
     try {
       const st = mod.status() || {};
@@ -2840,6 +2862,15 @@ function configuredChannelList() {
       (Array.isArray(st.trackers) ? st.trackers : []).forEach((t) => (Array.isArray(t.channels) ? t.channels : []).forEach((id) => add(id, `${label} · ${t.name || t.key}`)));
     } catch (_) {}
   }
+  // Recherche profonde dans le réglage de TOUS les boutons : toute liste « …channels » ou « channelId » est importée
+  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+    ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
+    ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
+    ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['VIP', vip], ['Prédit IA', predit],
+    ['Statistiques', statistics], ['Stabilité du jeu', gameStability]]) {
+    try { likeReact.collectFrom(mod.panel, label, add); } catch (_) {}
+  }
+  try { const mc = mirrorCounter.getChannel(); if (mc) add(mc, 'Compteur miroir'); } catch (_) {}
   // Copie et annonce : canaux de destination des règles
   try { for (const r of (copyAnnounce.status().rules || [])) (r.destChannels || []).forEach((id) => add(id, `Copie et annonce · ${r.name || ''}`.trim())); } catch (_) {}
   // Jeu 21 : canaux des prédictions (exacte / valeur)

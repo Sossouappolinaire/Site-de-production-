@@ -127,6 +127,11 @@ function validId(v) {
   return false;
 }
 
+function ignoredSet() {
+  try { const st = lazy('./store'); return new Set(((st && st.read() || {}).ignoredChannels || []).map((x) => String(x).trim().toLowerCase())); }
+  catch (_) { return new Set(); }
+}
+
 function collectFrom(node, label, add, depth = 0) {
   if (!node || typeof node !== 'object' || depth > 7) return;
   if (Array.isArray(node)) {
@@ -143,7 +148,7 @@ function collectFrom(node, label, add, depth = 0) {
       }
       continue;
     }
-    if (k === 'channelId' && validId(v)) { add(v, here); continue; }
+    if ((k === 'channelId' || k === 'channel') && typeof v !== 'object' && validId(v)) { add(v, here); continue; } // « channel » : emplacements (slots) de Costume faible
     if (v && typeof v === 'object') collectFrom(v, here, add, depth + 1);
   }
 }
@@ -152,17 +157,18 @@ function collectFrom(node, label, add, depth = 0) {
 // publié des prédictions (même s'ils ne sont plus saisis dans un réglage).
 function discoverChannels() {
   const found = new Map();
-  const add = (id, source) => {
+  const add = (id, source, hist) => {
     if (id === null || id === undefined || id === '') return;
     const key = String(id).trim();
-    if (!found.has(key)) found.set(key, { id: key, title: '', sources: [] });
+    if (!found.has(key)) found.set(key, { id: key, title: '', sources: [], configured: false });
     const row = found.get(key);
+    if (!hist) row.configured = true; // saisi dans un réglage (≠ simple trace dans l'historique des envois)
     if (source && !row.sources.includes(source)) row.sources.push(source);
   };
   const titles = {};
   const addTitle = (id, t) => { const k = String(id == null ? '' : id).trim(); if (k && t && String(t) !== k && !titles[k]) titles[k] = String(t); };
   const fromMessages = (list, label) => {
-    for (const e of (list || [])) for (const m of (e.messages || [])) add(m.chatId, label);
+    for (const e of (list || [])) for (const m of (e.messages || [])) add(m.chatId, label, true);
   };
   const predictor = lazy('./predictor');
   const strategies = lazy('./strategies');
@@ -172,7 +178,7 @@ function discoverChannels() {
     (Array.isArray(st && st.activeChannels) ? st.activeChannels : []).forEach((id) => { if (validId(id)) add(id, 'Canaux actifs'); });
     // canaux où le bot (l'API) a été ajouté : ils ont un nom
     for (const c of (Array.isArray(st && st.channels) ? st.channels : [])) {
-      if (c && validId(c.id)) { add(c.id, 'Bot ajouté dans ce canal'); addTitle(c.id, c.title); }
+      if (c && validId(c.id)) { add(c.id, 'Bot ajouté dans ce canal', true); addTitle(c.id, c.title); }
     }
     // toutes les stratégies : canaux publiés, silencieux et anciens canaux
     for (const [key, cfg] of Object.entries((st && st.strategies) || {})) {
@@ -194,6 +200,7 @@ function discoverChannels() {
     ['./bet-type', 'Type de mise'], ['./copy-announce', 'Copie et annonce'],
     ['./statistics', 'Statistiques'], ['./cards-count', 'Comptage 2/2'], ['./game21-predict', 'Jeu 21'],
     ['./formation-relay', 'Formation'], ['./mirror-counter', 'Compteur miroir'],
+    ['./loss-return', 'Retour après perte'], ['./like-react', 'J\'aime']
   ];
   for (const [file, label] of mods) {
     const mod = lazy(file);
@@ -202,8 +209,13 @@ function discoverChannels() {
     try { for (const [id, t] of Object.entries((mod.panel && mod.panel.channelTitles) || {})) addTitle(id, t); } catch (_) {}
     try { fromMessages(mod.panel && mod.panel.pendingMessages, label); } catch (_) {}
   }
+  // Compteur miroir : un seul canal, hors panneau
+  try { const mc = lazy('./mirror-counter'); const cid = mc && mc.getChannel && mc.getChannel(); if (validId(cid)) add(cid, 'Compteur miroir'); } catch (_) {}
   for (const row of found.values()) row.title = titles[row.id] || row.title || '';
-  return [...found.values()];
+  // Canaux supprimés par l'admin : ils ne reviennent pas tant qu'ils ne sont que des traces de l'historique ;
+  // dès qu'un réglage les contient de nouveau, ils réapparaissent.
+  const ignored = ignoredSet();
+  return [...found.values()].filter((r) => r.configured || !ignored.has(String(r.id).trim().toLowerCase()));
 }
 
 // Revérifie tous les canaux qui envoient des prédictions (démarrage, import,
@@ -658,3 +670,6 @@ module.exports = {
   restore, restoreFromDb, parseChannels, status: statusView,
 };
 module.exports.persist = persist;
+module.exports.collectFrom = collectFrom;
+module.exports.validId = validId;
+module.exports.ignoredSet = ignoredSet;
