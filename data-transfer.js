@@ -152,6 +152,7 @@ const PANELS = {
   dizaineTop: { mod: './dizaine-top' },
   bestWeakTop: { mod: './best-weak-top' },
   lossReturn: { mod: './loss-return' },
+  lossRelaunch: { mod: './loss-relaunch' },        // « Relance après perte »
   gameStability: { mod: './game-stability' },        // « Stabilité du jeu »
   costumeFaibleTop: { mod: './costume-faible-top' },
   suitBreak: { mod: './suit-break' },

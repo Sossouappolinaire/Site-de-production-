@@ -24,6 +24,7 @@ const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
+const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
 const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
@@ -365,6 +366,8 @@ function installChannelGuard(inst) {
       // « Retour après perte » : le bot ne reçoit pas ses propres publications de canal ; chaque message envoyé (toute stratégie,
       // tout bouton) est donc transmis ici, depuis ce point d'envoi unique (voir loss-return.js)
       try { if (m && !m.skipped && typeof rest[0] === 'string') lossReturn.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Relance après perte » : même lecture des messages envoyés par le bot (voir loss-relaunch.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') lossRelaunch.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       return m;
     });
   };
@@ -461,6 +464,7 @@ function wire(b) {
     // dans la liste des canaux détectés et alimente les configurations qui le suivent (voir best-weak-top.js)
     try { bestWeakTop.onChannelPost(m.chat, m.text); } catch (_) { /* détection seulement */ }
     try { lossReturn.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
+    try { lossRelaunch.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     const cmd = parsePredictionControlCommand(m.text);
     if (cmd) {
       const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`, m.chat);
@@ -2107,6 +2111,8 @@ async function tick() {
       Promise.resolve(bestWeakTop.tick()),
       // « Retour après perte » : vérification des prédictions des canaux suivis, retour N+D, rapport (voir loss-return.js)
       Promise.resolve(lossReturn.tick()),
+      // « Relance après perte » : vérification des prédictions des canaux suivis ; une perte lance le même costume à +N (voir loss-relaunch.js)
+      Promise.resolve(lossRelaunch.tick()),
       // « Stabilité du jeu » : 4 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
       Promise.resolve(gameStability.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
@@ -2309,6 +2315,7 @@ async function applyDbConfigs() {
   await dizaineTop.restoreFromDb();
   await bestWeakTop.restoreFromDb();
   await lossReturn.restoreFromDb();
+  await lossRelaunch.restoreFromDb();
   await gameStability.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
@@ -2382,6 +2389,8 @@ async function startLoop() {
   bestWeakTop.setAdminId(() => state.adminId);
   lossReturn.restore();
   lossReturn.setSender(senderFor);
+  lossRelaunch.restore();
+  lossRelaunch.setSender(senderFor);
   gameStability.restore();
   gameStability.setSender(senderFor);
   gameStability.setAdminId(() => state.adminId);

@@ -47,6 +47,7 @@ const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
+const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const gameStability = require('./game-stability');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
@@ -405,6 +406,7 @@ app.get('/api/state', async (req, res) => {
     dizaineTop: dizaineTop.status(),
     bestWeakTop: bestWeakTop.status(),
     lossReturn: lossReturnView(),
+    lossRelaunch: lossRelaunchView(),
     gameStability: gameStability.status(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
@@ -1960,6 +1962,46 @@ app.post('/api/loss-return/configs/:id/test', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
+// « Relance après perte » (voir loss-relaunch.js) : suit des canaux ; quand une de leurs prédictions est perdue, prédit le même
+// costume à (fin des rattrapages) + N dans un autre canal, avec le format et les rattrapages configurés.
+// vue du bouton + configurations « Relance » proposées comme source (suivi interne de la relance, pas de la perte d'origine)
+function lossRelaunchView() {
+  let relanceOptions = [];
+  try { relanceOptions = (bestWeakTop.status().configs || []).filter((c) => c.mode === 'relance').map((c) => ({ id: c.id, name: c.name || 'Relance', channelNames: c.channelNames || [], maxR: c.maxR })); } catch (_) {}
+  return { ...lossRelaunch.status(), relanceOptions };
+}
+async function verifyLossRelaunchChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) lossRelaunch.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/loss-relaunch', (req, res) => res.json(lossRelaunchView()));
+app.post('/api/loss-relaunch/configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.sources));
+    await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.channels));
+    const c = lossRelaunch.addConfig(b);
+    res.json({ ok: true, config: c, lossRelaunch: lossRelaunchView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/loss-relaunch/configs/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.sources !== undefined) await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.sources));
+    if (b.channels !== undefined) await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.channels));
+    const c = lossRelaunch.updateConfig(req.params.id, b);
+    res.json({ ok: true, config: c, lossRelaunch: lossRelaunchView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/loss-relaunch/configs/:id', (req, res) => { lossRelaunch.removeConfig(req.params.id); res.json(lossRelaunchView()); });
+app.post('/api/loss-relaunch/configs/:id/test', async (req, res) => {
+  const r = await lossRelaunch.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
 // « Meilleur + plus faible » (voir best-weak-top.js) : un message à deux costumes (meilleur + plus faible) par jeu.
 async function verifyBestWeakChannels(list) {
   for (const id of (list || [])) {
@@ -2517,7 +2559,7 @@ async function removeChannelEverywhere(id) {
     ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
-    ['J\'aime', likeReact], ['Retour après perte', lossReturn],
+    ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch],
   ];
   for (const [label, mod] of modules) {
     try {
@@ -2620,6 +2662,9 @@ function channelConfigsFor(channelId) {
   for (const c of ((lossReturn.panel && lossReturn.panel.configs) || [])) {
     if (has(c.channels)) out.push({ kind: 'loss-return', id: c.id, group: 'Retour après perte', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: '#/loss-return', canDelete: true });
   }
+  for (const c of ((lossRelaunch.panel && lossRelaunch.panel.configs) || [])) {
+    if (has(c.channels)) out.push({ kind: 'loss-relaunch', id: c.id, group: 'Relance après perte', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: '#/loss-relaunch', canDelete: true });
+  }
 
   // ---- Modules à réglage unique : Prédit IA, Nul / 2-3, VIP, Statistiques, Comptage 2/2, Formation (canal général)
   for (const [mid, label, mod, page] of CC_SIMPLE_MODULES) {
@@ -2702,6 +2747,8 @@ app.put('/api/diagnostics/channel-configs', async (req, res) => {
       if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
     } else if (b.kind === 'loss-return') {
       lossReturn.updateConfig(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+    } else if (b.kind === 'loss-relaunch') {
+      lossRelaunch.updateConfig(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
     } else if (b.kind === 'module') {
       const row = CC_SIMPLE_MODULES.find((x) => x[0] === b.id);
       if (!row) return res.status(404).json({ error: 'Module inconnu' });
@@ -2764,6 +2811,7 @@ app.delete('/api/diagnostics/channel-configs', (req, res) => {
       row[2].removeTracker(String(id));
     } else if (kind === 'best-weak') bestWeakTop.removeConfig(String(id));
     else if (kind === 'loss-return') lossReturn.removeConfig(String(id));
+    else if (kind === 'loss-relaunch') lossRelaunch.removeConfig(String(id));
     else if (kind === 'bet-type') betType.removeConfig(String(id));
     else if (kind === 'copy-announce') copyAnnounce.removeRule(String(id));
     else if (['module', 'cards-category', 'formation-strategy', 'game21', 'bet-best'].includes(kind)) return res.status(400).json({ error: 'Cette configuration est unique et ne se supprime pas : retire-lui ce canal, ou mets-la en pause.' });
@@ -2833,7 +2881,7 @@ function configuredChannelList() {
   let discovered = [];
   try { discovered = likeReact.discoverChannels(); } catch (_) {}
   for (const r of discovered) if (r.title) titles[r.id] = r.title;
-  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, lossReturn, overlap, copyAnnounce, betType]) {
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, lossReturn, lossRelaunch, overlap, copyAnnounce, betType]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {
@@ -2863,7 +2911,7 @@ function configuredChannelList() {
     } catch (_) {}
   }
   // Recherche profonde dans le réglage de TOUS les boutons : toute liste « …channels » ou « channelId » est importée
-  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Jeu 21', game21Predict], ['Formation', formationRelay],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
     ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
     ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['VIP', vip], ['Prédit IA', predit],

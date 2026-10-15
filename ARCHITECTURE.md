@@ -80,6 +80,7 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `dizaine-top.js` — stratégie « Dizaine — costume le plus / le moins sorti »
 - `costume-faible-top.js` — stratégie « Costume faible sur 2 cartes (miroir) »
 - `loss-return.js` — bouton « Retour après perte » (v47, demande admin) :
+- `loss-relaunch.js` — bouton « Relance après perte » (v57, demande admin) : suit des canaux ; une prédiction perdue → même costume à +N dans un autre canal.
 - `formation.js` — bouton « Formation » (page Analyseur IA)
 - `formation-relay.js` — « Envoyer la formation dans le canal »
 

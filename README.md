@@ -505,19 +505,30 @@ parmi les 4 meilleurs (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés :
 **Règle** : dès qu'un costume est sorti, **peu importe le rattrapage** (✅0️⃣, ✅1️⃣, ✅2️⃣… au jeu N+r), **et** que l'autre n'est toujours pas sorti au jeu
 **N+r+1**, le **même message** est édité : on y ajoute seulement le numéro de la relance, **(N+r+1) + 2 = N+r+3** (N+3 si le 1ᵉʳ est sorti direct) ; le costume pas venu reste ⏳ :
 
-    ♣️✅0️⃣ 95%
-     ┣━ N°1135
-     ┣━ N°1138⏳
-    ♦️⏳ 94%
+    ♦️N°: 1138⏳
+     ┣━♣️ N°1135✅
+     ┣━♦️ N°1138⏳
+    ♣️✅0️⃣N°: 1135
 
 - Exemple : ♥️✅1️⃣ (jeu 473), ♣️ pas sorti au jeu 474 → ♣️ relancé à **N°476** (474 + 2) ; s'il sort à 476 : N°476✅.
 - **Pas de relance** : les deux costumes sortent avant ; aucun ne sort (perdu) ; le jeu visé N+r+3 est déjà joué. Rattrapages épuisés avant N+r+1 : la relance part tout de suite.
-- L'autre sort à N+2 (après l'annonce de la relance) : la relance reste affichée et jouée (le costume garde son ✅). Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort au jeu relancé : ♦️✅0️⃣ ; jamais : ♦️❌.
+- L'autre sort à N+2 (après l'annonce de la relance) : la relance reste affichée et jouée ; la ligne du costume suit la relance (`♦️N°: 1138⏳`) jusqu'à son résultat.
+- **Une seule relance à la fois par costume** et par configuration : tant qu'une relance de ce costume est en cours, un autre message d'origine ne lance pas une deuxième relance. Le numéro de la relance porte ⏳ tant qu'elle n'est pas jouée, puis ✅ (gagnée) ou ❌ (perdue) ; il sort au jeu relancé : ♦️✅0️⃣ ; jamais : ♦️❌.
 - Avec 3 costumes, la relance en contient 2, même règle pour la suite (3 relances au maximum). Voir ci-dessus pour les rattrapages épuisés.
 - La relance compte comme une prédiction à part dans les gagnés / perdus de la configuration.
 - Avec 1 seul costume, pas de relance. Une configuration n'envoie jamais deux messages pour le même numéro de jeu.
 - Code : `best-weak-top.js` (mode `relance`, `sendRelaunch`, constante `RELAUNCH_OFFSET = 3`) ; mêmes routes `/api/best-weak/configs` avec `{ "mode": "relance", "ranks": [1, 2] }`.
   Exportée / importée avec le reste du panneau « Meilleur + plus faible ».
+
+## 🔁 Relance après perte (bouton de l'accueil, page `/#/loss-relaunch`, v57)
+
+- **Créer** : on coche un ou plusieurs canaux à suivre (ID, ou @nom). Le bot lit les prédictions publiées (N° de jeu + costume) et les vérifie lui-même sur la main du joueur, avec les rattrapages du canal suivi.
+- **Perte** : costume jamais sorti de N à N+R → le bot prédit le **même costume** au jeu **N + R + n** (n = nombre entier réglable, 1 = le jeu qui suit la fin des rattrapages). Exemple : 12 ♦️ perdu, 2 rattrapages (12 + 2 = 14), n = 3 → prédiction **N°17 ♦️**.
+- **Réglages** : canal d'envoi (ID), format de prédiction (1 → 101), nombre de rattrapages de la nouvelle prédiction, « rattrapages du canal suivi » (vide = même nombre), mot-clé facultatif.
+- **Suite** : la relance est vérifiée (N°, puis ses rattrapages) et son message est édité en ✅ / ❌ ; la fiche affiche envoyées, gagnées, perdues, taux et les dernières relances.
+- **Canal « Relance »** : si le canal coché est celui où une configuration du bouton « Relance » envoie ses deux costumes + sa relance (ou si on coche la configuration Relance elle-même), on suit **la relance** (jeu relancé, rattrapages de la relance) et **non la perte** du message d'origine.
+- **Sécurités** : une configuration n'envoie jamais deux prédictions pour le même numéro de jeu ; pas d'envoi pour un jeu déjà joué ; le canal suivi et le canal d'envoi doivent être différents.
+- Code : `loss-relaunch.js` ; routes `/api/loss-relaunch/…` dans `server.js` ; la relance du bouton « Relance » est transmise par `best-weak-top.js` (`onRelaunchSent`) ; les messages du bot passent par `installChannelGuard` (`bot.js`).
 
 ## 🛡️ Stabilité du jeu (page `/#/stability`, désactivée par défaut)
 

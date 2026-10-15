@@ -1,10 +1,13 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v54',
-  name: 'statistiques-ordre-import-canaux',
+  version: 'v57',
+  name: 'relance-apres-perte',
   date: '2026-10-15',
   features: [
+    'Nouveau bouton « Relance après perte » (accueil, thème Analyse des pertes) : on clique sur « Créer », on coche un ou plusieurs canaux (ID) à suivre ; le bot observe leurs prédictions et, dès qu’une est perdue (rattrapages du canal épuisés), prédit le même costume à +N après la fin des rattrapages (N entier réglable) ; on règle le canal d’envoi, le format de prédiction et le nombre de rattrapages ; la relance est vérifiée à son tour et son message édité (✅ / ❌), avec gagnés / perdus et taux sur la fiche ; jamais deux prédictions pour le même numéro de jeu ni pour un jeu déjà joué ; si le canal coché est celui d’une « Relance » (deux costumes + relance), on suit la relance de ce canal (jeu relancé, rattrapages de la relance) et non la perte du message d’origine ; modifiable / pause / suppression aussi depuis la page Envois, export et import inclus',
+    'Page Stratégies réorganisée en 3 niveaux sans mélange : 5 familles repliables (Simples · À configurations · Meilleur + plus faible · Combinées · IA) avec raccourcis en haut ; les stratégies simples sont rangées par thème (Numéro & rythme, Cartes & mains, Absence, Ombre) ; Dizaine, Costume faible et chaque mode de Meilleur + plus faible ont leur bloc avec leurs configurations juste dessous ; compteur « actives / total » par famille',
+    'Relance : le costume pas venu affiche son numéro de relance avec ⏳ (♠️N°: 1126⏳), le costume sorti est rappelé devant le N° d’origine (┣━♣️ N°1119✅), les lignes N° sont toujours dans l’ordre origine puis relance ; une seule relance à la fois par costume (plus de prédictions en double) ; classeur Excel de config-import mis à jour',
     'Statistiques : plus de doublons ni de désordre — jeux envoyés dans l’ordre strict, un seul envoi par jeu (verrou), canal saisi en ID ET en @nom = un seul message, suivi des messages jamais importé/exporté depuis un fichier Excel (il faisait éditer d’anciens messages)',
     'Anti-doublon global : le même texte envoyé au même canal dans les 6 secondes est ignoré (tous les boutons)',
     'Import / export : tous les IDs de canaux utilisés par n’importe quel bouton sont exportés dans la feuille Canaux et réimportés (nom retrouvé auprès de Telegram) ; Retour après perte, Formation, Type de mise et Arrêt/planification sont maintenant aussi sauvegardés en base après import (sinon l’ancien réglage revenait au redémarrage) ; un canal utilisé n’est plus caché par la liste des canaux supprimés',

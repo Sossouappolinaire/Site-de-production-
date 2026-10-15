@@ -111,7 +111,7 @@ const dayKey = (ts = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone:
 
 const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance']; // + « multi » (par défaut)
 const RELAUNCH_WAIT = 1;      // mode relance : nombre de jeux attendus APRÈS la sortie du 1er costume (v43) : le costume pas sorti ne doit pas venir …
-const RELAUNCH_OFFSET = 7;    // … alors il est relancé à (jeu du 1er costume sorti) + 7 (réglable ; ou choisi par l'analyse auto)
+const RELAUNCH_OFFSET = 3;    // … alors il est relancé à (jeu du 1er costume sorti) + 3 par défaut (réglable ; ou choisi par l'analyse auto)
 const RELAUNCH_MIN_OFFSET = 3; // analyse auto : on teste les relances de +3 jusqu'à +n
 const RELAUNCH_N_MAX = 12;    // +n par défaut de l'analyse auto
 const RELAUNCH_MIN_SAMPLE = 8; // nombre minimum de situations observées avant d'appliquer le +n trouvé par l'analyse
@@ -409,10 +409,12 @@ function predictionText(target, items, withResults, forcePending, extraTargets) 
 // targets[k] : numéro de jeu de la ligne k de la chaîne ; le N° affiché à côté d'un costume sorti est celui de SA ligne (rattrapage compté depuis lui).
 function relaunchText(items, owners, lines, targets) {
   const suitLines = items.map((s, i) => {
-    const mk = suitMark(s, true);
     const hit = Number.isFinite(Number(s.res)) && s.res !== null && s.res >= 0;
+    const lost = s.res !== undefined && s.res !== null && s.res < 0;
     const n = Array.isArray(targets) ? targets[owners[i]] : undefined;
-    return hit && n !== undefined ? `${s.suit}${mk}N°: ${n}` : `${s.suit}${mk}`; // v47 : sans espace (♣️✅0️⃣N°: 1158 / ♦️⏳)
+    if (hit && n !== undefined) return `${s.suit}${suitMark(s, true)}N°: ${n}`; // v47 : sans espace (♣️✅0️⃣N°: 1158)
+    if (owners[i] > 0 && n !== undefined) return lost ? `${s.suit}❌N°: ${n}` : `${s.suit}N°: ${n}⏳`; // v55 : costume relancé en attente → ♠️N°: 1126⏳
+    return `${s.suit}${suitMark(s, true)}`;
   });
   let boundaries = 0;
   for (let i = 1; i < items.length; i++) if (owners[i] !== owners[i - 1]) boundaries++;
@@ -425,7 +427,7 @@ function relaunchText(items, owners, lines, targets) {
   let lastBoundary = -1;
   for (let i = 0; i < items.length; i++) {
     if (i > 0 && owners[i] !== owners[i - 1]) {
-      for (const o of [owners[i - 1], owners[i]]) if (!emitted.has(o)) { emitted.add(o); out.push(lines[o]); }
+      for (const o of [owners[i - 1], owners[i]].sort((a, b) => a - b)) if (!emitted.has(o)) { emitted.add(o); out.push(lines[o]); } // v55 : toujours dans l'ordre de la chaîne (origine d'abord, puis la relance)
       lastBoundary = out.length; // position juste après les lignes N° de cette frontière
     }
     out.push(suitLines[i]);
@@ -806,20 +808,23 @@ function relaunchChain(entry) {
 // (⏳ tant qu'elle est en cours). Si le costume est sorti au jeu même visé par la relance (ou après), le résultat compte pour la RELANCE :
 // relancé à N°1115 et sorti à 1115 → ✅0️⃣ (rattrapage compté depuis le jeu de la relance, pas depuis le jeu d'origine → pas de ✅3️⃣).
 function chainResolve(chain, suit) {
-  let res = null; let owner = 0;
-  for (let k = 0; k < chain.length; k++) {
-    const e = chain[k];
-    const s = e.suits.find((x) => x.suit === suit);
-    if (!s) break;
-    res = s.res; owner = k;
-    if (res !== undefined && res !== null && res >= 0) {
-      const next = chain[k + 1];
-      const game = Number.isFinite(Number(s.resGame)) ? Number(s.resGame) : Number(e.target) + Number(res);
-      if (next && next.suits.some((x) => x.suit === suit) && game >= Number(next.target)) continue; // sorti au jeu de la relance (ou après) : c'est elle qui l'affiche
-      break;
-    }
-  }
-  return { res, owner };
+  // v55 : tant qu'une relance est annoncée pour ce costume et pas encore jouée, la ligne du costume suit la RELANCE (♠️N°: 1126⏳),
+  // même s'il est sorti entre-temps dans les rattrapages du message d'origine. Relance jouée : son résultat (✅ / ❌) ; relance perdue mais
+  // costume déjà sorti à l'origine : le ✅ d'origine est conservé.
+  let last = -1;
+  for (let k = 0; k < chain.length; k++) if (chain[k].suits.some((x) => x.suit === suit)) last = k;
+  if (last < 0) return { res: null, owner: 0 };
+  const rootS = chain[0].suits.find((x) => x.suit === suit);
+  const rootHit = !!rootS && rootS.res !== undefined && rootS.res !== null && rootS.res >= 0;
+  if (last === 0) return { res: rootS.res, owner: 0 };
+  const e = chain[last]; const s = e.suits.find((x) => x.suit === suit);
+  if (s.res !== undefined && s.res !== null && s.res >= 0) return { res: s.res, owner: last }; // relance gagnée
+  if (e.status === 'en attente' || e.status === 'annulé' || s.res === undefined || s.res === null) return { res: undefined, owner: last }; // relance en cours
+  return rootHit ? { res: rootS.res, owner: 0 } : { res: s.res, owner: last }; // relance perdue
+}
+function firstHitSuits(e) { // v55 : costume(s) sortis au 1er jeu gagnant du message d'origine (ex. ♣️ N°1119✅)
+  const first = Number.isFinite(Number(e.firstGame)) ? Number(e.firstGame) : null;
+  return (e.suits || []).filter((x) => x.res !== undefined && x.res !== null && x.res >= 0 && (first === null || Number(x.resGame) === first)).map((x) => x.suit).join('');
 }
 function editMulti(entry) {
   const chain = relaunchChain(entry);
@@ -830,7 +835,7 @@ function editMulti(entry) {
   const owners = resolved.map((r) => r.owner); // ligne N° de chaque costume
   const pendingSuits = (e) => e.suits.filter((x) => x.res === undefined || x.res === null).map((x) => x.suit).join('');
   const lines = chain.map((e, k) => (k === 0
-    ? ` ┣━ N°${e.target}✅` // jeu d'origine : au moins un costume est sorti (c'est ce qui a déclenché la relance)
+    ? ` ┣━${firstHitSuits(e)} N°${e.target}✅` // jeu d'origine : le costume sorti (c'est ce qui a déclenché la relance) est rappelé devant le N°
     : e.status === 'gagné' ? ` ┣━ N°${e.target}✅`
       : e.status === 'perdu' ? ` ┣━ N°${e.target}❌`
         : ` ┣━${pendingSuits(e)} N°${e.target}⏳`)); // relance en cours : le costume relancé est rappelé devant son N°
@@ -897,6 +902,12 @@ function sendRelaunch(cfg, parent, remaining) {
   const target = relaunchBase(parent) + relaunchOffset(cfg); // (jeu où le 1er costume est sorti) + n (ou le +n de l'analyse auto)
   if (target <= maxFinishedGameNumber()) { panel.lastError = `Relance N°${target} non envoyée : jeu déjà joué.`; return false; } // jeu déjà joué : trop tard
   if (relaunchAlreadySent(cfg.id, target)) return false; // cette relance existe déjà (pas une erreur)
+  // v55 : UNE SEULE relance à la fois par costume : si une relance de ce costume est déjà en cours pour cette configuration
+  // (autre message d'origine), on n'en lance pas une deuxième (plus de prédictions en double) ; le message d'origine reste tel quel.
+  if (remaining.some((r) => panel.pending.some((e) => e.configId === cfg.id && e.relaunch && e.status === 'en attente' && e.suits.some((x) => x.suit === r.suit)))) {
+    panel.relaunchSkipped = (panel.relaunchSkipped || 0) + 1; parent.relaunchSkipped = true;
+    return true; // traité (ignoré volontairement) : pas de nouvel essai à chaque tour
+  }
   const items = remaining.map((s) => {
     const it = { suit: s.suit, pct: s.pct, ref: s.ref, rank: s.rank };
     try { const p = pctProviders[cfg.strategy] && s.ref ? pctProviders[cfg.strategy](s.ref) : null; if (Number.isFinite(p)) it.pct = p; } catch (_) { /* dernier connu */ }
@@ -910,6 +921,7 @@ function sendRelaunch(cfg, parent, remaining) {
   };
   panel.pending.push(entry); panel.recentSent.push(relaunchKey(cfg.id, target));
   try { require('./loss-return').onRelaunchSent(cfg, parent, entry); } catch (_) { /* bouton « Retour après perte » : suivi seulement */ }
+  try { require('./loss-relaunch').onRelaunchSent(cfg, parent, entry); } catch (_) { /* bouton « Relance après perte » : suivi seulement */ }
   if (panel.recentSent.length > 500) panel.recentSent = panel.recentSent.slice(-500);
   cfg.sentCount = (cfg.sentCount || 0) + 1; cfg.lastSentAt = now;
   panel.lastError = null;
@@ -1105,7 +1117,7 @@ async function test(id) {
     msgs = await sendToChannels(cfg, `🧪 Test\n${predictionText(464, sample)}`, 'HTML');
     if (modeOf(cfg) === 'relance' && sample.length >= 2) { // aperçu de la relance : le 1ᵉʳ est sorti, le reste est relancé à +3
       sample[0].res = 0;
-      const lines = [' ┣━ N°464✅', ` ┣━${sample.slice(1).map((x) => x.suit).join('')} N°${464 + relaunchOffset(cfg)}⏳`];
+      const lines = [` ┣━${sample[0].suit} N°464✅`, ` ┣━${sample.slice(1).map((x) => x.suit).join('')} N°${464 + relaunchOffset(cfg)}⏳`];
       await sendToChannels(cfg, `🧪 Test (un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(cfg)} : relance à N+${relaunchOffset(cfg)}, le N° est placé à côté du costume relancé)\n${relaunchText(sample, sample.map((_, i) => (i === 0 ? 0 : 1)), lines, [464, 464 + relaunchOffset(cfg)])}`, 'HTML');
       if (cfg.relChannels && cfg.relChannels.length) {
         const o = triggerMessage({ format: cfg.relFormat, target: 464 + relaunchOffset(cfg), suits: [{ suit: sample[1].suit }], strategyName: `${cfg.name || 'Relance'} · relance`, maxR: cfg.relMaxR, step: 0 }, 'en attente');
