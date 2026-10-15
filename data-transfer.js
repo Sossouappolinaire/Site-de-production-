@@ -155,6 +155,7 @@ const PANELS = {
   cardsCount: { mod: './cards-count' },
   drawTwoThree: { mod: './draw-two-three' },          // « Nul / 2-3 »
   vip: { mod: './vip' },
+  secondCardRelay: { mod: './second-card-relay' },   // relais après perte de la stratégie « 2ᵉ carte du joueur »
   formationRelay: { mod: './formation-relay' },
   predictionControl: { mod: './prediction-control' },
   lossNotice: { mod: './loss-notice' },

@@ -32,6 +32,7 @@ const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const drawTwoThree = require('./draw-two-three');
 const vip = require('./vip');
+const secondCardRelay = require('./second-card-relay');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
@@ -2083,6 +2084,10 @@ async function tick() {
       // pertes consécutives, ou après 3 prédictions consécutives du même
       // costume, dans le canal VIP configuré (voir vip.js).
       vip.tick(),
+      // relais « après perte » de la stratégie « 2ᵉ carte du joueur » : configuration cachée qui travaille
+      // en arrière-plan ; après une perte, envoie les N prochaines prédictions dans un canal dédié
+      // (voir second-card-relay.js).
+      secondCardRelay.tick(),
     ]);
   } catch (e) {
     state.lastError = e.message;
@@ -2265,6 +2270,7 @@ async function applyDbConfigs() {
   await cardsCount.restoreFromDb();
   await drawTwoThree.restoreFromDb();
   await vip.restoreFromDb();
+  await secondCardRelay.restoreFromDb();
   await predictionControl.restoreFromDb();
   // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
   // depuis la base les prédictions encore « en attente » + les dernières
@@ -2376,6 +2382,8 @@ async function startLoop() {
   drawTwoThree.setAdminId(() => state.adminId);
   vip.restore();
   vip.setSender(senderFor);
+  secondCardRelay.restore();
+  secondCardRelay.setSender(senderFor);
   formationRelay.restore();
   formationRelay.setSender(senderFor);
   predictionControl.restore();

@@ -1,10 +1,16 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v47',
-  name: 'retour-apres-perte',
+  version: 'v49',
+  name: 'relais-apres-perte-2e-carte',
   date: '2026-10-14',
   features: [
+    'Stratégie « 2ᵉ carte du joueur » : relais après perte en arrière-plan (configuration cachée, rien à créer) — dès qu’une prédiction de la stratégie est perdue (publiée ou silencieuse), les 2 / 3 / 4 prochaines prédictions partent dans un canal (ID) différent de celui de la stratégie ; une prédiction identique (même numéro, même costume) déjà relayée est ignorée',
+    'Stratégie « 2ᵉ carte du joueur » : nouveau réglage « Carte du joueur à prédire » (1ʳᵉ, 2ᵉ par défaut, ou 3ᵉ) ; s’il n’y a pas de 3ᵉ carte dans le jeu, aucune prédiction n’est lancée',
+    'Page Envois : l’organisation par canal affiche maintenant aussi Prédit IA, Nul / 2-3, VIP, Statistiques, Comptage 2/2 (et ses catégories), Formation (canal général et par stratégie), Jeu 21, Type de mise (configurations et canal du meilleur) et Copie et annonce ; modifier / pause / retirer le canal, et supprimer pour Type de mise et Copie et annonce',
+    'Nouvelle stratégie « 2ᵉ carte du joueur à +2 · série puis pause » : une prédiction à la fois, 5 réussites (✅0️⃣/✅1️⃣) puis silence jusqu’à une perte, +3 prédictions si une perte est tombée dans la série',
+    'Page Envois : organisation par canal (choisir un canal, modifier / enregistrer, retirer le canal, supprimer une configuration)',
+    'Accueil rangé par thèmes + plan du code (ARCHITECTURE.md)',
     'Nouveau bouton « Retour après perte » : suit les canaux cochés, vérifie le rattrapage configuré (ex. 12♦️ perdu, 3 rattrapages → 15 ; sorti au 16 → D=1 : « misez sur le jeu suivant »), note ce qui est venu si le costume n’est pas revenu, envoie un rapport par perte vers un autre canal et un bilan avec les taux tous les X rapports ; il suit n’importe quel canal où le bot publie (toute stratégie ou bouton, via le point d’envoi unique) avec filtre par mot-clé facultatif ; il peut aussi surveiller une configuration « Relance » (suivi interne) pour prouver le D : le D constaté est comparé au jeu de la relance',
     'Relance : format sans espaces comme demandé (♣️✅0️⃣N°: 1158 / ┣━ N°1158✅ / ┣━♦️ N°1161⏳ / ♦️⏳) et exemple de la page Relance mis à jour',
     'Relance : message et fenêtre de 10 s mieux organisés (même structure sur chaque ligne, espaces réguliers, texte normal sans bloc code) ; la fenêtre devient une petite carte bilingue français / russe avec séparateurs',

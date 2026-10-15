@@ -475,175 +475,13 @@
       "format": 1,
       "maxR": 1
     },
-    "trackers": [
-      {
-        "id": "ss-1790768340645-o3iyb",
-        "key": "costume",
-        "name": "Costume par numéro",
-        "n": 2,
-        "mode": "cross2",
-        "offset": 1,
-        "suitFilter": null,
-        "predictSuit": "same",
-        "channels": [
-          -100
-        ],
-        "siteChannelId": null,
-        "format": null,
-        "maxR": null,
-        "streakSuit": null,
-        "streakCount": 0,
-        "streakHasLoss": false,
-        "waitingSuit": null,
-        "mirrorPending": null,
-        "diffPending": null,
-        "lastSeenTarget": 118,
-        "sentCount": 1,
-        "lastSentAt": 1790768340648,
-        "createdAt": 1790768340645
-      }
-    ],
-    "history": [
-      {
-        "trackerId": "ss-1790768340645-o3iyb",
-        "trackerName": "Costume par numéro",
-        "target": 118,
-        "suit": "♠️",
-        "sourceTarget": 118,
-        "sentAt": 1790768340648
-      }
-    ],
-    "pendingMessages": [
-      {
-        "id": "p-1790768340624-82mn1",
-        "trackerId": "ss-1790768340613-k9fr9",
-        "target": 118,
-        "suit": "♦️",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "en attente",
-        "messages": [
-          {
-            "chatId": -100,
-            "messageId": 1
-          }
-        ],
-        "createdAt": 1790768340624,
-        "resolvedAt": null
-      },
-      {
-        "id": "p-1790768340631-oca0p",
-        "trackerId": "ss-1790768340628-jqxgm",
-        "target": 118,
-        "suit": "❤️",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "en attente",
-        "messages": [
-          {
-            "chatId": -100,
-            "messageId": 1
-          }
-        ],
-        "createdAt": 1790768340631,
-        "resolvedAt": null
-      },
-      {
-        "id": "p-1790768340636-l7ibn",
-        "trackerId": "ss-1790768340633-81fea",
-        "target": 118,
-        "suit": "♠️",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "en attente",
-        "messages": [
-          {
-            "chatId": -100,
-            "messageId": 1
-          }
-        ],
-        "createdAt": 1790768340636,
-        "resolvedAt": null
-      },
-      {
-        "id": "p-1790768340641-07f80",
-        "trackerId": "ss-1790768340639-aww1o",
-        "target": 118,
-        "suit": "♣️",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "en attente",
-        "messages": [
-          {
-            "chatId": -100,
-            "messageId": 1
-          }
-        ],
-        "createdAt": 1790768340641,
-        "resolvedAt": null
-      },
-      {
-        "id": "p-1790768340644-c4cci",
-        "trackerId": "ss-1790768340642-tcevb",
-        "target": 118,
-        "suit": "♣️",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "en attente",
-        "messages": [
-          {
-            "chatId": -100,
-            "messageId": 1
-          }
-        ],
-        "createdAt": 1790768340644,
-        "resolvedAt": null
-      },
-      {
-        "id": "p-1790768340648-v5b69",
-        "trackerId": "ss-1790768340645-o3iyb",
-        "target": 118,
-        "suit": "♠️",
-        "strategyName": "Costume par numéro",
-        "format": 1,
-        "maxR": 1,
-        "step": 0,
-        "gap": 0,
-        "skipped": 0,
-        "status": "en attente",
-        "messages": [
-          {
-            "chatId": -100,
-            "messageId": 1
-          }
-        ],
-        "createdAt": 1790768340648,
-        "resolvedAt": null
-      }
-    ],
-    "sentCount": 6,
-    "lastSentAt": 1790768340648,
-    "lastScanAt": 1790768340648
+    "trackers": [],
+    "history": [],
+    "pendingMessages": [],
+    "sentCount": 0,
+    "lastSentAt": null,
+    "lastScanAt": null,
+    "channelTitles": {}
   },
   "botToken": "",
   "shopBotToken": "",
@@ -1405,7 +1243,7 @@
   "lossReturn": {
     "configs": [
       {
-        "id": "lr-1792013955444-0eg5",
+        "id": "lr-1792049216784-5tku",
         "name": "Tout",
         "enabled": true,
         "sources": [
@@ -1460,10 +1298,10 @@
           }
         },
         "reportsSent": 2,
-        "lastReportAt": 1792013955472
+        "lastReportAt": 1792049216805
       },
       {
-        "id": "lr-1792013955448-fwc7",
+        "id": "lr-1792049216787-hfoz",
         "name": "Filtre",
         "enabled": true,
         "sources": [
@@ -1500,61 +1338,61 @@
           }
         },
         "reportsSent": 1,
-        "lastReportAt": 1792013955471
+        "lastReportAt": 1792049216804
       }
     ],
     "pending": [
       {
-        "id": "lr-1792013955450-36fl",
-        "cfgId": "lr-1792013955444-0eg5",
+        "id": "lr-1792049216790-4dgp",
+        "cfgId": "lr-1792049216784-5tku",
         "src": "relance:bw1",
         "suit": "♦️",
         "target": 200,
         "phase": "clos",
         "status": "perdu",
-        "at": 1792013955450,
+        "at": 1792049216790,
         "relName": "Rel",
         "bwId": "e9",
         "maxR": 1,
         "scanFrom": 202,
-        "lostAt": 1792013955466,
+        "lostAt": 1792049216802,
         "nextChecked": true,
         "returnD": 4
       },
       {
-        "id": "lr-1792013955450-4gbd",
-        "cfgId": "lr-1792013955448-fwc7",
+        "id": "lr-1792049216790-qdtg",
+        "cfgId": "lr-1792049216787-hfoz",
         "src": "-1005",
         "suit": "♦️",
         "target": 200,
         "phase": "clos",
         "status": "perdu",
-        "at": 1792013955450,
+        "at": 1792049216790,
         "scanFrom": 202,
-        "lostAt": 1792013955469,
+        "lostAt": 1792049216803,
         "nextChecked": true,
         "returnD": 4
       },
       {
-        "id": "lr-1792013955452-lb9v",
-        "cfgId": "lr-1792013955444-0eg5",
+        "id": "lr-1792049216792-r1is",
+        "cfgId": "lr-1792049216784-5tku",
         "src": "-1005",
         "suit": "♣️",
         "target": 210,
         "phase": "clos",
         "status": "perdu",
-        "at": 1792013955452,
+        "at": 1792049216792,
         "scanFrom": 212,
-        "lostAt": 1792013955471,
+        "lostAt": 1792049216804,
         "nextChecked": true,
         "returnD": null
       }
     ],
     "seen": [
-      "lr-1792013955444-0eg5:-1005:200:♦️",
-      "lr-1792013955448-fwc7:-1005:200:♦️",
-      "lr-1792013955444-0eg5:-1005:210:♣️",
-      "lr-1792013955444-0eg5:rel:e9:♦️"
+      "lr-1792049216784-5tku:-1005:200:♦️",
+      "lr-1792049216787-hfoz:-1005:200:♦️",
+      "lr-1792049216784-5tku:-1005:210:♣️",
+      "lr-1792049216784-5tku:rel:e9:♦️"
     ],
     "channelTitles": {}
   }

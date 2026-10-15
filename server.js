@@ -57,6 +57,7 @@ const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const drawTwoThree = require('./draw-two-three');
 const vip = require('./vip');
+const secondCardRelay = require('./second-card-relay');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const mirrorCounter = require('./mirror-counter');
@@ -417,6 +418,7 @@ app.get('/api/state', async (req, res) => {
     cardsCount: cardsCount.status(),
     drawTwoThree: drawTwoThree.status(),
     vip: vip.status(),
+    secondCardRelay: secondCardRelay.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
       target: p.target, suit: p.suit, hand: p.hand, step: p.step, maxR: p.maxR,
@@ -1729,6 +1731,39 @@ app.post('/api/draw-two-three/reset', (req, res) => {
 // sur une stratégie cochée, relais de ses 2 prochaines prédictions dans le
 // canal VIP configuré, puis arrêt jusqu'à la prochaine série.
 // ---------------------------------------------------------------------------
+// Relais « après perte » de la stratégie « 2ᵉ carte du joueur » (voir second-card-relay.js) : configuration cachée qui
+// travaille en arrière-plan ; après une perte, les N prochaines prédictions partent dans un canal (ID) différent de la stratégie.
+app.get('/api/second-card-relay', (req, res) => res.json(secondCardRelay.status()));
+function secondCardRelayClash(list) {
+  const own = [...strategyChannels('secondeCarte', 'published'), ...strategyChannels('secondeCarte', 'shadow')].map(String);
+  return list.filter((id) => own.some((o) => o.toLowerCase() === String(id).toLowerCase()));
+}
+app.post('/api/second-card-relay/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    if (b.enabled !== undefined) patch.enabled = !!b.enabled;
+    if (b.count !== undefined) patch.count = b.count;
+    if (b.format !== undefined) patch.format = b.format;
+    const ids = b.channelId !== undefined ? b.channelId : b.channels;
+    if (ids !== undefined) {
+      const list = secondCardRelay.parseChannels(ids);
+      const clash = secondCardRelayClash(list);
+      if (clash.length) return res.status(400).json({ error: `Le canal du relais (${clash.join(', ')}) doit être différent des canaux de la stratégie.` });
+      if (list.length) { const check = await resolveChat(list[0]); if (!check.ok) return res.status(400).json({ error: check.error }); }
+      patch.channels = list;
+    }
+    const finalChannels = patch.channels !== undefined ? patch.channels : secondCardRelay.config().channels;
+    if (patch.enabled && !finalChannels.length) return res.status(400).json({ error: 'Renseigne d’abord l’ID du canal du relais.' });
+    secondCardRelay.configure(patch);
+    res.json({ ok: true, secondCardRelay: secondCardRelay.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/second-card-relay/test', async (req, res) => {
+  const r = await secondCardRelay.test();
+  res.status(r.ok ? 200 : 400).json({ ...r, secondCardRelay: secondCardRelay.status() });
+});
+
 app.get('/api/vip', (req, res) => res.json(vip.status()));
 
 app.post('/api/vip/config', (req, res) => {
@@ -2515,6 +2550,7 @@ async function removeChannelEverywhere(id) {
     ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+    ['2ᵉ carte · relais après perte', secondCardRelay],
   ];
   for (const [label, mod] of modules) {
     try {
@@ -2554,6 +2590,166 @@ app.post('/api/prediction-control', (req, res) => {
     return res.status(400).json({ error: 'Action inconnue (attendu : pause, resume, schedule, clear-schedule).' });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+
+// ---------------------------------------------------------------------------
+// Organisation des configurations PAR CANAL (page « Envois ») : on choisit un canal et on voit toutes les configurations qui
+// y publient (stratégies de base, boutons à configurations suivies, Meilleur + plus faible / Relance / Test, Retour après perte),
+// avec pour chacune : modifier (nom, activée, canaux) + enregistrer, retirer ce canal, supprimer la configuration.
+// Les autres usages (Type de mise, Copie et annonce, Jeu 21, Formation…) restent visibles dans la liste « tous les canaux » et se
+// modifient dans leur propre bouton.
+// ---------------------------------------------------------------------------
+const CC_TRACKER_PANELS = [
+  ['after-loss', 'Prédiction après perte', afterLoss, '#/after-loss'], ['combined', 'Prédiction combinée', combined, '#/combined'],
+  ['suit-streak', 'Répétition costume', suitStreak, '#/suit-streak'], ['suit-break', 'Rupture costume', suitBreak, '#/suit-break'],
+  ['overlap', 'Chevauchement', overlap, '#/overlap'], ['dizaine-top', 'Dizaine', dizaineTop, '#/dizaine-top'],
+  ['costume-faible-top', 'Costume faible', costumeFaibleTop, '#/costume-faible-top'],
+];
+const CC_SIMPLE_MODULES = [
+  ['predit', 'Prédit IA', predit, '#/predit'], ['draw-two-three', 'Nul / 2-3', drawTwoThree, '#/draw-two-three'],
+  ['vip', 'VIP', vip, '#/vip'], ['statistics', 'Statistiques', statistics, '#/statistics'],
+  ['cards-count', 'Comptage 2/2', cardsCount, '#/cards-count'], ['formation', 'Formation', formationRelay, '#/formation'],
+  ['second-card-relay', '2ᵉ carte · relais après perte', secondCardRelay, '#/strategy/secondeCarte'],
+];
+function channelConfigsFor(channelId) {
+  const out = [];
+  const has = (arr) => (Array.isArray(arr) ? arr : []).some((x) => sameChannel(x, channelId));
+  for (const def of strategies.LIST) {
+    for (const mode of ['published', 'shadow']) {
+      const ids = strategyChannels(def.key, mode);
+      if (has(ids)) out.push({ kind: 'strategy', id: def.key, mode, group: 'Stratégies', name: `${def.name} · ${mode === 'shadow' ? 'silencieux' : 'public'}`, enabled: !!(state.strategies[def.key] || {}).enabled, channels: ids.map(String), page: `#/strategy/${def.key}`, canDelete: false });
+    }
+  }
+  for (const [panelId, label, mod, page] of CC_TRACKER_PANELS) {
+    for (const t of ((mod.panel && mod.panel.trackers) || [])) {
+      if (has(t.channels)) out.push({ kind: 'tracker', panel: panelId, id: t.id, group: label, name: t.name || t.id, enabled: typeof t.enabled === 'boolean' ? t.enabled : null, channels: (t.channels || []).map(String), page, canDelete: true });
+    }
+  }
+  for (const c of ((bestWeakTop.panel && bestWeakTop.panel.configs) || [])) {
+    if (has(c.channels)) out.push({ kind: 'best-weak', id: c.id, group: 'Meilleur + plus faible / Relance / Test', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: c.mode === 'relance' ? '#/relance' : c.mode === 'test' ? '#/test' : '#/best-weak', canDelete: true });
+  }
+  for (const c of ((lossReturn.panel && lossReturn.panel.configs) || [])) {
+    if (has(c.channels)) out.push({ kind: 'loss-return', id: c.id, group: 'Retour après perte', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: '#/loss-return', canDelete: true });
+  }
+
+  // ---- Modules à réglage unique : Prédit IA, Nul / 2-3, VIP, Statistiques, Comptage 2/2, Formation (canal général)
+  for (const [mid, label, mod, page] of CC_SIMPLE_MODULES) {
+    const p = mod.panel || {};
+    if (has(p.channels)) out.push({ kind: 'module', id: mid, group: label, name: `${label} · canaux`, fixedName: true, enabled: !!p.enabled, channels: (p.channels || []).map(String), page, canDelete: false });
+  }
+  for (const [cat, list] of Object.entries((cardsCount.panel && cardsCount.panel.categoryChannels) || {})) {
+    if (has(list)) out.push({ kind: 'cards-category', id: cat, group: 'Comptage 2/2', name: `Comptage 2/2 · catégorie ${cat}`, fixedName: true, enabled: null, channels: list.map(String), page: '#/cards-count', canDelete: false });
+  }
+  const formationNames = {}; try { formationRelay.options().forEach((o) => { formationNames[o.key] = o.name; }); } catch (_) {}
+  for (const [key, e] of Object.entries((formationRelay.panel && formationRelay.panel.strategies) || {})) {
+    if (e && has(e.channels)) out.push({ kind: 'formation-strategy', id: key, group: 'Formation', name: `Formation · ${formationNames[key] || key}`, fixedName: true, enabled: !!e.enabled, channels: (e.channels || []).map(String), page: '#/formation', canDelete: false });
+  }
+  const g21 = game21Predict.panel || {};
+  if (has(g21.exactChannels)) out.push({ kind: 'game21', id: 'exact', group: 'Jeu 21', name: 'Prédiction jeu 21 · valeur exacte', fixedName: true, enabled: !!g21.enabled, channels: (g21.exactChannels || []).map(String), page: '#/game21-predict', canDelete: false });
+  if (has(g21.valueChannels)) out.push({ kind: 'game21', id: 'value', group: 'Jeu 21', name: 'Prédiction jeu 21 · valeur', fixedName: true, enabled: !!g21.enabled, channels: (g21.valueChannels || []).map(String), page: '#/game21-predict', canDelete: false });
+  // ---- Listes : Type de mise (configurations + « meilleur ») et Copie et annonce (règles)
+  for (const t of ((betType.panel && betType.panel.trackers) || [])) {
+    if (has(t.destChannels)) out.push({ kind: 'bet-type', id: t.id, group: 'Type de mise', name: t.name || t.id, enabled: t.enabled !== false, channels: (t.destChannels || []).map(String), page: '#/bet-type', canDelete: true });
+  }
+  const btBest = (betType.panel && betType.panel.best) || {};
+  if (has(btBest.channels)) out.push({ kind: 'bet-best', id: 'best', group: 'Type de mise', name: 'Type de mise · canal du meilleur', fixedName: true, enabled: !!btBest.enabled, channels: (btBest.channels || []).map(String), page: '#/bet-type', canDelete: false });
+  for (const r of ((copyAnnounce.panel && copyAnnounce.panel.rules) || [])) {
+    if (has(r.destChannels)) out.push({ kind: 'copy-announce', id: r.id, group: 'Copie et annonce', name: r.name || r.id, enabled: r.enabled !== false, channels: (r.destChannels || []).map(String), page: '#/copy-announce', canDelete: true });
+  }
+  return out;
+}
+app.get('/api/diagnostics/channel-configs/:id', (req, res) => {
+  const id = decodeURIComponent(String(req.params.id || '')).trim();
+  if (!id) return res.status(400).json({ error: 'Identifiant de canal manquant' });
+  res.json({ id, configs: channelConfigsFor(id) });
+});
+app.put('/api/diagnostics/channel-configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    if (b.name !== undefined) patch.name = String(b.name).trim();
+    if (b.enabled !== undefined) patch.enabled = !!b.enabled;
+    const channels = b.channels !== undefined ? parseChannelList(b.channels) : undefined;
+    if (b.kind === 'strategy') {
+      const def = strategies.BY_KEY[b.id];
+      if (!def) return res.status(404).json({ error: 'Stratégie inconnue' });
+      const p = {};
+      if (patch.enabled !== undefined) p.enabled = patch.enabled;
+      if (channels !== undefined) { if (b.mode === 'shadow') p.shadowChannels = channels; else p.publishedChannels = channels; }
+      const cfg = setStrategyConfig(b.id, p);
+      persist();
+      if (db.ready) await db.saveStrategy(b.id, def.name, cfg);
+    } else if (b.kind === 'tracker') {
+      const row = CC_TRACKER_PANELS.find((x) => x[0] === b.panel);
+      if (!row) return res.status(404).json({ error: 'Panneau inconnu' });
+      const cur = ((row[2].panel && row[2].panel.trackers) || []).find((x) => x.id === b.id);
+      if (cur && typeof cur.enabled === 'boolean' && patch.enabled !== undefined) cur.enabled = patch.enabled; // enregistré par updateTracker juste après
+      delete patch.enabled;
+      const t = row[2].updateTracker(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+      if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'best-weak') {
+      if (channels !== undefined) await verifyBestWeakChannels(channels);
+      const c = bestWeakTop.updateConfig(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+      if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'loss-return') {
+      lossReturn.updateConfig(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+    } else if (b.kind === 'module') {
+      const row = CC_SIMPLE_MODULES.find((x) => x[0] === b.id);
+      if (!row) return res.status(404).json({ error: 'Module inconnu' });
+      if (b.id === 'second-card-relay' && channels !== undefined) {
+        const clash = secondCardRelayClash(channels);
+        if (clash.length) return res.status(400).json({ error: `Le canal du relais (${clash.join(', ')}) doit être différent des canaux de la stratégie.` });
+      }
+      const p = {};
+      if (patch.enabled !== undefined && patch.enabled !== !!row[2].panel.enabled) p.enabled = patch.enabled; // seulement si ça change (évite de réinitialiser un suivi en cours)
+      if (channels !== undefined) p.channels = channels;
+      row[2].configure(p);
+    } else if (b.kind === 'cards-category') {
+      const cat = String(b.id);
+      if (!['3/2', '3/3', '2/2'].includes(cat)) return res.status(404).json({ error: 'Catégorie inconnue' });
+      if (channels !== undefined) cardsCount.configure({ categoryChannels: { ...(cardsCount.panel.categoryChannels || {}), [cat]: channels } });
+    } else if (b.kind === 'formation-strategy') {
+      const cur = (formationRelay.panel.strategies || {})[b.id];
+      if (!cur) return res.status(404).json({ error: 'Formation introuvable' });
+      const p = {};
+      if (patch.enabled !== undefined && patch.enabled !== !!cur.enabled) p.enabled = patch.enabled;
+      if (channels !== undefined) p.channels = channels;
+      formationRelay.setStrategy(String(b.id), p);
+    } else if (b.kind === 'game21') {
+      const p = {};
+      if (patch.enabled !== undefined) p.enabled = patch.enabled;
+      if (channels !== undefined) p[b.id === 'value' ? 'valueChannels' : 'exactChannels'] = channels;
+      game21Predict.configure(p);
+    } else if (b.kind === 'bet-best') {
+      betType.configureBest({ ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { channels } : {}) });
+    } else if (b.kind === 'bet-type') {
+      const t = betType.updateConfig(b.id, { ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { destChannels: channels } : {}) });
+      if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'copy-announce') {
+      const r = copyAnnounce.updateRule(b.id, { ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { destChannels: channels } : {}) });
+      if (!r) return res.status(404).json({ error: 'Règle introuvable' });
+    } else return res.status(400).json({ error: 'Type de configuration inconnu' });
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/diagnostics/channel-configs', (req, res) => {
+  try {
+    const { kind, panel: panelId, id } = req.query || {};
+    if (kind === 'strategy') return res.status(400).json({ error: 'Une stratégie intégrée ne se supprime pas : retire-lui ce canal, ou mets-la en pause.' });
+    if (kind === 'tracker') {
+      const row = CC_TRACKER_PANELS.find((x) => x[0] === panelId);
+      if (!row) return res.status(404).json({ error: 'Panneau inconnu' });
+      row[2].removeTracker(String(id));
+    } else if (kind === 'best-weak') bestWeakTop.removeConfig(String(id));
+    else if (kind === 'loss-return') lossReturn.removeConfig(String(id));
+    else if (kind === 'bet-type') betType.removeConfig(String(id));
+    else if (kind === 'copy-announce') copyAnnounce.removeRule(String(id));
+    else if (['module', 'cards-category', 'formation-strategy', 'game21', 'bet-best'].includes(kind)) return res.status(400).json({ error: 'Cette configuration est unique et ne se supprime pas : retire-lui ce canal, ou mets-la en pause.' });
+    else return res.status(400).json({ error: 'Type de configuration inconnu' });
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+function parseChannelList(v) { return lossReturn.parseChannels(v); }
 
 // édition rapide du canal d'une configuration suivie (tracker) DEPUIS la page
 // « Envois » — mêmes règles que les routes /api/<panel>/trackers/:id déjà
@@ -2634,7 +2830,7 @@ function configuredChannelList() {
   } catch (_) {}
   const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType],
     // sources qui manquaient : leurs canaux n'apparaissaient pas dans « Type de mise »
-    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics]];
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics], ['2ᵉ carte · relais après perte', secondCardRelay]];
   for (const [label, mod] of panelsList) {
     try {
       const st = mod.status() || {};

@@ -143,6 +143,14 @@ function setStrategyConfig(key, patch = {}) {
   // stratégie « Absence — costume absent chez le joueur » : liste des cases
   // Abs:N cochées (voir strategies.js/sanitizeAbsenceEntries).
   if (key === 'absenceJoueur' && patch.entries !== undefined) next.entries = strategies.sanitizeAbsenceEntries(patch.entries);
+  // stratégie « 2ᵉ carte du joueur à +2 » : série puis pause (voir runState / noteClosedRun ci-dessous)
+  if (key === RUN_KEY) {
+    if (patch.runEnabled !== undefined) next.runEnabled = !!patch.runEnabled;
+    if (patch.runTarget !== undefined) next.runTarget = Math.max(1, Math.min(50, parseInt(patch.runTarget, 10) || 5));
+    if (patch.runExtra !== undefined) next.runExtra = Math.max(0, Math.min(50, parseInt(patch.runExtra, 10) || 0));
+    // carte du joueur à prédire : 1 = 1ʳᵉ, 2 = 2ᵉ (par défaut), 3 = 3ᵉ
+    if (patch.cardIndex !== undefined) next.cardIndex = Math.max(1, Math.min(3, parseInt(patch.cardIndex, 10) || 2));
+  }
   // mode silencieux 1 — RÉSERVÉ à la stratégie « ombre », et OBLIGATOIRE pour
   // elle : ombre fonctionne exclusivement via ce filtre, `silent` ne peut donc
   // jamais y être désactivé (patch.silent est ignoré pour cette clé). Pour
@@ -216,6 +224,7 @@ function setStrategyConfig(key, patch = {}) {
   if (['silent', 'lossInterval', 'lossTrigger', 'lossWindow'].some(changed)) {
     resetGate(key);
   }
+  if (key === RUN_KEY && ['runEnabled', 'runTarget', 'runExtra', 'cardIndex'].some(changed)) resetRun(key); // nouvelle série avec les nouveaux réglages
   if (key === 'costume') pullCostume();
   return next;
 }
@@ -560,6 +569,7 @@ function noteClosedInner(pred) {
   // le déclencheur automatique « perte/rattrapage + N » est générique et
   // s'applique à TOUTES les stratégies (indépendant du filtre ci-dessous).
   noteClosedAuto(pred);
+  noteClosedRun(pred); // « 2ᵉ carte du joueur » : série puis pause
 
   // ── À PARTIR D'ICI : réservé EXCLUSIVEMENT à la stratégie « ombre » ──────
   // Le filtre « double perte » (phases 1→2→3) et les annonces de position
@@ -821,9 +831,70 @@ function autoView(key) {
 
 
 // une prédiction de cette stratégie peut-elle partir dans le canal ?
+// ---------------------------------------------------------------------------
+// Stratégie « 2ᵉ carte du joueur à +2 » — SÉRIE PUIS PAUSE (demande admin)
+//   phase 'active'  : les prédictions sont publiées ; on compte les réussites (✅0️⃣ / ✅1️⃣, c.-à-d. gagné avec ≤ 1 rattrapage).
+//                     Une perte (❌) ne remet pas le compte à zéro : elle note seulement qu'il y a eu une perte pendant la série.
+//   à N réussites   : sans perte pendant la série → phase 'silent' ; avec une perte → phase 'extra' (runExtra prédictions de plus)
+//   phase 'extra'   : les runExtra prédictions suivantes sont publiées (quel que soit leur résultat), puis → 'silent'
+//   phase 'silent'  : la stratégie continue de prédire et de se vérifier, sans rien publier ; dès la 1ʳᵉ perte → 'active' (série à zéro)
+// Un gain avec 2 rattrapages ou plus n'est ni une réussite ni une perte (neutre). L'état est gardé dans state.gates[key].run, donc
+// sauvegardé en base comme les autres filtres (voir setOnGateChange) et conservé après redémarrage.
+// ---------------------------------------------------------------------------
+const RUN_KEY = 'secondeCarte';
+function runOn(cfg) { return !!cfg && cfg.runEnabled !== false; }
+function runTargetOf(cfg) { return Math.max(1, Math.min(50, parseInt(cfg && cfg.runTarget, 10) || 5)); }
+function runExtraOf(cfg) { const n = parseInt(cfg && cfg.runExtra, 10); return Number.isFinite(n) ? Math.max(0, Math.min(50, n)) : 3; }
+function runState(key) {
+  const g = gate(key);
+  if (!g.run || typeof g.run !== 'object') g.run = { phase: 'active', succ: 0, hadLoss: false, extraLeft: 0, since: Date.now() };
+  return g.run;
+}
+function resetRun(key) { const g = gate(key); g.run = { phase: 'active', succ: 0, hadLoss: false, extraLeft: 0, since: Date.now() }; return g.run; }
+function noteClosedRun(pred) {
+  if (pred.strategy !== RUN_KEY) return;
+  const cfg = state.strategies[RUN_KEY];
+  if (!runOn(cfg)) return;
+  if (pred.status !== 'gagné' && pred.status !== 'perdu') return; // annulé : ignoré
+  const r = runState(RUN_KEY);
+  const success = pred.status === 'gagné' && (pred.step || 0) <= 1;
+  const loss = pred.status === 'perdu';
+  if (r.phase === 'silent') {
+    if (loss) { r.phase = 'active'; r.succ = 0; r.hadLoss = false; r.extraLeft = 0; r.since = Date.now(); }
+    return;
+  }
+  if (r.phase === 'extra') {
+    r.extraLeft = Math.max(0, (r.extraLeft || 0) - 1);
+    if (r.extraLeft <= 0) { r.phase = 'silent'; r.succ = 0; r.hadLoss = false; r.since = Date.now(); }
+    return;
+  }
+  // phase 'active'
+  if (loss) r.hadLoss = true;
+  if (success) r.succ += 1;
+  if (r.succ >= runTargetOf(cfg)) {
+    const extra = runExtraOf(cfg);
+    if (r.hadLoss && extra > 0) { r.phase = 'extra'; r.extraLeft = extra; }
+    else { r.phase = 'silent'; r.succ = 0; r.hadLoss = false; r.extraLeft = 0; }
+    r.since = Date.now();
+  }
+}
+function runView(key) {
+  const cfg = state.strategies[key] || {};
+  if (key !== RUN_KEY || !runOn(cfg)) return null;
+  const r = runState(key);
+  const target = runTargetOf(cfg); const extra = runExtraOf(cfg);
+  const label = r.phase === 'silent'
+    ? `Silence — la stratégie prédit sans publier jusqu'à la prochaine perte (série de ${target} terminée)`
+    : r.phase === 'extra'
+      ? `Série terminée avec une perte : encore ${r.extraLeft} prédiction(s) publiée(s) sur ${extra} avant l'arrêt`
+      : `Envoi actif — ${r.succ}/${target} réussite(s) (✅0️⃣ ou ✅1️⃣)${r.hadLoss ? ` · une perte dans la série : +${extra} prédiction(s) avant l'arrêt` : ''}`;
+  return { phase: r.phase, succ: r.succ, target, hadLoss: !!r.hadLoss, extraLeft: r.extraLeft || 0, extra, sending: r.phase !== 'silent', label };
+}
+
 function canSend(key) {
   const cfg = state.strategies[key];
   if (!cfg) return true;
+  if (key === RUN_KEY && runOn(cfg)) return runState(key).phase !== 'silent'; // série puis pause (voir ci-dessus)
   // « ombre » : seul le mode silencieux 1 décide de l'envoi. Le déclencheur
   // automatique ne s'applique pas à cette stratégie (elle n'a qu'un seul
   // filtre, pas deux qui se cumulent).
@@ -868,6 +939,12 @@ function queueFloor(key) {
 // état lisible du filtre (panel web / Telegram)
 function gateView(key) {
   const cfg = state.strategies[key] || {};
+  if (key === RUN_KEY && runOn(cfg)) { // série puis pause : vue dédiée (les champs « double perte » ne s'appliquent pas)
+    const rv = runView(key);
+    return { lossTrigger: 0, lossInterval: 0, autoUnlockMin: 0, autoUnlockInSec: null, autoUnlocked: false, autoUnlockReason: null, silent: false,
+      auto: autoView(key), lossWindow: 0, resetOnWin: true, sendOnlyNext: false, armed: rv.sending, losses: 0, used: 0, phase: rv.sending ? 3 : 1,
+      counting: false, position: null, seen: rv.succ, since: null, left: null, sending: rv.sending, priority: 'serie', run: rv, label: rv.label };
+  }
   applyAutoUnlock(key);
   const g = gate(key);
   const max = windowSize(cfg);
