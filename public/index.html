@@ -117,6 +117,19 @@
     .stat { padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: rgba(16,22,34,.76); }
     .stat b { display: block; margin-top: 8px; font-size: 27px; letter-spacing: -.06em; }
     .stat span { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .sg-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; position: sticky; top: 0; z-index: 5; padding: 8px 0; background: var(--bg, #0b0f14); }
+    .sg-chip { border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.05); color: inherit; border-radius: 999px; padding: 7px 13px; font-size: 13px; cursor: pointer; }
+    .sg { border: 1px solid rgba(255,255,255,.12); border-radius: 16px; margin: 0 0 18px; background: rgba(255,255,255,.03); }
+    .sg > summary { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; list-style: none; }
+    .sg > summary::-webkit-details-marker { display: none; }
+    .sg-ico { font-size: 26px; }
+    .sg-t { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+    .sg-t b { font-size: 17px; }
+    .sg-t small { opacity: .7; font-size: 12.5px; }
+    .sg-body { padding: 0 14px 14px; }
+    .sg-sub { margin-top: 14px; }
+    .sg-sub-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 8px; padding-left: 10px; border-left: 3px solid rgba(255,255,255,.25); }
+    .sg-sub-h small { opacity: .65; font-size: 12px; }
     .strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(225px, 1fr)); gap: 12px; }
     .panel { background: rgba(255,255,255,.04); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
     .panel h3 { margin: 0 0 10px; font-size: 15px; }
@@ -307,6 +320,7 @@
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
         <a href="#/loss-return" data-nav="loss-return">📉 Retour après perte</a>
+        <a href="#/loss-relaunch" data-nav="loss-relaunch">🔁 Relance après perte</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
@@ -568,6 +582,7 @@
       <div class="home-section-label">Analyse des pertes</div>
       <div class="home-grid">
         ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
+        ${card('#/loss-relaunch', '🔁', 'Relance après perte', `${((snapshot.lossRelaunch || {}).configs || []).length} configuration(s) · une prédiction perdue → même costume à +N`)}
       </div>
 
       <div class="home-section-label">Suivi, statistiques et communauté</div>
@@ -610,7 +625,83 @@
       <p class="small muted" style="text-align:center;margin:14px 0 0">${snapshot.appVersion ? `Version ${esc(snapshot.appVersion.version)} · ${esc(snapshot.appVersion.name)} · ${esc(snapshot.appVersion.date)}` : 'Version inconnue'}</p>
       <button class="logout-home-btn" onclick="doLogout()">Se déconnecter</button>`;
     }
-    function strategiesPage() { setNav('strategies'); $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Catalogue</span><h2 style="margin-top:7px">Choisir une stratégie</h2></div><button class="button ghost" onclick="resetAllStrategies()">Réinitialiser TOUT aux valeurs du code</button></div><div class="strategy-grid">${strategyButtons()}</div>`; }
+    // ── Page « Stratégies » : 3 niveaux, sans mélange ──────────────────────────────────────────────
+    //   Niveau 1 : la famille (Simples · À configurations · Meilleur + plus faible · Combinées · IA)
+    //   Niveau 2 : le sous-groupe (thème) ou le mode
+    //   Niveau 3 : le bouton de la stratégie, puis directement SES configurations
+    const STRAT_THEMES = [
+      { id: 'num', icon: '🔢', title: 'Numéro & rythme', sub: 'Le costume ou le déclencheur vient du numéro du jeu', keys: ['costume', 'parite'] },
+      { id: 'cartes', icon: '🃏', title: 'Cartes & mains', sub: 'Lecture des cartes du joueur et du banquier', keys: ['dominant', 'matchnul', 'troisiemeBanquier', 'secondeCarte', 'carteBanquier'] },
+      { id: 'absence', icon: '🕳️', title: 'Absence de costume', sub: 'Un costume ne sort plus pendant plusieurs jeux', keys: ['absente', 'absenceJoueur', 'absenceDecalage'] },
+      { id: 'ombre', icon: '👤', title: 'Prédiction dans l’ombre', sub: 'Surveillance silencieuse des 4 costumes', keys: ['ombre', 'ombreJoueur'] },
+    ];
+    const STRAT_FAMILY_KEYS = ['dizaine', 'costumeFaible', 'collecte']; // gérées dans leur propre famille
+    function stratStatusTag(active, total) {
+      if (!total) return '<span class="tag">aucune</span>';
+      return `<span class="tag ${active ? 'good' : 'warn'}">${active}/${total} actives</span>`;
+    }
+    function stratCardSimple(st) {
+      const x = st.stats || {};
+      return `<button class="strategy-button" onclick="location.hash='#/strategy/${encodeURIComponent(st.key)}'">
+        <span class="eyebrow">${st.config?.enabled ? '🟢 Active' : '⏸ En pause'}</span><b>${esc(st.name)}</b><span>${esc((st.about || '').slice(0, 80))}…</span>
+        <span class="strategy-stats"><span class="tag">${esc(x.total ?? 0)} préd.</span><span class="tag good">${esc(x.win ?? 0)} ✓</span><span class="tag bad">${esc(x.loss ?? 0)} ✗</span></span>
+        <em>Ouvrir →</em></button>`;
+    }
+    function stratFamily(id, icon, title, sub, badge, inner) {
+      return `<details class="sg" id="sg-${id}" open><summary><span class="sg-ico">${icon}</span><span class="sg-t"><b>${title}</b><small>${sub}</small></span>${badge}</summary><div class="sg-body">${inner}</div></details>`;
+    }
+    const stratSub = (icon, title, sub, grid) => `<div class="sg-sub"><div class="sg-sub-h"><b>${icon} ${title}</b>${sub ? `<small>${sub}</small>` : ''}</div><div class="strategy-grid">${grid}</div></div>`;
+    function strategyGroups() {
+      const all = snapshot.strategies || [];
+      const byKey = Object.fromEntries(all.map(x => [x.key, x]));
+      const fams = []; // { id, icon, short, count }
+      // 1) Simples : par thème
+      const used = new Set(STRAT_FAMILY_KEYS);
+      let simpleHtml = ''; let simpleN = 0; let simpleA = 0;
+      for (const th of STRAT_THEMES) {
+        const items = th.keys.map(k => byKey[k]).filter(Boolean);
+        items.forEach(x => used.add(x.key));
+        if (!items.length) continue;
+        simpleN += items.length; simpleA += items.filter(x => x.config?.enabled).length;
+        simpleHtml += stratSub(th.icon, th.title, th.sub, items.map(stratCardSimple).join(''));
+      }
+      const others = all.filter(x => !used.has(x.key) && !x.aiCreated);
+      if (others.length) { simpleN += others.length; simpleA += others.filter(x => x.config?.enabled).length; simpleHtml += stratSub('📦', 'Autres', 'Stratégies sans thème', others.map(stratCardSimple).join('')); }
+      fams.push(stratFamily('simples', '🎯', 'Stratégies simples', 'Une stratégie = un réglage (canal, format, rattrapages)', stratStatusTag(simpleA, simpleN), simpleHtml));
+      // 2) À configurations : Dizaine, Costume faible
+      const dz = dizaineTopButtons('parts'); const cf = costumeFaibleTopButtons('parts');
+      const classic = byKey.dizaine ? stratCardSimple(byKey.dizaine) : '';
+      const cfgHtml = stratSub('🔟', 'Dizaine — costume le plus / le moins sorti', `${dz.count} configuration(s)`, dz.main + dz.each + classic)
+        + stratSub('🃏', 'Costume faible sur 2 cartes (miroir)', `${cf.count} configuration(s)`, cf.main + cf.each);
+      fams.push(stratFamily('config', '🧱', 'Stratégies à configurations', 'On crée plusieurs configurations, chacune avec son canal', stratStatusTag(dz.active + cf.active, dz.count + cf.count), cfgHtml));
+      // 3) Meilleur + plus faible : un bloc par mode, avec SES configurations
+      const bw = bestWeakButtons('parts'); const inMode = (m) => bw.all.filter(c => bw.bwModeOf(c) === m);
+      const modeBlock = (m, btn, icon, title, sub, withCfg) => stratSub(icon, title, `${inMode(m).length} configuration(s)${sub ? ' · ' + sub : ''}`, btn + (withCfg ? inMode(m).map(bw.cfgBtn).join('') : ''));
+      const bwHtml = modeBlock('multi', bw.multi, '🎯', 'Message à plusieurs costumes', 'le meilleur, le 2ᵉ, le 3ᵉ, le plus faible', true)
+        + modeBlock('relance', bw.relance, '🔄', 'Relance', 'relance le costume pas venu', false)
+        + modeBlock('trigger', bw.trigger, '⚡', 'Envoi sur déclencheur', '', true)
+        + modeBlock('cycle', bw.cycle, '🔁', 'Cycle meilleur / faible', '', true)
+        + modeBlock('follow', bw.follow, '👁️', 'Suivi des canaux', '', true)
+        + modeBlock('scan', bw.scan, '🔎', 'Détection auto des canaux', '', false)
+        + modeBlock('test', bw.test, '🧪', 'Test meilleur / 2ᵉ meilleur', '', false);
+      fams.push(stratFamily('bw', '🏆', 'Meilleur + plus faible', 'Classement des costumes : 7 façons de l’envoyer', stratStatusTag(bw.all.filter(c => c.enabled).length, bw.all.length), bwHtml));
+      // 4) Combinées
+      const trackers = snapshot.combined?.trackers || [];
+      const combHtml = trackers.length ? stratSub('🧩', 'Sources suivies', `${trackers.length} source(s)`, trackers.map(t => `<button class="strategy-button" onclick="location.hash='#/combined'">
+        <span class="eyebrow">🧩 Combinée</span><b>${esc(t.name)}</b><span>Source : ${esc((optionByKeyGlobal(t.key) || {}).name || t.key)}</span>
+        <span class="strategy-stats"><span class="tag">${esc(t.sentCount ?? 0)} envoyée(s)</span></span><em>Ouvrir →</em></button>`).join(''))
+        : '<div class="empty">Aucune source combinée. Ouvre « Prédiction combinée » pour en suivre une.</div>';
+      fams.push(stratFamily('comb', '🧩', 'Prédictions combinées', 'On combine la sortie d’une autre stratégie', `<span class="tag">${trackers.length} source(s)</span>`, combHtml));
+      // 5) IA : Collecte + stratégies créées avec l'IA
+      const created = all.filter(x => x.aiCreated);
+      const aiItems = (byKey.collecte ? [byKey.collecte] : []).concat(created);
+      const aiHtml = aiItems.length ? stratSub('🤖', 'Collecte et créations IA', `${aiItems.length} stratégie(s)`, aiItems.map(stratCardSimple).join('')) + `<div class="toolbar" style="margin-top:10px"><button class="button small ghost" onclick="location.hash='#/ai-created'">➕ Créer / gérer « Créé par moi avec IA »</button></div>` : '<div class="empty">Aucune stratégie IA pour le moment.</div>';
+      fams.push(stratFamily('ia', '🤖', 'Intelligence artificielle', 'Collecte des meilleures stratégies et créations de l’IA', `<span class="tag">${aiItems.length} stratégie(s)</span>`, aiHtml));
+      const chips = [['simples', '🎯 Simples'], ['config', '🧱 À configurations'], ['bw', '🏆 Meilleur + faible'], ['comb', '🧩 Combinées'], ['ia', '🤖 IA']]
+        .map(([id, label]) => `<button class="sg-chip" onclick="document.getElementById('sg-${id}').scrollIntoView({behavior:'smooth',block:'start'})">${label}</button>`).join('');
+      return `<div class="sg-chips">${chips}</div>${fams.join('')}`;
+    }
+    function strategiesPage() { setNav('strategies'); $('#app').innerHTML = `<div class="section-head" style="padding-top:38px"><div><span class="eyebrow">Catalogue</span><h2 style="margin-top:7px">Choisir une stratégie</h2><p class="small">Chaque famille a son bloc : ouvre-en une, choisis la stratégie, ses configurations sont juste dessous.</p></div><button class="button ghost" onclick="resetAllStrategies()">Réinitialiser TOUT aux valeurs du code</button></div>${strategyGroups()}`; }
     function aiCreatedStrategiesPage() {
       setNav('ai-created');
       const created = (snapshot.strategies || []).filter(s => s.aiCreated);
@@ -1879,7 +1970,7 @@ Faites-en bon usage !
     // 11-20, 21-30…), mais on choisit le 1er/2e/3e/4e costume le PLUS ou
     // le MOINS sorti, et on enregistre autant de configurations qu'on veut.
     // -------------------------------------------------------------------
-    function dizaineTopButtons() {
+    function dizaineTopButtons(part) {
       const d = snapshot.dizaineTop || {};
       const list = d.trackers || [];
       const main = `<button class="strategy-button" onclick="location.hash='#/dizaine-top'">
@@ -1891,6 +1982,7 @@ Faites-en bon usage !
         <span class="eyebrow">🔟 Dizaine${t.enabled ? '' : ' · en pause'}</span><b>${esc(t.name)}</b><span>${esc(t.label)} · prédit à la fin de dizaine +${esc(t.lead)} · ${esc(t.maxR)} rattrapage(s)</span>
         <span class="strategy-stats"><span class="tag good">${esc(t.wins || 0)} gagné(s)</span><span class="tag bad">${esc(t.losses || 0)} perdu(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`).join('');
+      if (part === 'parts') return { main, each, count: list.length, active: list.filter(t => t.enabled).length };
       return main + each;
     }
     // -------------------------------------------------------------------
@@ -1910,7 +2002,7 @@ Faites-en bon usage !
     };
     let bwWizard = { mode: 'multi', strategy: null };
     const bwModeOf = (c) => (c && ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance'].includes(c.mode) ? c.mode : 'multi');
-    function bestWeakButtons() {
+    function bestWeakButtons(part) {
       const d = snapshot.bestWeakTop || {};
       const all = d.configs || [];
       const list = all.filter(c => !['test', 'scan', 'relance'].includes(bwModeOf(c))); // Test, Relance et Détection auto : listées dans leur propre bouton
@@ -1924,10 +2016,12 @@ Faites-en bon usage !
       const test = btn("location.hash='#/test'", BW_MODES.test, tag('test'));
       const relance = btn("location.hash='#/relance'", BW_MODES.relance, tag('relance'));
       const scan = btn("location.hash='#/scan'", BW_MODES.scan, `<span class="strategy-stats"><span class="tag">${count('scan')} configuration(s)</span><span class="tag good">${esc((d.detected || []).length)} canal(aux) détecté(s)</span></span>`);
-      const each = list.map(c => `<button class="strategy-button" onclick="location.hash='#/best-weak'">
+      const cfgBtn = (c) => `<button class="strategy-button" onclick="location.hash='#/best-weak'">
         <span class="eyebrow">${BW_MODES[bwModeOf(c)].icon} ${esc(BW_MODES[bwModeOf(c)].title)}${c.enabled ? '' : ' · en pause'}</span><b>${esc(c.name || c.strategyLabel)}</b><span>${esc(c.strategyLabel)} · Canal : ${esc((c.channelNames || []).join(', '))} · ${esc(c.maxR)} rattrapage(s)</span>
         <span class="strategy-stats"><span class="tag good">${esc(c.wins || 0)} gagné(s)</span><span class="tag bad">${esc(c.losses || 0)} perdu(s)</span></span>
-        <em>Ouvrir la configuration →</em></button>`).join('');
+        <em>Ouvrir la configuration →</em></button>`;
+      const each = list.map(cfgBtn).join('');
+      if (part === 'parts') return { multi: main, cycle, trigger: trig, follow, scan, test, relance, cfgBtn, all, list, bwModeOf };
       return main + cycle + trig + follow + scan + test + relance + each;
     }
     function testCyclePage() {
@@ -1958,7 +2052,7 @@ Faites-en bon usage !
     // 🔄 « Relance » : 1 à 3 costumes parmi les 4 meilleurs ; quand un costume sort directement (✅0️⃣),
     // celui qui n'est pas venu est relancé dans un nouveau message à N+3 (voir best-weak-top.js, mode « relance »)
     // -------------------------------------------------------------------
-    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas venu au jeu suivant → relance à (jeu du ✅) + 7', '', '♣️✅0️⃣N°: 1135', ' ┣━ N°1135✅', ' ┣━♦️ N°1142⏳', '♦️⏳'].join('\n');
+    const BW_RELANCE_DEMO = ['♣️ 95%', ' ┣━ N°1135', '♦️ 94%', '', '↓ ♣️ sort (peu importe le rattrapage) et ♦️ n’est pas venu au jeu suivant → relance à (jeu du ✅) + 7', '', '♦️N°: 1142⏳', ' ┣━♣️ N°1135✅', ' ┣━♦️ N°1142⏳', '♣️✅0️⃣N°: 1135'].join('\n');
     // résumé de la règle de relance, de l'analyse du +n et du canal de relance
     function relanceInfoHtml(c) {
       const r = c.relaunch || {};
@@ -2174,7 +2268,7 @@ Faites-en bon usage !
           'Renseigne le canal Telegram, le nombre de rattrapages, puis coche 1, 2 ou 3 costumes parmi le meilleur, le 2ᵉ, le 3ᵉ et le plus faible. Règle l’attente (jeux après la sortie du 1ᵉʳ costume) et la relance (+n) si besoin.',
         ],
         tips: [
-          'Exemple : N°1135, ♣️ sort directement, ♦️ n’est pas venu au jeu suivant (N°1136) : ♦️ est relancé à N°1142 (1135 + 7, le jeu où ♣️ est sorti + n). Le message devient ♣️✅0️⃣N°: 1135 / ┣━ N°1135✅ / ┣━♦️ N°1142⏳ / ♦️⏳ : chaque numéro est à côté de son costume. Le ⏳ devient ✅ ou ❌ une fois la relance jouée.',
+          'Exemple : N°1135, ♣️ sort directement, ♦️ n’est pas venu au jeu suivant (N°1136) : ♦️ est relancé à N°1142 (1135 + 7, le jeu où ♣️ est sorti + n). Le message devient ♦️N°: 1142⏳ / ┣━♣️ N°1135✅ / ┣━♦️ N°1142⏳ / ♣️✅0️⃣N°: 1135 : le costume pas venu affiche son numéro de relance avec ⏳, et une seule relance part par costume. Le ⏳ devient ✅ ou ❌ une fois la relance jouée.',
           'Pas de relance si les deux costumes sortent pendant l’attente, si aucun ne sort (perdu ❌), ou si le jeu visé est déjà joué. Même si l’autre costume sort ensuite, la relance annoncée reste.',
           'Analyse auto du +n : coche l’option et choisis le +n maximum. À chaque relance, le bot regarde de +3 jusqu’à +n si le costume relancé est sorti (au jeu visé ou dans ses rattrapages). Après 8 situations minimum, le +n le plus réussi est appliqué tout seul (les résultats par +n sont affichés sur la carte). Analyse auto cochée : le N+7 fixe n’est plus utilisé, la relance attend le verdict de l’analyse (aucune relance n’est envoyée avant).',
           'Relance vers un autre canal : renseigne l’ID du canal, le format de prédiction et le nombre de rattrapages. Chaque costume relancé y est envoyé en message simple et vérifié à part (gagnés / perdus comptés à part).',
@@ -2230,6 +2324,15 @@ Faites-en bon usage !
           'Un rapport part à chaque perte, et un bilan avec les taux tous les X rapports.',
         ],
         tips: ['Un canal où le bot publie lui-même peut être coché : tous ses envois sont suivis, quelle que soit la stratégie. Le mot-clé permet de ne garder qu’une stratégie.'] },
+      { g: 'auto', icon: '🔁', title: 'Relance après perte', hash: '#/loss-relaunch',
+        what: 'Suit des canaux : quand une de leurs prédictions est perdue, le bot prédit le même costume à +N après la fin des rattrapages, dans le canal d’envoi de ton choix, avec le format et les rattrapages configurés.',
+        steps: [
+          'Clique sur « Créer » et coche un ou plusieurs canaux à suivre (ID).',
+          'Choisis le canal d’envoi, le format de prédiction, le nombre de rattrapages et N (entier). Exemple : 12 ♦️ perdu avec 2 rattrapages (12 + 2 = 14), N = 3 → prédiction N°17 ♦️.',
+          'La relance est vérifiée à son tour (N°, puis ses rattrapages) et son message est édité en ✅ ou ❌ ; les gagnés / perdus et le taux s’affichent sur la fiche.',
+          'Si le canal coché est celui d’une « Relance » (deux costumes + relance), le bot suit la relance de ce canal (jeu relancé, rattrapages de la relance) et non la perte du message d’origine.',
+        ],
+        tips: ['Une configuration n’envoie jamais deux prédictions pour le même numéro de jeu, ni pour un jeu déjà joué. Le champ « Rattrapages du canal suivi » sert à savoir quand la prédiction suivie est perdue ; vide, il reprend le nombre de rattrapages de la relance.'] },
       { g: 'auto', icon: '🧩', title: 'Prédiction combinée', hash: '#/combined',
         what: 'Réagit après N résultats consécutifs d’une stratégie (rattrapage 1, 2, 3 ou perdue). Par défaut, elle relaie alors la prochaine prédiction de cette stratégie. Toujours vérifié sur la main du joueur.',
         steps: [
@@ -2436,8 +2539,8 @@ Faites-en bon usage !
       const fc = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101;
       return `<div class="field" style="margin-top:14px"><b>🔄 Règle de relance</b><br><small>Un costume sort, l’autre ne vient pas pendant l’attente (jeux après le 1ᵉʳ ✅) : il est alors relancé à (jeu du ✅) + n.</small></div>
         ${n('RelWait', 'Jeux à attendre après la sortie du 1ᵉʳ costume, avant de relancer (0 → 6)', c.relWait ?? 1, 0, 6)}
-        ${n('RelOffset', 'Puis relancer à N+… (3 → 40 · ignoré si l’analyse auto est cochée)', c.relOffset ?? 7, 3, 40)}
-        <label class="check" style="display:block;margin:10px 0"><input id="${prefix}RelAuto" type="checkbox" ${c.relAuto ? 'checked' : ''}> Analyse auto du +n : le bot vérifie de +3 jusqu’à +n si le costume relancé sort, puis applique tout seul le +n le plus réussi. Coché : le N+7 fixe n’est plus utilisé, la relance attend le verdict de l’analyse</label>
+        ${n('RelOffset', 'Puis relancer à N+… (3 → 40 · ignoré si l’analyse auto est cochée)', c.relOffset ?? 3, 3, 40)}
+        <label class="check" style="display:block;margin:10px 0"><input id="${prefix}RelAuto" type="checkbox" ${c.relAuto ? 'checked' : ''}> Analyse auto du +n : le bot vérifie de +3 jusqu’à +n si le costume relancé sort, puis applique tout seul le +n le plus réussi. Coché : le N+… fixe n’est plus utilisé, la relance attend le verdict de l’analyse</label>
         ${n('RelMaxN', '+n maximum à analyser (de +3 jusqu’à +n)', c.relMaxN ?? 12, 3, 40)}
         <div class="field" style="margin-top:14px"><b>📣 Relance vers un autre canal (facultatif)</b></div>
         <div class="field"><label>ID du canal Telegram de la relance (laisse vide pour ne pas en envoyer)</label><input id="${prefix}RelChannels" value="${esc((c.relChannels || []).join(', '))}" placeholder="-1001234567890 ou @nomducanal"></div>
@@ -2611,6 +2714,99 @@ Faites-en bon usage !
     async function removeLossReturn(id) {
       if (!confirm('Supprimer cette configuration ?')) return;
       try { await api(`/api/loss-return/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); lossReturnPage(); toast('Configuration supprimée.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    // 🔁 « Relance après perte » : suit des canaux ; une prédiction perdue → le bot prédit le même costume à (fin des rattrapages) + N
+    // dans le canal d'envoi, avec le format et les rattrapages configurés (voir loss-relaunch.js)
+    async function lossRelaunchPage() {
+      setNav('loss-relaunch');
+      try { await refresh(); } catch (_) {}
+      const p = snapshot.lossRelaunch || {};
+      const list = p.configs || [];
+      const statusLabel = (s) => (s.status === 'gagné' ? `✅${s.step}️⃣` : s.status === 'perdu' ? '❌' : s.status === 'annulé' ? 'annulée' : '⏳');
+      const cards = list.length ? list.map(c => `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
+          <span class="eyebrow">🔁 Relance après perte${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}${esc((c.sourceNames || []).concat((c.relanceIds || []).map(id => { const r = (p.relanceOptions || []).find(o => o.id === id); return '🔄 ' + (r ? r.name : id); })).join(', '))} → ${esc((c.channelNames || []).join(', '))}</h3>
+          <p class="small">Perte constatée (${c.srcMaxR === null || c.srcMaxR === undefined ? esc(c.maxR) : esc(c.srcMaxR)} rattrapage(s) du canal suivi) → même costume à <b>+${esc(c.offset)}</b> après la fin des rattrapages · format ${esc(c.format)} · ${esc(c.maxR)} rattrapage(s) · ${esc(c.following || 0)} prédiction(s) suivie(s) · ${esc(c.waiting || 0)} relance(s) en attente de résultat</p>
+          <p class="small" style="margin:6px 0">📊 ${esc(c.sentCount || 0)} envoyée(s) · ${esc((c.stats || {}).won || 0)} gagnée(s) · ${esc((c.stats || {}).lost || 0)} perdue(s)${c.resolved ? ` · taux <b>${esc(c.rate)}%</b>` : ''}${(c.steps || []).length ? '<br>🎯 ' + c.steps.map(x => `✅${esc(x.step)}️⃣ : ${esc(x.n)}`).join(' · ') : ''}${(c.suits || []).length ? '<br>' + c.suits.map(x => `${esc(x.suit)} ${esc(x.won)}✅ ${esc(x.lost)}❌`).join(' · ') : ''}</p>
+          ${(c.recent || []).length ? `<p class="small" style="margin:6px 0">🕘 ${c.recent.map(s => `${esc(s.suit)} N°${esc(s.target)} ${statusLabel(s)}${s.originTarget ? ` <small>(après N°${esc(s.originTarget)}${s.relName ? ' · relance « ' + esc(s.relName) + ' »' : ''})</small>` : ''}`).join('<br>🕘 ')}</p>` : '<p class="small">Aucune relance envoyée pour l’instant : elle part dès qu’une prédiction suivie est perdue.</p>'}
+          ${(c.lateSkipped || 0) ? `<p class="small">⏱️ ${esc(c.lateSkipped)} relance(s) non envoyée(s) : le jeu visé était déjà joué.</p>` : ''}</div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleLossRelaunch('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="lossRelaunchModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testLossRelaunch('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small ghost" onclick="resetLossRelaunch('${esc(c.id)}')">Remettre les stats à zéro</button>
+          <button class="button small danger" onclick="removeLossRelaunch('${esc(c.id)}')">Supprimer</button></div></div>`).join('') : '<div class="empty">Aucune configuration. Clique sur « Créer ».</div>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse des pertes</span><h2 style="margin-top:7px">🔁 Relance après perte</h2>
+        <p class="small">Clique sur « Créer », coche un ou plusieurs canaux (ID) à suivre. Le bot observe leurs prédictions : si une est perdue (rattrapages du canal épuisés), il prédit le même costume à +N après la fin des rattrapages (N entier réglable ; ex. 12 ♦️ perdu avec 2 rattrapages, N = 3 → N°17 ♦️). On règle le canal d’envoi, le format de prédiction et le nombre de rattrapages. Si le canal coché est celui d’une « Relance » (deux costumes + relance), le bot suit la relance de ce canal et non la perte du message d’origine.</p></div>
+        <div class="toolbar"><button class="button primary" onclick="lossRelaunchModal()">Créer</button><button class="button ghost" onclick="lossRelaunchPage()">Actualiser</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section">${cards}</section>`;
+    }
+    function lossRelaunchModal(id) {
+      const p = snapshot.lossRelaunch || {};
+      const c = id ? (p.configs || []).find(x => x.id === id) : null;
+      const chosen = new Set(c ? (c.sources || []).map(String) : []);
+      const relCh = new Set((p.relanceChannels || []).map(String));
+      const rows = (snapshot.channelList || []);
+      const known = new Set(rows.map(r => String(r.id)));
+      const boxes = rows.map(r => `<label class="check" style="display:block;margin:6px 0"><input type="checkbox" class="lrlSrc" value="${esc(r.id)}" ${chosen.has(String(r.id)) ? 'checked' : ''}> ${esc(r.title || r.id)} <small>${esc(r.id)}${(r.sources || []).length ? ' · publie : ' + esc((r.sources || []).join(', ')) : ''}${relCh.has(String(r.id)) ? ' · 🔄 canal Relance : on suit la relance, pas la perte' : ''}</small> <input type="number" class="lrlSrcR" data-ch="${esc(r.id)}" min="0" max="9" placeholder="ratt." title="Rattrapages de ce canal (0 → 9) ; vide = rattrapage commun ci-dessous" value="${esc(c && c.srcMaxRBy && c.srcMaxRBy[String(r.id)] !== undefined ? c.srcMaxRBy[String(r.id)] : '')}" style="width:62px;margin-left:6px"></label>`).join('');
+      const extra = [...chosen].filter(x => !known.has(x)).join(', ');
+      const chans = rows.map(r => `<option value="${esc(r.id)}">${esc(r.title || '')}</option>`).join('');
+      const nFmt = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101;
+      openModal(`<div class="modal-head"><div><span class="eyebrow">🔁 Relance après perte</span><h3 style="margin-top:8px">${c ? 'Modifier' : 'Nouvelle configuration'}</h3></div></div>
+        <div class="field"><label>Nom (facultatif)</label><input id="lrlName" value="${esc(c ? c.name : '')}"></div>
+        <div class="field"><label>Canal(aux) à suivre : coche un ou plusieurs (canaux où ce bot publie — toute stratégie ou bouton — ou canaux d’autres bots où il est administrateur)</label>${boxes || '<small>Aucun canal connu pour l’instant : saisis-le ci-dessous.</small>'}</div>
+        <div class="field"><label>🔄 Relances à suivre (suivi interne : on suit la relance de cette configuration, pas la perte du message d’origine)</label>${(p.relanceOptions || []).map(r => `<label class="check" style="display:block;margin:6px 0"><input type="checkbox" class="lrlRel" data-maxr="${esc(r.maxR ?? '')}" value="${esc(r.id)}" ${c && (c.relanceIds || []).includes(r.id) ? 'checked' : ''}> ${esc(r.name)} <small>→ ${esc((r.channelNames || []).join(', '))} · ${esc(r.maxR)} rattrapage(s)</small></label>`).join('') || '<small>Aucune configuration « Relance » : crée-en une dans 🔄 Relance.</small>'}</div>
+        <div class="field"><label>Autre canal à suivre (ID ou @nom, facultatif)</label><input id="lrlSourcesExtra" value="${esc(extra)}" placeholder="-1001234567890 ou @nomducanal"></div>
+        <div class="field"><label>Mot-clé (facultatif) : ne suivre que les messages qui contiennent ce mot, par exemple le nom d’une stratégie</label><input id="lrlKeyword" value="${esc(c ? (c.keyword || '') : '')}" placeholder="laisse vide pour tout suivre"></div>
+        <div class="field"><label>Canal d’envoi des prédictions (ID)</label><input id="lrlChannels" list="lrlChanList" value="${esc(c ? (c.channels || []).join(', ') : '')}" placeholder="-1009876543210 ou @nomducanal"><datalist id="lrlChanList">${chans}</datalist></div>
+        <div class="field"><label>Relancer à + N (nombre entier) : relance à la fin des rattrapages de la prédiction perdue + N. N doit être supérieur au plus grand rattrapage des canaux cochés (rattrapage 3 → N ≥ 4, rattrapage 2 → N ≥ 3)</label><input id="lrlOffset" type="number" min="1" max="40" value="${esc(c ? c.offset : 4)}"><small id="lrlMinInfo"></small></div>
+        <div class="field"><label>Format de prédiction (1 → ${esc(nFmt)})</label><input id="lrlFormat" type="number" min="1" max="${esc(nFmt)}" value="${esc(c ? c.format : 1)}"></div>
+        <div class="field"><label>Nombre de rattrapages de la nouvelle prédiction (0 → 9)</label><input id="lrlMaxR" type="number" min="0" max="9" value="${esc(c ? c.maxR : 3)}"></div>
+        <div class="field"><label>Rattrapages du canal suivi (0 → 9), pour savoir quand sa prédiction est perdue — laisse vide pour utiliser le même nombre que ci-dessus (une relance suivie utilise ses propres rattrapages)</label><input id="lrlSrcMaxR" type="number" min="0" max="9" value="${esc(c && c.srcMaxR !== null && c.srcMaxR !== undefined ? c.srcMaxR : '')}" placeholder="identique"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveLossRelaunch('${c ? esc(c.id) : ''}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+      document.querySelectorAll('.lrlSrc,.lrlRel,.lrlSrcR,#lrlSrcMaxR,#lrlMaxR,#lrlSourcesExtra').forEach(el => { el.addEventListener('input', lrlRecalc); el.addEventListener('change', lrlRecalc); });
+      lrlRecalc();
+    }
+    // v58 : N minimum = plus grand rattrapage des canaux / relances cochés + 1 (calculé en direct)
+    function lrlRecalc() {
+      const field = (id) => { const e = document.getElementById(id); return e ? e.value : ''; };
+      const def = field('lrlSrcMaxR') !== '' ? Number(field('lrlSrcMaxR')) : Number(field('lrlMaxR') !== '' ? field('lrlMaxR') : 3);
+      let m = 0;
+      document.querySelectorAll('.lrlSrc:checked').forEach(x => {
+        const inp = [...document.querySelectorAll('.lrlSrcR')].find(i => i.dataset.ch === x.value);
+        m = Math.max(m, inp && inp.value !== '' ? Number(inp.value) : def);
+      });
+      if (ids(field('lrlSourcesExtra')).length) m = Math.max(m, def);
+      document.querySelectorAll('.lrlRel:checked').forEach(x => { m = Math.max(m, x.dataset.maxr !== '' && x.dataset.maxr !== undefined ? Number(x.dataset.maxr) : def); });
+      const min = m + 1, off = document.getElementById('lrlOffset'), info = document.getElementById('lrlMinInfo');
+      if (!off) return;
+      off.min = String(min);
+      if (info) info.textContent = ` Plus grand rattrapage coché : ${m} → N minimum : ${min}`;
+      if (Number(off.value) < min) off.value = String(min);
+    }
+    async function saveLossRelaunch(id) {
+      try {
+        const sources = [...document.querySelectorAll('.lrlSrc:checked')].map(x => x.value).concat(ids(val('lrlSourcesExtra')));
+        const relances = [...document.querySelectorAll('.lrlRel:checked')].map(x => x.value);
+        const body = { name: val('lrlName'), keyword: val('lrlKeyword'), sources, relances, channels: ids(val('lrlChannels')), offset: val('lrlOffset'), format: val('lrlFormat'), maxR: val('lrlMaxR'), srcMaxR: val('lrlSrcMaxR'),
+          srcMaxRBy: Object.fromEntries([...document.querySelectorAll('.lrlSrc:checked')].map(x => [x.value, ([...document.querySelectorAll('.lrlSrcR')].find(i => i.dataset.ch === x.value) || {}).value]).filter(([, v]) => v !== undefined && v !== '')) };
+        await api(id ? `/api/loss-relaunch/configs/${encodeURIComponent(id)}` : '/api/loss-relaunch/configs', id ? 'PUT' : 'POST', body);
+        closeModal(); await refresh(); lossRelaunchPage(); toast('Configuration enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function toggleLossRelaunch(id, enabled) {
+      try { await api(`/api/loss-relaunch/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); lossRelaunchPage(); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testLossRelaunch(id) {
+      try { await api(`/api/loss-relaunch/configs/${encodeURIComponent(id)}/test`, 'POST'); toast('Prédiction de test envoyée dans le canal.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetLossRelaunch(id) {
+      if (!confirm('Remettre à zéro les statistiques de cette configuration ?')) return;
+      try { await api(`/api/loss-relaunch/configs/${encodeURIComponent(id)}`, 'PUT', { resetStats: true }); await refresh(); lossRelaunchPage(); toast('Statistiques remises à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeLossRelaunch(id) {
+      if (!confirm('Supprimer cette configuration ?')) return;
+      try { await api(`/api/loss-relaunch/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); lossRelaunchPage(); toast('Configuration supprimée.'); } catch (e) { toast(e.message, 'error'); }
     }
     async function toggleBestWeak(id, enabled) {
       try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); bwRerender(); }
@@ -2793,7 +2989,7 @@ Faites-en bon usage !
     // (voir costume-faible-top.js). Même fonctionnement que la Dizaine :
     // plusieurs configurations, canal des meilleures prédictions, bilan.
     // -------------------------------------------------------------------
-    function costumeFaibleTopButtons() {
+    function costumeFaibleTopButtons(part) {
       const d = snapshot.costumeFaibleTop || {};
       const list = d.trackers || [];
       const main = `<button class="strategy-button" onclick="location.hash='#/costume-faible-top'">
@@ -2805,6 +3001,7 @@ Faites-en bon usage !
         <span class="eyebrow">🃏 Costume faible${t.enabled ? '' : ' · en pause'}</span><b>${esc(t.name)}</b><span>${esc(t.ruleLabel)} · prédit à a+${esc(t.lead)} · ${esc(t.maxR)} rattrapage(s)</span>
         <span class="strategy-stats"><span class="tag good">${esc(t.wins || 0)} gagné(s)</span><span class="tag bad">${esc(t.losses || 0)} perdu(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`).join('');
+      if (part === 'parts') return { main, each, count: list.length, active: list.filter(t => t.enabled).length };
       return main + each;
     }
     function costumeFaibleTopSiteOptions(currentId) {
@@ -5328,6 +5525,7 @@ Faites-en bon usage !
         else if (h === '#/costume-faible-top') costumeFaibleTopPage();
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/loss-return') lossReturnPage();
+        else if (h === '#/loss-relaunch') lossRelaunchPage();
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
         else if (h === '#/bet-type') betTypePage();
