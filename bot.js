@@ -331,6 +331,20 @@ function runPredictionControlCommand(cmd, by, chat) {
 // message factice sont ignorées. Les messages DÉJÀ envoyés avant l'arrêt
 // restent éditables (résultat gagné/perdu). sendMessageUnguarded sert aux
 // réponses aux commandes (/start, /statut…) dans le canal arrêté.
+// Anti-doublon GLOBAL (tous les boutons) : le même texte exact envoyé au même canal dans les 6 secondes
+// est ignoré. Les prédictions et statistiques portent toujours un numéro de jeu : un vrai second envoi
+// identique n'existe pas ; en revanche une double exécution (deux tâches, deux instances) en produisait.
+const recentSends = new Map();
+function isRecentDuplicate(chatId, text) {
+  if (typeof text !== 'string' || !text) return false;
+  const now = Date.now();
+  const key = `${String(chatId).toLowerCase()}|${text}`;
+  const prev = recentSends.get(key);
+  recentSends.set(key, now);
+  if (recentSends.size > 400) for (const [k, t] of recentSends) { if (now - t > 6000) recentSends.delete(k); }
+  return prev !== undefined && now - prev < 6000;
+}
+
 function installChannelGuard(inst) {
   if (!inst || inst.__channelGuard) return inst;
   inst.__channelGuard = true;
@@ -339,6 +353,10 @@ function installChannelGuard(inst) {
   inst.sendMessageUnguarded = send;
   inst.sendMessage = function guardedSend(chatId, ...rest) {
     if (predictionControl.isChannelPaused(chatId) || gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
+    }
+    if (isRecentDuplicate(chatId, rest[0])) { // même message, même canal, quelques secondes plus tôt
+      state.dupSkipped = (state.dupSkipped || 0) + 1;
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
     // prédiction « en cours » → animation du statut (status-animator.js)
@@ -389,6 +407,17 @@ function fmtDate(d) {
   const s = d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
   const [y, mo, da] = s.split('-');
   return da ? `${da}/${mo}/${y}` : s;
+}
+
+// Complète le nom des canaux de la liste (state.channels) qui n'en ont pas : après un import, les canaux
+// retrouvés dans les boutons n'avaient que leur ID. Best-effort, sans jamais bloquer l'import.
+async function fillChannelTitles(b) {
+  try {
+    const missing = (state.channels || []).filter((c) => c && c.id != null && !c.title).slice(0, 60);
+    await Promise.all(missing.map(async (c) => {
+      try { const chat = await b.getChat(c.id); if (chat && chat.title) c.title = String(chat.title).slice(0, 120); } catch (_) { /* bot absent du canal */ }
+    }));
+  } catch (_) { /* ignoré */ }
 }
 
 function wire(b) {
@@ -545,6 +574,7 @@ function wire(b) {
       if (!resp.ok) throw new Error(`Téléchargement du fichier impossible (HTTP ${resp.status}).`);
       const buffer = Buffer.from(await resp.arrayBuffer());
       const report = await dataTransfer.importBufferAsync(buffer);
+      await fillChannelTitles(b); // noms des canaux retrouvés dans les boutons (visibles dans « Envois »)
       persist();
       if (db.ready) await saveConfigsToDb();
       const lines = ['✅ Import terminé.'];

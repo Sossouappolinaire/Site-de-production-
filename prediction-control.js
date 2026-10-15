@@ -327,5 +327,5 @@ module.exports = {
   isChannelPaused, pauseChannel, resumeChannel, setChannelSchedule, clearChannelSchedule,
   channelStatus, channelStatusText, pausedChannels,
   isPaused, pause, resume, setSchedule, clearSchedule, status, statusText,
-  tickSchedule, restore, restoreFromDb,
+  tickSchedule, restore, restoreFromDb, persist,
 };

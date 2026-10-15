@@ -70,7 +70,13 @@ function parseChannels(value) {
 
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
-  if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
+  if (patch.channels !== undefined) {
+    const next = parseChannels(patch.channels);
+    // les identifiants de messages suivis appartiennent aux anciens canaux : on ne doit JAMAIS
+    // les éditer dans un autre canal (c'était une source de désordre).
+    if (JSON.stringify(next) !== JSON.stringify(panel.channels)) panel.tracked = {};
+    panel.channels = next;
+  }
   persist();
   return config();
 }
@@ -196,16 +202,30 @@ function isRealLiveGame(g) {
 // ---------------------------------------------------------------------------
 // Envoi / édition
 // ---------------------------------------------------------------------------
+const realIdCache = new Map(); // saisie du canal (ID ou @nom) -> identifiant réel Telegram
 async function sendNew(g, text) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return null; }
   if (!panel.channels.length) { panel.lastError = 'Aucun canal configuré pour les statistiques'; return null; }
-  const results = await Promise.all(panel.channels.map((id) =>
-    bot.sendMessage(id, text)
-      .then((m) => ({ ok: true, id, messageId: m.message_id }))
-      .catch((e) => ({ ok: false, id, error: e.message }))
-  ));
-  const sentMessages = results.filter((r) => r.ok).map((r) => ({ chatId: r.id, messageId: r.messageId }));
+  // envoi canal par canal, dans l'ordre : un même canal réel saisi deux fois (ID + @nom) ne reçoit qu'un message.
+  const results = [];
+  const reached = new Set();
+  for (const id of panel.channels) {
+    try {
+      // canal déjà reconnu comme identique à un autre (ID + @nom) : on n'envoie même pas
+      if (realIdCache.has(String(id)) && reached.has(realIdCache.get(String(id)))) continue;
+      const m = await bot.sendMessage(id, text);
+      const real = String((m && m.chat && m.chat.id) != null ? m.chat.id : id);
+      realIdCache.set(String(id), real);
+      if (reached.has(real)) { // doublon de configuration : on supprime le message en trop
+        if (m && m.message_id != null) { try { await bot.deleteMessage(real, m.message_id); } catch (_) { /* best-effort */ } }
+        continue;
+      }
+      reached.add(real);
+      results.push({ ok: true, id: (m && m.chat && m.chat.id != null) ? m.chat.id : id, messageId: m && m.message_id });
+    } catch (e) { results.push({ ok: false, id, error: e.message }); }
+  }
+  const sentMessages = results.filter((r) => r.ok && r.messageId != null).map((r) => ({ chatId: r.id, messageId: r.messageId }));
   const errors = results.filter((r) => !r.ok).map((r) => `${r.id} : ${r.error}`);
   if (!sentMessages.length) { panel.lastError = errors[0] || 'Envoi impossible'; return null; }
   panel.sentCount = (panel.sentCount || 0) + 1;
@@ -222,6 +242,7 @@ async function editExisting(messages, text) {
   ));
 }
 
+const sending = new Set(); // numéros dont le premier envoi est en cours (anti-doublon)
 async function processGame(g) {
   if (!hasStarted(g)) return; // « un jeu qui n'a pas encore commencé n'est pas envoyé »
   if (!isRealLiveGame(g)) return; // pas la table réellement suivie : on bloque
@@ -229,8 +250,21 @@ async function processGame(g) {
   const entry = panel.tracked[g.number];
   const text = buildLine(g);
   if (!entry) {
-    const sentMessages = await sendNew(g, text);
-    if (sentMessages) panel.tracked[g.number] = { messages: sentMessages, signature: sig, finished: !!g.finished };
+    if (sending.has(g.number)) return; // déjà en cours d'envoi : jamais deux fois
+    // ORDRE STRICT : un jeu plus ancien que le dernier déjà publié n'est jamais envoyé après lui
+    // (il apparaîtrait dans le désordre dans le canal).
+    let top = maxTrackedNumber();
+    // numérotation repartie de très bas sur le jeu EN DIRECT = nouveau sabot non détecté : on repart d'un suivi vide
+    if (top != null && g.number < top && state.live && g.number === state.live.number && (top - g.number) > 30) { panel.tracked = {}; top = null; }
+    if (top != null && g.number < top) { panel.skippedLate = (panel.skippedLate || 0) + 1; return; }
+    sending.add(g.number);
+    try {
+      const sentMessages = await sendNew(g, text);
+      if (sentMessages) {
+        panel.tracked[g.number] = { messages: sentMessages, signature: sig, finished: !!g.finished };
+        persist(); // mémorisé tout de suite : un redémarrage ne renverra pas ce jeu
+      }
+    } finally { sending.delete(g.number); }
     return;
   }
   if (entry.signature === sig) return; // rien de visible n'a changé depuis la dernière fois
@@ -342,6 +376,7 @@ function statusView() {
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
     lastError: panel.lastError,
+    skippedLate: panel.skippedLate || 0,
   };
 }
 

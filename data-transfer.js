@@ -97,6 +97,10 @@ const CHUNK = 30000;
 const LIVE_KEYS = [
   'pendingMessages', 'pending', 'block', 'watching', 'lastSeenTarget',
   'streakSuit', 'streakCount', 'lastScanAt', 'live', 'liveGame', 'currentGame',
+  // « Statistiques » : numéro de jeu -> identifiants des messages Telegram déjà publiés. Ces identifiants
+  // n'ont de sens que pour le canal et le sabot en cours : les importer faisait ÉDITER d'anciens messages
+  // avec les jeux d'aujourd'hui et renvoyer des doublons (désordre dans le canal).
+  'tracked', 'skippedLate',
 ];
 // Retrait limité au PREMIER niveau du panneau et aux éléments de `trackers` :
 // aucune clé portant ce nom plus profondément (configuration, historique
@@ -235,6 +239,11 @@ function applyPanel(key, value) {
   if (key !== 'lossNotice' && key !== 'mirrorCounter' && typeof m.configure === 'function' && typeof m.config === 'function') {
     try { m.configure(m.config()); } catch (_) { /* best-effort */ }
   }
+  // 3) modules sans configure()/config() (Retour après perte, Formation, Type de mise, Arrêt/planification) :
+  //    sans cet appel la base gardait l'ANCIEN réglage et, au redémarrage, les canaux importés disparaissaient.
+  if (key !== 'lossNotice' && key !== 'mirrorCounter' && typeof m.persist === 'function') {
+    try { m.persist(); } catch (_) { /* best-effort */ }
+  }
 }
 
 
@@ -353,6 +362,21 @@ function allChannelRows() {
     rows.push({ id: Number(id), titre: h.title, actif: active.includes(id) ? 'oui' : 'non', utilise_par: [...h.usedBy].join(', ') });
   }
   return rows;
+}
+
+// Un canal utilisé par un bouton importé ne doit pas rester dans la liste « canaux supprimés »
+// (sinon il est caché de la page Envois).
+function unignoreUsedChannels() {
+  try {
+    const cur = (store.read() || {}).ignoredChannels;
+    if (!Array.isArray(cur) || !cur.length) return;
+    const used = new Set([...harvestAll().keys()]);
+    const kept = cur.filter((x) => !used.has(String(x).trim()));
+    if (kept.length === cur.length) return;
+    store.patch({ ignoredChannels: kept });
+    const db = lazy('./db');
+    if (db && db.ready) db.setSetting('ignored_channels', JSON.stringify(kept)).catch(() => {});
+  } catch (_) { /* best-effort */ }
 }
 
 function registerHarvestedChannels() {
@@ -477,7 +501,7 @@ function importWorkbook(wb) {
   if (panelKeys.length) {
     const done = [];
     for (const key of panelKeys) {
-      try { applyPanel(key, panels[key]); done.push(key); } catch (e) { skipped.push(`${key} (${e.message})`); }
+      try { applyPanel(key, stripLive(panels[key])); done.push(key); } catch (e) { skipped.push(`${key} (${e.message})`); }
     }
     applied.push(`${SHEETS.PANNEAUX} (${done.length} : ${done.join(', ')})`);
   } else skipped.push(SHEETS.PANNEAUX);
@@ -486,6 +510,7 @@ function importWorkbook(wb) {
   // fichier mais absent de la feuille « Canaux » rejoint la liste des canaux.
   const added = registerHarvestedChannels();
   if (added) applied.push(`Canaux retrouvés dans les boutons (${added})`);
+  unignoreUsedChannels();
 
   return { applied, skipped };
 }

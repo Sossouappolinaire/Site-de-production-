@@ -1,10 +1,15 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v51',
-  name: 'organisation-tous-boutons-suppression',
+  version: 'v54',
+  name: 'statistiques-ordre-import-canaux',
   date: '2026-10-15',
   features: [
+    'Statistiques : plus de doublons ni de désordre — jeux envoyés dans l’ordre strict, un seul envoi par jeu (verrou), canal saisi en ID ET en @nom = un seul message, suivi des messages jamais importé/exporté depuis un fichier Excel (il faisait éditer d’anciens messages)',
+    'Anti-doublon global : le même texte envoyé au même canal dans les 6 secondes est ignoré (tous les boutons)',
+    'Import / export : tous les IDs de canaux utilisés par n’importe quel bouton sont exportés dans la feuille Canaux et réimportés (nom retrouvé auprès de Telegram) ; Retour après perte, Formation, Type de mise et Arrêt/planification sont maintenant aussi sauvegardés en base après import (sinon l’ancien réglage revenait au redémarrage) ; un canal utilisé n’est plus caché par la liste des canaux supprimés',
+    'Page Envois : Meilleur / plus faible de Dizaine et Costume faible, relance, Stabilité du jeu, Compteur miroir et emplacements de Costume faible sont identifiés',
+    'Rangement : succes.html et pay-sebpay.html (jamais servies) déplacées dans public/ ; anciennes copies de index.html / login.html du dossier racine archivées dans _anciens-fichiers/',
     'Organisation par canal : recherche dans le réglage de TOUS les boutons (J\'aime, Retour après perte, Compteur miroir, Jeu 21, Formation…) et importe leur ID de canal ; « Supprimer ce canal partout » retire aussi le canal de J\'aime, Retour après perte, Compteur miroir et de la liste « Bot ajouté », et les canaux qui ne sont plus qu’une trace de l’historique ne reviennent plus',
     'Page Envois : il ne reste que « Organisation par canal » (tous les canaux configurés sont recherchés automatiquement, bouton ↻ Rechercher) ; « Supprimer ce canal partout » est dans la fiche du canal choisi',
     'Stratégie « 2ᵉ carte du joueur » : fiche simplifiée (ID du canal, rattrapages, format, nombre de prédictions avant la pause) ; plus de canal silencieux ni de relais après perte ; après N prédictions la stratégie se met en pause en arrière-plan jusqu’à une perte, puis reprend l’envoi',
