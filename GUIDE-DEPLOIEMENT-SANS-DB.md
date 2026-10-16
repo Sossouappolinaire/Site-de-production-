@@ -1,40 +1,38 @@
-# Correctif de Déploiement — Bot Baccara v106 (Mode Sans Base de Données)
+# Déploiement — Bot Baccara
 
-Le projet a été adapté pour fonctionner de manière 100% autonome **sans aucune base de données**, tout en intégrant directement vos identifiants administrateur dans la configuration.
+Le service Node.js peut démarrer sans PostgreSQL. Aucune URL de base de données,
+aucun jeton Telegram et aucun mot de passe admin ne sont livrés dans le code.
 
----
+## Configuration Render
 
-## 1. Modifications apportées
+Le jeton Telegram saisi dans **Réglages → Bot Telegram** est enregistré dans
+`app_config` en PostgreSQL et rechargé au démarrage. Si le même `DATABASE_URL`
+reste attaché au service, il n'est pas nécessaire de ressaisir `BOT_TOKEN`.
+Le compte admin déjà enregistré en base reste utilisable sans
+`ADMIN_PASSWORD_DEFAULT`.
 
-### A. Suppression de la base de données Render par défaut (`database-url.js`)
-L'ancienne URL PostgreSQL en dur (`postgresql://kile_user:...@dpg-dalgdimk1f9s7385no2g-a...`) qui causait des erreurs ou des blocages au démarrage a été supprimée.
-La fonction `databaseUrl()` renvoie désormais uniquement `process.env.DATABASE_URL || ''`. Sans cette variable, aucune tentative de connexion externe n'est effectuée.
+Dans Render, conserve le `DATABASE_URL` déjà utilisé par le site si tu veux
+retrouver les réglages persistés, dont le jeton Telegram. `BOT_TOKEN` et
+`ADMIN_PASSWORD_DEFAULT` restent des valeurs de secours pour un premier
+démarrage ou un mode hors ligne ; elles ne sont pas requises quand les données
+et le compte existent déjà en base. `ADMIN_ID` configure les commandes Telegram,
+et `ADMIN_IDENTIFIER` peut remplacer l'identifiant admin par défaut.
 
-### B. Ajout des identifiants administrateur dans `config.js`
-Les identifiants sont maintenant déclarés directement dans `config.js` :
-- **Identifiant** : `sossoukouam`
-- **Mot de passe** : `arrow2026`
+`SESSION_SECRET` signe les cookies de connexion. Si sa valeur est déjà présente
+dans l'environnement Render, garde-la telle quelle : pas besoin de la ressaisir.
+Sans cette variable, le service génère une clé temporaire et les sessions de
+connexion peuvent expirer au redémarrage. `ACTIVE_CHANNELS` est un secours pour
+les canaux de diffusion.
 
-Ils peuvent aussi être surchargés si besoin par les variables d'environnement `ADMIN_IDENTIFIER` et `ADMIN_PASSWORD`.
+Ne colle jamais ces valeurs dans le code, dans `data.json` ou dans un ZIP partagé.
 
-### C. Gestion des sessions sans PostgreSQL (`server.js`)
-Dans `server.js`, le gestionnaire de session vérifie si une base est configurée :
-- Si `DATABASE_URL` est absente, les sessions utilisent directement `MemoryStore` sans chercher à joindre PostgreSQL ni `connect-pg-simple`.
-- Si `DATABASE_URL` est fournie, le mode persistant hybride reste activable.
+## Lancer le service
 
-### D. Connexion administrateur immédiate (`auth.js`)
-La méthode `login()` reconnaît immédiatement l'identifiant et le mot de passe configurés, même sans base de données, accordant le rôle `admin` dès le premier démarrage.
+- **Build** : `npm install`
+- **Start** : `npm start`
+- **Contrôle de santé** : `/health`
+- **Connexion au tableau de bord** : `/login.html`
 
----
-
-## 2. Déploiement sur Render ou toute autre plateforme
-
-- **Build Command** : `npm install`
-- **Start Command** : `node bootstrap.js` (ou `npm start`)
-- **Variables recommandées** :
-  - `BOT_TOKEN` : token de votre bot Telegram
-  - `ADMIN_ID` : votre identifiant Telegram
-  - `ACTIVE_CHANNELS` : vos canaux Telegram de diffusion
-- **Accès au tableau de bord** : `https://<votre-domaine>/login.html`
-  - Identifiant : `sossoukouam`
-  - Mot de passe : `arrow2026`
+L'identifiant et le mot de passe du compte admin déjà enregistré en base sont
+inchangés. `ADMIN_PASSWORD_DEFAULT` ne sert qu'à semer un nouveau compte admin
+ou à activer le secours hors ligne.

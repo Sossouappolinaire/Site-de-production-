@@ -1,11 +1,12 @@
-// loss-relaunch.js — stratégie « Relance après perte » (v57, demande admin) :
+// loss-relaunch.js — stratégie « Relance après perte » (v63) :
 //
 //  • On crée une configuration depuis le bouton de l'accueil : on COCHE un ou plusieurs canaux à suivre (ID) — canaux où ce bot
 //    publie (toute stratégie ou bouton) ou canaux d'autres bots où il est administrateur.
 //  • Le bot OBSERVE les prédictions de ces canaux (N° de jeu + costume) et les vérifie lui-même sur la main du JOUEUR, avec le
 //    nombre de rattrapages du canal suivi (N, N+1 … N+R). Costume jamais sorti → prédiction PERDUE.
-//  • Dès qu'une prédiction est perdue, le bot PRÉDIT LE MÊME COSTUME à « fin des rattrapages + N » (N = nombre entier configurable ;
-//    N ≥ 4, supérieur aux 3 rattrapages). Ex. : 12 ♦️ perdu, 3 rattrapages (12 + 3 = 15), N = 4 → prédiction N°19 ♦️.
+//  • Dès que la main du joueur du dernier rattrapage est complète et que le costume est absent, le bot prédit le même costume à
+//    N + R + D. D = 1 (par défaut) signifie le jeu qui suit la fin des rattrapages. Ex. : 12 ❤️ + 3 rattrapages → si absent au 15,
+//    prédiction N°16 ❤️, sans attendre la fin de la main du banquier.
 //  • Configuration : canal d'envoi (ID), format de prédiction (1 → 101), nombre de rattrapages de la nouvelle prédiction.
 //    La nouvelle prédiction est vérifiée à son tour (N°, N+1 … N+rattrapages) et son message est édité (✅ / ❌).
 //  • Canal « Relance » : si un canal coché est celui où une configuration du bouton « Relance » (best-weak-top.js) envoie ses deux
@@ -24,7 +25,8 @@ const loss = require('./loss-return'); // lecture d'une publication de canal (pa
 const { state, hasSuit } = require('./predictor');
 
 const SUITS = ['♠️', '❤️', '♦️', '♣️'];
-const DEFAULT_OFFSET = 4;     // +N par défaut (v58) : N doit être supérieur aux 3 rattrapages, donc 4 minimum
+const DEFAULT_OFFSET = 1;     // D=1 : prédire au jeu qui suit le dernier jeu de rattrapage
+const OFFSET_SCHEMA_VERSION = 2;
 const DEFAULT_MAXR = 3;       // rattrapages par défaut (v58)
 const SEEN_MAX = 1500;
 const PENDING_MAX = 400;
@@ -40,6 +42,21 @@ const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.is
 const parseChannels = loss.parseChannels;
 const sanitizeName = (v) => String(v == null ? '' : v).replace(/[<>]/g, '').trim().slice(0, 60);
 const isDone = (g) => !!g && g.finished && g.complete !== false;
+// La perte d'une prédiction de costume dépend uniquement de la main du joueur.
+// Au baccarat, après deux cartes le joueur tire encore à 0–5 et s'arrête à 6–9.
+// Une troisième carte confirme aussi que sa main est terminée, même si le banquier tire toujours.
+function isPlayerHandComplete(g) {
+  if (!g || g.complete === false) return false;
+  const count = g.playerCards !== null && g.playerCards !== undefined && Number.isFinite(Number(g.playerCards))
+    ? Number(g.playerCards)
+    : (Array.isArray(g.player) ? g.player.length : 0);
+  if (count < 2) return false;
+  if (g.finished) return true;
+  if (count >= 3) return true;
+  if (count !== 2 || g.playerValue === null || g.playerValue === undefined || g.playerValue === '') return false;
+  const total = Number(g.playerValue);
+  return Number.isFinite(total) && total >= 6;
+}
 const maxFinishedGameNumber = () => { let m = 0; for (const g of state.games.values()) if (g.finished && g.number > m) m = g.number; return m; };
 const maxKnownGameNumber = () => { let m = 0; for (const g of state.games.values()) if (g.number > m) m = g.number; return m; };
 const pct = (a, b) => (b > 0 ? Math.round((a * 100) / b) : 0);
@@ -50,22 +67,8 @@ const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinit
 // rattrapage d'un canal suivi : celui saisi pour CE canal, sinon celui commun aux canaux suivis, sinon celui de la configuration
 const chanMaxR = (cfg, key) => { const m = key != null && cfg.srcMaxRBy ? cfg.srcMaxRBy[String(key)] : null; return isNum(m) ? Number(m) : (isNum(cfg.srcMaxR) ? Number(cfg.srcMaxR) : Number(cfg.maxR)); };
 const sourceMaxR = (e, cfg) => (isNum(e.maxR) ? Number(e.maxR) : chanMaxR(cfg, e.srcKey != null ? e.srcKey : e.src));
-// rattrapage d'une configuration « Relance » (bouton Meilleur + plus faible) : celui de ses relances
-function relanceMaxR(id) {
-  try {
-    const bw = require('./best-weak-top');
-    const c = ((bw.panel && bw.panel.configs) || []).find((x) => String(x.id) === String(id));
-    return c && isNum(c.maxR) ? Number(c.maxR) : null;
-  } catch (_) { return null; }
-}
-// v58 : N doit être supérieur au PLUS GRAND rattrapage de tous les canaux / relances cochés (rattrapage 3 → N ≥ 4 ; rattrapage 2 → N ≥ 3)
-function maxFollowedR(cfg) {
-  let m = 0;
-  for (const s of cfg.sources || []) m = Math.max(m, chanMaxR(cfg, s));
-  for (const r of cfg.relances || []) { const v = relanceMaxR(r); m = Math.max(m, v === null ? chanMaxR(cfg, null) : v); }
-  return m;
-}
-const minOffsetOf = (cfg) => maxFollowedR(cfg) + 1;
+// D est le nombre de jeux après le dernier jeu de rattrapage ; D=1 est valide.
+const minOffsetOf = () => 1;
 
 // canaux où une configuration « Relance » du bouton « Meilleur + plus faible » envoie : ils sont suivis par la relance, pas par leurs publications
 function relanceChannelIds() {
@@ -175,10 +178,10 @@ function editSent(entry, statusFr) {
 }
 
 const inflight = new Set();
-// perte constatée : prédit le même costume à (fin des rattrapages du jeu perdu) + N
+// Perte constatée après la main du joueur : prédit le même costume à N + R + D.
 async function launch(cfg, e) {
   const R = sourceMaxR(e, cfg);
-  const target = e.target + R + Math.max(cfg.offset, minOffsetOf(cfg)); // N jamais inférieur au minimum (plus grand rattrapage suivi + 1)
+  const target = e.target + R + Math.max(cfg.offset, minOffsetOf()); // D=1 : jeu suivant la fin des rattrapages
   e.launchTarget = target;
   if (target <= maxKnownGameNumber()) { e.launch = 'trop tard (jeu déjà joué)'; cfg.lateSkipped = (cfg.lateSkipped || 0) + 1; panel.lastError = `Relance N°${target} non envoyée : jeu déjà joué.`; return false; }
   if (panel.pendingMessages.some((s) => s.cfgId === cfg.id && s.target === target) || inflight.has(`${cfg.id}:${target}`)) { // un seul message par numéro de jeu et par configuration
@@ -215,7 +218,7 @@ async function tick() {
       let verdict = null;
       for (let k = 0; k <= R; k++) {
         const g = state.games.get(e.target + k);
-        if (!isDone(g)) { if (e.target + k + 2 <= maxDone) verdict = 'annulé'; break; } // jeu manquant : on abandonne cette prédiction
+        if (!isPlayerHandComplete(g)) { if (e.target + k + 2 <= maxDone) verdict = 'annulé'; break; } // joueur pas encore arrivé à la fin de sa main
         if (hasSuit(g, e.suit)) { verdict = 'gagné'; break; }
         if (k === R) verdict = 'perdu';
       }
@@ -270,6 +273,7 @@ function normalizeConfig(c) {
   const stats = c.stats && typeof c.stats === 'object' ? { ...emptyStats(), ...c.stats, byStep: { ...(c.stats.byStep || {}) }, bySuit: { ...(c.stats.bySuit || {}) } } : emptyStats();
   const srcMaxRaw = c.srcMaxR === '' || c.srcMaxR === null || c.srcMaxR === undefined ? null : clampInt(c.srcMaxR, 0, 9, null);
   return {
+    offsetVersion: OFFSET_SCHEMA_VERSION,
     id: String(c.id), name: sanitizeName(c.name), enabled: c.enabled !== false,
     sources: parseChannels(c.sources).map(String), relances: (Array.isArray(c.relances) ? c.relances : []).map(String).filter(Boolean), channels: parseChannels(c.channels),
     keyword: sanitizeName(c.keyword).slice(0, 40),
@@ -285,15 +289,11 @@ function checkConfig(next) {
   if (!channels.length) throw new Error('Renseigne le canal où envoyer les prédictions.');
   if (sources.some((s) => channels.map(String).includes(String(s)))) throw new Error('Le canal suivi et le canal d’envoi doivent être différents.');
 }
-function checkOffset(out) {
-  const min = minOffsetOf(out);
-  if (out.offset < min) throw new Error(`N doit être supérieur au plus grand rattrapage des canaux cochés (${min - 1}) : N minimum = ${min}.`);
-}
 function addConfig(input) {
   const base = { ...input, relances: Array.isArray(input.relances) ? input.relances : [] };
   checkConfig(base);
   const cfg0 = normalizeConfig({ ...base, id: `lrl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, stats: {} });
-  checkOffset(cfg0); const cfg = cfg0;
+  const cfg = cfg0;
   panel.configs.push(cfg); persist(); return cfg;
 }
 const EDITABLE = ['name', 'enabled', 'keyword', 'sources', 'relances', 'channels', 'offset', 'maxR', 'srcMaxR', 'srcMaxRBy', 'format'];
@@ -303,7 +303,6 @@ function updateConfig(id, patch) {
   const next = { ...c, ...Object.fromEntries(Object.entries(patch || {}).filter(([k]) => EDITABLE.includes(k))) };
   checkConfig(next);
   const out = normalizeConfig({ ...next, stats: patch && patch.resetStats ? {} : c.stats });
-  if (['offset', 'sources', 'relances', 'srcMaxR', 'srcMaxRBy', 'maxR'].some((k) => patch && patch[k] !== undefined)) checkOffset(out);
   Object.keys(c).forEach((k) => delete c[k]); Object.assign(c, out);
   if (patch && patch.resetStats) { panel.pending = panel.pending.filter((e) => e.cfgId !== id); panel.pendingMessages = panel.pendingMessages.filter((s) => s.cfgId !== id || s.status === 'en attente'); }
   persist(); return c;
@@ -362,11 +361,29 @@ function persist() {
 }
 function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
-  panel.configs = (Array.isArray(saved.configs) ? saved.configs : []).filter((c) => c && c.id).map(normalizeConfig);
+  let migratedOffset = false;
+  panel.configs = (Array.isArray(saved.configs) ? saved.configs : []).filter((c) => c && c.id).map((c) => {
+    if (Number(c.offsetVersion) === OFFSET_SCHEMA_VERSION) return normalizeConfig(c);
+    // Avant v62, l'interface imposait D >= (plus grand rattrapage + 1).
+    // Quand l'ancien réglage était exactement cette limite imposée, il s'agissait
+    // du décalage par défaut, pas d'un délai choisi : le convertir en D=1 évite
+    // qu'une configuration RAP déjà enregistrée continue d'attendre plusieurs jeux.
+    const levels = [isNum(c.maxR) ? Number(c.maxR) : DEFAULT_MAXR];
+    if (isNum(c.srcMaxR)) levels.push(Number(c.srcMaxR));
+    for (const value of Object.values(c.srcMaxRBy && typeof c.srcMaxRBy === 'object' ? c.srcMaxRBy : {})) {
+      if (isNum(value)) levels.push(Number(value));
+    }
+    const legacyMinimum = Math.max(0, ...levels) + 1;
+    const oldOffset = Number.parseInt(c.offset, 10);
+    const offset = !Number.isFinite(oldOffset) || oldOffset <= legacyMinimum ? DEFAULT_OFFSET : oldOffset;
+    migratedOffset = true;
+    return normalizeConfig({ ...c, offset });
+  });
   panel.pending = Array.isArray(saved.pending) ? saved.pending.filter((e) => e && e.id).slice(-PENDING_MAX) : [];
   panel.pendingMessages = Array.isArray(saved.pendingMessages) ? saved.pendingMessages.filter((s) => s && s.id).slice(-(SENT_RESOLVED_MAX + PENDING_MAX)) : [];
   panel.seen = Array.isArray(saved.seen) ? saved.seen.slice(-SEEN_MAX) : [];
   panel.channelTitles = saved.channelTitles && typeof saved.channelTitles === 'object' ? saved.channelTitles : {};
+  if (migratedOffset) persist();
 }
 function restore() { try { const s = (store.read() || {}).lossRelaunch; if (s) applySaved(s); } catch (_) {} }
 async function restoreFromDb() {

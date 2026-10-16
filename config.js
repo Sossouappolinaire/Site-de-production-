@@ -23,19 +23,12 @@ module.exports = {
   DATABASE_URL: databaseUrl(),
 
   // ---- Telegram ---------------------------------------------------------
-  // token par défaut au démarrage (v59) : utilisé tant qu'aucun token n'a été enregistré depuis le site ; seul le site peut le changer (jamais un import Excel)
-  BOT_TOKEN: process.env.BOT_TOKEN || '8901286028:AAEEdclK8t_JgPg09wWJn-1XX-ece9EiQcA',
+  // token Telegram : variable d'environnement ou valeur enregistrée depuis le site
+  BOT_TOKEN: process.env.BOT_TOKEN || '',
   ADMIN_ID: process.env.ADMIN_ID || '',
-  // CORRECTIF « le site doit marcher même sans base de données » (demande
-  // admin) : le token et l'admin survivent déjà à un redémarrage via ces
-  // variables d'environnement Render (persistantes, contrairement au disque
-  // local data.json ET à la base Postgres gratuite qui expire). Il manquait
-  // l'équivalent pour les CANAUX ACTIFS (là où les stratégies de base
-  // publient par défaut, voir strategyChannels() dans predictor.js) : sans
-  // eux, même avec un token valide, il n'y a nulle part où envoyer. Réglage
-  // facultatif : ACTIVE_CHANNELS=-1001234567890,-1009876543210 sur Render —
-  // sert de solution de secours SEULEMENT si aucun canal n'est déjà connu
-  // localement/en base (voir bot.js, juste après le chargement de `saved`).
+  // Le jeton et l'administrateur survivent aux redémarrages par variables
+  // d'environnement Render. ACTIVE_CHANNELS est un secours si aucun canal
+  // n'est déjà connu localement ou en base.
   ACTIVE_CHANNELS: String(process.env.ACTIVE_CHANNELS || '')
     .split(/[\s,;]+/)
     .map((s) => s.trim())
@@ -43,14 +36,10 @@ module.exports = {
     .map((s) => (/^-?\d+$/.test(s) ? Number(s) : s)),
 
   // ---- compte administrateur ---------------------------------------------
-  // Identifiants fixes du compte admin, en dur ici (pas seulement en base) :
-  // le site doit marcher SANS base de données connectée, sur N'IMPORTE QUEL
-  // hébergeur (pas seulement Render) — voir auth.js (secours admin hors
-  // ligne) et session-store.js (sessions en mémoire si la base ne répond
-  // pas). Redéfinissables par variable d'environnement si besoin, sinon ces
-  // valeurs par défaut s'appliquent automatiquement dès le déploiement.
+  // Identifiant admin configurable ; aucun mot de passe par défaut n'est livré.
+  // Définir ADMIN_PASSWORD_DEFAULT dans les variables d'environnement.
   ADMIN_IDENTIFIER: process.env.ADMIN_IDENTIFIER || 'sossoukouam',
-  ADMIN_PASSWORD_DEFAULT: process.env.ADMIN_PASSWORD_DEFAULT || 'arrow2026',
+  ADMIN_PASSWORD_DEFAULT: process.env.ADMIN_PASSWORD_DEFAULT || '',
 
   // ---- flux des jeux 1xbet Baccara --------------------------------------
   // 1xBet a changé de domaine et l'ancien championnat 2196545 ne renvoie

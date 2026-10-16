@@ -10,10 +10,8 @@ const { databaseUrl } = require('./database-url');
 let pool = null;
 let ready = false;
 let lastError = null;
-// Priorité : DATABASE_URL (Render) > base « kile » par défaut (database-url.js)
-// > dernier lien enregistré via /setdb ou le panel web. La base par défaut
-// passe devant l'ancien lien resté dans data.json, pour que le changement de
-// base soit effectif même sur un service déjà déployé.
+// Priorité : DATABASE_URL (Render) > dernier lien enregistré via /setdb ou le
+// panel web. Aucun lien PostgreSQL n'est intégré au code.
 let url = databaseUrl() || store.read().databaseUrl || config.DATABASE_URL || '';
 
 const SCHEMA = `

@@ -148,6 +148,7 @@ function setStrategyConfig(key, patch = {}) {
   if (key === RUN_KEY) {
     if (patch.runEnabled !== undefined) next.runEnabled = !!patch.runEnabled;
     if (patch.runTarget !== undefined) next.runTarget = Math.max(1, Math.min(50, parseInt(patch.runTarget, 10) || 5));
+    if (patch.runLosses !== undefined) next.runLosses = Math.max(1, Math.min(10, parseInt(patch.runLosses, 10) || 2));
     // carte du joueur à prédire : 1 = 1ʳᵉ, 2 = 2ᵉ (par défaut), 3 = 3ᵉ
     if (patch.cardIndex !== undefined) next.cardIndex = Math.max(1, Math.min(3, parseInt(patch.cardIndex, 10) || 2));
   }
@@ -225,7 +226,7 @@ function setStrategyConfig(key, patch = {}) {
   if (['silent', 'lossInterval', 'lossTrigger', 'lossWindow'].some(changed)) {
     resetGate(key);
   }
-  if (key === RUN_KEY && ['runEnabled', 'runTarget', 'cardIndex'].some(changed)) resetRun(key); // nouvelle série avec les nouveaux réglages
+  if (key === RUN_KEY && ['runEnabled', 'runTarget', 'runLosses', 'cardIndex'].some(changed)) resetRun(key); // nouvelle série avec les nouveaux réglages
   if (key === 'costume') pullCostume();
   return next;
 }
@@ -843,7 +844,9 @@ function autoView(key) {
 const RUN_KEY = 'secondeCarte';
 function runOn(cfg) { return !!cfg && cfg.runEnabled !== false; }
 function runTargetOf(cfg) { return Math.max(1, Math.min(50, parseInt(cfg && cfg.runTarget, 10) || 5)); }
-function newRun() { return { phase: 'active', succ: 0, since: Date.now() }; }
+// v60 : nombre de pertes (consécutives ou non) à voir pendant la pause avant de reprendre l'envoi (2 par défaut)
+function runLossesOf(cfg) { return Math.max(1, Math.min(10, parseInt(cfg && cfg.runLosses, 10) || 2)); }
+function newRun() { return { phase: 'active', succ: 0, losses: 0, since: Date.now() }; }
 function runState(key) {
   const g = gate(key);
   if (!g.run || typeof g.run !== 'object') g.run = newRun();
@@ -858,12 +861,15 @@ function noteClosedRun(pred) {
   if (pred.status !== 'gagné' && pred.status !== 'perdu') return; // annulé : ignoré
   const r = runState(RUN_KEY);
   if (r.phase === 'silent') {
-    if (pred.status === 'perdu') { r.phase = 'active'; r.succ = 0; r.since = Date.now(); }
+    if (pred.status === 'perdu') { // chaque perte compte (consécutive ou non) ; les gains ne remettent rien à zéro
+      r.losses = (Number(r.losses) || 0) + 1;
+      if (r.losses >= runLossesOf(cfg)) { r.phase = 'active'; r.succ = 0; r.losses = 0; r.since = Date.now(); }
+    }
     return;
   }
   // phase 'active' : on compte chaque prédiction terminée ; à N → pause
   r.succ += 1;
-  if (r.succ >= runTargetOf(cfg)) { r.phase = 'silent'; r.succ = 0; r.since = Date.now(); }
+  if (r.succ >= runTargetOf(cfg)) { r.phase = 'silent'; r.succ = 0; r.losses = 0; r.since = Date.now(); }
 }
 function runView(key) {
   const cfg = state.strategies[key] || {};
@@ -871,9 +877,9 @@ function runView(key) {
   const r = runState(key);
   const target = runTargetOf(cfg);
   const label = r.phase === 'silent'
-    ? `Pause — la stratégie prédit en arrière-plan (sans envoyer) jusqu'à la prochaine perte`
+    ? `Pause — prédit en arrière-plan (sans envoyer) : ${Number(r.losses) || 0}/${runLossesOf(cfg)} perte(s) vue(s) avant la reprise`
     : `Envoi actif — ${r.succ}/${target} prédiction(s) avant la pause`;
-  return { phase: r.phase, succ: r.succ, target, sending: r.phase !== 'silent', label };
+  return { phase: r.phase, succ: r.succ, losses: Number(r.losses) || 0, lossesTarget: runLossesOf(cfg), target, sending: r.phase !== 'silent', label };
 }
 
 function canSend(key) {

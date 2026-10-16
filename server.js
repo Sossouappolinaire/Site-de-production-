@@ -103,7 +103,7 @@ app.use(session({
     pruneSessionInterval: 60 * 60, // purge des sessions expirées toutes les heures
   })),
   name: 'baccara.sid',
-  secret: process.env.SESSION_SECRET || 'baccara-bot-changeme-secret',
+  secret: process.env.SESSION_SECRET || require('crypto').randomBytes(32).toString('hex'),
   resave: false,
   saveUninitialized: false,
   rolling: true, // chaque requête prolonge la session de 12h glissantes
@@ -1962,8 +1962,8 @@ app.post('/api/loss-return/configs/:id/test', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
-// « Relance après perte » (voir loss-relaunch.js) : suit des canaux ; quand une de leurs prédictions est perdue, prédit le même
-// costume à (fin des rattrapages) + N dans un autre canal, avec le format et les rattrapages configurés.
+// « Relance après perte » (voir loss-relaunch.js) : suit des canaux ou des configurations Relance ; dès que la main du joueur
+// du dernier rattrapage est complète, une perte prédit le même costume à N + R + D (D=1 = jeu suivant) dans le canal configuré.
 // vue du bouton + configurations « Relance » proposées comme source (suivi interne de la relance, pas de la perte d'origine)
 function lossRelaunchView() {
   let relanceOptions = [];

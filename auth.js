@@ -1,8 +1,7 @@
 // auth.js — protection du tableau de bord web
 //
-//  • Compte administrateur fixe (identifiant + mot de passe définis dans
-//    config.js — ADMIN_IDENTIFIER / ADMIN_PASSWORD_DEFAULT, en dur pour que
-//    le site marche sans base de données, sur n'importe quel hébergeur) —
+//  • Compte administrateur fixe (identifiant + mot de passe fournis par
+//    variables d'environnement — ADMIN_IDENTIFIER / ADMIN_PASSWORD_DEFAULT) —
 //    semé automatiquement en base au premier démarrage, une seule fois : un
 //    changement de mot de passe ultérieur n'est jamais écrasé au redémarrage.
 //  • Si les identifiants ne correspondent à aucun compte connu, la personne
@@ -34,7 +33,7 @@ function isGmail(email) {
 // ne jamais écraser un mot de passe déjà changé par la suite.
 // ---------------------------------------------------------------------------
 async function ensureAdminSeed() {
-  if (!db.ready) return;
+  if (!db.ready || !ADMIN_PASSWORD_DEFAULT) return;
   try {
     const hash = await bcrypt.hash(ADMIN_PASSWORD_DEFAULT, 10);
     await db.exec(
@@ -67,10 +66,8 @@ async function login(identifierRaw, password) {
   const pwd = String(password || '');
   if (!identifier || !pwd) return { ok: false, error: 'Identifiant et mot de passe requis.' };
 
-  // SECOURS ADMIN : le compte administrateur fixe (« sossoukouam » /
-  // « arrow2026 ») est accepté même si la base de données n'est pas connectée,
-  // pour ne jamais rester enfermé dehors pendant une panne/veille de la base.
-  if (identifier === ADMIN_IDENTIFIER && pwd === ADMIN_PASSWORD_DEFAULT) {
+  // Secours admin hors ligne uniquement avec les identifiants configurés.
+  if (ADMIN_PASSWORD_DEFAULT && identifier === ADMIN_IDENTIFIER && pwd === ADMIN_PASSWORD_DEFAULT) {
     if (!db.ready) {
       return { ok: true, userId: -1, identifier: ADMIN_IDENTIFIER, role: 'admin', offline: true };
     }
@@ -80,7 +77,6 @@ async function login(identifierRaw, password) {
   if (!user) return { ok: false, error: 'Identifiants incorrects.', unknown: true };
   const match = await bcrypt.compare(pwd, user.password_hash);
   if (!match) return { ok: false, error: 'Identifiants incorrects.' };
-
   if (user.role !== 'admin') {
     const access = await checkUserAccess(user);
     if (!access.ok) return access;

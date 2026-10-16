@@ -1298,7 +1298,7 @@ const collecte = {
 //  • Une seule prédiction à la fois : tant que la précédente n'est pas vérifiée, aucune autre n'est lancée.
 //  • « N prédictions puis pause » (logique dans predictor.js : runState / noteClosedRun / canSend) : après N prédictions
 //    envoyées (5 par défaut) la stratégie se met en pause EN ARRIÈRE-PLAN (elle continue de prédire et de se vérifier, sans rien
-//    envoyer, sans canal silencieux) jusqu'à la première prédiction perdue, puis reprend l'envoi.
+//    envoyer, sans canal silencieux) jusqu'à 2 prédictions perdues (consécutives ou non, réglable), puis reprend l'envoi.
 //  • Réglages : ID du canal, rattrapages, format, nombre de prédictions avant la pause.
 const secondeCarte = {
   key: 'secondeCarte',
@@ -1307,7 +1307,7 @@ const secondeCarte = {
     "On prend le costume de la 2ᵉ carte du joueur d'un jeu terminé et on le prédit sur la main du joueur au jeu +2, " +
     "avec le nombre de rattrapages choisi. Une seule prédiction à la fois : on attend sa vérification avant d'en lancer " +
     "une autre. Après N prédictions envoyées la stratégie se met en pause : elle continue de prédire en arrière-plan " +
-    "(sans rien envoyer) jusqu'à une prédiction perdue, puis reprend l'envoi.",
+    "(sans rien envoyer) jusqu'à 2 prédictions perdues (consécutives ou non, réglable), puis reprend l'envoi.",
   defaults: {
     enabled: true,
     format: config.DEFAULT_FORMAT,
@@ -1318,6 +1318,7 @@ const secondeCarte = {
     template: null,
     channels: [],
     runEnabled: true,   // « N prédictions puis pause »
+    runLosses: 2,       // pertes (consécutives ou non) à voir pendant la pause avant de reprendre l'envoi
     runTarget: 5,       // prédictions envoyées avant la pause (en attendant une perte en arrière-plan)
   },
   usesB: false,

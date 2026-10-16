@@ -520,11 +520,11 @@ parmi les 4 meilleurs (meilleur, 2ᵉ, 3ᵉ, plus faible). Avec 2 cochés :
 - Code : `best-weak-top.js` (mode `relance`, `sendRelaunch`, constante `RELAUNCH_OFFSET = 3`) ; mêmes routes `/api/best-weak/configs` avec `{ "mode": "relance", "ranks": [1, 2] }`.
   Exportée / importée avec le reste du panneau « Meilleur + plus faible ».
 
-## 🔁 Relance après perte (bouton de l'accueil, page `/#/loss-relaunch`, v57)
+## 🔁 Relance après perte (bouton de l'accueil, page `/#/loss-relaunch`, v63)
 
 - **Créer** : on coche un ou plusieurs canaux à suivre (ID, ou @nom). Le bot lit les prédictions publiées (N° de jeu + costume) et les vérifie lui-même sur la main du joueur, avec les rattrapages du canal suivi.
-- **Perte** : costume jamais sorti de N à N+R → le bot prédit le **même costume** au jeu **N + R + n** (n = nombre entier réglable, 1 = le jeu qui suit la fin des rattrapages). Exemple : 12 ♦️ perdu, 2 rattrapages (12 + 2 = 14), n = 3 → prédiction **N°17 ♦️**.
-- **Réglages** : canal d'envoi (ID), format de prédiction (1 → 101), nombre de rattrapages de la nouvelle prédiction, « rattrapages du canal suivi » (vide = même nombre), mot-clé facultatif.
+- **Perte** : costume jamais sorti de N à N+R → dès que la main du joueur du dernier rattrapage est complète, le bot prédit le **même costume** au jeu **N + R + D**, sans attendre la fin de la main du banquier. D=1 (par défaut) signifie le jeu qui suit : 12 ❤️ avec 3 rattrapages, absent au 15 → prédiction **N°16 ❤️**.
+- **Réglages** : canaux à suivre (ou configuration « Relance »), ID du canal d'envoi, format de prédiction (1 → 101), nombre de rattrapages de la nouvelle prédiction, rattrapages par canal suivi (vide = même nombre), D (décalage après le dernier rattrapage) et mot-clé facultatif.
 - **Suite** : la relance est vérifiée (N°, puis ses rattrapages) et son message est édité en ✅ / ❌ ; la fiche affiche envoyées, gagnées, perdues, taux et les dernières relances.
 - **Canal « Relance »** : si le canal coché est celui où une configuration du bouton « Relance » envoie ses deux costumes + sa relance (ou si on coche la configuration Relance elle-même), on suit **la relance** (jeu relancé, rattrapages de la relance) et **non la perte** du message d'origine.
 - **Sécurités** : une configuration n'envoie jamais deux prédictions pour le même numéro de jeu ; pas d'envoi pour un jeu déjà joué ; le canal suivi et le canal d'envoi doivent être différents.
