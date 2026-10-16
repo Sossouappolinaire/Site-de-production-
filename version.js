@@ -1,10 +1,12 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v57',
-  name: 'relance-apres-perte',
-  date: '2026-10-15',
+  version: 'v60',
+  name: 'relance-fenetre-20s',
+  date: '2026-10-16',
   features: [
+    'Relance : la fenêtre « Prédit » dure 20 s et reprend le format de prédiction (🎮GAME: #N473 / 🃏Carte ❤️:⌛) avec le nombre de rattrapages en français et en russe ; le token API n’est plus jamais modifié par un import Excel (seul le site le change ; token par défaut au démarrage)',
+    'Relance : une édition Telegram qui échoue (limite, réseau) est maintenant retentée avec le texte à jour au lieu de laisser le ⏳ figé ; relance annulée (jeu manquant, nouveau sabot) affichée ➖ au lieu d’un ⏳ éternel ; envoi vers le 2ᵉ canal de relance : en cas d’échec (canal en pause, jeu instable, bot non admin) nouvel essai toutes les 20 s tant que le jeu relancé n’est pas joué, erreur visible sur la fiche et alerte dans le chat privé de l’admin ; mêmes réessais d’édition pour « Relance après perte »',
     'Nouveau bouton « Relance après perte » (accueil, thème Analyse des pertes) : on clique sur « Créer », on coche un ou plusieurs canaux (ID) à suivre ; le bot observe leurs prédictions et, dès qu’une est perdue (rattrapages du canal épuisés), prédit le même costume à +N après la fin des rattrapages (N entier réglable) ; on règle le canal d’envoi, le format de prédiction et le nombre de rattrapages ; la relance est vérifiée à son tour et son message édité (✅ / ❌), avec gagnés / perdus et taux sur la fiche ; jamais deux prédictions pour le même numéro de jeu ni pour un jeu déjà joué ; si le canal coché est celui d’une « Relance » (deux costumes + relance), on suit la relance de ce canal (jeu relancé, rattrapages de la relance) et non la perte du message d’origine ; modifiable / pause / suppression aussi depuis la page Envois, export et import inclus',
     'Page Stratégies réorganisée en 3 niveaux sans mélange : 5 familles repliables (Simples · À configurations · Meilleur + plus faible · Combinées · IA) avec raccourcis en haut ; les stratégies simples sont rangées par thème (Numéro & rythme, Cartes & mains, Absence, Ombre) ; Dizaine, Costume faible et chaque mode de Meilleur + plus faible ont leur bloc avec leurs configurations juste dessous ; compteur « actives / total » par famille',
     'Relance : le costume pas venu affiche son numéro de relance avec ⏳ (♠️N°: 1126⏳), le costume sorti est rappelé devant le N° d’origine (┣━♣️ N°1119✅), les lignes N° sont toujours dans l’ordre origine puis relance ; une seule relance à la fois par costume (plus de prédictions en double) ; classeur Excel de config-import mis à jour',

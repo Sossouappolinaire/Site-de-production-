@@ -1094,86 +1094,95 @@
   "bestWeakTop": {
     "configs": [
       {
-        "id": "bw-1792003193961-24cg",
+        "id": "c1",
         "mode": "relance",
         "name": "Relance",
         "strategy": "dizaine",
         "channels": [
-          -100
+          "-100"
         ],
-        "sources": [],
-        "rot": {},
-        "maxR": 3,
-        "format": 1,
         "ranks": [
           1,
           2
         ],
-        "cycleRole": 1,
-        "cycleWaiting": false,
-        "cycleDone": [],
+        "maxR": 3,
+        "format": 1,
         "enabled": true,
-        "sentCount": 1,
-        "wins": 2,
-        "losses": 0,
-        "lastSentAt": 1792003193966,
-        "lossGate": false,
-        "gateFrom": null,
         "relWait": 1,
         "relOffset": 3,
         "relMaxN": 12,
         "relAuto": false,
-        "relChannels": [],
+        "relChannels": [
+          "-200"
+        ],
         "relFormat": 1,
         "relMaxR": 2,
         "relStats": {
           "3": {
             "n": 1,
-            "hit": 1
+            "hit": 0
+          },
+          "4": {
+            "n": 1,
+            "hit": 0
+          },
+          "5": {
+            "n": 1,
+            "hit": 0
+          },
+          "6": {
+            "n": 1,
+            "hit": 0
           }
         },
         "relObs": [
           {
-            "base": 1112,
+            "base": 447,
             "suits": [
-              "♦️"
+              "♣️"
             ],
             "lo": 3,
             "hi": 12,
             "maxR": 3,
             "res": {
-              "♦️|3": 1
+              "♣️|3": 0,
+              "♣️|4": 0,
+              "♣️|5": 0,
+              "♣️|6": 0
             },
-            "at": 1792003193966
+            "at": 1792137256916
           }
         ],
         "relOffsetAuto": null,
         "relOutWins": 0,
-        "relOutLosses": 0,
-        "relOutSent": 0
+        "relOutLosses": 1,
+        "relOutSent": 1,
+        "sentCount": 2,
+        "wins": 1,
+        "losses": 1,
+        "lastSentAt": 1792137256916
       }
     ],
     "pending": [
       {
-        "id": "r",
-        "configId": "bw-1792003193961-24cg",
+        "id": "root",
+        "configId": "c1",
         "mode": "relance",
         "strategy": "dizaine",
-        "target": 1112,
+        "target": 447,
         "suits": [
           {
-            "suit": "♣️",
-            "pct": 95,
+            "suit": "❤️",
+            "pct": 99,
             "rank": 1,
             "res": 0,
-            "resGame": 1112
+            "resGame": 447
           },
           {
-            "suit": "♦️",
-            "pct": 94,
+            "suit": "♣️",
+            "pct": 97,
             "rank": 2,
-            "res": 3,
-            "resGame": 1115
+            "res": -1
           }
         ],
         "maxR": 3,
@@ -1183,48 +1192,76 @@
         "status": "gagné",
         "messages": [
           {
-            "chatId": -100,
-            "messageId": 1
+            "chatId": "-100",
+            "messageId": 7
           }
         ],
-        "createdAt": 1792003193963,
-        "resolvedAt": 1792003193974,
+        "createdAt": 1792137256913,
+        "resolvedAt": 1792137256921,
         "firstRes": 0,
+        "firstGame": 447,
         "won": true,
+        "relObserved": true,
         "relaunched": true
       },
       {
-        "id": "bwr-1792003193966-yb3d",
-        "configId": "bw-1792003193961-24cg",
+        "id": "bwr-1792137256916-8cyt",
+        "configId": "c1",
         "mode": "relance",
         "strategy": "dizaine",
-        "target": 1115,
+        "target": 450,
         "suits": [
           {
-            "suit": "♦️",
-            "pct": 94,
+            "suit": "♣️",
+            "pct": 97,
             "rank": 2,
-            "res": 0,
-            "resGame": 1115
+            "res": -1
           }
         ],
         "maxR": 3,
-        "step": 0,
+        "step": 3,
         "gap": 0,
         "skipped": 0,
-        "status": "gagné",
+        "status": "perdu",
         "messages": [],
-        "createdAt": 1792003193966,
-        "resolvedAt": 1792003193974,
+        "createdAt": 1792137256916,
+        "resolvedAt": 1792137256925,
         "relaunch": true,
         "depth": 1,
-        "parentId": "r",
-        "firstRes": 0,
-        "won": true
+        "parentId": "root",
+        "relayTodo": []
+      },
+      {
+        "id": "bwo-1792137256916-fjey",
+        "configId": "c1",
+        "mode": "relaycanal",
+        "relayOut": true,
+        "strategy": "dizaine",
+        "target": 450,
+        "suits": [
+          {
+            "suit": "♣️"
+          }
+        ],
+        "format": 1,
+        "strategyName": "Relance · relance",
+        "maxR": 2,
+        "step": 2,
+        "gap": 0,
+        "skipped": 0,
+        "status": "perdu",
+        "messages": [
+          {
+            "chatId": "-200",
+            "messageId": 59192
+          }
+        ],
+        "createdAt": 1792137256916,
+        "resolvedAt": 1792137256924
       }
     ],
     "recentSent": [
-      "bw-1792003193961-24cg:1115"
+      "c1:rel:450"
     ],
     "watch": [],
     "detected": {},
@@ -1393,6 +1430,93 @@
       "lr-1792049216787-hfoz:-1005:200:♦️",
       "lr-1792049216784-5tku:-1005:210:♣️",
       "lr-1792049216784-5tku:rel:e9:♦️"
+    ],
+    "channelTitles": {}
+  },
+  "lossRelaunch": {
+    "configs": [
+      {
+        "id": "L1",
+        "name": "RAP",
+        "enabled": true,
+        "sources": [],
+        "relances": [
+          "c1"
+        ],
+        "channels": [
+          "-300"
+        ],
+        "keyword": "",
+        "offset": 4,
+        "maxR": 3,
+        "srcMaxR": null,
+        "srcMaxRBy": {},
+        "format": 1,
+        "stats": {
+          "sent": 1,
+          "won": 0,
+          "lost": 1,
+          "cancelled": 0,
+          "byStep": {},
+          "bySuit": {
+            "♣️": {
+              "won": 0,
+              "lost": 1
+            }
+          }
+        },
+        "sentCount": 1,
+        "lastSentAt": 1792136735183
+      }
+    ],
+    "pending": [
+      {
+        "id": "lrl-1792136735160-69bh",
+        "cfgId": "L1",
+        "kind": "relance",
+        "src": "relance:c1",
+        "relName": "Relance",
+        "suit": "♣️",
+        "target": 450,
+        "maxR": 3,
+        "status": "perdu",
+        "phase": "clos",
+        "at": 1792136735160,
+        "closedAt": 1792136735181,
+        "launchTarget": 457,
+        "launch": "envoyé N°457"
+      }
+    ],
+    "pendingMessages": [
+      {
+        "id": "lrls-1792136735182-0tm5",
+        "cfgId": "L1",
+        "suit": "♣️",
+        "target": 457,
+        "maxR": 3,
+        "format": 1,
+        "step": 3,
+        "strategyName": "RAP",
+        "status": "perdu",
+        "messages": [
+          {
+            "chatId": "-300",
+            "messageId": 13889
+          }
+        ],
+        "origin": {
+          "target": 450,
+          "src": "relance:c1",
+          "relName": "Relance",
+          "kind": "relance"
+        },
+        "createdAt": 1792136735182,
+        "resolvedAt": 1792136735198,
+        "editFail": null
+      }
+    ],
+    "seen": [
+      "L1:rl:bwr-1792136735159-vidy:♣️"
     ],
     "channelTitles": {}
   }

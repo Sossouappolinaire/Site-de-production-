@@ -453,7 +453,7 @@ function importWorkbook(wb) {
   if (general.length) {
     const map = {};
     for (const row of general) map[row.cle] = row.valeur;
-    if (map.botToken) state.botToken = String(map.botToken);
+    // v59 : le token API n'est JAMAIS modifié par un import (il se change uniquement depuis le site ; au démarrage le token par défaut est utilisé)
     if (map.adminId !== undefined && map.adminId !== '') state.adminId = Number(map.adminId) || map.adminId;
     if (map.shopBotToken) { state.shopBotToken = String(map.shopBotToken); store.patch({ shopBotToken: state.shopBotToken }); }
     if (map.format !== undefined && map.format !== '') state.format = Number(map.format) || state.format;

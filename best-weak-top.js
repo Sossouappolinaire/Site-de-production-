@@ -413,6 +413,7 @@ function relaunchText(items, owners, lines, targets) {
     const lost = s.res !== undefined && s.res !== null && s.res < 0;
     const n = Array.isArray(targets) ? targets[owners[i]] : undefined;
     if (hit && n !== undefined) return `${s.suit}${suitMark(s, true)}N°: ${n}`; // v47 : sans espace (♣️✅0️⃣N°: 1158)
+    if (owners[i] > 0 && n !== undefined && s.cancelled) return `${s.suit}➖N°: ${n}`; // v59 : relance annulée
     if (owners[i] > 0 && n !== undefined) return lost ? `${s.suit}❌N°: ${n}` : `${s.suit}N°: ${n}⏳`; // v55 : costume relancé en attente → ♠️N°: 1126⏳
     return `${s.suit}${suitMark(s, true)}`;
   });
@@ -454,10 +455,37 @@ async function sendToChannels(cfg, text, parseMode, channels) {
   for (const r of results) { if (r.ok) out.push({ chatId: r.id, messageId: r.messageId }); else if (!r.skipped) panel.lastError = `${r.id} : ${r.error}`; }
   return out;
 }
+// v59 : une édition qui échoue (limite Telegram, coupure réseau…) n'est plus avalée en silence : le message restait alors figé sur ⏳.
+// L'échec est mémorisé (entry.editFail) et retenté au tour suivant (retryFailedEdits) avec le texte À JOUR, jusqu'à 20 fois.
+const EDIT_FINAL_ERR = /message to edit not found|message can't be edited|chat not found|bot was kicked|bot is not a member|forbidden|blocked/i;
 function editAll(entry, text, parseMode) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return;
-  for (const m of entry.messages || []) bot.editMessageText(text, { chat_id: m.chatId, message_id: m.messageId, ...(parseMode ? { parse_mode: parseMode } : {}) }).catch(() => {});
+  for (const m of entry.messages || []) {
+    Promise.resolve()
+      .then(() => bot.editMessageText(text, { chat_id: m.chatId, message_id: m.messageId, ...(parseMode ? { parse_mode: parseMode } : {}) }))
+      .then(() => { if (entry.editFail) { entry.editFail = null; entry.editTries = 0; } })
+      .catch((e) => {
+        const msg = String((e && e.message) || e);
+        if (/message is not modified/i.test(msg)) { entry.editFail = null; return; } // déjà à jour
+        if (EDIT_FINAL_ERR.test(msg)) { panel.lastError = `Édition impossible (${m.chatId}) : ${msg}`; return; } // définitif : inutile de réessayer
+        entry.editTries = (Number(entry.editTries) || 0) + 1;
+        if (entry.editTries <= 20) entry.editFail = Date.now();
+        panel.lastError = `Édition du message ${m.chatId}/${m.messageId} : ${msg}`;
+      });
+  }
+}
+// réédite (texte à jour) les messages dont la dernière édition a échoué
+function retryFailedEdits() {
+  const now = Date.now();
+  for (const e of panel.pending) {
+    if (!e.editFail || now - e.editFail < 8000) continue;
+    e.editFail = null;
+    try {
+      if (e.mode === 'multi' || e.mode === 'relance') { if (!e.relaunch) editMulti(e); }
+      else if (e.status === 'gagné' || e.status === 'perdu') editTrigger(e, e.status);
+    } catch (err) { panel.lastError = err.message; }
+  }
 }
 function editTrigger(entry, statusFr) { const o = triggerMessage(entry, statusFr); editAll(entry, o.text, o.parse_mode); }
 
@@ -819,7 +847,8 @@ function chainResolve(chain, suit) {
   if (last === 0) return { res: rootS.res, owner: 0 };
   const e = chain[last]; const s = e.suits.find((x) => x.suit === suit);
   if (s.res !== undefined && s.res !== null && s.res >= 0) return { res: s.res, owner: last }; // relance gagnée
-  if (e.status === 'en attente' || e.status === 'annulé' || s.res === undefined || s.res === null) return { res: undefined, owner: last }; // relance en cours
+  if (e.status === 'annulé' && (s.res === undefined || s.res === null)) return { res: undefined, owner: last, cancelled: true }; // v59 : relance abandonnée (jeu manquant, nouveau sabot) : plus de ⏳ éternel
+  if (e.status === 'en attente' || s.res === undefined || s.res === null) return { res: undefined, owner: last }; // relance en cours
   return rootHit ? { res: rootS.res, owner: 0 } : { res: s.res, owner: last }; // relance perdue
 }
 function firstHitSuits(e) { // v55 : costume(s) sortis au 1er jeu gagnant du message d'origine (ex. ♣️ N°1119✅)
@@ -831,14 +860,15 @@ function editMulti(entry) {
   const root = chain[0];
   if (chain.length === 1) { editAll(root, predictionText(root.target, root.suits, true, !!root.relaunch), 'HTML'); return; }
   const resolved = root.suits.map((s) => ({ s, ...chainResolve(chain, s.suit) }));
-  const items = resolved.map((r) => ({ ...r.s, res: r.res }));
+  const items = resolved.map((r) => ({ ...r.s, res: r.res, cancelled: !!r.cancelled }));
   const owners = resolved.map((r) => r.owner); // ligne N° de chaque costume
   const pendingSuits = (e) => e.suits.filter((x) => x.res === undefined || x.res === null).map((x) => x.suit).join('');
   const lines = chain.map((e, k) => (k === 0
     ? ` ┣━${firstHitSuits(e)} N°${e.target}✅` // jeu d'origine : le costume sorti (c'est ce qui a déclenché la relance) est rappelé devant le N°
     : e.status === 'gagné' ? ` ┣━ N°${e.target}✅`
       : e.status === 'perdu' ? ` ┣━ N°${e.target}❌`
-        : ` ┣━${pendingSuits(e)} N°${e.target}⏳`)); // relance en cours : le costume relancé est rappelé devant son N°
+        : e.status === 'annulé' ? ` ┣━ N°${e.target}➖`
+          : ` ┣━${pendingSuits(e)} N°${e.target}⏳`)); // relance en cours : le costume relancé est rappelé devant son N°
   editAll(root, relaunchText(items, owners, lines, chain.map((e) => e.target)), 'HTML');
 }
 function verifyMulti(entry, cfg, maxDone) {
@@ -853,7 +883,7 @@ function verifyMulti(entry, cfg, maxDone) {
     if (!done && !early) {
       if (num + 2 <= maxDone) { // jeu manquant : on décale
         entry.gap += 1; entry.skipped = (entry.skipped || 0) + 1;
-        if (entry.skipped > 6) { entry.status = 'annulé'; entry.resolvedAt = Date.now(); changed = true; break; }
+        if (entry.skipped > 6) { entry.status = 'annulé'; entry.resolvedAt = Date.now(); changed = true; try { editMulti(entry); } catch (_) {} break; }
         continue;
       }
       break;
@@ -927,35 +957,39 @@ function sendRelaunch(cfg, parent, remaining) {
   panel.lastError = null;
   editMulti(entry); // ajoute « ├ N°{target} » dans le message d'origine
   flashRelaunch(cfg, target, items).catch((e) => { panel.lastError = e.message; }); // fenêtre « Prédit … » qui disparaît après 10 s
-  if (cfg.relChannels && cfg.relChannels.length) sendRelayOut(cfg, items, target).catch((e) => { panel.lastError = e.message; });
+  if (cfg.relChannels && cfg.relChannels.length) {
+    entry.relayTodo = []; // rempli si l'envoi vers le 2ᵉ canal échoue : retenté par retryRelayOut
+    sendRelayOut(cfg, items, target).then((failed) => { if (failed && failed.length) { entry.relayTodo = failed; entry.relayTries = 1; entry.relayTryAt = Date.now(); persist(); } }).catch((e) => { panel.lastError = e.message; entry.relayTodo = items.map((x) => ({ suit: x.suit })); entry.relayTries = 1; entry.relayTryAt = Date.now(); });
+  }
   persist();
   return true;
 }
-// Fenêtre envoyée dans le canal à chaque relance : « Prédit : N°… costume », supprimée automatiquement après 10 secondes.
-const FLASH_MS = 10 * 1000;
+// Fenêtre envoyée dans le canal à chaque relance, supprimée automatiquement après 20 secondes (v59) :
+//   🎮GAME: #N473
+//   🃏Carte ❤️:⌛
+//   🔁 Rattrapages : 3  ·  Догоны : 3
+const FLASH_MS = 20 * 1000;
 async function flashRelaunch(cfg, target, items) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return;
-  const suits = items.map((it) => it.suit).join('  ');
-  const bar = '━━━━━━━━━━━━━━';
+  const suits = items.map((it) => it.suit).join(' ');
+  const r = Number.isFinite(Number(cfg.maxR)) ? Number(cfg.maxR) : 0;
   const text = [
-    '🔔 <b>RELANCE  ·  ПОВТОР</b>',
-    bar,
-    '🎯 <b>Prédit  ·  Прогноз</b>',
-    '',
-    `🃏 <b>Costume</b>  ·  <b>Масть</b> :  ${suits}`,
-    `🔢 <b>Numéro</b>  ·  <b>Номер</b> :  <b>№${target}</b>`,
-    bar,
-    '⏳ <i>Disparaît dans 10 s  ·  Исчезнет через 10 с</i>',
+    `🎮GAME: #N${target}`,
+    `🃏Carte ${suits}:⌛`,
+    `🔁 Rattrapages : ${r}  ·  Догоны : ${r}`,
   ].join('\n');
-  const sent = await sendToChannels(cfg, text, 'HTML');
+  const sent = await sendToChannels(cfg, text, null);
   if (!sent.length || typeof bot.deleteMessage !== 'function') return;
   const t = setTimeout(() => { for (const m of sent) Promise.resolve(bot.deleteMessage(m.chatId, m.messageId)).catch(() => {}); }, FLASH_MS);
   if (t && typeof t.unref === 'function') t.unref(); // ne retient pas l'arrêt du serveur
 }
 // Relance aussi vers un AUTRE canal : un message simple par costume relancé, au format de prédiction et avec le nombre de rattrapages
 // choisis pour ce canal (vérifié comme une prédiction à part ; gagnés / perdus comptés à part).
+// v59 : renvoie les costumes dont l'envoi a échoué (canal en pause / jeu instable / bot non administrateur / erreur Telegram) :
+// ils sont retentés (retryRelayOut) tant que le jeu relancé n'est pas joué, et l'erreur est visible (panel.lastError + chat privé).
 async function sendRelayOut(cfg, items, target) {
+  const failed = [];
   for (const it of items) {
     const entry = {
       id: `bwo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, configId: cfg.id, mode: 'relaycanal', relayOut: true, strategy: cfg.strategy, target: Number(target),
@@ -964,10 +998,36 @@ async function sendRelayOut(cfg, items, target) {
     };
     const out = triggerMessage(entry, 'en attente');
     entry.messages = await sendToChannels(cfg, out.text, out.parse_mode, cfg.relChannels);
-    if (!entry.messages.length) continue;
+    if (!entry.messages.length) { failed.push({ suit: it.suit }); continue; }
     panel.pending.push(entry); cfg.relOutSent = (cfg.relOutSent || 0) + 1; panel.lastError = null;
   }
+  if (failed.length) panel.lastError = `Relance N°${target} non envoyée vers ${(cfg.relChannels || []).join(', ')} (canal en pause, jeu instable, bot non administrateur ou erreur Telegram)`;
   persist();
+  return failed;
+}
+const RELAY_RETRY_MAX = 6;
+async function retryRelayOut() {
+  for (const e of panel.pending.slice()) {
+    if (!e.relaunch || !Array.isArray(e.relayTodo) || !e.relayTodo.length || e.status !== 'en attente') continue;
+    const cfg = panel.configs.find((c) => c.id === e.configId);
+    if (!cfg || !(cfg.relChannels || []).length) { e.relayTodo = []; continue; }
+    if (Date.now() - (e.relayTryAt || 0) < 20000) continue;
+    if (Number(e.target) <= maxFinishedGameNumber()) { // jeu relancé déjà joué : trop tard pour le prédire
+      e.relayTodo = []; panel.lastError = `Relance N°${e.target} abandonnée vers ${cfg.relChannels.join(', ')} : jeu déjà joué.`; notifyAdminRelay(cfg, e, 'jeu déjà joué'); continue;
+    }
+    e.relayTries = (Number(e.relayTries) || 0) + 1; e.relayTryAt = Date.now();
+    const failed = await sendRelayOut(cfg, e.relayTodo, e.target).catch((err) => { panel.lastError = err.message; return e.relayTodo; });
+    e.relayTodo = failed;
+    if (failed.length && e.relayTries >= RELAY_RETRY_MAX) { e.relayTodo = []; notifyAdminRelay(cfg, e, `${RELAY_RETRY_MAX} essais sans succès`); }
+  }
+}
+function notifyAdminRelay(cfg, e, why) {
+  try {
+    const bot = typeof sender === 'function' ? sender() : null; const adminId = adminIdFn ? adminIdFn() : null;
+    if (!bot || !adminId) return;
+    const raw = typeof bot.sendMessageUnguarded === 'function' ? bot.sendMessageUnguarded : bot.sendMessage.bind(bot);
+    Promise.resolve(raw(adminId, `⚠️ Relance « ${cfg.name || 'Relance'} » : la prédiction N°${e.target} n'a pas pu être envoyée vers ${(cfg.relChannels || []).join(', ')} (${why}). Vérifie que le bot est administrateur du canal et que le canal n'est pas en pause.`)).catch(() => {});
+  } catch (_) { /* information seulement */ }
 }
 // ── Analyse du +n : à chaque relance décidée, on note le costume pas venu ; quand les jeux N+3 … N+n sont joués, on regarde pour chaque +k
 // s'il est sorti (au jeu N+k ou dans ses rattrapages). Le +k qui réussit le plus est retenu (et appliqué tout seul si « analyse auto »). ──
@@ -1093,6 +1153,8 @@ function verifyPending() {
 }
 async function tick() {
   verifyPending();
+  try { retryFailedEdits(); } catch (e) { panel.lastError = e.message; }
+  try { await retryRelayOut(); } catch (e) { panel.lastError = e.message; }
   try { await checkAbsence(); } catch (e) { panel.lastError = e.message; }
   try { await checkPatterns(); } catch (e) { panel.lastError = e.message; }
 }
@@ -1101,7 +1163,9 @@ setOnShoeReset(() => {
   panel.watch = panel.watch.filter((w) => w.kind !== 'scan'); // la numérotation repart de zéro
   for (const c of panel.configs) if (Array.isArray(c.relObs)) c.relObs = []; // observations du +n : la numérotation repart de zéro
   panel.trig.armed = {}; panel.trig.absenceFired = {}; // nouveau sabot : la numérotation repart de zéro
-  for (const e of panel.pending) if (e.status === 'en attente') { e.status = 'annulé'; e.resolvedAt = Date.now(); }
+  const cancelled = [];
+  for (const e of panel.pending) if (e.status === 'en attente') { e.status = 'annulé'; e.resolvedAt = Date.now(); cancelled.push(e); }
+  for (const e of cancelled) { try { if ((e.mode === 'multi' || e.mode === 'relance') && e.relaunch) editMulti(e); } catch (_) {} } // v59 : le ⏳ de la relance annulée est remplacé
   persist();
 });
 

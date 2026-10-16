@@ -23,7 +23,8 @@ module.exports = {
   DATABASE_URL: databaseUrl(),
 
   // ---- Telegram ---------------------------------------------------------
-  BOT_TOKEN: process.env.BOT_TOKEN || '',
+  // token par défaut au démarrage (v59) : utilisé tant qu'aucun token n'a été enregistré depuis le site ; seul le site peut le changer (jamais un import Excel)
+  BOT_TOKEN: process.env.BOT_TOKEN || '8901286028:AAEEdclK8t_JgPg09wWJn-1XX-ece9EiQcA',
   ADMIN_ID: process.env.ADMIN_ID || '',
   // CORRECTIF « le site doit marcher même sans base de données » (demande
   // admin) : le token et l'admin survivent déjà à un redémarrage via ces

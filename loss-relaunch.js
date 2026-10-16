@@ -162,7 +162,15 @@ function editSent(entry, statusFr) {
   const b = bot(); if (!b) return;
   const out = renderFor(entry, statusFr);
   for (const m of entry.messages || []) {
-    b.editMessageText(out.text, { chat_id: m.chatId, message_id: m.messageId, ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}) }).catch(() => { /* message supprimé entre-temps : pas bloquant */ });
+    Promise.resolve().then(() => b.editMessageText(out.text, { chat_id: m.chatId, message_id: m.messageId, ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}) }))
+      .then(() => { entry.editFail = null; })
+      .catch((e) => { // v59 : un échec temporaire (limite Telegram, réseau) est retenté au tour suivant ; message supprimé / bot retiré : on abandonne
+        const msg = String((e && e.message) || e);
+        if (/message is not modified/i.test(msg)) { entry.editFail = null; return; }
+        if (/not found|can't be edited|chat not found|kicked|not a member|forbidden|blocked/i.test(msg)) return;
+        entry.editTries = (Number(entry.editTries) || 0) + 1;
+        if (entry.editTries <= 20) entry.editFail = Date.now();
+      });
   }
 }
 
@@ -238,6 +246,12 @@ async function tick() {
         const bs = st.bySuit[s.suit] || (st.bySuit[s.suit] = { won: 0, lost: 0 });
         if (verdict === 'gagné') bs.won += 1; else bs.lost += 1;
       }
+    }
+    // v59 : messages dont la dernière édition a échoué : réédités avec le résultat à jour
+    for (const s of panel.pendingMessages) {
+      if (!s.editFail || Date.now() - s.editFail < 8000) continue;
+      s.editFail = null;
+      if (s.status === 'gagné' || s.status === 'perdu') editSent(s, s.status); else if (s.status === 'en attente') editSent(s, null);
     }
     // nettoyage : on garde les suivis récents et toutes les entrées encore en attente
     const before = panel.pending.length + panel.pendingMessages.length;
