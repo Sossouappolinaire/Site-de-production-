@@ -895,8 +895,9 @@ Faites-en bon usage !
           <div class="three-col"><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 1}"></div>
           <div class="field"><label>Format de prédiction</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div>
           <div class="field"><label>Nombre de prédictions avant la pause</label><input id="cfgRunTarget" type="number" min="1" max="50" value="${c.runTarget ?? 5}"></div></div>
+          <div class="field"><label>Pertes à voir pendant la pause avant de reprendre (consécutives ou non)</label><input id="cfgRunLosses" type="number" min="1" max="10" value="${c.runLosses ?? 2}"></div>
           <label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
-          <p class="small muted">Après ce nombre de prédictions, la stratégie se met en pause : elle continue de prédire et de se vérifier en arrière-plan, sans rien envoyer, jusqu'à une prédiction perdue, puis elle reprend l'envoi.</p>
+          <p class="small muted">Après ce nombre de prédictions, la stratégie se met en pause : elle continue de prédire et de se vérifier en arrière-plan, sans rien envoyer, jusqu'à ce qu'elle ait vu le nombre de pertes réglé ci-dessus (2 par défaut, consécutives ou non), puis elle reprend l'envoi et recommence la série.</p>
           <div class="toolbar" style="margin-top:14px"><button class="button primary" onclick="saveSecondeCarte()">Enregistrer</button><button class="button small ghost" onclick="testStrategy('secondeCarte','published')">Tester le canal</button><button class="button small danger" onclick="removeChannel('secondeCarte','published')">Retirer le canal</button></div><div id="strategyMessage"></div></div>`; })() : `<div class="two-col"><div class="panel"><h3>Règles de calcul</h3><div class="three-col"><div class="field"><label>Format</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 2}"></div><div class="field"><label>Avance</label><input id="cfgLead" type="number" min="1" max="9" value="${c.lead ?? 2}"></div></div>
           ${s.usesB ? `<div class="field"><label>Compteur B</label><input id="cfgB" type="number" min="0" max="20" value="${c.b ?? 3}"></div>` : ''}
           ${s.key === 'parite' ? `<div class="three-col"><div class="field"><label>Départ</label><input id="cfgStart" type="number" min="1" value="${c.startGame ?? 1}"></div><div class="field"><label>Pas VAR</label><input id="cfgVar" type="number" min="0" value="${c.varStep ?? 0}"></div><div class="field"><label>Décalage</label><input id="cfgDec" type="number" min="1" value="${c.decalage ?? 1}"></div></div>` : ''}
@@ -986,7 +987,7 @@ Faites-en bon usage !
     async function saveStrategy(key) {
       const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       if (key === 'absenceJoueur') patch.entries = readAbsenceEntries('cfg');
-      if (key === 'secondeCarte') Object.assign(patch, { cardIndex: val('cfgCardIndex'), runEnabled: true, runTarget: val('cfgRunTarget') });
+      if (key === 'secondeCarte') Object.assign(patch, { cardIndex: val('cfgCardIndex'), runEnabled: true, runTarget: val('cfgRunTarget'), runLosses: val('cfgRunLosses') });
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
       try { await api(`/api/strategies/${key}`, 'POST', patch); await refresh(); await strategyPage(key); toast('Réglages enregistrés.'); } catch (e) { toast(e.message, 'error'); }
@@ -995,7 +996,7 @@ Faites-en bon usage !
       try {
         const chan = ids(val('pubChannel'));
         if (chan.length) await api('/api/strategies/secondeCarte/channel', 'POST', { channelId: chan[0], mode: 'published' });
-        await api('/api/strategies/secondeCarte', 'POST', { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), runEnabled: true, runTarget: val('cfgRunTarget') });
+        await api('/api/strategies/secondeCarte', 'POST', { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), runEnabled: true, runTarget: val('cfgRunTarget'), runLosses: val('cfgRunLosses') });
         await refresh(); await strategyPage('secondeCarte'); toast('Réglages enregistrés.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -2726,7 +2727,7 @@ Faites-en bon usage !
       const cards = list.length ? list.map(c => `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
           <span class="eyebrow">🔁 Relance après perte${c.enabled ? '' : ' · en pause'}</span>
           <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}${esc((c.sourceNames || []).concat((c.relanceIds || []).map(id => { const r = (p.relanceOptions || []).find(o => o.id === id); return '🔄 ' + (r ? r.name : id); })).join(', '))} → ${esc((c.channelNames || []).join(', '))}</h3>
-          <p class="small">Perte constatée (${c.srcMaxR === null || c.srcMaxR === undefined ? esc(c.maxR) : esc(c.srcMaxR)} rattrapage(s) du canal suivi) → même costume à <b>+${esc(c.offset)}</b> après la fin des rattrapages · format ${esc(c.format)} · ${esc(c.maxR)} rattrapage(s) · ${esc(c.following || 0)} prédiction(s) suivie(s) · ${esc(c.waiting || 0)} relance(s) en attente de résultat</p>
+          <p class="small">Perte constatée après la fin de la main du joueur (${c.srcMaxR === null || c.srcMaxR === undefined ? esc(c.maxR) : esc(c.srcMaxR)} rattrapage(s) du canal suivi) → même costume au jeu <b>N + R + D</b> (D=+${esc(c.offset)} après les rattrapages) · format ${esc(c.format)} · ${esc(c.maxR)} rattrapage(s) · ${esc(c.following || 0)} prédiction(s) suivie(s) · ${esc(c.waiting || 0)} relance(s) en attente de résultat</p>
           <p class="small" style="margin:6px 0">📊 ${esc(c.sentCount || 0)} envoyée(s) · ${esc((c.stats || {}).won || 0)} gagnée(s) · ${esc((c.stats || {}).lost || 0)} perdue(s)${c.resolved ? ` · taux <b>${esc(c.rate)}%</b>` : ''}${(c.steps || []).length ? '<br>🎯 ' + c.steps.map(x => `✅${esc(x.step)}️⃣ : ${esc(x.n)}`).join(' · ') : ''}${(c.suits || []).length ? '<br>' + c.suits.map(x => `${esc(x.suit)} ${esc(x.won)}✅ ${esc(x.lost)}❌`).join(' · ') : ''}</p>
           ${(c.recent || []).length ? `<p class="small" style="margin:6px 0">🕘 ${c.recent.map(s => `${esc(s.suit)} N°${esc(s.target)} ${statusLabel(s)}${s.originTarget ? ` <small>(après N°${esc(s.originTarget)}${s.relName ? ' · relance « ' + esc(s.relName) + ' »' : ''})</small>` : ''}`).join('<br>🕘 ')}</p>` : '<p class="small">Aucune relance envoyée pour l’instant : elle part dès qu’une prédiction suivie est perdue.</p>'}
           ${(c.lateSkipped || 0) ? `<p class="small">⏱️ ${esc(c.lateSkipped)} relance(s) non envoyée(s) : le jeu visé était déjà joué.</p>` : ''}</div></div>
@@ -2736,7 +2737,7 @@ Faites-en bon usage !
           <button class="button small ghost" onclick="resetLossRelaunch('${esc(c.id)}')">Remettre les stats à zéro</button>
           <button class="button small danger" onclick="removeLossRelaunch('${esc(c.id)}')">Supprimer</button></div></div>`).join('') : '<div class="empty">Aucune configuration. Clique sur « Créer ».</div>';
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse des pertes</span><h2 style="margin-top:7px">🔁 Relance après perte</h2>
-        <p class="small">Clique sur « Créer », coche un ou plusieurs canaux (ID) à suivre. Le bot observe leurs prédictions : si une est perdue (rattrapages du canal épuisés), il prédit le même costume à +N après la fin des rattrapages (N entier réglable ; ex. 12 ♦️ perdu avec 2 rattrapages, N = 3 → N°17 ♦️). On règle le canal d’envoi, le format de prédiction et le nombre de rattrapages. Si le canal coché est celui d’une « Relance » (deux costumes + relance), le bot suit la relance de ce canal et non la perte du message d’origine.</p></div>
+        <p class="small">Clique sur « Créer », coche les canaux à suivre ou une configuration « Relance », puis règle les ID de canal, les rattrapages, le format et les autres options. Une perte est confirmée dès que la main du joueur du dernier rattrapage est complète : le bot n’attend pas le banquier. D=1 signifie « jeu suivant » : si ❤️ est prédit au 12 avec 3 rattrapages et reste absent au 15, la relance ❤️ part au 16 (12 + 3 + 1). Le message de relance est ensuite vérifié et mis à jour ✅/❌.</p></div>
         <div class="toolbar"><button class="button primary" onclick="lossRelaunchModal()">Créer</button><button class="button ghost" onclick="lossRelaunchPage()">Actualiser</button></div></div>
         ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
         <section class="section">${cards}</section>`;
@@ -2759,30 +2760,19 @@ Faites-en bon usage !
         <div class="field"><label>Autre canal à suivre (ID ou @nom, facultatif)</label><input id="lrlSourcesExtra" value="${esc(extra)}" placeholder="-1001234567890 ou @nomducanal"></div>
         <div class="field"><label>Mot-clé (facultatif) : ne suivre que les messages qui contiennent ce mot, par exemple le nom d’une stratégie</label><input id="lrlKeyword" value="${esc(c ? (c.keyword || '') : '')}" placeholder="laisse vide pour tout suivre"></div>
         <div class="field"><label>Canal d’envoi des prédictions (ID)</label><input id="lrlChannels" list="lrlChanList" value="${esc(c ? (c.channels || []).join(', ') : '')}" placeholder="-1009876543210 ou @nomducanal"><datalist id="lrlChanList">${chans}</datalist></div>
-        <div class="field"><label>Relancer à + N (nombre entier) : relance à la fin des rattrapages de la prédiction perdue + N. N doit être supérieur au plus grand rattrapage des canaux cochés (rattrapage 3 → N ≥ 4, rattrapage 2 → N ≥ 3)</label><input id="lrlOffset" type="number" min="1" max="40" value="${esc(c ? c.offset : 4)}"><small id="lrlMinInfo"></small></div>
+        <div class="field"><label>Décalage après le dernier rattrapage (D) : 1 = jeu suivant. Exemple : #12 + 3 rattrapages, perdu au #15 → relance au #16.</label><input id="lrlOffset" type="number" min="1" max="40" value="${esc(c ? c.offset : 1)}"><small id="lrlMinInfo"></small></div>
         <div class="field"><label>Format de prédiction (1 → ${esc(nFmt)})</label><input id="lrlFormat" type="number" min="1" max="${esc(nFmt)}" value="${esc(c ? c.format : 1)}"></div>
         <div class="field"><label>Nombre de rattrapages de la nouvelle prédiction (0 → 9)</label><input id="lrlMaxR" type="number" min="0" max="9" value="${esc(c ? c.maxR : 3)}"></div>
         <div class="field"><label>Rattrapages du canal suivi (0 → 9), pour savoir quand sa prédiction est perdue — laisse vide pour utiliser le même nombre que ci-dessus (une relance suivie utilise ses propres rattrapages)</label><input id="lrlSrcMaxR" type="number" min="0" max="9" value="${esc(c && c.srcMaxR !== null && c.srcMaxR !== undefined ? c.srcMaxR : '')}" placeholder="identique"></div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveLossRelaunch('${c ? esc(c.id) : ''}')">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
-      document.querySelectorAll('.lrlSrc,.lrlRel,.lrlSrcR,#lrlSrcMaxR,#lrlMaxR,#lrlSourcesExtra').forEach(el => { el.addEventListener('input', lrlRecalc); el.addEventListener('change', lrlRecalc); });
       lrlRecalc();
     }
-    // v58 : N minimum = plus grand rattrapage des canaux / relances cochés + 1 (calculé en direct)
+    // D commence à 1 : il correspond au jeu qui suit le dernier rattrapage.
     function lrlRecalc() {
-      const field = (id) => { const e = document.getElementById(id); return e ? e.value : ''; };
-      const def = field('lrlSrcMaxR') !== '' ? Number(field('lrlSrcMaxR')) : Number(field('lrlMaxR') !== '' ? field('lrlMaxR') : 3);
-      let m = 0;
-      document.querySelectorAll('.lrlSrc:checked').forEach(x => {
-        const inp = [...document.querySelectorAll('.lrlSrcR')].find(i => i.dataset.ch === x.value);
-        m = Math.max(m, inp && inp.value !== '' ? Number(inp.value) : def);
-      });
-      if (ids(field('lrlSourcesExtra')).length) m = Math.max(m, def);
-      document.querySelectorAll('.lrlRel:checked').forEach(x => { m = Math.max(m, x.dataset.maxr !== '' && x.dataset.maxr !== undefined ? Number(x.dataset.maxr) : def); });
-      const min = m + 1, off = document.getElementById('lrlOffset'), info = document.getElementById('lrlMinInfo');
+      const off = document.getElementById('lrlOffset'), info = document.getElementById('lrlMinInfo');
       if (!off) return;
-      off.min = String(min);
-      if (info) info.textContent = ` Plus grand rattrapage coché : ${m} → N minimum : ${min}`;
-      if (Number(off.value) < min) off.value = String(min);
+      off.min = '1';
+      if (info) info.textContent = ' D=1 envoie au jeu qui suit le dernier rattrapage.';
     }
     async function saveLossRelaunch(id) {
       try {
