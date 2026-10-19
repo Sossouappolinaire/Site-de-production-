@@ -228,6 +228,8 @@
     .modal-actions { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 24px; }
     .modal-head { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; }
     .empty { padding: 36px 20px; color: var(--muted); text-align: center; border: 1px dashed var(--line); border-radius: 14px; }
+    #navProgress { position: fixed; top: 0; left: 0; height: 4px; width: 0; opacity: 0; background: linear-gradient(90deg, #5eead4, #818cf8); z-index: 9999; transition: width .25s ease, opacity .3s ease; pointer-events: none; }
+    #navProgressLabel { position: fixed; top: 10px; right: 12px; z-index: 9999; padding: 4px 10px; border-radius: 999px; font-size: 12px; background: rgba(15,23,42,.88); color: #fff; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
     .loading { min-height: 160px; display: grid; place-items: center; color: var(--muted); }
     /* --- Canaux : jeu en direct (cartes en temps réel) ------------------ */
     .live-game-wrap { margin-bottom: 16px; min-height: 0; overflow: hidden; transition: max-height .3s ease, opacity .3s ease, margin .3s ease; }
@@ -377,7 +379,45 @@
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const ids = (value) => String(value || '').split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
     const formatDate = (value) => value ? new Date(value).toLocaleString('fr-FR', { dateStyle:'short', timeStyle:'short' }) : '—';
-    async function api(url, method = 'GET', body, timeoutMs) {
+    // v66 : barre de progression « chargement » à chaque clic sur un bouton ; elle monte jusqu'à ce que la page / les requêtes lancées
+    // par le clic soient terminées, puis passe à 100 % et le contenu s'affiche. Les rafraîchissements automatiques en arrière-plan ne la montrent pas.
+    const navProgress = (() => {
+      const bar = document.createElement('div'); bar.id = 'navProgress';
+      const lab = document.createElement('div'); lab.id = 'navProgressLabel';
+      document.body.append(bar, lab);
+      let active = false, pending = 0, routing = 0, pct = 0, t0 = 0, timer = null, hideT = null;
+      const paint = () => { bar.style.width = pct + '%'; lab.textContent = 'Chargement… ' + Math.round(pct) + ' %'; };
+      function finish() {
+        clearInterval(timer); timer = null; pct = 100; paint(); active = false;
+        hideT = setTimeout(() => { bar.style.opacity = '0'; lab.style.opacity = '0'; setTimeout(() => { if (!active) bar.style.width = '0'; }, 320); }, 280);
+      }
+      function tick() {
+        pct += (92 - pct) * 0.07; paint();
+        const age = Date.now() - t0;
+        if ((pending === 0 && routing === 0 && age > 450) || age > 90000) finish();
+      }
+      function start() {
+        if (active) return;
+        active = true; t0 = Date.now(); pct = 8; clearTimeout(hideT);
+        bar.style.opacity = '1'; lab.style.opacity = '1'; paint();
+        timer = setInterval(tick, 120);
+      }
+      document.addEventListener('click', (ev) => {
+        const el = ev.target && ev.target.closest ? ev.target.closest('button, a[href], [onclick], summary') : null;
+        if (!el || el.disabled) return;
+        if (el.tagName === 'A' && !String(el.getAttribute('href') || '').startsWith('#/')) return;
+        start();
+      }, true);
+      window.addEventListener('hashchange', start);
+      return {
+        start,
+        track() { if (!active) return () => {}; pending++; return () => { pending = Math.max(0, pending - 1); }; },
+        routeBegin() { routing++; },
+        routeEnd() { routing = Math.max(0, routing - 1); },
+      };
+    })();
+    function api(url, method, body, timeoutMs) { const done = navProgress.track(); return apiRaw(url, method, body, timeoutMs).finally(done); }
+    async function apiRaw(url, method = 'GET', body, timeoutMs) {
       // CORRECTIF (page /ai qui semblait « plantée ») : sans timeout côté
       // navigateur, un appel lent (ex. analyse IA qui essaie plusieurs
       // fournisseurs) laissait la page figée indéfiniment, sans aucun
@@ -631,7 +671,7 @@
     //   Niveau 3 : le bouton de la stratégie, puis directement SES configurations
     const STRAT_THEMES = [
       { id: 'num', icon: '🔢', title: 'Numéro & rythme', sub: 'Le costume ou le déclencheur vient du numéro du jeu', keys: ['costume', 'parite'] },
-      { id: 'cartes', icon: '🃏', title: 'Cartes & mains', sub: 'Lecture des cartes du joueur et du banquier', keys: ['dominant', 'matchnul', 'troisiemeBanquier', 'secondeCarte', 'carteBanquier'] },
+      { id: 'cartes', icon: '🃏', title: 'Cartes & mains', sub: 'Lecture des cartes du joueur et du banquier', keys: ['dominant', 'matchnul', 'troisiemeBanquier', 'secondeCarte', 'deuxTrois', 'carteBanquier'] },
       { id: 'absence', icon: '🕳️', title: 'Absence de costume', sub: 'Un costume ne sort plus pendant plusieurs jeux', keys: ['absente', 'absenceJoueur', 'absenceDecalage'] },
       { id: 'ombre', icon: '👤', title: 'Prédiction dans l’ombre', sub: 'Surveillance silencieuse des 4 costumes', keys: ['ombre', 'ombreJoueur'] },
     ];
@@ -898,10 +938,13 @@ Faites-en bon usage !
           <div class="field"><label>Pertes à voir pendant la pause avant de reprendre (consécutives ou non)</label><input id="cfgRunLosses" type="number" min="1" max="10" value="${c.runLosses ?? 2}"></div>
           <label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <p class="small muted">Après ce nombre de prédictions, la stratégie se met en pause : elle continue de prédire et de se vérifier en arrière-plan, sans rien envoyer, jusqu'à ce qu'elle ait vu le nombre de pertes réglé ci-dessus (2 par défaut, consécutives ou non), puis elle reprend l'envoi et recommence la série.</p>
-          <div class="toolbar" style="margin-top:14px"><button class="button primary" onclick="saveSecondeCarte()">Enregistrer</button><button class="button small ghost" onclick="testStrategy('secondeCarte','published')">Tester le canal</button><button class="button small danger" onclick="removeChannel('secondeCarte','published')">Retirer le canal</button></div><div id="strategyMessage"></div></div>`; })() : `<div class="two-col"><div class="panel"><h3>Règles de calcul</h3><div class="three-col"><div class="field"><label>Format</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 2}"></div><div class="field"><label>Avance</label><input id="cfgLead" type="number" min="1" max="9" value="${c.lead ?? 2}"></div></div>
+          <label class="check" style="margin-top:10px"><input id="cfgRecap" type="checkbox" ${c.recap ? 'checked' : ''}> 📊 Récapitulatif des prédictions toutes les <input id="cfgRecapHours" type="number" min="1" max="12" value="${c.recapHours ?? 2}" style="width:64px"> h (bilan à 00h, puis remis à zéro)</label>
+          <p class="small muted">Envoyé dans le canal de cette stratégie toutes les N heures (2 h : 02h, 04h … 22h · 5 h : 05h, 10h, 15h, 20h — heure d'Abidjan), puis le bilan de la journée à 00h et les compteurs repartent à zéro. Compte uniquement les prédictions envoyées dans ce canal. Aucun message tant qu'aucune prédiction n'est terminée.</p>
+          <div class="toolbar" style="margin-top:14px"><button class="button primary" onclick="saveSecondeCarte()">Enregistrer</button><button class="button small ghost" onclick="testStrategy('secondeCarte','published')">Tester le canal</button><button class="button small danger" onclick="removeChannel('secondeCarte','published')">Retirer le canal</button></div><div id="strategyMessage"></div></div>`; })() : `<div class="two-col"><div class="panel"><h3>Règles de calcul</h3><div class="three-col"><div class="field"><label>Format</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 2}"></div><div class="field"><label>Avance</label><input id="cfgLead" type="number" min="1" max="${s.key === 'deuxTrois' ? 20 : 9}" value="${c.lead ?? 2}"></div></div>
           ${s.usesB ? `<div class="field"><label>Compteur B</label><input id="cfgB" type="number" min="0" max="20" value="${c.b ?? 3}"></div>` : ''}
           ${s.key === 'parite' ? `<div class="three-col"><div class="field"><label>Départ</label><input id="cfgStart" type="number" min="1" value="${c.startGame ?? 1}"></div><div class="field"><label>Pas VAR</label><input id="cfgVar" type="number" min="0" value="${c.varStep ?? 0}"></div><div class="field"><label>Décalage</label><input id="cfgDec" type="number" min="1" value="${c.decalage ?? 1}"></div></div>` : ''}
           ${s.key === 'absenceDecalage' ? `<div class="three-col"><div class="field"><label>Nombre d'absences (jeux consécutifs sans le costume)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Décalage (+ jeux)</label><input id="cfgDec" type="number" min="1" max="99" value="${c.decalage ?? 2}"></div></div><p class="small">Exemple : absence 4 + décalage 2. Si ❤️ est absent aux jeux 2, 3, 4 et 5, on prédit ❤️ sur le jeu 5 + 2 = <b>7</b>. Main du joueur uniquement. La prédiction part une seule fois par série d'absence. Le format, les rattrapages et le canal se règlent ci-dessous comme pour les autres stratégies.</p>` : ''}
+          ${s.key === 'deuxTrois' ? distFormatPicker(c.format) : ''}
           ${s.key === 'absente' ? `<div class="field"><label>Jeux sans costume</label><input id="cfgStreak" type="number" min="2" max="10" value="${c.streak ?? 3}"></div>` : ''}
           ${s.key === 'ombre' ? `<div class="three-col"><div class="field"><label>Absence minimum</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Périmètre</label><select id="cfgScope"><option value="tous" ${c.scope !== 'joueur' ? 'selected' : ''}>Joueur + banquier</option><option value="joueur" ${c.scope === 'joueur' ? 'selected' : ''}>Joueur uniquement</option></select></div></div>` : ''}
           ${s.key === 'ombreJoueur' ? `<div class="field"><label>Absence minimum (jeux sans le costume sur la main du joueur)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><p class="small">Périmètre fixe : main du joueur uniquement (le banquier n'est jamais pris en compte).</p>` : ''}
@@ -914,6 +957,8 @@ Faites-en bon usage !
           <div class="field"><label>Format du message</label><p class="small">Les 89 formats complets sont accessibles depuis le bouton Formats.</p></div><label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           <label class="check" style="margin-top:10px"><input id="cfgAiAuto" type="checkbox" ${c.aiAuto ? 'checked' : ''}> 🤖 Ajustement automatique par l'IA</label>
           ${s.key !== 'ombre' ? `<label class="check" style="margin-top:10px"><input id="cfgDelay" type="checkbox" ${c.delayEnabled ? 'checked' : ''}> ⏱️ Retard d'envoi : attendre que le jeu avant la cible soit en cours, puis <input id="cfgDelaySec" type="number" min="0" max="120" value="${c.delaySec ?? 0}" style="width:64px"> secondes</label>` : ''}
+          <label class="check" style="margin-top:10px"><input id="cfgRecap" type="checkbox" ${c.recap ? 'checked' : ''}> 📊 Récapitulatif des prédictions toutes les <input id="cfgRecapHours" type="number" min="1" max="12" value="${c.recapHours ?? 2}" style="width:64px"> h (bilan à 00h, puis remis à zéro)</label>
+          <p class="small muted">Envoyé dans le canal de cette stratégie toutes les N heures (2 h : 02h, 04h … 22h · 5 h : 05h, 10h, 15h, 20h — heure d'Abidjan), puis le bilan de la journée à 00h et les compteurs repartent à zéro. Compte uniquement les prédictions envoyées dans ce canal. Aucun message tant qu'aucune prédiction n'est terminée.</p>
           <label class="check" style="margin-top:10px"><input id="cfgLossNotice" type="checkbox" ${c.lossNoticeEnabled ? 'checked' : ''}> 📘 Envoyer le message de perte + formation VIP</label>
           <p class="small">Désactivé par défaut. Nécessite aussi que le réglage général (Système → Message de perte) soit activé — les deux doivent être cochés à la fois.</p>
           <p class="small">${['costume','dominant','absente','ombre','ombreJoueur','carteBanquier','dizaine','absenceJoueur','absenceDecalage','troisiemeBanquier'].includes(s.key)
@@ -985,7 +1030,7 @@ Faites-en bon usage !
     async function refreshStrategyLive(key) { await refresh(); strategyPage(key); }
     function val(id) { return document.getElementById(id)?.value ?? ''; }
     async function saveStrategy(key) {
-      const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
+      const patch = { enabled: $('#cfgEnabled')?.checked, recap: $('#cfgRecap')?.checked, recapHours: val('cfgRecapHours'), format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       if (key === 'absenceJoueur') patch.entries = readAbsenceEntries('cfg');
       if (key === 'secondeCarte') Object.assign(patch, { cardIndex: val('cfgCardIndex'), runEnabled: true, runTarget: val('cfgRunTarget'), runLosses: val('cfgRunLosses') });
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
@@ -996,7 +1041,7 @@ Faites-en bon usage !
       try {
         const chan = ids(val('pubChannel'));
         if (chan.length) await api('/api/strategies/secondeCarte/channel', 'POST', { channelId: chan[0], mode: 'published' });
-        await api('/api/strategies/secondeCarte', 'POST', { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), runEnabled: true, runTarget: val('cfgRunTarget'), runLosses: val('cfgRunLosses') });
+        await api('/api/strategies/secondeCarte', 'POST', { enabled: $('#cfgEnabled')?.checked, recap: $('#cfgRecap')?.checked, recapHours: val('cfgRecapHours'), format: val('cfgFormat'), maxR: val('cfgMaxR'), runEnabled: true, runTarget: val('cfgRunTarget'), runLosses: val('cfgRunLosses') });
         await refresh(); await strategyPage('secondeCarte'); toast('Réglages enregistrés.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -3963,24 +4008,37 @@ Faites-en bon usage !
       };
 
     // 🗂️ Organisation par canal (page Envois) : choisir un canal → ses configurations → modifier / retirer ce canal / supprimer
+    // 5 formats simples pour « 2/3 → distribution 2/2 » : on clique sur celui qu'on veut (il remplit le champ « Format »)
+    function distFormatPicker(cur) {
+      const list = snapshot.distFormats || [];
+      const cards = list.map((f) => `<div class="panel dist-fmt" data-fmt="${f.id}" onclick="pickDistFormat(${f.id})" style="cursor:pointer;padding:10px 12px;border:2px solid ${Number(cur) === f.id ? 'var(--accent, #5eead4)' : 'var(--border, #334155)'}"><div class="small muted" style="margin-bottom:4px">Format ${f.id}</div><pre style="margin:0;white-space:pre-wrap;font:inherit">${esc(f.preview)}</pre><div class="small muted" style="margin:6px 0 2px">Après un gain :</div><pre style="margin:0;white-space:pre-wrap;font:inherit">${esc(f.previewWin)}</pre></div>`).join('');
+      return `<div class="field"><label>Choisis l'un des 5 formats (clique) — le numéro s'inscrit dans le champ « Format » ci-dessus, puis « Enregistrer »</label><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">${cards}</div></div><p class="small">Déclencheur : un jeu terminé avec joueur 2 cartes et banquier 3 cartes (2/3). Prédiction : joueur 2 cartes + banquier 2 cartes (2/2), vérifiée avec les rattrapages. « Avance » = nombre de jeux après le 2/3 (4 par défaut).</p>`;
+    }
+    window.pickDistFormat = function(id) {
+      const inp = document.getElementById('cfgFormat'); if (inp) inp.value = id;
+      document.querySelectorAll('.dist-fmt').forEach((el) => { el.style.borderColor = Number(el.dataset.fmt) === id ? 'var(--accent, #5eead4)' : 'var(--border, #334155)'; });
+    };
     window.__cc = { channel: null, list: [] };
     window.diagOrgOpen = async function(id) {
       const box = document.getElementById('diagOrg'); if (!box) return;
       box.innerHTML = '<p class="small muted">Chargement…</p>';
       try {
         const r = await api(`/api/diagnostics/channel-configs/${encodeURIComponent(id)}`);
-        window.__cc = { channel: id, list: r.configs || [] };
+        let rc = {}; try { rc = await api(`/api/recap/${encodeURIComponent(id)}`); } catch (_) { /* ignoré */ }
+        window.__cc = { channel: id, list: r.configs || [], recap: rc };
         diagOrgRender();
       } catch (e) { box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
     };
     function diagOrgRender() {
       const box = document.getElementById('diagOrg'); if (!box) return;
-      const { channel, list } = window.__cc;
+      const { channel, list, recap } = window.__cc;
+      const recapBox = `<label class="check" style="margin:10px 0 4px"><input type="checkbox" ${recap && recap.enabled ? 'checked' : ''} onchange="diagOrgRecap(this.checked)"> 📊 Récapitulatif toutes les 2 h (bilan à 00h, puis remis à zéro)</label><p class="small muted" style="margin:0 0 6px">Compte uniquement les prédictions envoyées dans CE canal, tous boutons confondus : un seul récapitulatif même si plusieurs boutons y publient (02h, 04h … 22h, heure d'Abidjan).${recap && recap.viaStrategy ? ' Activé aussi par la case d\'une stratégie de ce canal.' : ''}</p>`;
       const info = (window.__diagAll || []).find(c => String(c.id) === String(channel)) || {};
       const groups = {};
       list.forEach((c, i) => { (groups[c.group] = groups[c.group] || []).push([c, i]); });
       const other = (info.sources || []).length ? `<p class="small muted">Tous les usages de ce canal : ${esc((info.sources || []).join(' · '))}</p>` : '';
       box.innerHTML = `<div class="panel" style="margin-top:10px"><div class="split"><b>${esc(info.title || channel)} <span class="mono small">${esc(channel)}</span></b><span class="toolbar"><span class="tag">${list.length} configuration(s) modifiable(s)</span><button class="button small danger" onclick="diagDeleteChannel(decodeURIComponent('${encodeURIComponent(String(channel))}'), decodeURIComponent('${encodeURIComponent(String(info.title || ''))}'))">🗑 Supprimer ce canal partout</button></span></div>
+        ${recapBox}
         ${Object.keys(groups).length ? Object.entries(groups).map(([g, rows]) => `<h4 class="small eyebrow" style="margin:14px 0 6px">${esc(g)}</h4>${rows.map(([c, i]) => `<div class="split" style="gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--border)">
             <span><b>${esc(c.name)}</b> ${c.enabled === null ? '' : `<span class="tag ${c.enabled ? 'good' : 'warn'}">${c.enabled ? 'active' : 'en pause'}</span>`}<br><span class="small muted">canaux : ${esc((c.channels || []).join(', ') || '—')}</span></span>
             <span class="toolbar"><a class="button small ghost" href="${esc(c.page)}">Ouvrir</a>
@@ -3989,6 +4047,9 @@ Faites-en bon usage !
               ${c.canDelete ? `<button class="button small danger" onclick="diagOrgDelete(${i})">Supprimer</button>` : ''}</span></div>`).join('')}`).join('') : '<p class="small muted">Aucune configuration modifiable ici pour ce canal.</p>'}
         ${other}</div>`;
     }
+    window.diagOrgRecap = async function(on) {
+      try { const r = await api(`/api/recap/${encodeURIComponent(window.__cc.channel)}`, 'POST', { enabled: !!on }); window.__cc.recap = r; diagOrgRender(); toast(r.enabled ? 'Récapitulatif activé pour ce canal.' : (on ? 'Récapitulatif désactivé.' : (r.viaStrategy ? 'Encore activé par la case d\'une stratégie de ce canal : décoche-la dans la page de la stratégie.' : 'Récapitulatif désactivé pour ce canal.'))); } catch (e) { toast(e.message, 'error'); }
+    };
     window.diagOrgEdit = function(i) {
       const c = window.__cc.list[i]; if (!c) return;
       const known = (window.__diagAll || []);
@@ -5487,6 +5548,7 @@ Faites-en bon usage !
     }
 
     async function route() {
+      navProgress.routeBegin();
       try {
         await refresh();
         const h = location.hash || '#/';
@@ -5541,6 +5603,7 @@ Faites-en bon usage !
       injectBack();
       applyReadOnly();
       firstRouteDone = true;
+      navProgress.routeEnd();
     }
     new MutationObserver(() => injectBack()).observe($('#app'), { childList: true });
     window.addEventListener('hashchange', route); route(); setInterval(() => { if (!location.hash || location.hash === '#/') route(); }, 8000);
