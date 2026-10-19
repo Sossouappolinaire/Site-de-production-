@@ -11,6 +11,7 @@
 const config = require('./config');
 const fmt = require('./formats');
 const strategies = require('./strategies');
+const strategyRecap = require('./strategy-recap');
 const db = require('./db');
 const earlyVerify = require('./early-verify');
 const sendDelay = require('./send-delay');
@@ -128,7 +129,7 @@ function setStrategyConfig(key, patch = {}) {
   if (patch.formatDistribution !== undefined) next.formatDistribution = fmt.clampFormat(patch.formatDistribution);
   if (patch.maxR !== undefined) next.maxR = Math.max(0, Math.min(9, parseInt(patch.maxR, 10) || 0));
   if (patch.b !== undefined) next.b = Math.max(0, parseInt(patch.b, 10) || 0);
-  if (patch.lead !== undefined) next.lead = Math.max(1, Math.min(9, parseInt(patch.lead, 10) || 1));
+  if (patch.lead !== undefined) next.lead = Math.max(1, Math.min(20, parseInt(patch.lead, 10) || 1));
   // paramètres de la stratégie Pair / Impair (VAR)
   if (patch.startGame !== undefined) next.startGame = Math.max(1, parseInt(patch.startGame, 10) || 1);
   if (patch.varStep !== undefined) next.varStep = Math.max(0, Math.min(99, parseInt(patch.varStep, 10) || 0));
@@ -208,6 +209,9 @@ function setStrategyConfig(key, patch = {}) {
   // interrupteur, effectif seulement pour les stratégies à costume (voir
   // aiSuitOverride() plus bas, appelée depuis evaluate()).
   if (patch.aiAuto !== undefined) next.aiAuto = !!patch.aiAuto;
+  // récapitulatif des prédictions toutes les 2 h + bilan à 00h (voir strategy-recap.js)
+  if (patch.recap !== undefined) next.recap = !!patch.recap;
+  if (patch.recapHours !== undefined) next.recapHours = Math.max(1, Math.min(12, parseInt(patch.recapHours, 10) || 2));
   // retard d'envoi (voir send-delay.js)
   if (patch.delayEnabled !== undefined) next.delayEnabled = key === 'ombre' ? false : !!patch.delayEnabled;
   if (patch.delaySec !== undefined) next.delaySec = Math.max(0, Math.min(120, parseInt(patch.delaySec, 10) || 0));
@@ -562,6 +566,7 @@ function startWindow(key, target) {
 
 // mise à jour du filtre à chaque prédiction terminée
 function noteClosed(pred) {
+  try { strategyRecap.noteEntry(pred); } catch (_) { /* le récapitulatif ne doit jamais bloquer la clôture d'une prédiction */ }
   try { noteClosedInner(pred); } finally { emitGateChange(pred.strategy); }
 }
 
@@ -867,7 +872,10 @@ function noteClosedRun(pred) {
     }
     return;
   }
-  // phase 'active' : on compte chaque prédiction terminée ; à N → pause
+  // phase 'active' : on compte chaque prédiction terminée ET RÉELLEMENT ENVOYÉE ; à N → pause
+  // (v64) une prédiction faite pendant la pause — donc jamais envoyée (pred.silent) — qui se termine après
+  // un retour en phase active ne compte plus : sinon la série envoyait 3 ou 4 prédictions au lieu de 5.
+  if (pred.silent === true) return;
   r.succ += 1;
   if (r.succ >= runTargetOf(cfg)) { r.phase = 'silent'; r.succ = 0; r.losses = 0; r.since = Date.now(); }
 }

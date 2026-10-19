@@ -14,6 +14,7 @@ const fmt = require('./formats');
 const statusAnimator = require('./status-animator');
 const sendDelay = require('./send-delay');
 const midnightReset = require('./midnight-reset');
+const strategyRecap = require('./strategy-recap');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const copyAnnounce = require('./copy-announce');
@@ -205,8 +206,8 @@ const HELP =
   '*Prédiction*\n' +
   '/setb <n> — compteur B (apparitions consécutives max)\n' +
   '/setmaxr <n> — nombre de rattrapages vérifiés\n' +
-  '/setformat <1-101> — style du message de prédiction\n' +
-  '/formats [page] — liste des 101 styles\n' +
+  '/setformat <1-106> — style du message de prédiction\n' +
+  '/formats [page] — liste des 106 styles\n' +
   '/apercu <n> — aperçu complet d\'un style (⌛ / ✅ / ❌)\n' +
   '/settemplate <texte> — style personnalisé ({game} {emoji} {suit} {status} {maxR})\n' +
   '/notemplate — revenir au style numéroté\n\n' +
@@ -2319,6 +2320,7 @@ async function applyDbConfigs() {
   await gameStability.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
+  await strategyRecap.restoreFromDb();
   await copyAnnounce.restoreFromDb();
   await betType.restoreFromDb();
   await likeReact.restoreFromDb();
@@ -2397,6 +2399,8 @@ async function startLoop() {
   costumeFaibleTop.restore();
   midnightReset.restore();
   midnightReset.setSender(senderFor);
+  strategyRecap.restore();
+  strategyRecap.setContext({ state, strategyChannels, senderFor, isPaused: () => predictionControl.isPaused() });
   dizaineTop.setSender(senderFor);
   dizaineTop.setAdminId(() => state.adminId);
   costumeFaibleTop.setSender(senderFor);
@@ -2522,6 +2526,8 @@ async function startLoop() {
     // « nouveau départ » de 00h00 (heure d'Abidjan) : export dans le chat privé puis
     // effacement des données, configurations conservées (voir midnight-reset.js)
     setInterval(() => { midnightReset.check().catch((e) => { state.lastError = e.message; }); }, 1000);
+    // récapitulatif des prédictions (case « Récapitulatif » de chaque stratégie) : toutes les 2 h, bilan à 00h puis remise à zéro
+    setInterval(() => { strategyRecap.tick().catch((e) => { state.lastError = e.message; }); }, 20000);
     tick();
   }
   startBot();

@@ -24,6 +24,7 @@
 // de la journée, minimum de prédictions vérifiées, relais de la meilleure
 // configuration vers le canal « meilleures prédictions »).
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const store = require('./store');
 const db = require('./db');
@@ -1269,13 +1270,13 @@ async function verifyPending() {
       }
       const won = hasSuit(g, entry.suit); // main du JOUEUR
       if (won) {
-        entry.status = 'gagné'; entry.resolvedAt = Date.now();
+        entry.status = 'gagné'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry);
         bumpEntry(entry, 'wins', entry.step);
         editPending(entry, 'gagné');
         break;
       }
       if (entry.step >= entry.maxR) {
-        entry.status = 'perdu'; entry.resolvedAt = Date.now();
+        entry.status = 'perdu'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry);
         bumpEntry(entry, 'losses');
         editPending(entry, 'perdu');
         break;

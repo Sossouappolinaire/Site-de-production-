@@ -27,6 +27,7 @@
 //  taux général de la fenêtre si l'échantillon est trop petit). La page « Nul / 2-3 » montre aussi
 //  l'analyse de la façon dont les matchs nuls viennent.
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const store = require('./store');
 const db = require('./db');
@@ -382,13 +383,13 @@ function verifyPending() {
       if (h23 || hX) { // l'un des deux est sorti : l'autre est ignoré
         if (h23) entry.hit.t23 = entry.step;
         if (hX) entry.hit.x = entry.step;
-        entry.status = 'gagné'; entry.resolvedAt = Date.now();
+        entry.status = 'gagné'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry);
         const st = statsOf(entry.trigger);
         st.won += 1; if (h23) st.w23 += 1; if (hX) st.wX += 1;
         editEntry(entry); break;
       }
       if (entry.step >= entry.maxR) {
-        entry.status = 'perdu'; entry.resolvedAt = Date.now();
+        entry.status = 'perdu'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry);
         statsOf(entry.trigger).lost += 1;
         editEntry(entry); break;
       }

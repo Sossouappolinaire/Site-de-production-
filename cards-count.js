@@ -32,6 +32,7 @@
 //    jeux suivants selon le rattrapage configuré, et le message Telegram est
 //    édité avec le résultat.
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const store = require('./store');
 const db = require('./db');
@@ -519,10 +520,10 @@ function verifyPending() {
         break;
       }
       if (categoryOf(g) === (entry.signal || '2/2')) {
-        entry.status = 'gagné'; entry.resolvedAt = Date.now(); editEntry(entry, 'gagné'); break;
+        entry.status = 'gagné'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry); editEntry(entry, 'gagné'); break;
       }
       if (entry.step >= entry.maxR) {
-        entry.status = 'perdu'; entry.resolvedAt = Date.now(); editEntry(entry, 'perdu'); break;
+        entry.status = 'perdu'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry); editEntry(entry, 'perdu'); break;
       }
       entry.step += 1;
     }

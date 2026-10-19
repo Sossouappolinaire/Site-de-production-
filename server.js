@@ -350,6 +350,8 @@ app.get('/api/state', async (req, res) => {
     hand: 'joueur',
     format: state.format,
     formatCount: fmt.FORMAT_COUNT,
+    // 5 formats simples « Il y aura distribution 2/2 » (stratégie « 2/3 → distribution 2/2 ») : aperçus en attente / gagné au 1ᵉʳ rattrapage
+    distFormats: [102, 103, 104, 105, 106].map((id) => ({ id, preview: fmt.formatPreview(id, { cardsLabel: '2/2', gameNumber: 1194, maxR: 3, status: null }), previewWin: fmt.formatPreview(id, { cardsLabel: '2/2', gameNumber: 1194, maxR: 3, status: 'gagné', rattrapage: 1 }) })),
     formats: fmt.formatList(1, fmt.FORMAT_COUNT).text,
     template: state.template || null,
     counters: state.counters,
@@ -2346,6 +2348,30 @@ app.post('/api/after-loss/trackers/:id/optimize', async (req, res) => {
 });
 
 // --- diagnostic complet des envois de prédictions ---------------------------
+// v66 : la page « Envois » vérifiait chaque canal de chaque stratégie UN PAR UN, avec 4 appels Telegram par canal et sans mémoire :
+// avec beaucoup de canaux elle mettait des dizaines de secondes (ou dépassait le délai) et son contenu restait inutilisable.
+// Les résultats sont gardés 30 s (un canal commun à plusieurs stratégies n'est interrogé qu'une fois) et les vérifications partent en parallèle.
+const _chatCache = new Map();
+function resolveChatCached(id, ttlMs = 30000) {
+  const k = String(id); const hit = _chatCache.get(k);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.p;
+  const p = resolveChat(id).then((r) => { if (!r || !r.ok) _chatCache.delete(k); return r; }, (e) => { _chatCache.delete(k); throw e; });
+  _chatCache.set(k, { at: Date.now(), p });
+  return p;
+}
+// récapitulatif par canal (strategy-recap.js) : état d'un canal / activation depuis « Envois → Organisation par canal »
+app.get('/api/recap/:channel', (req, res) => {
+  const id = String(req.params.channel || '').trim();
+  const st = strategyRecap.status();
+  res.json({ channel: id, enabled: strategyRecap.isEnabled(id), explicit: !!st.enabled[id], viaStrategy: st.viaStrategies.includes(id), tz: st.tz });
+});
+app.post('/api/recap/:channel', (req, res) => {
+  const id = String(req.params.channel || '').trim();
+  if (!id) return res.status(400).json({ error: 'Canal manquant' });
+  strategyRecap.setChannelEnabled(id, !!(req.body && req.body.enabled));
+  const st = strategyRecap.status();
+  res.json({ ok: true, channel: id, enabled: strategyRecap.isEnabled(id), explicit: !!st.enabled[id], viaStrategy: st.viaStrategies.includes(id) });
+});
 app.get('/api/diagnostics/channels', async (req, res) => {
   const bot = botStatus();
   const out = [];
@@ -2364,8 +2390,8 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     };
     for (const mode of ['published', 'shadow']) {
       const ids = strategyChannels(def.key, mode);
-      for (const id of ids) {
-        const check = bot.tokenSet ? await resolveChat(id) : { ok: false, error: 'Aucun token Telegram configuré' };
+      const checks = await Promise.all(ids.map(async (id) => ({ id, check: bot.tokenSet ? await resolveChatCached(id) : { ok: false, error: 'Aucun token Telegram configuré' } })));
+      for (const { id, check } of checks) {
         entry[mode].push(check.ok
           ? { id, title: check.chat.title, type: check.chat.type, canPost: check.chat.canPost, ok: check.chat.canPost !== false }
           : { id, ok: false, error: check.error });
@@ -2382,8 +2408,8 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   // panneau — on expose les deux pour que ce soit visible d'un coup d'œil.
   async function resolveIds(ids) {
     const out2 = [];
-    for (const id of ids) {
-      const check = bot.tokenSet ? await resolveChat(id) : { ok: false, error: 'Aucun token Telegram configuré' };
+    const checks2 = await Promise.all(ids.map(async (id) => ({ id, check: bot.tokenSet ? await resolveChatCached(id) : { ok: false, error: 'Aucun token Telegram configuré' } })));
+    for (const { id, check } of checks2) {
       out2.push(check.ok
         ? { id, title: check.chat.title, type: check.chat.type, canPost: check.chat.canPost, ok: check.chat.canPost !== false }
         : { id, ok: false, error: check.error });

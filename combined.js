@@ -23,6 +23,7 @@
 //  • Toujours sur la main du JOUEUR (nom du bouton) : vérification via
 //    hasSuit(), jamais hasSuitBanker().
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const strategies = require('./strategies');
 const store = require('./store');
@@ -545,8 +546,8 @@ async function verifyPending() {
         break;
       }
       const won = hasSuit(g, entry.suit);
-      if (won) { entry.status = 'gagné'; entry.resolvedAt = Date.now(); editPending(entry, 'gagné'); break; }
-      if (entry.step >= entry.maxR) { entry.status = 'perdu'; entry.resolvedAt = Date.now(); editPending(entry, 'perdu'); break; }
+      if (won) { entry.status = 'gagné'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry); editPending(entry, 'gagné'); break; }
+      if (entry.step >= entry.maxR) { entry.status = 'perdu'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry); editPending(entry, 'perdu'); break; }
       entry.step += 1;
     }
   }

@@ -1346,7 +1346,41 @@ const secondeCarte = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte];
+// ---------------------------------------------------------------------------
+// 12) 2/3 → distribution 2/2 à +4 (demande admin) — récapitulatif toutes les 5 h
+// ---------------------------------------------------------------------------
+// Quand un jeu se termine en « 2/3 » (joueur 2 cartes, banquier 3 cartes — même notation que « Nul / 2-3 »), on prédit une
+// DISTRIBUTION « 2/2 » (joueur 2 cartes ET banquier 2 cartes, aucune 3ᵉ carte) au jeu +4 (décalage réglable). Vérification avec
+// les rattrapages. Le récapitulatif des prédictions (strategy-recap.js) est activé par défaut, toutes les 5 h (réglable).
+const deuxTrois = {
+  key: 'deuxTrois',
+  name: '2/3 → distribution 2/2 (+4)',
+  about:
+    "Quand un jeu se termine en 2/3 (joueur 2 cartes, banquier 3 cartes), on prédit une distribution 2/2 " +
+    "(joueur 2 cartes + banquier 2 cartes) au jeu +4 (décalage réglable). Vérification avec les rattrapages. " +
+    "Un récapitulatif des prédictions est envoyé dans le canal toutes les 5 h (réglable), bilan à 00h puis remise à zéro.",
+  defaults: { enabled: true, format: 102, maxR: 2, b: 0, lead: 4, template: null, channels: [], recap: true, recapHours: 5 }, // format 102 : « 💠Jeux № / 🎯Il y aura distribution 2/2 / 🌤 Rattrapages +N / 🗯️Résultats »
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg) {
+    if (!game || !game.finished) return null;
+    if (game.playerCards !== 2 || game.bankerCards !== 3) return null; // uniquement les jeux terminés en 2/3
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 4));
+    return {
+      kind: 'cards',
+      target: game.number + lead,
+      wantPlayer: 2,
+      wantBanker: 2,
+      cardsLabel: '2/2',
+      suit: 'deux',
+      label: 'distribution 2/2',
+      trigger: game.number,
+      reason: `Jeu #N${game.number} terminé en 2/3 (joueur 2 cartes, banquier 3 cartes) → distribution 2/2 sur #N${game.number + lead} (+${lead})`,
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

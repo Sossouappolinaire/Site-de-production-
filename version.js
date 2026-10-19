@@ -1,10 +1,20 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v63',
-  name: 'relance-apres-perte-main-joueur-et-migration',
+  version: 'v73',
+  name: 'cinq-formats-2-2-avec-ou-sans-distribution',
   date: '2026-10-16',
   features: [
+    'Formats 102 à 106 (prédiction 2/2) : avec ou sans le mot « distribution » (102 et 106 avec ; 103, 104 et 105 simplement « 2/2 »)',
+    '« 2/3 → distribution 2/2 » : 5 formats simples au choix (102 à 106, « Il y aura distribution 2/2 »), choisis en cliquant sur leur aperçu dans la page de la stratégie ; champ « Avance » unique (jusqu’à 20) ; 106 formats au total',
+    'Nouveau format 102 « Il y aura distribution 2/2 » (sans « Joueur », même mise en page que le 76), utilisé par défaut par « 2/3 → distribution 2/2 » — 102 formats au total',
+    '« 2/3 → distribution 2/2 » : format 76 par défaut (💠Jeux № / 🎯Joueur recevra 2 cartes / 🌤 Rattrapages / 🗯️Résultats)',
+    'Nouvelle stratégie « 2/3 → distribution 2/2 (+4) » : jeu terminé en 2/3 → prédit 2/2 (joueur 2 cartes + banquier 2 cartes) au jeu +4 (réglable) ; récapitulatif toutes les 5 h (heures réglables par stratégie)',
+    'Récapitulatif PAR CANAL, tous boutons confondus : un seul récapitulatif par canal (02h … 22h, bilan à 00h puis remise à zéro) qui compte uniquement les prédictions envoyées dans ce canal ; case dans Envois → Organisation par canal et case de chaque stratégie',
+    'Chaque stratégie : case « Récapitulatif des prédictions toutes les 2 h » (02h, 04h … 22h) ; à 00h bilan de la journée puis compteurs remis à zéro (strategy-recap.js)',
+    'Barre de progression « Chargement… x % » à chaque clic sur un bouton, puis le contenu s’ouvre ; page « Envois » beaucoup plus rapide (canaux vérifiés en parallèle et gardés 30 s au lieu d’un par un)',
+    'Relance après perte : le jeu visé n’est plus jugé « déjà joué » dès qu’il est simplement listé par le flux — seulement s’il est terminé ou déjà distribué ; corrige les relances qui n’envoyaient rien (compteur « relance(s) non envoyée(s) : le jeu visé était déjà joué »)',
+    '2ᵉ carte du joueur : la série compte uniquement les prédictions réellement envoyées (une prédiction faite pendant la pause ne compte plus dans les 5) — corrige les séries de 3 ou 4 au lieu de 5',
     'Relance après perte : perte constatée dès que la main du joueur du dernier rattrapage est complète, sans attendre celle du banquier ; D=1 par défaut envoie au jeu suivant (12 ❤️ + 3 rattrapages → absence au 15 → relance au 16) ; réglage D=1..40, canaux sources ou configuration « Relance », ID de sortie, format et rattrapages configurables ; migration des anciens décalages par défaut vers D=1, y compris en base PostgreSQL',
     '2ᵉ carte du joueur à +2 : pendant la pause (après 5 prédictions envoyées) la stratégie attend 2 pertes, consécutives ou non (réglable), avant de reprendre et d’envoyer les 5 suivantes ; puis nouvelle pause',
     'Relance : la fenêtre « Prédit » dure 20 s et reprend le format de prédiction (🎮GAME: #N473 / 🃏Carte ❤️:⌛) avec le nombre de rattrapages en français et en russe ; le jeton Telegram se configure par variable d’environnement ou dans le site, jamais via un import Excel',

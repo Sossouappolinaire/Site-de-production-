@@ -29,6 +29,7 @@
 //    chaque stratégie suivie vers un canal différent, ou plusieurs vers le
 //    même canal, au choix.
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const appConfig = require('./config');
 const strategies = require('./strategies');
@@ -473,6 +474,7 @@ function markResolved(entry, status) {
   entry.resolvedAt = Date.now();
   if (entry.counted) return;
   entry.counted = true;
+  strategyRecap.noteEntry(entry); // récapitulatif par canal (ne compte que s'il y a des messages envoyés)
   pushVerified(entry, status);
   const t = tallyFor(entry.trackerId);
   if (status === 'gagné') t.win += 1;

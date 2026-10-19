@@ -26,6 +26,7 @@
 //    referme le filtre. Voir panel.silentMode / silentLossTrigger /
 //    silentLossWindow / silentGate ci-dessous.
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const appConfig = require('./config');
 const miner = require('./pattern-miner');
@@ -665,6 +666,7 @@ function verify(games) {
   // une règle certifiée qui perd sort immédiatement du panneau
   let anyLoss = false;
   for (const pred of closed) {
+    strategyRecap.noteEntry(pred); // récapitulatif par canal
     for (const src of pred.sources) {
       const entry = panel.certified.find((c) => c.id === src.id);
       if (!entry) continue;

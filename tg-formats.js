@@ -1,4 +1,4 @@
-// tg-formats.js — Formats de messages Telegram pour Baccarat Pro (N°1 à N°101)
+// tg-formats.js — Formats de messages Telegram pour Baccarat Pro (N°1 à N°106)
 // Fichier dédié aux formats de prédiction — aucun saut de numéro.
 // Importer avec : const { buildTgMessage, buildPredictionMsg, buildResultMsg, ... } = require('./tg-formats');
 
@@ -1207,6 +1207,23 @@ function buildTgMessage(formatId, {
         text: `🤖 PREDICTION #${gameNumber}\n${emoji} Costume : ${emoji}\n🔰 Signal : ${maxR}\n${sl101}`,
         parse_mode: null,
       };
+    }
+
+    // ── Formats 102 à 106 : prédiction « 2/2 » — 5 mises en page SIMPLES au choix (sans « Joueur »), avec ou sans le mot « distribution » ───
+    //   102 : 3 lignes, « Il y aura distribution 2/2 »     103 : 3 lignes, « Il y aura 2/2 » (sans le mot distribution)
+    //   104 : une seule ligne « №… · 2/2 · résultat »      105 : 3 lignes, « 2/2 (+N) » avec le nombre de rattrapages
+    //   106 : bandeau « ⚜️ Baccara ⚜️ » + « №… · distribution 2/2 »
+    case 102: case 103: case 104: case 105: case 106: {
+      const cl = cardsLabel || (suit === 'trois' ? '3/3' : '2/2');
+      const sl = status === null ? '⌛' : status === 'gagne' ? `✅ ${RATR_EMOJI[rattrapage] ?? rattrapage}` : '❌';
+      const lines = {
+        102: [`💠Jeux №${gameNumber}`, `🎯Il y aura distribution ${cl}`, `🗯️Résultats : ${sl}`],
+        103: [`💠Jeux №${gameNumber}`, `🎯Il y aura ${cl}`, `🗯️Résultats : ${sl}`],
+        104: [`🎯 №${gameNumber} · ${cl} · ${sl}`],
+        105: [`📌 Jeu №${gameNumber}`, `Il y aura ${cl} (+${maxR})`, `Résultat : ${sl}`],
+        106: ['⚜️ Baccara ⚜️', `№${gameNumber} · distribution ${cl}`, sl],
+      }[formatId];
+      return { text: lines.join('\n'), parse_mode: null };
     }
 
     // ── Default : texte générique sans HTML ───────────────────────────────

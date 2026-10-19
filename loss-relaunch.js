@@ -16,6 +16,7 @@
 //  • Une configuration n'envoie jamais deux prédictions pour le même numéro de jeu (même costume ou non) ; jamais pour un jeu déjà joué.
 //  • Toujours sur la main du JOUEUR (hasSuit), jamais le banquier.
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const store = require('./store');
 const db = require('./db');
@@ -58,7 +59,9 @@ function isPlayerHandComplete(g) {
   return Number.isFinite(total) && total >= 6;
 }
 const maxFinishedGameNumber = () => { let m = 0; for (const g of state.games.values()) if (g.finished && g.number > m) m = g.number; return m; };
-const maxKnownGameNumber = () => { let m = 0; for (const g of state.games.values()) if (g.number > m) m = g.number; return m; };
+// v65 : « jeu déjà joué » = terminé OU déjà distribué (cartes visibles). Avant, tout jeu simplement LISTÉ par le flux (même pas commencé)
+// comptait : avec D=1 le jeu visé (N+R+1) était alors presque toujours jugé « trop tard » et aucune relance ne partait.
+const maxKnownGameNumber = () => { let m = 0; for (const g of state.games.values()) if ((g.finished || g.dealing) && g.number > m) m = g.number; return m; };
 const pct = (a, b) => (b > 0 ? Math.round((a * 100) / b) : 0);
 const emptyStats = () => ({ sent: 0, won: 0, lost: 0, cancelled: 0, byStep: {}, bySuit: {} });
 function statsOf(cfg) { cfg.stats = cfg.stats && typeof cfg.stats === 'object' ? cfg.stats : emptyStats(); return cfg.stats; }
@@ -242,6 +245,7 @@ async function tick() {
       changed = true; s.status = verdict; s.resolvedAt = Date.now();
       if (verdict === 'gagné') s.step = hitAt;
       if (verdict === 'annulé') continue;
+      strategyRecap.noteEntry(s); // récapitulatif par canal
       editSent(s, verdict);
       if (cfg) {
         const st = statsOf(cfg);

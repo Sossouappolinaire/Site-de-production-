@@ -86,6 +86,7 @@
 //   • prédictions : une configuration n'envoie JAMAIS deux prédictions pour le même numéro de jeu (verrou pendant l'envoi
 //     + mémoire persistée des envois, valable après un redémarrage).
 'use strict';
+const strategyRecap = require('./strategy-recap');
 
 const store = require('./store');
 const db = require('./db');
@@ -897,7 +898,7 @@ function verifyMulti(entry, cfg, maxDone) {
     }
     const rest = unresolved();
     if (!rest.length) { // les deux (tous) sont vérifiés
-      entry.status = 'gagné'; entry.resolvedAt = Date.now(); changed = true; editMulti(entry); break;
+      entry.status = 'gagné'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry); changed = true; editMulti(entry); break;
     }
     if (newly.length) editMulti(entry); // un costume vient de sortir : on affiche son résultat, l'autre reste en vérification
     if (!done) break; // validation anticipée : le tour n'est pas fini, les autres ne peuvent pas être déclarés perdus
@@ -1126,7 +1127,7 @@ function verifyPending() {
       const hit = entry.suits.filter((s) => hasSuit(g, s.suit)).map((s) => s.suit);
       const cfg = panel.configs.find((c) => c.id === entry.configId);
       if (hit.length) {
-        entry.status = 'gagné'; entry.resolvedAt = Date.now(); changed = true;
+        entry.status = 'gagné'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry); changed = true;
         if (cfg) { if (entry.relayOut) cfg.relOutWins = (cfg.relOutWins || 0) + 1; else cfg.wins = (cfg.wins || 0) + 1; }
         if (isTrigger) editTrigger(entry, 'gagné');
         if (entry.mode === 'follow') advanceFollow(cfg, entry);
@@ -1135,7 +1136,7 @@ function verifyPending() {
         break;
       }
       if (entry.step >= entry.maxR) {
-        entry.status = 'perdu'; entry.resolvedAt = Date.now(); changed = true;
+        entry.status = 'perdu'; entry.resolvedAt = Date.now(); strategyRecap.noteEntry(entry); changed = true;
         if (cfg) { if (entry.relayOut) cfg.relOutLosses = (cfg.relOutLosses || 0) + 1; else cfg.losses = (cfg.losses || 0) + 1; }
         if (isTrigger) editTrigger(entry, 'perdu');
         if (entry.mode === 'follow') advanceFollow(cfg, entry);

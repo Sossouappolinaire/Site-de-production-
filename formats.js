@@ -8,7 +8,7 @@
 const tg = require('./tg-formats');
 const animator = require('./status-animator');
 
-const FORMAT_COUNT = 101;  // 90-91 = ÉTOILE/ÉCLAIR BACCARA · 92-101 = 10 formats proposés (ChatGPT)
+const FORMAT_COUNT = 106;  // 90-91 = ÉTOILE/ÉCLAIR BACCARA · 92-101 = 10 formats proposés (ChatGPT) · 102-106 = « Il y aura distribution 2/2 » (5 formats simples)
 
 // costumes utilisés par le moteur (avec sélecteur emoji) -> clés de tg-formats
 function normalizeSuit(suit) {
