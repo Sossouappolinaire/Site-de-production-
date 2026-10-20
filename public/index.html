@@ -3881,7 +3881,7 @@ Faites-en bon usage !
             <h3>Déclencheurs actifs (jeu terminé N → jeu prédit N+n)</h3>
             <p class="small">V1 et V2 ont chacun leurs déclencheurs, trouvés séparément. Quel que soit le déclencheur trouvé, le message contient <b>toujours les deux</b> (V1 et V2) ; le pourcentage le plus élevé reste en haut.</p>
             ${['V1', 'V2'].map((sd) => { const list = (p.rules || []).filter((t) => t.side === sd); return `<h4 style="margin:12px 0 4px">${sd === 'V1' ? '🟦 Déclencheurs V1 (victoire joueur)' : '🟥 Déclencheurs V2 (victoire banquier)'}</h4>` + (list.length ? `<table class="table"><thead><tr><th>Quand</th><th>Prédit à</th><th></th></tr></thead><tbody>
-              ${list.map((t) => `<tr><td>${esc(t.label)}${t.auto ? ' <span class="tag good">auto</span>' : ''}${t.enabled === false ? ' <span class="tag bad">désactivée</span>' : ''}</td><td>N+${t.offset}</td>
+              ${list.map((t) => `<tr><td>${esc(t.label)}${t.auto ? ' <span class="tag good">auto</span>' : ''}${t.locked ? ' <span class="tag">par défaut</span>' : ''}${t.enabled === false ? ' <span class="tag bad">désactivée</span>' : ''}</td><td>N+${t.offset}</td>
                 <td><button class="button small ghost" onclick="toggleVictoireVbRule('${esc(t.id)}', ${t.enabled === false ? 'true' : 'false'})">${t.enabled === false ? 'Activer' : 'Désactiver'}</button> <button class="button small danger" onclick="removeVictoireVbRule('${esc(t.id)}')">Supprimer</button></td></tr>`).join('')}
             </tbody></table>` : '<p class="small">Aucun déclencheur pour l’instant : l’analyse en cherche toute seule (échantillon minimal ' + esc(String(th.minN ?? 20)) + ' cas, écart net avec le taux général).</p>'); }).join('')}
             <p class="small" style="margin-top:10px">Jeu en live : <b>№${esc(String(p.live || '—'))}</b> • envoyées <b>${p.sentCount || 0}</b> • gagnées ${p.won || 0} • perdues ${p.lost || 0}</p>
@@ -4052,12 +4052,13 @@ Faites-en bon usage !
       const side = (key, icon, name) => {
         const v = p[key] || { pair: Array(10).fill(0), impair: Array(10).fill(0), pairTotal: 0, impairTotal: 0 };
         const ALLD = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        const rows = (arr, total) => ALLD.map((d) => `<tr><td>${DG[d]}</td><td>${arr[d]}</td><td>${pc(arr[d], total)}%</td></tr>`).join('');
+        const rows = (arr, total, sc) => ALLD.map((d) => `<tr><td>${DG[d]}</td><td>${arr[d]}</td><td>${pc(arr[d], total)}%</td><td class="small">${((sc && sc[d]) || []).map((r) => `(${esc(r.suit)}${r.pct}%)`).join(' ')}</td></tr>`).join('');
         return `<div class="card"><h3>${icon} ${name}</h3>
           <div class="grid two">
-            <div><h4>Taux parité pair</h4><table class="table"><tbody>${rows(v.pair, v.pairTotal)}</tbody></table><p class="small">Total pair : <b>${v.pairTotal}</b></p></div>
-            <div><h4>Taux parité impair</h4><table class="table"><tbody>${rows(v.impair, v.impairTotal)}</tbody></table><p class="small">Total impair : <b>${v.impairTotal}</b></p></div>
-          </div></div>`;
+            <div><h4>Taux parité pair</h4><table class="table"><tbody>${rows(v.pair, v.pairTotal, v.pairSuits)}</tbody></table><p class="small">Total pair : <b>${v.pairTotal}</b></p></div>
+            <div><h4>Taux parité impair</h4><table class="table"><tbody>${rows(v.impair, v.impairTotal, v.impairSuits)}</tbody></table><p class="small">Total impair : <b>${v.impairTotal}</b></p></div>
+          </div>
+          </div>`;
       };
       const mins = Math.floor((p.nextResetMs || 0) / 60000); const secs = Math.floor(((p.nextResetMs || 0) % 60000) / 1000);
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Compteur</span><h2 style="margin-top:7px">🔢 Compte parité</h2><p class="small">Compte la <b>fin du numéro de jeu (0 à 9)</b> — le jeu #1223 compte pour le <b>3</b> — pour le joueur et le banquier <b>séparément</b>. Si le point du joueur est <b>pair</b>, le chiffre va dans « Taux parité pair — Joueur », s’il est <b>impair</b>, dans « Taux parité impair — Joueur » (idem pour le banquier avec son point). À chaque fin de jeu, le bot envoie le message de <b>celui qui a gagné</b> (joueur ou banquier), puis tout repart de zéro à chaque reset.</p></div></div>
@@ -5692,13 +5693,35 @@ Faites-en bon usage !
 
 
     // --- fonctions de « Prédiction après perte » et « Prédiction combinée » (manquaient dans cette page) ---
+    // Liste « Canaux à surveiller » (plusieurs possibles) + ID du canal où envoyer.
+    // Si au moins un canal est coché, il remplace la stratégie choisie : une
+    // stratégie suivie est créée par canal coché, toutes envoyant vers l'ID indiqué.
+    function afterLossSourceChannelsHtml() {
+      const all = (snapshot.channelList || []).slice();
+      const rows = all.length ? all.map(ch => `<label class="check" style="align-items:flex-start;margin:6px 0"><input type="checkbox" class="al-src" value="${esc(String(ch.id))}"> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join(' · ')}</span>` : ''}</span></label>`).join('')
+        : '<p class="small muted">Aucun canal connu pour le moment.</p>';
+      return `<div class="field" style="margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0"><label>Canaux à surveiller (un ou plusieurs)</label>
+          <div style="max-height:220px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;padding:6px 10px">${rows}</div>
+          <p class="small muted" style="margin:6px 0 0">Optionnel. Si tu coches un ou plusieurs canaux, ce sont leurs prédictions (gagné / perdu) qui sont surveillées à la place de la stratégie choisie ci-dessus. Une stratégie suivie est créée pour chaque canal coché.</p></div>
+        <div class="field"><label>ID du canal où envoyer les prédictions</label><input id="al-dest" placeholder="-1001234567890">
+          ${all.length ? `<select onchange="if(this.value){document.getElementById('al-dest').value=this.value;this.value='';}"><option value="">Choisir un canal déjà configuré…</option>${all.map(ch => `<option value="${esc(String(ch.id))}">${esc(ch.title ? ch.title + ' · ' + ch.id : String(ch.id))}</option>`).join('')}</select>` : ''}
+          <p class="small muted" style="margin:6px 0 0">Vide = canal du panneau. Le canal d'envoi ne peut pas être l'un des canaux surveillés.</p></div>`;
+    }
     async function addAfterLossTracker() {
       const key = val('newTrackerKey');
       const category = Number(val('new-category')) || 0;
       const blocks = readAfterLossCategoryBlocks('new', category);
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
       const name = val('new-name');
+      const sourceChannels = [...document.querySelectorAll('.al-src:checked')].map(x => x.value);
       const body = { key, category, name, ...blocks, channels, siteChannelId, format };
+      if (sourceChannels.length) {
+        // canaux cochés : le canal d'envoi est l'ID saisi dans « ID du canal où envoyer »
+        body.sourceChannels = sourceChannels;
+        const destIds = ids(val('al-dest') || '');
+        if (destIds.length) body.channels = destIds;
+        if (!body.channels.length && !(snapshot.afterLoss?.channels || []).length) return toast("Indique l'ID du canal où envoyer les prédictions.", 'error');
+      }
       try { await api('/api/after-loss/trackers', 'POST', body); closeModal(); await refresh(); afterLossPage(); toast('Stratégie ajoutée au suivi.'); }
       catch (e) {
         // configuration identique à une autre déjà suivie : confirmation avant de créer quand même
@@ -5719,6 +5742,7 @@ Faites-en bon usage !
         <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
         <div class="field"><label>Catégorie</label><select id="new-category" onchange="afterLossCategoryChanged('new', null)">${afterLossCategoryOptions(2, false)}</select><p class="small muted" id="new-catAbout" style="margin:6px 0 0">${esc(afterLossCategoryAbout(2))}</p></div>
         <div id="new-blocks">${afterLossCategoryBlocks('new', 2, null)}</div>
+        ${afterLossSourceChannelsHtml()}
         ${afterLossChannelFormatRow('new', { channels: [], format: null })}
         ${afterLossNameRow('new', '')}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
