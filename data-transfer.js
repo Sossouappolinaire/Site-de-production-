@@ -167,6 +167,7 @@ const PANELS = {
   lossNotice: { mod: './loss-notice' },
   mirrorCounter: { mod: './mirror-counter' },
   parityCounter: { mod: './parity-counter' },         // « Compte parité »
+  slowMode: { mod: './slow-mode' },                   // « Ralentisseur »
   betType: { mod: './bet-type' },                  // « Type de mise »
   likeReact: { mod: './like-react' },              // « J'aime » (réactions automatiques)
   copyAnnounce: { mod: './copy-announce' },        // « Copie et annonce »

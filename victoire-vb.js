@@ -42,11 +42,13 @@ const LETTER = { V1: 'J', V2: 'B' };
 const otherSide = (s) => (s === 'V1' ? 'V2' : 'V1');
 const OFFSETS = [1, 2, 3, 4, 5];
 const MAX_RULES = 12;
-const MIN_N = 20;            // échantillon minimal pour proposer / ajouter une règle
-const MIN_N_DEL = 30;        // échantillon minimal pour supprimer une règle
-const MIN_Z = 2.3;           // écart minimal (en écarts-types) avec le taux général : évite les coïncidences
-const MIN_GAIN = 0.08;       // gain minimal sur le taux général (8 points)
-const MIN_MOD_GAIN = 0.05;   // gain minimal d'un autre décalage pour MODIFIER une règle
+// Sensibilité de l'analyse : plus elle est large, plus elle trouve de déclencheurs (mais plus certains peuvent être du hasard)
+const PRESETS = {
+  strict: { minN: 20, minNDel: 30, minZ: 2.3, gain: 0.08, modGain: 0.05, minRate: 60, label: 'Stricte' },
+  normal: { minN: 15, minNDel: 25, minZ: 1.5, gain: 0.05, modGain: 0.04, minRate: 56, label: 'Normale' },
+  large: { minN: 5, minNDel: 20, minZ: 0, gain: 0, modGain: 0.1, minRate: 50, label: 'Large (dès 10 jeux)' },
+};
+const thr = () => PRESETS[panel.sensitivity] || PRESETS.large;
 const MAX_FINDINGS = 8;
 const ANALYSIS_EVERY = 20;   // nouvelle analyse tous les 20 jeux enregistrés
 const LOG_MAX = 8000;        // jeux gardés (plusieurs sabots)
@@ -66,7 +68,7 @@ const panel = {
   maxR: 1,                // rattrapages
   waitGames: 1,           // « l'autre ne valide pas à +1 »
   relanceGap: 3,          // relance à N+3
-  minRate: 60,            // taux minimal (%) pour qu'une règle soit retenue
+  sensitivity: 'large',   // strict | normal | large : seuils de l'analyse
   rules: [],
   pending: [],
   stats: {},
@@ -115,13 +117,12 @@ const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.is
 const sanitizeMaxR = (v) => clampInt(v, 0, 9, 1);
 const sanitizeWait = (v) => clampInt(v, 1, 3, 1);
 const sanitizeGap = (v, wait) => clampInt(v, (wait || 1) + 1, 9, 3);
-const sanitizeMinRate = (v) => clampInt(v, 50, 90, 60);
 
 function config() {
   return {
     enabled: panel.enabled, notify: panel.notify, autoApply: panel.autoApply, channels: [...panel.channels], siteChannelId: panel.siteChannelId,
     relanceChannels: [...panel.relanceChannels], relanceMaxR: panel.relanceMaxR,
-    maxR: panel.maxR, waitGames: panel.waitGames, relanceGap: panel.relanceGap, minRate: panel.minRate,
+    maxR: panel.maxR, waitGames: panel.waitGames, relanceGap: panel.relanceGap, sensitivity: panel.sensitivity,
   };
 }
 function configure(patch = {}) {
@@ -135,7 +136,7 @@ function configure(patch = {}) {
   if (patch.relanceMaxR !== undefined) panel.relanceMaxR = sanitizeMaxR(patch.relanceMaxR);
   if (patch.waitGames !== undefined) panel.waitGames = sanitizeWait(patch.waitGames);
   if (patch.relanceGap !== undefined || patch.waitGames !== undefined) panel.relanceGap = sanitizeGap(patch.relanceGap !== undefined ? patch.relanceGap : panel.relanceGap, panel.waitGames);
-  if (patch.minRate !== undefined) panel.minRate = sanitizeMinRate(patch.minRate);
+  if (patch.sensitivity !== undefined) panel.sensitivity = PRESETS[patch.sensitivity] ? patch.sensitivity : 'large';
   persist();
   return config();
 }
@@ -178,7 +179,7 @@ function applySaved(saved) {
     panel.relanceMaxR = sanitizeMaxR(saved.config.relanceMaxR === undefined ? saved.config.maxR : saved.config.relanceMaxR);
     panel.waitGames = sanitizeWait(saved.config.waitGames);
     panel.relanceGap = sanitizeGap(saved.config.relanceGap, panel.waitGames);
-    panel.minRate = sanitizeMinRate(saved.config.minRate);
+    panel.sensitivity = PRESETS[saved.config.sensitivity] ? saved.config.sensitivity : 'large';
   }
   if (Array.isArray(saved.rules)) panel.rules = saved.rules.map(sanitizeRule).filter(Boolean).slice(0, MAX_RULES);
   if (Array.isArray(saved.pending)) panel.pending = saved.pending.slice(-200);
@@ -198,7 +199,35 @@ async function restoreFromDb() {
     const raw = await db.getSetting(DB_KEY);
     if (raw) applySaved(JSON.parse(raw)); else persist();
   } catch (_) { persist(); }
+  seedFromDb(false).catch(() => {}); // historique court : on le complète avec les jeux déjà en base
   return config();
+}
+
+// Historique des jeux déjà enregistrés en base (plusieurs sabots) : l'analyse a tout de suite de quoi travailler
+async function seedFromDb(force = false) {
+  if (!db.ready) return { ok: false, error: 'Base de données non connectée' };
+  const have = panel.log.replace(/[|?]/g, '').length;
+  if (!force && have >= 300) return { ok: true, skipped: true, games: have };
+  const rows = await db.rows('SELECT number, winner, player_count, banker_count FROM games ORDER BY played_on DESC, number DESC LIMIT $1', [LOG_MAX]);
+  rows.reverse();
+  const current = new Set([...state.games.keys()]); // le sabot en cours est relu depuis la mémoire par appendLog
+  let log = ''; let prev = null; let count = 0;
+  for (const r of rows) {
+    const n = Number(r.number);
+    if (!Number.isFinite(n) || current.has(n)) continue;
+    if (prev !== null && n !== prev + 1 && !log.endsWith('|')) log += '|';
+    prev = n;
+    const wi = r.winner === 'Joueur' ? 0 : r.winner === 'Banquier' ? 1 : r.winner === 'Égalité' ? 2 : -1;
+    const p = Number(r.player_count); const b = Number(r.banker_count);
+    log += (wi < 0 || (p !== 2 && p !== 3) || (b !== 2 && b !== 3)) ? '?' : String.fromCharCode(97 + wi * 4 + (p === 3 ? 2 : 0) + (b === 3 ? 1 : 0));
+    count += 1;
+  }
+  if (!count) return { ok: true, games: 0 };
+  panel.log = (log + '|').replace(/\|+/g, '|').slice(-LOG_MAX);
+  panel.lastLogged = 0; // appendLog relit le sabot en cours après l'historique
+  panel.loggedCount += count;
+  persist();
+  return { ok: true, games: count };
 }
 
 // ---------------------------------------------------------------------------
@@ -596,17 +625,19 @@ function allConds() {
 }
 const rulesSig = () => panel.rules.map((r) => `${r.id}:${r.offset}:${r.side}:${r.enabled ? 1 : 0}`).join(',');
 let findingsCache = { key: '', list: [] };
+let lastNear = [];
 
 // réussite d'UN côté (V1 ou V2) pour une condition à un décalage donné : { side, n, hits, rate, z, ok }
 function evalCond(cond, offset, base, maxR, side) {
   const r = rateFor((seg, i) => matchAt(cond, seg, i), offset, maxR);
-  if (r.n < MIN_N) return { n: r.n, ok: false };
+  const T = thr();
+  if (r.n < T.minN) return { n: r.n, ok: false };
   const L = LETTER[side]; const p0 = base[L] / base.n;
   const rate = r[L] / r.n; const z = zOf(r[L], r.n, p0);
-  return { side, n: r.n, hits: r[L], rate, p0, z, ok: rate * 100 >= panel.minRate && z >= MIN_Z && rate - p0 >= MIN_GAIN };
+  return { side, n: r.n, hits: r[L], rate, p0, z, ok: rate * 100 >= T.minRate && z >= T.minZ && rate - p0 >= T.gain };
 }
 function computeFindings() {
-  const key = `${panel.loggedCount}|${panel.maxR}|${panel.minRate}|${rulesSig()}|${Object.keys(panel.dismissed).length}`;
+  const key = `${panel.loggedCount}|${panel.maxR}|${panel.sensitivity}|${rulesSig()}|${Object.keys(panel.dismissed).length}`;
   if (findingsCache.key === key) return findingsCache.list;
   const list = buildFindings();
   findingsCache = { key, list };
@@ -615,7 +646,9 @@ function computeFindings() {
 function buildFindings() {
   const maxR = panel.maxR;
   const base = baseRate(maxR);
-  if (base.n < MIN_N * 3) return [];
+  const T = thr();
+  lastNear = [];
+  if (base.n < Math.max(10, T.minN * 2)) return []; // 10 jeux lus suffisent en sensibilité Large
   const out = [];
   const modded = new Set();
   // MODIFIER : un autre décalage valide nettement mieux
@@ -630,8 +663,8 @@ function buildFindings() {
       const ev = evalCond(rule, o, base, maxR, rule.side);
       if (ev.ok && (!best || ev.z > best.z)) best = { ...ev, o };
     }
-    const curZ = curR.n >= MIN_N ? zOf(curR[L], curR.n, base[L] / base.n) : 0;
-    if (best && (curRate === null || best.rate - curRate >= MIN_MOD_GAIN) && best.z > curZ) {
+    const curZ = curR.n >= T.minN ? zOf(curR[L], curR.n, base[L] / base.n) : 0;
+    if (best && (curRate === null || best.rate - curRate >= T.modGain) && best.z > curZ) {
       const k = `mod|${rule.id}|${best.o}`;
       out.push({ sid: hash(k), type: 'mod', key: k, n: best.n, rate: r0(best.rate * 100), base: r0(best.p0 * 100), score: best.z,
         title: `✏️ ${ruleLabel(rule)} : N+${rule.offset} → N+${best.o} · ${r0(best.rate * 100)}% (n=${best.n})`,
@@ -645,9 +678,9 @@ function buildFindings() {
     if (modded.has(rule.id)) continue;
     const L = LETTER[rule.side];
     const cur = rateFor((seg, i) => matchAt(rule, seg, i), rule.offset, maxR);
-    if (cur.n < MIN_N_DEL) continue;
+    if (cur.n < T.minNDel) continue;
     const p0 = base[L] / base.n; const z = zOf(cur[L], cur.n, p0);
-    if (z < 0.5 || cur[L] / cur.n * 100 < panel.minRate - 10) {
+    if (z < 0.5 || cur[L] / cur.n * 100 < T.minRate - 10) {
       const k = `del|${rule.id}`;
       out.push({ sid: hash(k), type: 'del', key: k, n: cur.n, rate: r0((cur[L] / cur.n) * 100), base: r0(p0 * 100), score: 5 - z,
         title: `🗑️ Supprimer ${ruleText(rule)} · ${r0((cur[L] / cur.n) * 100)}% (n=${cur.n})`,
@@ -656,7 +689,7 @@ function buildFindings() {
     }
   }
   // AJOUTER : nouveau déclencheur net (une seule règle par déclencheur)
-  const adds = [];
+  const adds = []; const nearAll = [];
   for (const side of ['V1', 'V2']) for (const cond of allConds()) {
     if (panel.rules.some((x) => sameRule(x, { ...cond, side }))) continue;
     let best = null;
@@ -664,7 +697,13 @@ function buildFindings() {
       const ev = evalCond(cond, o, base, maxR, side);
       if (ev.ok && (!best || ev.z > best.z)) best = { ...ev, o };
     }
-    if (!best) continue;
+    if (!best) {
+      // quasi-candidat : meilleur décalage de ce déclencheur, même s'il ne passe pas les seuils (affiché pour comprendre)
+      let nb = null;
+      for (const o of OFFSETS) { const ev = evalCond(cond, o, base, maxR, side); if (ev.n >= T.minN && ev.z !== undefined && (!nb || ev.z > nb.z)) nb = { ...ev, o }; }
+      if (nb) nearAll.push({ side, label: ruleLabel({ ...cond }), offset: nb.o, n: nb.n, rate: r0(nb.rate * 100), base: r0(nb.p0 * 100), z: Math.round(nb.z * 10) / 10 });
+      continue;
+    }
     const k = `add|${cond.seq}|${cond.p}|${cond.b}|${best.o}|${best.side}`;
     const label = ruleLabel({ ...cond });
     adds.push({ sid: hash(k), type: 'add', key: k, n: best.n, rate: r0(best.rate * 100), base: r0(best.p0 * 100), score: best.z,
@@ -672,6 +711,7 @@ function buildFindings() {
       detail: `Ajouter le déclencheur « ${label} → N+${best.o} » : ${best.side} valide ${r0(best.rate * 100)}% sur ${best.n} cas, contre ${r0(best.p0 * 100)}% de taux général (écart ${best.z.toFixed(1)} σ).`,
       patch: { rule: { seq: cond.seq, p: cond.p, b: cond.b, offset: best.o, side: best.side } } });
   }
+  lastNear = ['V1', 'V2'].flatMap((sd) => nearAll.filter((x) => x.side === sd).sort((a, b) => b.z - a.z).slice(0, 5));
   adds.sort((a, b) => b.score - a.score);
   const top = [...adds.filter((f) => f.patch.rule.side === 'V1').slice(0, 2), ...adds.filter((f) => f.patch.rule.side === 'V2').slice(0, 2)]; // 2 par côté
   const list = out.concat(top).filter((f) => !panel.dismissed[f.sid]);
@@ -772,7 +812,8 @@ function handleCallback(data) {
 
 // analyse automatique : tous les ANALYSIS_EVERY jeux enregistrés (ou à la demande)
 async function maybeAnalyze(force = false) {
-  if (!force && panel.loggedCount - panel.analysisMark < ANALYSIS_EVERY) return;
+  // sans aucune règle active : on cherche dès 3 nouveaux jeux ; sinon tous les ANALYSIS_EVERY jeux
+  if (!force && panel.loggedCount - panel.analysisMark < (panel.rules.length ? ANALYSIS_EVERY : 3)) return;
   panel.analysisMark = panel.loggedCount;
   panel.lastAnalysisAt = Date.now();
   const list = computeFindings();
@@ -866,13 +907,15 @@ function analysis() {
     games, J, B, T, jPct: pc(J), bPct: pc(B), tPct: pc(T), shoes: segs.length,
     currentRun: curLetter ? { letter: curLetter, n: curRun } : null, maxRunJ: maxJ, maxRunB: maxB,
     window: { maxR: panel.maxR, base },
-    thresholds: { minN: MIN_N, minZ: MIN_Z, minRate: panel.minRate },
+    thresholds: { minN: thr().minN, minZ: thr().minZ, minRate: thr().minRate, label: thr().label },
     rules: panel.rules.map((r) => {
       const p = percentsFor(r); const s = statsOf(r.id);
       return { id: r.id, label: ruleLabel(r), offset: r.offset, side: r.side, auto: !!r.auto, enabled: r.enabled, observed: p.observed, p1: p.p1, p2: p.p2, ...s };
     }),
   };
 }
+
+function analysisGames() { let n = 0; for (const seg of parsed()) for (const x of seg) if (x) n += 1; return n; }
 
 function statusView() {
   const resolved = panel.pending.filter((e) => e.status === 'gagné' || e.status === 'perdu');
@@ -887,6 +930,8 @@ function statusView() {
       step: e.step, maxR: e.maxR, hit: e.hit, first: e.first, relance: e.relance ? { target: e.relance.target, status: e.relance.status, hit: e.relance.hit ?? null, own: !!e.relance.own } : null,
       text: messageText(e), sentAt: e.sentAt, resolvedAt: e.resolvedAt, usedChannels: e.usedChannels || [], usedSite: e.usedSite ?? null,
     })),
+    near: lastNear,
+    historyGames: analysisGames(),
     analysis: analysis(),
     won: resolved.filter((e) => e.status === 'gagné').length,
     lost: resolved.filter((e) => e.status === 'perdu').length,
@@ -906,6 +951,6 @@ function resetStats() {
 module.exports = {
   panel, setSender, setAdminId, tick, test, status: statusView, config, configure, persist,
   restore, restoreFromDb, parseChannels, resetStats, analysis, messageText,
-  computeFindings, applyBySid, listView, sendListToAdmin, handleCallback, maybeAnalyze, analyzeNow, ruleText,
+  seedFromDb, computeFindings, applyBySid, listView, sendListToAdmin, handleCallback, maybeAnalyze, analyzeNow, ruleText,
   setRuleEnabled, removeRule,
 };

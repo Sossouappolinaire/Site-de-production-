@@ -1,10 +1,14 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v75',
-  name: 'compte-parite',
+  version: 'v78',
+  name: 'victoire-des-10-jeux',
   date: '2026-10-20',
   features: [
+    'Victoire V1 / V2 : en sensibilité Large l’analyse trouve des déclencheurs dès 10 jeux lus (échantillon minimal 5 cas) et cherche tous les 3 nouveaux jeux tant qu’aucune règle n’est active',
+    'Victoire V1 / V2 : les déclencheurs se trouvent enfin tout de suite — l’analyse relit l’historique des jeux déjà en base (bouton « Charger l’historique de la base ») au lieu de repartir de zéro, sensibilité réglable (Large par défaut / Normale / Stricte), liste des meilleurs candidats même non retenus ; correction d’un doublon de code dans la page du site',
+    'Nouveau bouton « Analyse fin de numéro » (accueil, menu, Aide) : pour chaque fin de numéro de jeu 0 à 9, costume le plus fréquent dans la main du joueur et du banquier, proposition pour le prochain jeu, nombre de jeux analysés réglable (base de données + sabot en cours) (end-digit.js)',
+    'Nouveau « Ralentisseur » (accueil, menu, Aide), valable pour toutes les stratégies de tous les boutons : sur un canal ralenti, une prédiction pour un jeu lointain est retenue jusqu’au début du jeu précédent (jeu 23 prédit, live au 18 → envoi quand le jeu 22 commence), puis les éditions ✅ / ❌ sont redirigées vers le vrai message ; file persistante, expiration 25 min, abandon au changement de sabot (slow-mode.js, branché sur le point d’envoi unique de bot.js)',
     'Nouveau bouton « Compte parité » (accueil, menu, Aide) : compte la fin du numéro de jeu (0 à 9) pour le joueur et le banquier séparément ; le point pair ou impair du côté range le chiffre dans « Taux parité pair » ou « Taux parité impair » avec pourcentages ; à chaque fin de jeu, envoi du message du côté gagnant seulement (option, rien si égalité) avec compte à rebours du reset ; réglages : canal, envoyer pour joueur seul / banquier seul / les deux, intervalle de reset ; export / import inclus (parity-counter.js)',
     'Nouvelle stratégie « Victoire V1 / V2 » (page Stratégies, menu et accueil) : V1 = victoire du joueur, V2 = victoire du banquier, envoyés ensemble dans un seul message comme les deux costumes ; dès qu’un côté est validé (✅0️⃣, ✅1️⃣…) on attend l’autre ; s’il ne valide pas à +1 il est relancé à N+3 dans le même message (+1 et N+3 réglables) ; déclencheurs (gagnants précédents, cartes, décalage +n) trouvés et appliqués automatiquement par l’analyse (ajouter / modifier / supprimer, avec seuil statistique), liste aussi dans le chat privé (/victoire) ; canal, canal du site, rattrapages, taux minimal réglables ; déclencheurs de V1 et de V2 trouvés séparément (le message contient toujours les deux, le pourcentage le plus élevé en haut) ; canal des relances séparé (un message simple par relance, rattrapages propres) ; export / import inclus (victoire-vb.js)',
     'Formats 102 à 106 (prédiction 2/2) : avec ou sans le mot « distribution » (102 et 106 avec ; 103, 104 et 105 simplement « 2/2 »)',

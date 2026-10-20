@@ -64,6 +64,8 @@ const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const mirrorCounter = require('./mirror-counter');
 const parityCounter = require('./parity-counter');
+const endDigit = require('./end-digit');
+const slowMode = require('./slow-mode');
 const lossNotice = require('./loss-notice');
 const game21 = require('./game21');
 const game21Strategies = require('./game21-strategies');
@@ -441,6 +443,7 @@ app.get('/api/state', async (req, res) => {
     },
     lossNotice: lossNotice.getSettings(),
     parityCounter: parityCounter.status(state.live ? state.live.number : null),
+    slowMode: { all: slowMode.status().all, channels: slowMode.status().channels.length, queued: slowMode.status().queue.length },
   });
 });
 
@@ -876,6 +879,34 @@ app.get('/api/strategies', (req, res) => {
 // carte, publié dans un canal Telegram configuré une fois (bouton
 // « Compteur » du tableau de bord). Reset automatique à chaque heure pile.
 // ---------------------------------------------------------------------------
+// « Analyse fin de numéro » (voir end-digit.js)
+app.get('/api/end-digit', async (req, res) => {
+  try { res.json(await endDigit.analyze(req.query.window)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// « Ralentisseur » (voir slow-mode.js) : canaux dont les prédictions attendent le début du jeu précédent
+function slowModeView() {
+  const st = slowMode.status();
+  const seen = new Set();
+  const channels = (state.channels || []).map((c) => {
+    seen.add(String(c.id).toLowerCase());
+    return { id: String(c.id), name: c.name || c.title || String(c.id), slowed: slowMode.isSlowed(c.id), uses: channelConfigsFor(String(c.id)).map((x) => `${x.group} · ${x.name}`) };
+  });
+  for (const k of st.channels) if (!seen.has(k)) channels.push({ id: k, name: k, slowed: true, uses: channelConfigsFor(k).map((x) => `${x.group} · ${x.name}`) });
+  return { ...st, channelList: channels };
+}
+app.get('/api/slow-mode', (req, res) => res.json(slowModeView()));
+app.post('/api/slow-mode/config', (req, res) => {
+  const b = req.body || {};
+  slowMode.configure({ all: b.all, channels: b.channels });
+  res.json(slowModeView());
+});
+app.post('/api/slow-mode/flush', async (req, res) => {
+  const sent = await slowMode.tick(true);
+  res.json({ sent, ...slowModeView() });
+});
+
 // « Compte parité » (voir parity-counter.js)
 app.get('/api/parity-counter', (req, res) => res.json(parityCounter.status(state.live ? state.live.number : null)));
 app.post('/api/parity-counter/config', (req, res) => {
@@ -1802,6 +1833,14 @@ app.delete('/api/victoire-vb/rule', (req, res) => {
 app.post('/api/victoire-vb/send-list', async (req, res) => {
   const ok = await victoireVb.sendListToAdmin();
   res.status(ok ? 200 : 400).json({ ok, error: ok ? null : (victoireVb.status().lastError || 'Envoi impossible'), victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/seed', async (req, res) => {
+  try {
+    const r = await victoireVb.seedFromDb(true);
+    await victoireVb.analyzeNow();
+    res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 app.post('/api/victoire-vb/reset', (req, res) => {

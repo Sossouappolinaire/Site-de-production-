@@ -40,6 +40,7 @@ const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
 const mirrorCounter = require('./mirror-counter');
 const parityCounter = require('./parity-counter');
+const slowMode = require('./slow-mode');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
 const predictionControl = require('./prediction-control');
@@ -355,14 +356,16 @@ function installChannelGuard(inst) {
   const send = inst.sendMessage.bind(inst);
   const edit = inst.editMessageText.bind(inst);
   inst.sendMessageUnguarded = send;
-  inst.sendMessage = function guardedSend(chatId, ...rest) {
+  const doSend = function guardedSend(chatId, rest, fromQueue) {
     if (predictionControl.isChannelPaused(chatId) || gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
-    if (isRecentDuplicate(chatId, rest[0])) { // même message, même canal, quelques secondes plus tôt
+    if (!fromQueue && isRecentDuplicate(chatId, rest[0])) { // même message, même canal, quelques secondes plus tôt
       state.dupSkipped = (state.dupSkipped || 0) + 1;
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
+    // « Ralentisseur » (slow-mode.js) : canal ralenti + jeu futur dont le précédent n'a pas commencé → message retenu, envoi automatique plus tard
+    if (!fromQueue && slowMode.shouldHold(chatId, rest[0])) return Promise.resolve(slowMode.hold(chatId, rest));
     // prédiction « en cours » → animation du statut (status-animator.js)
     return Promise.resolve(send(chatId, ...rest)).then((m) => {
       try { statusAnimator.maybeTrack(edit, chatId, m, rest[0], rest[1]); } catch (_) { /* l'animation ne doit jamais bloquer l'envoi */ }
@@ -374,7 +377,10 @@ function installChannelGuard(inst) {
       return m;
     });
   };
+  inst.sendMessage = function guardedSendEntry(chatId, ...rest) { return doSend(chatId, rest, false); };
+  slowMode.start((chatId, args) => doSend(chatId, args, true)); // envoi réel des messages retenus par le ralentisseur
   inst.editMessageText = function guardedEdit(text, opts) {
+    { const r = slowMode.resolveEdit(text, opts); if (r.action === 'done') return Promise.resolve(true); opts = r.opts; } // message encore retenu / identifiant virtuel du ralentisseur
     if (opts && (opts.message_id === null || opts.message_id === undefined) && opts.inline_message_id === undefined) return Promise.resolve(true);
     const key = statusAnimator.keyFromOpts(opts);
     if (key && statusAnimator.has(key)) {
@@ -388,6 +394,7 @@ function installChannelGuard(inst) {
   if (typeof inst.deleteMessage === 'function') {
     const del = inst.deleteMessage.bind(inst);
     inst.deleteMessage = function guardedDelete(chatId, messageId, ...rest) {
+      { const r = slowMode.resolveDelete(messageId); if (r.action === 'done') return Promise.resolve(true); messageId = r.id; }
       if (messageId === null || messageId === undefined) return Promise.resolve(true);
       statusAnimator.stop(`${chatId}:${messageId}`).catch(() => {});
       return del(chatId, messageId, ...rest);
@@ -2352,6 +2359,8 @@ async function applyDbConfigs() {
   if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
   await mirrorCounter.loadFromDb();
   await parityCounter.restoreFromDb();
+  slowMode.restore();
+  await slowMode.restoreFromDb();
   await lossNotice.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
 }
