@@ -1,10 +1,11 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v78',
-  name: 'victoire-des-10-jeux',
+  version: 'v79',
+  name: 'victoire-apres-nul',
   date: '2026-10-20',
   features: [
+    'Victoire V1 / V2 : règle par défaut « après un match nul → prédit à +1 », V1 en tête et V2 dessous (pourcentages réels de l’historique) ; jamais modifiée par l’analyse, désactivable ou supprimable',
     'Victoire V1 / V2 : en sensibilité Large l’analyse trouve des déclencheurs dès 10 jeux lus (échantillon minimal 5 cas) et cherche tous les 3 nouveaux jeux tant qu’aucune règle n’est active',
     'Victoire V1 / V2 : les déclencheurs se trouvent enfin tout de suite — l’analyse relit l’historique des jeux déjà en base (bouton « Charger l’historique de la base ») au lieu de repartir de zéro, sensibilité réglable (Large par défaut / Normale / Stricte), liste des meilleurs candidats même non retenus ; correction d’un doublon de code dans la page du site',
     'Nouveau bouton « Analyse fin de numéro » (accueil, menu, Aide) : pour chaque fin de numéro de jeu 0 à 9, costume le plus fréquent dans la main du joueur et du banquier, proposition pour le prochain jeu, nombre de jeux analysés réglable (base de données + sabot en cours) (end-digit.js)',

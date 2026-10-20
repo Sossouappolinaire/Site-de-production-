@@ -48,6 +48,10 @@ const PRESETS = {
   normal: { minN: 15, minNDel: 25, minZ: 1.5, gain: 0.05, modGain: 0.04, minRate: 56, label: 'Normale' },
   large: { minN: 5, minNDel: 20, minZ: 0, gain: 0, modGain: 0.1, minRate: 50, label: 'Large (dès 10 jeux)' },
 };
+// Règle PAR DÉFAUT (demande admin) : après un match nul, prédit à +1 ; V1 en haut (le côté de la règle reste en tête),
+// V2 dessous. Elle n'est jamais modifiée ni supprimée par l'analyse ; l'admin peut la désactiver ou la supprimer.
+const DEFAULT_RULE_ID = 'DEF-NUL';
+const defaultRule = () => ({ id: DEFAULT_RULE_ID, seq: 'T', p: null, b: null, offset: 1, side: 'V1', enabled: true, auto: false, locked: true });
 const thr = () => PRESETS[panel.sensitivity] || PRESETS.large;
 const MAX_FINDINGS = 8;
 const ANALYSIS_EVERY = 20;   // nouvelle analyse tous les 20 jeux enregistrés
@@ -70,6 +74,7 @@ const panel = {
   relanceGap: 3,          // relance à N+3
   sensitivity: 'large',   // strict | normal | large : seuils de l'analyse
   rules: [],
+  defaultDropped: false,  // l'admin a supprimé la règle par défaut « après un nul → +1 »
   pending: [],
   stats: {},
   log: '',                // 1 caractère par jeu : a-l (voir codeOf), ? inconnu, | changement de sabot
@@ -147,7 +152,7 @@ function configure(patch = {}) {
 const trimMap = (o, max = 200) => { const e = Object.entries(o || {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, max); return Object.fromEntries(e); };
 function persist() {
   const saved = {
-    config: config(), rules: panel.rules, pending: panel.pending.map((e) => (e.relance && e.relance.sendP ? { ...e, relance: { ...e.relance, sendP: undefined } } : e)), stats: panel.stats, lastScanned: panel.lastScanned,
+    config: config(), rules: panel.rules, defaultDropped: panel.defaultDropped, pending: panel.pending.map((e) => (e.relance && e.relance.sendP ? { ...e, relance: { ...e.relance, sendP: undefined } } : e)), stats: panel.stats, lastScanned: panel.lastScanned,
     log: panel.log, lastLogged: panel.lastLogged, loggedCount: panel.loggedCount, analysisMark: panel.analysisMark,
     notified: trimMap(panel.notified), dismissed: trimMap(panel.dismissed),
     sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, lastScanAt: panel.lastScanAt, lastAnalysisAt: panel.lastAnalysisAt,
@@ -164,8 +169,13 @@ function sanitizeRule(r) {
   if (!seq && p === null && b === null) return null;
   const offset = clampInt(r.offset, 1, 9, 1);
   const side = r.side === 'V2' ? 'V2' : 'V1';
-  return { id: String(r.id || `R${Date.now().toString(36)}${Math.random().toString(36).slice(2, 4)}`), seq, p, b, offset, side, enabled: r.enabled !== false, auto: !!r.auto };
+  const id = String(r.id || `R${Date.now().toString(36)}${Math.random().toString(36).slice(2, 4)}`);
+  return { id, seq, p, b, offset, side, enabled: r.enabled !== false, auto: !!r.auto, locked: id === DEFAULT_RULE_ID };
 }
+function ensureDefaultRule() {
+  if (!panel.defaultDropped && !panel.rules.some((r) => r.id === DEFAULT_RULE_ID)) panel.rules.unshift(defaultRule());
+}
+ensureDefaultRule();
 function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
   if (saved.config) {
@@ -182,6 +192,8 @@ function applySaved(saved) {
     panel.sensitivity = PRESETS[saved.config.sensitivity] ? saved.config.sensitivity : 'large';
   }
   if (Array.isArray(saved.rules)) panel.rules = saved.rules.map(sanitizeRule).filter(Boolean).slice(0, MAX_RULES);
+  panel.defaultDropped = !!saved.defaultDropped;
+  ensureDefaultRule();
   if (Array.isArray(saved.pending)) panel.pending = saved.pending.slice(-200);
   if (saved.stats && typeof saved.stats === 'object') panel.stats = Object.fromEntries(Object.entries(saved.stats).map(([k, v]) => [k, { ...emptyStats(), ...(v || {}) }]));
   if (typeof saved.log === 'string') panel.log = saved.log.replace(/[^a-l?|]/g, '').slice(-LOG_MAX);
@@ -372,7 +384,8 @@ function sideLine(entry, side) {
   return `${side}${mark} ${pc}%`;
 }
 function messageText(entry) {
-  const order = [{ k: 'V1', v: entry.p1 }, { k: 'V2', v: entry.p2 }].sort((a, b) => b.v - a.v).map((x) => x.k); // le plus probable en haut
+  const order = entry.forceTop ? [entry.forceTop, otherSide(entry.forceTop)] // règle par défaut : son côté (V1) en tête
+    : [{ k: 'V1', v: entry.p1 }, { k: 'V2', v: entry.p2 }].sort((a, b) => b.v - a.v).map((x) => x.k); // le plus probable en haut
   const tail = entry.status === 'en attente' ? '⏳' : '';
   const lines = [sideLine(entry, order[0]), ` ┣━ N°${entry.target}${tail}`];
   const rl = entry.relance;
@@ -486,7 +499,7 @@ async function scanTriggers() {
         const p = percentsFor(rule);
         const entry = {
           id: `vv-${target}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          trigger: rule.id, ruleLabel: ruleText(rule), source: n, target, p1: p.p1, p2: p.p2, sample: p.n, mainSide: rule.side,
+          trigger: rule.id, ruleLabel: ruleText(rule), source: n, target, p1: p.p1, p2: p.p2, sample: p.n, mainSide: rule.side, forceTop: rule.locked ? rule.side : null,
           status: 'en attente', phase: 'first', step: 0, gap: 0, skipped: 0, maxR: panel.maxR, waitGames: panel.waitGames, relanceGap: panel.relanceGap,
           hit: { V1: null, V2: null }, first: null, wstep: 0, lastNum: null, relance: null,
           messages: [], usedChannels: [], usedSite: null,
@@ -653,6 +666,7 @@ function buildFindings() {
   const modded = new Set();
   // MODIFIER : un autre décalage valide nettement mieux
   for (const rule of panel.rules) {
+    if (rule.locked) continue;
     const L = LETTER[rule.side];
     const curR = rateFor((seg, i) => matchAt(rule, seg, i), rule.offset, maxR);
     const curRate = curR.n ? curR[L] / curR.n : null;
@@ -675,7 +689,7 @@ function buildFindings() {
   }
   // SUPPRIMER : une règle qui ne fait pas mieux que le hasard
   for (const rule of panel.rules) {
-    if (modded.has(rule.id)) continue;
+    if (modded.has(rule.id) || rule.locked) continue;
     const L = LETTER[rule.side];
     const cur = rateFor((seg, i) => matchAt(rule, seg, i), rule.offset, maxR);
     if (cur.n < T.minNDel) continue;
@@ -750,6 +764,7 @@ function setRuleEnabled(id, enabled) {
 function removeRule(id) {
   const rule = panel.rules.find((r) => r.id === id);
   if (!rule) return { ok: false, text: 'Règle introuvable.' };
+  if (id === DEFAULT_RULE_ID) panel.defaultDropped = true;
   panel.rules = panel.rules.filter((r) => r.id !== id); persist();
   return { ok: true, text: `Règle supprimée : ${ruleText(rule)}` };
 }
@@ -923,7 +938,7 @@ function statusView() {
     ...config(),
     siteChannels: siteChannelsView().map((c) => ({ id: c.id, name: c.name })),
     live: state.live && Number.isFinite(Number(state.live.number)) ? Number(state.live.number) : maxFinishedGameNumber(),
-    rules: panel.rules.map((r) => ({ id: r.id, label: ruleLabel(r), offset: r.offset, side: r.side, enabled: r.enabled, auto: !!r.auto })),
+    rules: panel.rules.map((r) => ({ id: r.id, label: ruleLabel(r), offset: r.offset, side: r.side, enabled: r.enabled, auto: !!r.auto, locked: !!r.locked })),
     findings: computeFindings().map((f) => ({ sid: f.sid, type: f.type, title: f.title, detail: f.detail, n: f.n, rate: f.rate, base: f.base })),
     pending: panel.pending.slice(-30).map((e) => ({
       id: e.id, trigger: e.trigger, ruleLabel: e.ruleLabel, source: e.source, target: e.target, p1: e.p1, p2: e.p2, status: e.status, phase: e.phase,
@@ -942,7 +957,7 @@ function statusView() {
 function resetStats() {
   panel.stats = {};
   panel.pending = [];
-  panel.rules = [];
+  panel.rules = []; panel.defaultDropped = false; ensureDefaultRule();
   panel.notified = {}; panel.dismissed = {};
   persist();
   return statusView();

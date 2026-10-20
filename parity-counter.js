@@ -20,14 +20,18 @@ const ALL = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 const TARGETS = ['both', 'player', 'banker'];
 
 const zeros = () => Array(10).fill(0);
+const SUITS = ['♠️', '❤️', '♦️', '♣️'];
+const suitZeros = () => ({ '♠️': 0, '❤️': 0, '♦️': 0, '♣️': 0 });
+const suitGrid = () => ({ pair: Array.from({ length: 10 }, suitZeros), impair: Array.from({ length: 10 }, suitZeros) });
+const strategies = require('./strategies');
 const state = {
   enabled: true,
   channelId: '',
   target: 'both',      // both | player | banker
   winnerOnly: true,    // à chaque fin de jeu, n'envoie que le message du côté GAGNANT (nul : rien)
   intervalMin: 60,
-  player: { pair: zeros(), impair: zeros() },
-  banker: { pair: zeros(), impair: zeros() },
+  player: { pair: zeros(), impair: zeros(), suits: suitGrid() },
+  banker: { pair: zeros(), impair: zeros(), suits: suitGrid() },
   games: 0,
   lastGameNumber: null,
   sinceAt: Date.now(),
@@ -85,7 +89,7 @@ const getChannel = () => state.channelId;
 // Comptage
 // ---------------------------------------------------------------------------
 function resetCounts() {
-  state.player = { pair: zeros(), impair: zeros() }; state.banker = { pair: zeros(), impair: zeros() };
+  state.player = { pair: zeros(), impair: zeros(), suits: suitGrid() }; state.banker = { pair: zeros(), impair: zeros(), suits: suitGrid() };
   state.games = 0;
   state.sinceAt = Date.now();
 }
@@ -105,15 +109,32 @@ function bump(round) {
   const d = num % 10; // fin de numéro : 1223 → 3
   if (pp) state.player[pp][d] += 1;
   if (bp) state.banker[bp][d] += 1;
+  // costumes des cartes du côté, rangés dans la même case (parité, chiffre) que le jeu
+  if (pp) for (const x of strategies.suitsOf(round.playerSuits)) if (x in state.player.suits[pp][d]) state.player.suits[pp][d][x] += 1;
+  if (bp) for (const x of strategies.suitsOf(round.bankerSuits)) if (x in state.banker.suits[bp][d]) state.banker.suits[bp][d][x] += 1;
   state.games += 1;
   return true;
 }
 
 const pct = (count, total) => (total ? ((count / total) * 100).toFixed(1) : '0.0');
-function block(parityName, icon, name, counts, digits = ALL) {
+// Ordre d'affichage des costumes sur chaque ligne : ❤️ ♦️ ♠️ ♣️ (emojis : rouge pour cœur/carreau, noir pour pique/trèfle)
+const SUIT_ORDER = ['❤️', '♦️', '♠️', '♣️'];
+const SUIT_PLAIN = { '❤️': '❤️', '♦️': '♦️', '♠️': '♠️', '♣️': '♣️' }; // emojis colorés (VS16)
+// pourcentages des costumes d'une case (parité, chiffre) ; 👑 sur le costume strictement dominant
+function suitCells(cell) {
+  const c = cell || suitZeros();
+  const total = SUIT_ORDER.reduce((n, x) => n + (c[x] || 0), 0);
+  const max = Math.max(...SUIT_ORDER.map((x) => c[x] || 0));
+  const topCount = SUIT_ORDER.filter((x) => (c[x] || 0) === max).length;
+  return SUIT_ORDER.map((x) => ({ suit: x, count: c[x] || 0, pct: pct(c[x] || 0, total), dominant: total > 0 && max > 0 && topCount === 1 && (c[x] || 0) === max }));
+}
+function block(parityName, icon, name, counts, digits = ALL, suits) {
   const total = digits.reduce((s, d) => s + counts[d], 0);
   const lines = [`📈 Taux parité ${parityName} — ${icon} ${name}`, '━━━━━━━━━━━━━━━━━━'];
-  for (const d of digits) lines.push(`${DIGITS[d]} : ${counts[d]}  (${pct(counts[d], total)}%)`);
+  for (const d of digits) {
+    const sc = suitCells(suits && suits[d]).map((r) => `(${SUIT_PLAIN[r.suit]}${r.pct}%)`).join(' ');
+    lines.push(`${DIGITS[d]} : ${counts[d]}  (${pct(counts[d], total)}%)  ${sc}`);
+  }
   return lines.join('\n');
 }
 
@@ -138,9 +159,9 @@ function sidesToSend() { return state.target === 'player' ? ['player'] : state.t
 function buildMessage(side, gameNumber) {
   const s = SIDES[side]; const counts = state[side];
   return [
-    block('pair', s.icon, s.name, counts.pair),
+    block('pair', s.icon, s.name, counts.pair, ALL, counts.suits && counts.suits.pair),
     '',
-    block('impair', s.icon, s.name, counts.impair),
+    block('impair', s.icon, s.name, counts.impair, ALL, counts.suits && counts.suits.impair),
     '',
     `🎮 Jeu #${gameNumber ?? '—'}  |  📊 ${state.games} jeu(x) depuis dernier reset`,
     `⏭ Reset dans ${formatCountdown(msUntilNextReset())}  (Intervalle ${state.intervalMin}min)`,
@@ -187,6 +208,7 @@ async function test(gameNumber) {
 function status(gameNumber) {
   const view = (c) => ({
     pair: [...c.pair], impair: [...c.impair],
+    pairSuits: c.suits.pair.map(suitCells), impairSuits: c.suits.impair.map(suitCells),
     pairTotal: c.pair.reduce((s, n) => s + n, 0),
     impairTotal: c.impair.reduce((s, n) => s + n, 0),
   });

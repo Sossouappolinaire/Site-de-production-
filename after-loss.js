@@ -168,7 +168,21 @@ function options() {
   ];
 }
 
+// Source « canal surveillé » : clé `channel:<id>`. On surveille les prédictions
+// PUBLIÉES dans ce canal Telegram (résultats gagné/perdu compris) au lieu d'une
+// stratégie du bot. Ces clés ne figurent pas dans options() (liste partagée avec
+// les autres panneaux) : elles sont résolues à la demande ici.
+function isChannelKey(key) { return typeof key === 'string' && key.startsWith('channel:'); }
+const sameChan = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+function channelTitles() { return panel.channelTitles || (panel.channelTitles = {}); }
+
 function optionByKey(key) {
+  if (isChannelKey(key)) {
+    const id = key.slice('channel:'.length);
+    if (!id) return null;
+    const title = channelTitles()[id];
+    return { key, name: title || `Canal ${id}`, group: 'Canaux surveillés' };
+  }
   return options().find((o) => o.key === key) || null;
 }
 
@@ -581,6 +595,7 @@ function sourceMessageText(tracker, p) {
 
 function alignSourceRetries(tracker, target, suit) {
   try {
+    if (isChannelKey(tracker.key)) return false; // prédiction d'un canal externe : on ne modifie jamais ses messages
     if (tracker.maxR === null || tracker.maxR === undefined) return false;
     const wanted = effectiveMaxR(tracker);
     const p = findSourcePred(tracker, target, suit);
@@ -880,6 +895,15 @@ function pendingFor(trackerId) {
 }
 
 function trackerPredictions(key) {
+  if (isChannelKey(key)) {
+    try {
+      const copyAnnounce = require('./copy-announce'); // require paresseux (copy-announce lit lui-même after-loss paresseusement)
+      return copyAnnounce.sourceEntries(key)
+        .filter((e) => e.suit)
+        .map((e) => ({ target: e.target, suit: e.suit, status: e.status, step: e.step, maxR: e.maxR, messages: e.messages || [] }))
+        .sort((a, b) => a.target - b.target);
+    } catch (_) { return []; }
+  }
   if (key === 'ia') return [...predit.panel.predictions].sort((a, b) => a.target - b.target);
   if (key.startsWith('after:')) return pendingFor(key.slice('after:'.length));
   if (key.startsWith('combo:')) {
@@ -934,6 +958,59 @@ function findConfigConflicts(key, channels, siteChannelId, format) {
   });
 }
 
+// Un canal surveillé ne peut pas être aussi le canal d'envoi (boucle infinie :
+// le relais serait relu comme une nouvelle prédiction du canal).
+function assertNoChannelLoop(key, channels) {
+  if (!isChannelKey(key)) return;
+  const id = key.slice('channel:'.length);
+  const dest = (channels && channels.length) ? channels : panel.channels;
+  if ((dest || []).some((d) => sameChan(d, id))) {
+    throw new Error(`Le canal ${id} est surveillé : il ne peut pas être aussi le canal où envoyer les prédictions (boucle infinie). Choisis un autre canal d'envoi.`);
+  }
+}
+
+// Plusieurs canaux cochés d'un coup : une stratégie suivie par canal surveillé,
+// toutes envoyant vers le même canal d'envoi (extra.channels). Tout est vérifié
+// AVANT de créer quoi que ce soit : une erreur ne laisse jamais une création partielle.
+// sources : [{ id, title }]
+function addChannelTrackers(sources, triggers, repeat, extra = {}) {
+  const list = [];
+  for (const raw of Array.isArray(sources) ? sources : []) {
+    const id = String((raw && typeof raw === 'object') ? raw.id : raw).trim();
+    if (!id || list.some((x) => sameChan(x.id, id))) continue;
+    list.push({ id, title: raw && typeof raw === 'object' ? String(raw.title || '').trim() : '' });
+  }
+  if (!list.length) throw new Error('Coche au moins un canal à surveiller.');
+  const wantedChannels = parseChannels(extra.channels);
+  if (!wantedChannels.length && !panel.channels.length) {
+    throw new Error("Indique l'ID du canal où envoyer les prédictions (ou configure le canal du panneau).");
+  }
+  for (const s of list) assertNoChannelLoop(`channel:${s.id}`, wantedChannels);
+  if (!extra.force) {
+    const wantedSite = sanitizeSiteChannelId(extra.siteChannelId);
+    const wantedFormat = sanitizeTrackerFormat(extra.format);
+    const conflicts = [];
+    for (const s of list) {
+      for (const t of findConfigConflicts(`channel:${s.id}`, wantedChannels, wantedSite, wantedFormat)) conflicts.push(t);
+    }
+    if (conflicts.length) {
+      const err = new Error('Une stratégie suivie avec exactement le(s) même(s) canal(aux) et le même format existe déjà pour au moins un de ces canaux — confirme pour l\'ajouter quand même (sinon ce sera un doublon).');
+      err.code = 'DUPLICATE_CONFIG';
+      err.conflicts = conflicts.map((t) => ({ id: t.id, name: t.name, channels: effectiveChannels(t), siteChannelId: effectiveSiteChannelId(t), format: effectiveFormat(t), triggers: t.triggers }));
+      throw err;
+    }
+  }
+  const customName = sanitizeName(extra.name);
+  const created = [];
+  for (const s of list) {
+    if (s.title) channelTitles()[s.id] = s.title.slice(0, 120);
+    const label = s.title || s.id;
+    const name = customName ? (list.length > 1 ? `${customName} · ${label}` : customName) : (s.title || `Canal ${s.id}`);
+    created.push(addTracker(`channel:${s.id}`, triggers, repeat, { ...extra, name, force: true }));
+  }
+  return created;
+}
+
 function addTracker(key, triggers, repeat, extra = {}) {
   const opt = optionByKey(key);
   if (!opt) throw new Error("Stratégie inconnue pour le suivi « après perte »");
@@ -962,6 +1039,7 @@ function addTracker(key, triggers, repeat, extra = {}) {
   const wantedSiteChannelId = sanitizeSiteChannelId(extra.siteChannelId);
   const wantedFormat = sanitizeTrackerFormat(extra.format);
   const wantedMaxR = sanitizeTrackerMaxR(extra.maxR);
+  assertNoChannelLoop(opt.key, wantedChannels);
   if (!extra.force) {
     const conflicts = findConfigConflicts(opt.key, wantedChannels, wantedSiteChannelId, wantedFormat);
     if (conflicts.length) {
@@ -986,7 +1064,7 @@ function addTracker(key, triggers, repeat, extra = {}) {
   // indéfiniment. On l'active donc automatiquement à l'ajout (la stratégie
   // IA du panneau « Prédit » a son propre cycle, elle n'a pas besoin de ce
   // réglage).
-  if (opt.key !== 'ia') setStrategyConfig(opt.key, { enabled: true });
+  if (opt.key !== 'ia' && !isChannelKey(opt.key)) setStrategyConfig(opt.key, { enabled: true });
   const tracker = {
     id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     key: opt.key,
@@ -2352,7 +2430,7 @@ function status() {
 
 module.exports = {
   panel, status, config, configure, restore, restoreFromDb, setSender, tick, test,
-  parseChannels, options, addTracker, updateTracker, removeTracker,
+  parseChannels, options, addTracker, addChannelTrackers, updateTracker, removeTracker,
   backtestTracker, optimizeTracker, triggersAboveThreshold, allTriggersAboveThreshold,
   TRIGGER_KEYS, TRIGGER_LABELS, pendingFor, tallyView, findConfigConflicts,
   CATEGORIES, verifiedFor,

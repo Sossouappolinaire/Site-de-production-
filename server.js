@@ -1568,6 +1568,25 @@ app.post('/api/after-loss/scan', async (req, res) => {
 
 app.post('/api/after-loss/trackers', async (req, res) => {
   try {
+    // Plusieurs canaux cochés à surveiller (liste « Canaux à surveiller ») : une
+    // stratégie suivie par canal, toutes envoyant vers le canal d'envoi indiqué.
+    const sourceChannels = req.body && req.body.sourceChannels;
+    if (Array.isArray(sourceChannels) && sourceChannels.length) {
+      const known = new Map(configuredChannelList().map((c) => [String(c.id), c.title || '']));
+      const sources = sourceChannels.map((id) => ({ id: String(id), title: known.get(String(id)) || '' }));
+      const dest = afterLoss.parseChannels(req.body.channels);
+      for (const id of dest) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`${id} : ${check.error}`);
+        if (check.chat && check.chat.canPost === false) throw new Error(`${id} : le bot ne peut pas publier dans ce canal`);
+      }
+      const created = afterLoss.addChannelTrackers(sources, req.body.triggers, req.body.repeat, {
+        name: req.body.name, category: req.body.category, channels: req.body.channels,
+        siteChannelId: req.body.siteChannelId, format: req.body.format, streak: req.body.streak,
+        decade: req.body.decade, maxR: req.body.maxR, force: !!req.body.force,
+      });
+      return res.json({ ok: true, trackers: created, afterLoss: afterLoss.status() });
+    }
     const key = req.body && req.body.key;
     const t = afterLoss.addTracker(key, req.body && req.body.triggers, req.body && req.body.repeat, {
       // nom donné à la configuration : elle apparaît ensuite sous ce nom dans
