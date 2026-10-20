@@ -1571,9 +1571,10 @@ app.post('/api/after-loss/trackers', async (req, res) => {
     // Plusieurs canaux cochés à surveiller (liste « Canaux à surveiller ») : une
     // stratégie suivie par canal, toutes envoyant vers le canal d'envoi indiqué.
     const sourceChannels = req.body && req.body.sourceChannels;
-    if (Array.isArray(sourceChannels) && sourceChannels.length) {
+    const sourceKeys = req.body && req.body.sourceKeys;
+    if ((Array.isArray(sourceChannels) && sourceChannels.length) || (Array.isArray(sourceKeys) && sourceKeys.length)) {
       const known = new Map(configuredChannelList().map((c) => [String(c.id), c.title || '']));
-      const sources = sourceChannels.map((id) => ({ id: String(id), title: known.get(String(id)) || '' }));
+      const sources = (Array.isArray(sourceChannels) ? sourceChannels : []).map((id) => ({ id: String(id), title: known.get(String(id)) || '' }));
       const dest = afterLoss.parseChannels(req.body.channels);
       for (const id of dest) {
         const check = await resolveChat(id);
@@ -1584,7 +1585,13 @@ app.post('/api/after-loss/trackers', async (req, res) => {
         name: req.body.name, category: req.body.category, channels: req.body.channels,
         siteChannelId: req.body.siteChannelId, format: req.body.format, streak: req.body.streak,
         decade: req.body.decade, maxR: req.body.maxR, force: !!req.body.force,
+        strategyKeys: Array.isArray(sourceKeys) ? sourceKeys : [],
       });
+      // les stratégies suivies ont été activées automatiquement : on persiste comme la route /api/strategies/:key
+      let persisted = false;
+      for (const k of (Array.isArray(sourceKeys) ? sourceKeys : [])) {
+        if (k && k !== 'ia' && strategies.BY_KEY[k]) { if (!persisted) { persist(); persisted = true; } if (db.ready) await db.saveStrategy(k, strategies.BY_KEY[k].name, state.strategies[k]); }
+      }
       return res.json({ ok: true, trackers: created, afterLoss: afterLoss.status() });
     }
     const key = req.body && req.body.key;

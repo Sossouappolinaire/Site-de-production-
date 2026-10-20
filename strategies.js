@@ -1380,7 +1380,61 @@ const deuxTrois = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois];
+// ---------------------------------------------------------------------------
+// 13) Costume manquant (2/2) — vérification à +2, prédiction à +4 (demande admin)
+// ---------------------------------------------------------------------------
+// Jeu déclencheur : joueur 2 cartes ET banquier 2 cartes (aucune 3ᵉ carte) et, parmi ces 4 cartes, UN SEUL des 4 costumes est
+// absent (3 costumes différents présents). Au jeu déclencheur + 2 (réglable), on regarde si ce costume manquant est venu sur la
+// main du JOUEUR : s'il est venu → aucune prédiction ; sinon → prédiction de ce costume au jeu déclencheur + 4 (réglable).
+function missingSuitOf(fourSuits) {
+  const present = new Set(fourSuits);
+  const missing = SUITS.filter((x) => !present.has(x));
+  return missing.length === 1 ? missing[0] : null;
+}
+const carteManquante = {
+  key: 'carteManquante',
+  name: 'Costume manquant (2/2) → +2 puis +4',
+  about:
+    "Jeu déclencheur : joueur 2 cartes ET banquier 2 cartes, avec UN SEUL costume absent parmi ces 4 cartes. " +
+    "Au jeu +2, on vérifie si ce costume manquant est venu sur la main du joueur : si oui, aucune prédiction ; " +
+    "sinon, on prédit ce costume au jeu +4 du jeu déclencheur. Vérification avec les rattrapages.",
+  defaults: { enabled: false, format: config.DEFAULT_FORMAT, maxR: 2, b: 0, check: 2, lead: 4, template: null, channels: [] },
+  usesB: false,
+  source: 'finished',
+  // `game` est le jeu qui vient de se terminer : c'est le jeu de vérification (déclencheur + check)
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const check = Math.max(1, Math.min(10, parseInt(cfg && cfg.check, 10) || 2));
+    const lead = Math.max(check, Math.min(30, parseInt(cfg && cfg.lead, 10) || 4));
+    const trigNum = game.number - check;
+    if (trigNum < 1) return null;
+    const games = (ctx && ctx.games) || new Map();
+    const trig = games.get(trigNum);
+    if (!trig || !trig.finished) return null;
+    if (trig.playerCards !== 2 || trig.bankerCards !== 2) return null;
+    const four = [...suitsOf(trig.playerSuits), ...suitsOf(trig.bankerSuits)];
+    if (four.length !== 4) return null;
+    const suit = missingSuitOf(four);
+    if (!suit) return null;
+    // le jeu de vérification doit avoir des cartes lisibles chez le joueur
+    const hand = suitsOf(game.playerSuits);
+    if (!hand.length) return null;
+    if (hand.includes(suit)) return null; // le costume manquant est venu → pas de prédiction
+    return {
+      kind: 'suit',
+      target: trigNum + lead,
+      suit,
+      label: suit,
+      trigger: trigNum,
+      reason:
+        `Jeu #N${trigNum} : 2 cartes joueur + 2 cartes banquier, costume manquant ${suit} ; ` +
+        `absent chez le joueur au jeu #N${game.number} (+${check}) → prédiction ${suit} sur #N${trigNum + lead} (+${lead})`,
+      meta: { missing: suit, trigger: trigNum, check, lead, cards: four },
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois, carteManquante];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {
@@ -1459,7 +1513,7 @@ function catalog() {
 }
 
 module.exports = {
-  LIST, BY_KEY, SUITS, INVERSE, MIRROR, weakSuitOf, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
+  LIST, BY_KEY, SUITS, INVERSE, MIRROR, weakSuitOf, missingSuitOf, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
   normParity, triggerAt, triggerIndexOf, lastTriggerAtOrBefore, nextTriggerAfter, triggerSequence, varCounterAt,
   sanitizeAbsenceEntries,
 };

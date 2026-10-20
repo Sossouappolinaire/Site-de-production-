@@ -969,32 +969,39 @@ function assertNoChannelLoop(key, channels) {
   }
 }
 
-// Plusieurs canaux cochés d'un coup : une stratégie suivie par canal surveillé,
-// toutes envoyant vers le même canal d'envoi (extra.channels). Tout est vérifié
-// AVANT de créer quoi que ce soit : une erreur ne laisse jamais une création partielle.
-// sources : [{ id, title }]
+// Plusieurs sources cochées d'un coup (canaux ET/OU stratégies existantes) : une
+// stratégie suivie par source, toutes envoyant vers le même canal d'envoi
+// (extra.channels). Tout est vérifié AVANT de créer quoi que ce soit : une
+// erreur ne laisse jamais une création partielle.
+// sources : [{ id, title }] = canaux ; extra.strategyKeys : [clé] = stratégies existantes
 function addChannelTrackers(sources, triggers, repeat, extra = {}) {
-  const list = [];
+  const list = []; // { key, title }
   for (const raw of Array.isArray(sources) ? sources : []) {
     const id = String((raw && typeof raw === 'object') ? raw.id : raw).trim();
-    if (!id || list.some((x) => sameChan(x.id, id))) continue;
-    list.push({ id, title: raw && typeof raw === 'object' ? String(raw.title || '').trim() : '' });
+    if (!id || list.some((x) => x.key === `channel:${id}`)) continue;
+    list.push({ key: `channel:${id}`, title: raw && typeof raw === 'object' ? String(raw.title || '').trim() : '' });
   }
-  if (!list.length) throw new Error('Coche au moins un canal à surveiller.');
+  for (const raw of Array.isArray(extra.strategyKeys) ? extra.strategyKeys : []) {
+    const key = String(raw == null ? '' : raw).trim();
+    if (!key || isChannelKey(key) || list.some((x) => x.key === key)) continue;
+    if (!optionByKey(key)) throw new Error('Stratégie inconnue pour le suivi « après perte »');
+    list.push({ key, title: '' });
+  }
+  if (!list.length) throw new Error('Coche au moins un canal ou une stratégie à surveiller.');
   const wantedChannels = parseChannels(extra.channels);
   if (!wantedChannels.length && !panel.channels.length) {
     throw new Error("Indique l'ID du canal où envoyer les prédictions (ou configure le canal du panneau).");
   }
-  for (const s of list) assertNoChannelLoop(`channel:${s.id}`, wantedChannels);
+  for (const s of list) assertNoChannelLoop(s.key, wantedChannels);
   if (!extra.force) {
     const wantedSite = sanitizeSiteChannelId(extra.siteChannelId);
     const wantedFormat = sanitizeTrackerFormat(extra.format);
     const conflicts = [];
     for (const s of list) {
-      for (const t of findConfigConflicts(`channel:${s.id}`, wantedChannels, wantedSite, wantedFormat)) conflicts.push(t);
+      for (const t of findConfigConflicts(s.key, wantedChannels, wantedSite, wantedFormat)) conflicts.push(t);
     }
     if (conflicts.length) {
-      const err = new Error('Une stratégie suivie avec exactement le(s) même(s) canal(aux) et le même format existe déjà pour au moins un de ces canaux — confirme pour l\'ajouter quand même (sinon ce sera un doublon).');
+      const err = new Error('Une stratégie suivie avec exactement le(s) même(s) canal(aux) et le même format existe déjà pour au moins une de ces sources — confirme pour l\'ajouter quand même (sinon ce sera un doublon).');
       err.code = 'DUPLICATE_CONFIG';
       err.conflicts = conflicts.map((t) => ({ id: t.id, name: t.name, channels: effectiveChannels(t), siteChannelId: effectiveSiteChannelId(t), format: effectiveFormat(t), triggers: t.triggers }));
       throw err;
@@ -1003,10 +1010,10 @@ function addChannelTrackers(sources, triggers, repeat, extra = {}) {
   const customName = sanitizeName(extra.name);
   const created = [];
   for (const s of list) {
-    if (s.title) channelTitles()[s.id] = s.title.slice(0, 120);
-    const label = s.title || s.id;
-    const name = customName ? (list.length > 1 ? `${customName} · ${label}` : customName) : (s.title || `Canal ${s.id}`);
-    created.push(addTracker(`channel:${s.id}`, triggers, repeat, { ...extra, name, force: true }));
+    if (isChannelKey(s.key) && s.title) channelTitles()[s.key.slice('channel:'.length)] = s.title.slice(0, 120);
+    const label = s.title || (optionByKey(s.key) || {}).name || s.key;
+    const name = customName ? (list.length > 1 ? `${customName} · ${label}` : customName) : label;
+    created.push(addTracker(s.key, triggers, repeat, { ...extra, name, force: true }));
   }
   return created;
 }
