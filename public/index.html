@@ -679,7 +679,7 @@
     //   Niveau 3 : le bouton de la stratégie, puis directement SES configurations
     const STRAT_THEMES = [
       { id: 'num', icon: '🔢', title: 'Numéro & rythme', sub: 'Le costume ou le déclencheur vient du numéro du jeu', keys: ['costume', 'parite'] },
-      { id: 'cartes', icon: '🃏', title: 'Cartes & mains', sub: 'Lecture des cartes du joueur et du banquier', keys: ['dominant', 'matchnul', 'troisiemeBanquier', 'secondeCarte', 'deuxTrois', 'carteBanquier'] },
+      { id: 'cartes', icon: '🃏', title: 'Cartes & mains', sub: 'Lecture des cartes du joueur et du banquier', keys: ['dominant', 'matchnul', 'troisiemeBanquier', 'secondeCarte', 'deuxTrois', 'carteManquante', 'carteBanquier'] },
       { id: 'absence', icon: '🕳️', title: 'Absence de costume', sub: 'Un costume ne sort plus pendant plusieurs jeux', keys: ['absente', 'absenceJoueur', 'absenceDecalage'] },
       { id: 'ombre', icon: '👤', title: 'Prédiction dans l’ombre', sub: 'Surveillance silencieuse des 4 costumes', keys: ['ombre', 'ombreJoueur'] },
     ];
@@ -1526,7 +1526,7 @@ Faites-en bon usage !
       const format = (t.format === null || t.format === undefined) ? '' : t.format;
       const maxR = (t.maxR === null || t.maxR === undefined) ? '' : t.maxR;
       return `<div class="field-row" style="display:flex;align-items:flex-end;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap">
-        <div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>
+        ${t.hideChannels ? '' : `<div class="field" style="flex:1;min-width:180px;margin:0"><label style="font-size:11px">Canal Telegram (optionnel)</label><input id="${prefix}-channels" value="${esc(channels)}" placeholder="vide = canal du panneau"></div>`}
         <div class="field" style="flex:1;min-width:160px;margin:0"><label style="font-size:11px">Canal du site (optionnel)</label><select id="${prefix}-siteChannel">${siteChannelOptions(t.siteChannelId)}</select></div>
         <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Format (optionnel)</label><input id="${prefix}-format" type="number" min="1" max="${esc(String(snapshot.formatCount || 88))}" value="${esc(String(format))}" placeholder="vide = panneau"></div>
         <div class="field" style="max-width:130px;margin:0"><label style="font-size:11px">Rattrapage (optionnel)</label><input id="${prefix}-maxR" type="number" min="0" max="9" value="${esc(String(maxR))}" placeholder="vide = panneau"></div>
@@ -5700,24 +5700,31 @@ Faites-en bon usage !
       const all = (snapshot.channelList || []).slice();
       const rows = all.length ? all.map(ch => `<label class="check" style="align-items:flex-start;margin:6px 0"><input type="checkbox" class="al-src" value="${esc(String(ch.id))}"> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join(' · ')}</span>` : ''}</span></label>`).join('')
         : '<p class="small muted">Aucun canal connu pour le moment.</p>';
-      return `<div class="field" style="margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0"><label>Canaux à surveiller (un ou plusieurs)</label>
+      const strats = (snapshot.afterLoss?.options || []).map(o => `<label class="check" style="align-items:flex-start;margin:6px 0"><input type="checkbox" class="al-strat" value="${esc(o.key)}"> <span><b>${esc(o.name)}</b>${o.group ? `<br><span class="small muted">${esc(o.group)}</span>` : ''}</span></label>`).join('');
+      return `<div class="field"><label>Canaux à surveiller (un ou plusieurs)</label>
           <div style="max-height:220px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;padding:6px 10px">${rows}</div>
-          <p class="small muted" style="margin:6px 0 0">Optionnel. Si tu coches un ou plusieurs canaux, ce sont leurs prédictions (gagné / perdu) qui sont surveillées à la place de la stratégie choisie ci-dessus. Une stratégie suivie est créée pour chaque canal coché.</p></div>
+        </div>
+        <div class="field"><label>Stratégies existantes à surveiller (un ou plusieurs)</label>
+          <div style="max-height:220px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;padding:6px 10px">${strats || '<p class="small muted">Aucune stratégie.</p>'}</div>
+          <p class="small muted" style="margin:6px 0 0">Tu peux cocher des canaux, des stratégies, ou les deux. Une stratégie suivie est créée pour chaque case cochée, et toutes envoient vers le même canal.</p></div>
         <div class="field"><label>ID du canal où envoyer les prédictions</label><input id="al-dest" placeholder="-1001234567890">
           ${all.length ? `<select onchange="if(this.value){document.getElementById('al-dest').value=this.value;this.value='';}"><option value="">Choisir un canal déjà configuré…</option>${all.map(ch => `<option value="${esc(String(ch.id))}">${esc(ch.title ? ch.title + ' · ' + ch.id : String(ch.id))}</option>`).join('')}</select>` : ''}
           <p class="small muted" style="margin:6px 0 0">Vide = canal du panneau. Le canal d'envoi ne peut pas être l'un des canaux surveillés.</p></div>`;
     }
     async function addAfterLossTracker() {
-      const key = val('newTrackerKey');
+      const key = '';
       const category = Number(val('new-category')) || 0;
       const blocks = readAfterLossCategoryBlocks('new', category);
       const { channels, siteChannelId, format } = readAfterLossChannelFormat('new');
       const name = val('new-name');
       const sourceChannels = [...document.querySelectorAll('.al-src:checked')].map(x => x.value);
       const body = { key, category, name, ...blocks, channels, siteChannelId, format };
-      if (sourceChannels.length) {
-        // canaux cochés : le canal d'envoi est l'ID saisi dans « ID du canal où envoyer »
+      const sourceKeys = [...document.querySelectorAll('.al-strat:checked')].map(x => x.value);
+      if (!sourceChannels.length && !sourceKeys.length) return toast('Coche au moins un canal ou une stratégie à surveiller.', 'error');
+      {
+        // sources cochées : le canal d'envoi est l'ID saisi dans « ID du canal où envoyer »
         body.sourceChannels = sourceChannels;
+        body.sourceKeys = sourceKeys;
         const destIds = ids(val('al-dest') || '');
         if (destIds.length) body.channels = destIds;
         if (!body.channels.length && !(snapshot.afterLoss?.channels || []).length) return toast("Indique l'ID du canal où envoyer les prédictions.", 'error');
@@ -5737,13 +5744,11 @@ Faites-en bon usage !
       }
     }
     function addAfterLossTrackerModal() {
-      const opts = (snapshot.afterLoss?.options || []).map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('');
-      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Choisis une stratégie existante du bot ou la stratégie IA, puis coche au moins un type de résultat déclencheur et le N à attendre pour chacun.</p></div></div>
-        <div class="field"><label>Stratégie</label><select id="newTrackerKey">${opts}</select></div>
+      openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle stratégie suivie</span><h3 style="margin-top:8px">Ajouter une stratégie</h3><p class="small" style="margin:0">Coche les canaux et/ou les stratégies à surveiller et indique l'ID du canal où envoyer, puis coche au moins un type de résultat déclencheur et le N à attendre pour chacun.</p></div></div>
+        ${afterLossSourceChannelsHtml()}
         <div class="field"><label>Catégorie</label><select id="new-category" onchange="afterLossCategoryChanged('new', null)">${afterLossCategoryOptions(2, false)}</select><p class="small muted" id="new-catAbout" style="margin:6px 0 0">${esc(afterLossCategoryAbout(2))}</p></div>
         <div id="new-blocks">${afterLossCategoryBlocks('new', 2, null)}</div>
-        ${afterLossSourceChannelsHtml()}
-        ${afterLossChannelFormatRow('new', { channels: [], format: null })}
+        ${afterLossChannelFormatRow('new', { channels: [], format: null, hideChannels: true })}
         ${afterLossNameRow('new', '')}
         <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="addAfterLossTracker()">Enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
