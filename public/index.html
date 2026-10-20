@@ -332,6 +332,8 @@
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/parity-counter" data-nav="parity-counter">🔢 Compte parité</a>
+        <a href="#/end-digit" data-nav="end-digit">🎯 Analyse fin de numéro</a>
+        <a href="#/slow-mode" data-nav="slow-mode">⏳ Ralentisseur</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
         <a href="#/draw-two-three" data-nav="draw-two-three">⚖️ Nul / 2-3</a>
         <a href="#/victoire-vb" data-nav="victoire-vb">⚔️ Victoire V1 / V2</a>
@@ -631,6 +633,8 @@
       <div class="home-section-label">Suivi, statistiques et communauté</div>
       <div class="home-grid">
         ${card('#/parity-counter', '🔢', 'Compte parité', `${({ both: 'Joueur + banquier', player: 'Joueur seul', banker: 'Banquier seul' })[snapshot.parityCounter?.target || 'both']} • ${snapshot.parityCounter?.games || 0} jeu(x) depuis le reset • ${snapshot.parityCounter?.sentCount || 0} message(s)`)}
+        ${card('#/end-digit', '🎯', 'Analyse fin de numéro', 'Costume le plus fréquent pour chaque fin de numéro 0 à 9')}
+        ${card('#/slow-mode', '⏳', 'Ralentisseur', `${snapshot.slowMode?.all ? 'Tous les canaux' : (snapshot.slowMode?.channels || 0) + ' canal(aux) ralenti(s)'} • ${snapshot.slowMode?.queued || 0} prédiction(s) en attente`)}
         ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/draw-two-three', '⚖️', 'Nul / 2-3', `${(snapshot.drawTwoThree?.sentCount) || 0} prédiction(s) • ${(snapshot.drawTwoThree?.won) || 0} gagnée(s) • ${(snapshot.drawTwoThree?.lost) || 0} perdue(s)`)}
@@ -2438,6 +2442,14 @@ Faites-en bon usage !
         what: 'Prédit ensemble le match nul (noté X) ou la distribution 2/3 (joueur 2 cartes, banquier 3 cartes), dans un seul message. Dès que l’un des deux sort, le message est édité avec le rattrapage et l’autre est ignoré.',
         steps: ['Ouvre « Nul / 2-3 », renseigne le canal et le rattrapage, puis active.', 'Déclencheurs : 2/3 → jeu +1 ; nul 2/2 → +1 ; nul 3/2 (joueur 3, banquier 2) → +2 ; nul 3/3 → +3.'],
         tips: ['Les pourcentages sont les taux réellement observés (fenêtre jeu prédit + rattrapages) ; la page montre aussi l’analyse des matchs nuls.', 'Quand l’analyse trouve une règle à ajouter, modifier ou supprimer, elle l’envoie dans le chat privé avec un bouton « Appliquer » (liste cliquable, aussi avec /nul).'] },
+      { g: 'ops', icon: '🎯', title: 'Analyse fin de numéro', hash: '#/end-digit',
+        what: 'Pour chaque fin de numéro de jeu (0 à 9), cherche quel costume arrive le plus souvent dans la main du joueur et du banquier, et propose le meilleur costume de chaque chiffre, y compris pour le prochain jeu.',
+        steps: ['Ouvre « Analyse fin de numéro » et choisis le nombre de jeux à analyser.', 'Lis le costume proposé pour chaque chiffre et pour le prochain jeu.'],
+        tips: ['Avec la base de données connectée, l’analyse porte sur des milliers de jeux ; sans elle, seul le sabot en cours est lu.', 'Un petit écart avec la moyenne peut être du hasard : regarde le nombre de jeux (« faible » sous 30).'] },
+      { g: 'ops', icon: '⏳', title: 'Ralentisseur', hash: '#/slow-mode',
+        what: 'Valable pour toutes les stratégies de tous les boutons : sur un canal ralenti, une prédiction destinée à un jeu lointain attend que le jeu précédent commence, puis part automatiquement (jeu 23 prédit, live au 18 : envoi quand le jeu 22 commence).',
+        steps: ['Ouvre « Ralentisseur » et coche les canaux à ralentir (ou « tous les canaux »).', 'Les prédictions en attente sont listées ; « Envoyer maintenant » les libère tout de suite.'],
+        tips: ['Le résultat ✅ / ❌ est édité dans le même message une fois envoyé.', 'Un canal partagé par plusieurs stratégies les ralentit toutes. Les prédictions qui attendent trop longtemps (25 min) ou changent de sabot sont abandonnées.'] },
       { g: 'ops', icon: '🔢', title: 'Compte parité', hash: '#/parity-counter',
         what: 'Compte la fin du numéro de jeu (0 à 9) pour le joueur et le banquier séparément : si le point du côté est pair, le chiffre va dans « Taux parité pair », sinon dans « Taux parité impair », avec le pourcentage de chaque chiffre. À chaque fin de jeu, seul le message du côté gagnant est envoyé (rien en cas d’égalité), avec le compte à rebours avant le reset.',
         steps: ['Ouvre « Compte parité », renseigne le canal, choisis « Joueur », « Banquier » ou les deux, puis enregistre.', 'Règle l’intervalle de reset (60 min par défaut).'],
@@ -3851,11 +3863,12 @@ Faites-en bon usage !
             <div class="field"><label>Rattrapages de la relance</label><input id="vvRelMaxR" type="number" min="0" max="9" value="${p.relanceMaxR ?? 1}"></div>
             <div class="field"><label>L’autre côté doit valider à + <span class="small">(sinon il est relancé)</span></label><input id="vvWait" type="number" min="1" max="3" value="${p.waitGames ?? 1}"></div>
             <div class="field"><label>Relance à N+ <span class="small">(N = jeu du côté validé ; 3 = N+3)</span></label><input id="vvGap" type="number" min="2" max="9" value="${p.relanceGap ?? 3}"></div>
-            <div class="field"><label>Taux minimal d’un déclencheur (%)</label><input id="vvMinRate" type="number" min="50" max="90" value="${p.minRate ?? 60}"></div>
+            <div class="field"><label>Sensibilité de l’analyse <span class="small">(plus elle est large, plus elle trouve de déclencheurs, mais certains peuvent être du hasard)</span></label>
+              <select id="vvSens">${[['large', 'Large — trouve beaucoup de déclencheurs'], ['normal', 'Normale'], ['strict', 'Stricte — seulement les déclencheurs très nets']].map(([k, l]) => `<option value="${k}" ${(p.sensitivity || 'large') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
             <label class="check"><input id="vvEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer « Victoire V1 / V2 »</label>
             <label class="check"><input id="vvAuto" type="checkbox" ${p.autoApply !== false ? 'checked' : ''}> Appliquer automatiquement les déclencheurs trouvés par l’analyse (ajouter / modifier / supprimer)</label>
             <label class="check"><input id="vvNotify" type="checkbox" ${p.notify !== false ? 'checked' : ''}> Prévenir dans le chat privé quand l’analyse trouve ou applique quelque chose</label>
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveVictoireVb()">Enregistrer</button><button class="button small ghost" onclick="victoireVbScan()">Analyser maintenant</button><button class="button small ghost" onclick="victoireVbSendList()">Envoyer la liste au chat privé</button><button class="button small danger" onclick="resetVictoireVb()">Remettre à zéro (règles et compteurs)</button></div>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveVictoireVb()">Enregistrer</button><button class="button small ghost" onclick="victoireVbScan()">Analyser maintenant</button><button class="button small ghost" onclick="victoireVbSeed()">Charger l’historique de la base</button><button class="button small ghost" onclick="victoireVbSendList()">Envoyer la liste au chat privé</button><button class="button small danger" onclick="resetVictoireVb()">Remettre à zéro (règles et compteurs)</button></div>
             ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
             <h3 style="margin-top:18px">Format du message</h3>
             <pre class="small" style="white-space:pre;margin:6px 0">V1 62%\n ┣━ N°532⏳\nV2 31%</pre>
@@ -3875,119 +3888,6 @@ Faites-en bon usage !
           </div>
         </div>
         <div class="card" style="margin-top:16px">
-          <h3>Trouvailles de l'analyse (ajouter / modifier / supprimer une règle)</h3>
-          ${(p.findings || []).length ? `<table class="table"><thead><tr><th>Proposition</th><th>Détail</th><th></th></tr></thead><tbody>
-            ${(p.findings || []).map((f) => `<tr><td><b>${esc(f.title)}</b></td><td class="small">${esc(f.detail)}</td><td><button class="button small primary" onclick="applyDrawTwoThree('${esc(f.sid)}')">Appliquer</button></td></tr>`).join('')}
-          </tbody></table>` : '<p class="small">Rien à proposer pour l\'instant (il faut au moins 15 cas observés et un écart net avec le taux général).</p>'}
-          <p class="small muted" style="margin-top:8px">La même liste arrive dans le chat privé avec des boutons (commande /nul). Dernière analyse : ${p.lastAnalysisAt ? new Date(p.lastAnalysisAt).toLocaleString('fr-FR') : '—'}.</p>
-        </div>
-        <div class="card" style="margin-top:16px">
-          <h3>Analyse : comment les matchs nuls viennent</h3>
-          ${a.games ? `<p class="small">Sur <b>${a.games}</b> jeux enregistrés (${a.shoes || 1} sabot(s)) : <b>${a.ties}</b> match(s) nul(s) (${pc(a.tiePct)}) • 2/3 : <b>${a.all23}</b> (${pc(a.all23Pct)}) • écart moyen entre deux nuls : <b>${a.avgGap ?? '—'}</b> jeux (max ${a.maxGap ?? '—'}) • jeux depuis le dernier nul : <b>${a.sinceLastTie ?? '—'}</b></p>
-          <p class="small">Cartes des matchs nuls : 2/2 <b>${byCards['2/2'] || 0}</b> • 3/2 <b>${byCards['3/2'] || 0}</b> • 3/3 <b>${byCards['3/3'] || 0}</b> • 2/3 <b>${byCards['2/3'] || 0}</b>${(a.lastTies || []).length ? ` • derniers nuls : ${(a.lastTies || []).map((n) => '№' + n).join(', ')}` : ''}</p>
-          <table class="table"><thead><tr><th>Après un nul…</th><th>Nul au jeu suivant</th></tr></thead><tbody>
-            ${(a.afterTie || []).map((x) => `<tr><td>+${x.k} jeu(x)</td><td>${x.n ? `${x.hits}/${x.n} (${pc(x.pct)})` : '—'}</td></tr>`).join('')}
-          </tbody></table>
-          <h3 style="margin-top:14px">Probabilité par règle (fenêtre : jeu prédit + ${a.window?.maxR ?? p.maxR ?? 2} rattrapage(s))</h3>
-          <table class="table"><thead><tr><th>Règle</th><th>Échantillon</th><th>2/3 vient</th><th>X vient</th><th>Affiché</th><th>Envoyées</th><th>Gagnées</th><th>Perdues</th></tr></thead><tbody>
-            ${(a.rules || []).map((t) => `<tr><td>${esc(t.label)} → N+${t.offset}</td><td>${t.observed?.n || 0}</td><td>${t.observed?.n ? `${t.observed.t23}/${t.observed.n}` : '—'}</td><td>${t.observed?.n ? `${t.observed.tX}/${t.observed.n}` : '—'}</td><td>2/3 ${t.p23}% · X ${t.pX}%</td><td>${t.sent}</td><td>${t.won} <span class="small muted">(2/3 ${t.w23} · X ${t.wX})</span></td><td>${t.lost}</td></tr>`).join('')}
-          </tbody></table>
-          <p class="small muted" style="margin-top:8px">Avec moins de 5 cas observés, le pourcentage affiché utilise le taux général de la fenêtre (lissage de Laplace). Taux général : 2/3 ${a.window?.base?.n ? pc(Math.round(100 * a.window.base.t23 / a.window.base.n)) : '—'} • X ${a.window?.base?.n ? pc(Math.round(100 * a.window.base.tX / a.window.base.n)) : '—'}.</p>` : '<p class="small">Pas encore de jeu terminé dans le sabot.</p>'}
-        </div>
-        <div class="card" style="margin-top:16px">
-          <h3>Prédictions</h3>
-          ${pend.length ? `<table class="table"><thead><tr><th>Jeu</th><th>Règle</th><th>Affiché</th><th>État</th><th>Résultat</th><th>Rattrapage</th></tr></thead><tbody>
-            ${pend.map((e) => `<tr><td>№${e.target}</td><td class="small">${esc(e.ruleLabel || e.trigger)} (№${e.source})</td><td>2/3 ${e.p23}% · X ${e.pX}%</td><td>${badge(e.status)}</td><td>${esc(resultOf(e))}</td><td>${e.step}/${e.maxR}</td></tr>`).join('')}
-          </tbody></table>` : '<p class="small">Aucune prédiction pour le moment.</p>'}
-        </div>`;
-    }
-    async function saveDrawTwoThree() {
-      const rawSite = val('dtSiteChannel');
-      try { await api('/api/draw-two-three/config', 'POST', { enabled: $('#dtEnabled')?.checked, notify: $('#dtNotify')?.checked, maxR: val('dtMaxR'), channels: ids(val('dtChannel')), siteChannelId: rawSite === '' ? null : rawSite }); await refresh(); drawTwoThreePage(); toast('Panneau « Nul / 2-3 » enregistré.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function saveDrawTwoThreeChannel() {
-      const list = ids(val('dtChannel'));
-      if (!list.length) return toast('Renseigne un ID de canal.', 'error');
-      try { const r = await api('/api/draw-two-three/channel', 'POST', { channelId: list[0] }); await refresh(); drawTwoThreePage(); toast(`Canal ${r.channel?.title || list[0]} relié au panneau.`); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function removeDrawTwoThreeChannel() { try { await api('/api/draw-two-three/channel', 'DELETE'); await refresh(); drawTwoThreePage(); } catch (e) { toast(e.message, 'error'); } }
-    async function drawTwoThreeTest() {
-      try { const r = await api('/api/draw-two-three/test', 'POST', {}); toast(r.ok ? 'Message de test envoyé.' : (r.errors || []).join(' / ')); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function applyDrawTwoThree(sid) {
-      try { const r = await api('/api/draw-two-three/apply', 'POST', { sid }); await refresh(); drawTwoThreePage(); toast(r.text || 'Appliqué.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function drawTwoThreeSendList() {
-      try { await api('/api/draw-two-three/send-list', 'POST', {}); toast('Liste envoyée dans le chat privé.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function drawTwoThreeScan() {
-      try { await api('/api/draw-two-three/scan', 'POST', {}); await refresh(); drawTwoThreePage(); toast('Analyse effectuée.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-    async function resetDrawTwoThree() {
-      try { await api('/api/draw-two-three/reset', 'POST', {}); await refresh(); drawTwoThreePage(); toast('Compteurs remis à zéro.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
-
-    // « Victoire V1 / V2 » (voir victoire-vb.js) : V1 = victoire du joueur, V2 = victoire du banquier, envoyés ensemble
-    // comme les deux costumes ; l'autre est attendu puis relancé à N+3 ; déclencheurs trouvés par l'analyse.
-    // -----------------------------------------------------------------------
-    function vvSiteOptions(currentId) {
-      const list = snapshot.victoireVb?.siteChannels || [];
-      const cur = currentId == null ? '' : String(currentId);
-      return ['<option value="">Aucun</option>']
-        .concat(list.map((c) => `<option value="${esc(String(c.id))}" ${String(c.id) === cur ? 'selected' : ''}>${esc(c.name)}</option>`)).join('');
-    }
-    function victoireVbPage() {
-      setNav('victoire-vb');
-      const p = snapshot.victoireVb || {};
-      const a = p.analysis || {};
-      const badge = (e) => e.status === 'perdu' ? '❌ perdu' : e.status === 'annulé' ? '🚫 annulé'
-        : e.phase === 'first' ? '⏳ envoyé' : e.phase === 'second' ? '✅ validé · on attend l’autre' : e.phase === 'relance' ? '🔄 relance en cours' : '✅ terminé';
-      const pend = (p.pending || []).slice().reverse();
-      const pc = (v) => (v == null ? '—' : `${v}%`);
-      const side = (s) => (s === 'V2' ? 'V2 (banquier)' : 'V1 (joueur)');
-      const th = a.thresholds || {};
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie · victoire joueur / banquier</span><h2 style="margin-top:7px">⚔️ Victoire V1 / V2</h2><p class="small"><b>V1</b> = victoire du <b>joueur</b>, <b>V2</b> = victoire du <b>banquier</b>. Le bot les envoie <b>ensemble</b> dans un seul message, comme les deux costumes. Dès qu’un côté est validé (✅0️⃣ = direct, ✅1️⃣ = 1ᵉʳ rattrapage…), il <b>attend l’autre</b> ; si l’autre ne valide pas à <b>+${p.waitGames ?? 1}</b>, il le <b>relance à N+${p.relanceGap ?? 3}</b> dans le même message. Les <b>déclencheurs</b> (après quels gagnants / quelles cartes, et à quel +n) sont <b>trouvés et appliqués automatiquement</b> par l’analyse.</p></div></div>
-        <div class="grid two">
-          <div class="card">
-            <h3>Canal et réglages</h3>
-            <div class="field"><label>ID ou @nom du canal</label><input id="vvChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
-            <div class="toolbar"><button class="button small primary" onclick="saveVictoireVbChannel()">Vérifier et enregistrer</button><button class="button small ghost" onclick="victoireVbTest()">Envoyer un test</button><button class="button small danger" onclick="removeVictoireVbChannel()">Retirer</button></div>
-            <div class="field" style="margin-top:16px"><label>Canal du site (vitrine)</label><select id="vvSiteChannel">${vvSiteOptions(p.siteChannelId)}</select></div>
-            <div class="field"><label>Rattrapage maximum</label><input id="vvMaxR" type="number" min="0" max="9" value="${p.maxR ?? 1}"></div>
-            <div class="field" style="margin-top:16px"><label>Canal des relances <span class="small">(vide = la relance s’ajoute dans le message d’origine ; rempli = un message simple par relance, uniquement dans ce canal)</span></label><input id="vvRelChannel" value="${esc((p.relanceChannels || []).join(', '))}" placeholder="-1001234567890"></div>
-            <div class="field"><label>Rattrapages de la relance</label><input id="vvRelMaxR" type="number" min="0" max="9" value="${p.relanceMaxR ?? 1}"></div>
-            <div class="field"><label>L’autre côté doit valider à + <span class="small">(sinon il est relancé)</span></label><input id="vvWait" type="number" min="1" max="3" value="${p.waitGames ?? 1}"></div>
-            <div class="field"><label>Relance à N+ <span class="small">(N = jeu du côté validé ; 3 = N+3)</span></label><input id="vvGap" type="number" min="2" max="9" value="${p.relanceGap ?? 3}"></div>
-            <div class="field"><label>Taux minimal d’un déclencheur (%)</label><input id="vvMinRate" type="number" min="50" max="90" value="${p.minRate ?? 60}"></div>
-            <label class="check"><input id="vvEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer « Victoire V1 / V2 »</label>
-            <label class="check"><input id="vvAuto" type="checkbox" ${p.autoApply !== false ? 'checked' : ''}> Appliquer automatiquement les déclencheurs trouvés par l’analyse (ajouter / modifier / supprimer)</label>
-            <label class="check"><input id="vvNotify" type="checkbox" ${p.notify !== false ? 'checked' : ''}> Prévenir dans le chat privé quand l’analyse trouve ou applique quelque chose</label>
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveVictoireVb()">Enregistrer</button><button class="button small ghost" onclick="victoireVbScan()">Analyser maintenant</button><button class="button small ghost" onclick="victoireVbSendList()">Envoyer la liste au chat privé</button><button class="button small danger" onclick="resetVictoireVb()">Remettre à zéro (règles et compteurs)</button></div>
-            ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
-            <h3 style="margin-top:18px">Format du message</h3>
-            <pre class="small" style="white-space:pre;margin:6px 0">V1 62%\n ┣━ N°532⏳\nV2 31%</pre>
-            <p class="small">Un côté validé, l’autre pas encore venu à +${p.waitGames ?? 1} → relance dans le même message :</p>
-            <pre class="small" style="white-space:pre;margin:6px 0">V1 ✅0️⃣ 62%\n ┣━ N°532\n ┣━ N°535⏳\nV2 ⏳ 31%</pre>
-            <p class="small">Avec un « canal des relances », le canal principal garde seulement V1 / V2, et la relance part seule dans l’autre canal :</p>
-            <pre class="small" style="white-space:pre;margin:6px 0">V2 31%\n ┣━ N°535⏳</pre>
-          </div>
-          <div class="card">
-            <h3>Déclencheurs actifs (jeu terminé N → jeu prédit N+n)</h3>
-            ${(p.rules || []).length ? `<table class="table"><thead><tr><th>Quand</th><th>Prédit à</th><th>Côté</th><th></th></tr></thead><tbody>
-              ${(p.rules || []).map((t) => `<tr><td>${esc(t.label)}${t.auto ? ' <span class="tag good">auto</span>' : ''}${t.enabled === false ? ' <span class="tag bad">désactivée</span>' : ''}</td><td>N+${t.offset}</td><td>${esc(side(t.side))}</td>
-                <td><button class="button small ghost" onclick="toggleVictoireVbRule('${esc(t.id)}', ${t.enabled === false ? 'true' : 'false'})">${t.enabled === false ? 'Activer' : 'Désactiver'}</button> <button class="button small danger" onclick="removeVictoireVbRule('${esc(t.id)}')">Supprimer</button></td></tr>`).join('')}
-            </tbody></table>` : '<p class="small">Aucun déclencheur pour l’instant : l’analyse en cherche toute seule à mesure que les jeux s’enregistrent (échantillon minimal ' + esc(String(th.minN ?? 20)) + ' cas, écart net avec le taux général), puis les ajoute ici. Rien n’est envoyé tant qu’aucun déclencheur net n’est trouvé.</p>'}
-            <p class="small" style="margin-top:10px">Jeu en live : <b>№${esc(String(p.live || '—'))}</b> • envoyées <b>${p.sentCount || 0}</b> • gagnées ${p.won || 0} • perdues ${p.lost || 0}</p>
-          </div>
-        </div>
-        <div class="card" style="margin-top:16px">
           <h3>Trouvailles de l’analyse (ajouter / modifier / supprimer un déclencheur)</h3>
           ${(p.findings || []).length ? `<table class="table"><thead><tr><th>Proposition</th><th>Détail</th><th></th></tr></thead><tbody>
             ${(p.findings || []).map((f) => `<tr><td><b>${esc(f.title)}</b></td><td class="small">${esc(f.detail)}</td><td><button class="button small primary" onclick="applyVictoireVb('${esc(f.sid)}')">Appliquer</button></td></tr>`).join('')}
@@ -3996,6 +3896,11 @@ Faites-en bon usage !
         </div>
         <div class="card" style="margin-top:16px">
           <h3>Analyse : comment les victoires viennent</h3>
+          <p class="small">Historique lu : <b>${p.historyGames || 0}</b> jeu(x) • sensibilité : <b>${esc(th.label || 'Large')}</b> (échantillon minimal ${esc(String(th.minN ?? 10))} cas, taux minimal ${esc(String(th.minRate ?? 53))}%).</p>
+          ${(p.near || []).length ? `<h3 style="margin-top:10px">Meilleurs candidats actuels <span class="small muted">(pas encore retenus : pas assez nets pour la sensibilité choisie)</span></h3>
+          <table class="table"><thead><tr><th>Côté</th><th>Quand</th><th>À</th><th>Réussite</th><th>Taux général</th><th>Cas</th></tr></thead><tbody>
+            ${(p.near || []).map((x) => `<tr><td>${esc(x.side)}</td><td>${esc(x.label)}</td><td>N+${x.offset}</td><td>${x.rate}%</td><td>${x.base}%</td><td>${x.n}</td></tr>`).join('')}
+          </tbody></table>` : ''}
           ${a.games ? `<p class="small">Sur <b>${a.games}</b> jeux enregistrés (${a.shoes || 1} sabot(s)) : joueur <b>${a.J}</b> (${pc(a.jPct)}) • banquier <b>${a.B}</b> (${pc(a.bPct)}) • nul <b>${a.T}</b> (${pc(a.tPct)}) • plus longue série joueur <b>${a.maxRunJ}</b> / banquier <b>${a.maxRunB}</b>${a.currentRun ? ` • série en cours : <b>${a.currentRun.letter === 'J' ? 'joueur' : a.currentRun.letter === 'B' ? 'banquier' : 'nul'} ×${a.currentRun.n}</b>` : ''}</p>
           ${(a.rules || []).length ? `<h3 style="margin-top:14px">Probabilité par déclencheur (fenêtre : jeu prédit + ${a.window?.maxR ?? p.maxR ?? 1} rattrapage(s))</h3>
           <table class="table"><thead><tr><th>Déclencheur</th><th>Échantillon</th><th>Joueur vient</th><th>Banquier vient</th><th>Affiché</th><th>Envoyées</th><th>Gagnées</th><th>Autre à +1</th><th>Relances</th></tr></thead><tbody>
@@ -4013,7 +3918,7 @@ Faites-en bon usage !
     async function saveVictoireVb() {
       const rawSite = val('vvSiteChannel');
       try {
-        await api('/api/victoire-vb/config', 'POST', { enabled: $('#vvEnabled')?.checked, autoApply: $('#vvAuto')?.checked, notify: $('#vvNotify')?.checked, maxR: val('vvMaxR'), relanceChannels: ids(val('vvRelChannel')), relanceMaxR: val('vvRelMaxR'), waitGames: val('vvWait'), relanceGap: val('vvGap'), minRate: val('vvMinRate'), channels: ids(val('vvChannel')), siteChannelId: rawSite === '' ? null : rawSite });
+        await api('/api/victoire-vb/config', 'POST', { enabled: $('#vvEnabled')?.checked, autoApply: $('#vvAuto')?.checked, notify: $('#vvNotify')?.checked, maxR: val('vvMaxR'), relanceChannels: ids(val('vvRelChannel')), relanceMaxR: val('vvRelMaxR'), sensitivity: val('vvSens'), waitGames: val('vvWait'), relanceGap: val('vvGap'), channels: ids(val('vvChannel')), siteChannelId: rawSite === '' ? null : rawSite });
         await refresh(); victoireVbPage(); toast('Panneau « Victoire V1 / V2 » enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -4040,6 +3945,10 @@ Faites-en bon usage !
       try { await api('/api/victoire-vb/rule?id=' + encodeURIComponent(id), 'DELETE'); await refresh(); victoireVbPage(); toast('Déclencheur supprimé.'); }
       catch (e) { toast(e.message, 'error'); }
     }
+    async function victoireVbSeed() {
+      try { const r = await api('/api/victoire-vb/seed', 'POST', {}); await refresh(); victoireVbPage(); toast(`Historique chargé : ${r.games ?? 0} jeu(x) lus dans la base.`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
     async function victoireVbSendList() {
       try { await api('/api/victoire-vb/send-list', 'POST', {}); toast('Liste envoyée dans le chat privé.'); }
       catch (e) { toast(e.message, 'error'); }
@@ -4051,6 +3960,85 @@ Faites-en bon usage !
     async function resetVictoireVb() {
       if (!confirm('Remettre à zéro les déclencheurs et les compteurs de « Victoire V1 / V2 » ?')) return;
       try { await api('/api/victoire-vb/reset', 'POST', {}); await refresh(); victoireVbPage(); toast('Remis à zéro.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // « Analyse fin de numéro » (voir end-digit.js) : costume le plus fréquent pour chaque fin de numéro 0-9.
+    // -----------------------------------------------------------------------
+    let edWindow = 5000;
+    async function endDigitPage() {
+      setNav('end-digit');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse</span><h2 style="margin-top:7px">🎯 Analyse fin de numéro</h2><p class="small">Pour chaque <b>fin de numéro de jeu (0 à 9)</b> — le jeu #1223 finit par <b>3</b> — le bot cherche quel <b>costume arrive le plus souvent</b> dans la main du joueur et dans celle du banquier, et te propose le meilleur de chaque chiffre.</p></div></div><div class="card"><p class="small">Analyse en cours…</p></div>`;
+      let a;
+      try { a = await api('/api/end-digit?window=' + encodeURIComponent(edWindow)); }
+      catch (e) { $('#app').innerHTML += `<div class="card"><p class="small" style="color:#f87171">${esc(e.message)}</p></div>`; return; }
+      const suitRow = (r) => r.ranked.map((x, i) => `<span class="tag ${i === 0 ? 'good' : ''}" style="margin-right:4px">${x.suit} ${x.pct}%</span>`).join('');
+      const best = (b) => (b ? `<b style="font-size:1.15em">${b.suit}</b> ${b.pct}% <span class="small muted">(${b.edge >= 0 ? '+' : ''}${b.edge} pt vs moyenne)</span>` : '—');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse</span><h2 style="margin-top:7px">🎯 Analyse fin de numéro</h2><p class="small">Pour chaque <b>fin de numéro de jeu (0 à 9)</b> — le jeu #1223 finit par <b>3</b> — le bot cherche quel <b>costume arrive le plus souvent</b> dans la main du joueur et dans celle du banquier, et te propose le meilleur de chaque chiffre. « Arrive » = le costume apparaît au moins une fois dans la main.</p></div></div>
+        <div class="card">
+          <div class="toolbar"><label class="small">Jeux analysés&nbsp;
+            <select id="edWin" onchange="edWindow = Number(this.value); endDigitPage()">
+              ${[500, 1000, 2000, 5000, 10000, 20000].map((n) => `<option value="${n}" ${n === a.window ? 'selected' : ''}>${n} derniers</option>`).join('')}
+            </select></label>
+            <button class="button small ghost" onclick="endDigitPage()">Actualiser</button></div>
+          <p class="small" style="margin-top:8px">Source : <b>${esc(a.source)}</b> • <b>${a.games}</b> jeu(x) analysé(s)${a.source !== 'base de données' ? ' — base non connectée : seul le sabot en cours est analysé, l’échantillon est petit' : ''}.</p>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Proposition pour le prochain jeu (#${a.next.number}, fin <b>${a.next.digit}</b>)</h3>
+          <p>👤 Joueur : ${best(a.next.player)}</p>
+          <p>🏦 Banquier : ${best(a.next.banker)}</p>
+          <p class="small muted">Calculé sur ${a.next.n} jeu(x) finissant par ${a.next.digit}${a.next.n < a.goodN ? ' — échantillon encore faible, à prendre avec prudence' : ''}.</p>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Meilleur costume par fin de numéro</h3>
+          <table class="table"><thead><tr><th>Fin</th><th>Jeux</th><th>👤 Joueur — proposé</th><th>🏦 Banquier — proposé</th></tr></thead><tbody>
+            ${a.digits.map((d) => `<tr><td><b>${d.digit}</b></td><td>${d.n}${d.reliable ? '' : ' <span class="tag bad">faible</span>'}</td><td>${best(d.player.best)}</td><td>${best(d.banker.best)}</td></tr>`).join('')}
+          </tbody></table>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Détail : les quatre costumes pour chaque fin de numéro</h3>
+          <table class="table"><thead><tr><th>Fin</th><th>👤 Joueur (du plus fréquent au moins fréquent)</th><th>🏦 Banquier</th></tr></thead><tbody>
+            ${a.digits.map((d) => `<tr><td><b>${d.digit}</b></td><td>${suitRow(d.player)}</td><td>${suitRow(d.banker)}</td></tr>`).join('')}
+          </tbody></table>
+          <p class="small muted" style="margin-top:8px">Moyenne générale — joueur : ${a.overall.player.map((x) => `${x.suit} ${x.pct}%`).join(' · ')} • banquier : ${a.overall.banker.map((x) => `${x.suit} ${x.pct}%`).join(' · ')}. Un écart faible avec la moyenne peut être du simple hasard : plus il y a de jeux, plus la proposition est fiable.</p>
+        </div>`;
+    }
+
+    // « Ralentisseur » (voir slow-mode.js) : retient une prédiction jusqu'au début du jeu précédent.
+    // -----------------------------------------------------------------------
+    async function slowModePage() {
+      setNav('slow-mode');
+      let v;
+      try { v = await api('/api/slow-mode'); } catch (e) { $('#app').innerHTML = `<div class="card"><p style="color:#f87171">${esc(e.message)}</p></div>`; return; }
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Toutes les stratégies</span><h2 style="margin-top:7px">⏳ Ralentisseur</h2><p class="small">Valable pour <b>toutes les stratégies de tous les boutons</b>. Sur un canal ralenti, une prédiction destinée à un jeu lointain n’est pas envoyée tout de suite : le bot attend que le <b>jeu précédent commence</b>, puis envoie automatiquement la prédiction. Exemple : prédiction du <b>jeu 23</b> alors que le live est au <b>18</b> → le bot attend que le <b>jeu 22 commence</b>, puis envoie la prédiction du <b>N°23</b>. Le résultat (✅ / ❌) s’affiche ensuite dans ce même message.</p></div></div>
+        <div class="card">
+          <h3>Canaux ralentis</h3>
+          <label class="check"><input id="smAll" type="checkbox" ${v.all ? 'checked' : ''}> Ralentir <b>tous</b> les canaux</label>
+          ${(v.channelList || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Ralentir</th><th>Canal</th><th>Utilisé par</th></tr></thead><tbody>
+            ${v.channelList.map((c) => `<tr><td><input type="checkbox" class="smCh" data-id="${esc(c.id)}" ${c.slowed ? 'checked' : ''}></td><td>${esc(c.name)}<div class="small muted">${esc(c.id)}</div></td><td class="small">${c.uses.length ? c.uses.map(esc).join('<br>') : '—'}</td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Aucun canal enregistré pour l’instant. Ajoute-en un ci-dessous.</p>'}
+          <div class="field" style="margin-top:12px"><label>Ajouter un canal (ID ou @nom)</label><input id="smNew" placeholder="-1001234567890"></div>
+          <div class="toolbar"><button class="button small primary" onclick="saveSlowMode()">Enregistrer</button><button class="button small ghost" onclick="flushSlowMode()">Envoyer maintenant tout ce qui attend</button></div>
+          <p class="small muted" style="margin-top:8px">Un canal utilisé par plusieurs stratégies les ralentit toutes. Les messages sans numéro de jeu futur (résultats, bilans…) ne sont jamais retenus.</p>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Prédictions en attente</h3>
+          <p class="small">Jeu le plus avancé : <b>№${v.started || '—'}</b> • envoyées par le ralentisseur : <b>${v.released || 0}</b> • abandonnées : ${v.dropped || 0}</p>
+          ${(v.queue || []).length ? `<table class="table"><thead><tr><th>Canal</th><th>Jeu prédit</th><th>Attend le début du jeu</th><th>Message</th></tr></thead><tbody>
+            ${v.queue.map((q) => `<tr><td class="small">${esc(String(q.chatId))}</td><td>№${q.target}</td><td>№${q.waitingFor}</td><td><pre class="small" style="white-space:pre-wrap;margin:0">${esc(q.text)}</pre></td></tr>`).join('')}
+          </tbody></table>` : '<p class="small">Aucune prédiction en attente.</p>'}
+        </div>`;
+    }
+    async function saveSlowMode() {
+      const channels = {};
+      document.querySelectorAll('.smCh').forEach((el) => { channels[el.dataset.id] = el.checked; });
+      const extra = (val('smNew') || '').trim();
+      if (extra) channels[extra] = true;
+      try { await api('/api/slow-mode/config', 'POST', { all: $('#smAll')?.checked, channels }); await refresh(); slowModePage(); toast('Ralentisseur enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function flushSlowMode() {
+      try { const r = await api('/api/slow-mode/flush', 'POST', {}); await refresh(); slowModePage(); toast(`${r.sent || 0} prédiction(s) envoyée(s).`); }
       catch (e) { toast(e.message, 'error'); }
     }
 
@@ -5892,6 +5880,8 @@ Faites-en bon usage !
         else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/parity-counter') parityCounterPage();
+        else if (h === '#/end-digit') endDigitPage();
+        else if (h === '#/slow-mode') slowModePage();
         else if (h === '#/draw-two-three') drawTwoThreePage();
         else if (h === '#/victoire-vb') victoireVbPage();
         else if (h === '#/vip') vipPage();
