@@ -58,10 +58,12 @@ const overlap = require('./overlap');
 const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const drawTwoThree = require('./draw-two-three');
+const victoireVb = require('./victoire-vb');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const mirrorCounter = require('./mirror-counter');
+const parityCounter = require('./parity-counter');
 const lossNotice = require('./loss-notice');
 const game21 = require('./game21');
 const game21Strategies = require('./game21-strategies');
@@ -421,6 +423,7 @@ app.get('/api/state', async (req, res) => {
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
     drawTwoThree: drawTwoThree.status(),
+    victoireVb: victoireVb.status(),
     vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
@@ -437,6 +440,7 @@ app.get('/api/state', async (req, res) => {
       games: mirrorCounter.state.games,
     },
     lossNotice: lossNotice.getSettings(),
+    parityCounter: parityCounter.status(state.live ? state.live.number : null),
   });
 });
 
@@ -872,6 +876,21 @@ app.get('/api/strategies', (req, res) => {
 // carte, publié dans un canal Telegram configuré une fois (bouton
 // « Compteur » du tableau de bord). Reset automatique à chaque heure pile.
 // ---------------------------------------------------------------------------
+// « Compte parité » (voir parity-counter.js)
+app.get('/api/parity-counter', (req, res) => res.json(parityCounter.status(state.live ? state.live.number : null)));
+app.post('/api/parity-counter/config', (req, res) => {
+  parityCounter.configure(req.body || {});
+  res.json(parityCounter.status(state.live ? state.live.number : null));
+});
+app.post('/api/parity-counter/test', async (req, res) => {
+  const r = await parityCounter.test(state.live ? state.live.number : null);
+  res.status(r.ok ? 200 : 400).json({ ...r, parityCounter: parityCounter.status(state.live ? state.live.number : null) });
+});
+app.post('/api/parity-counter/reset', (req, res) => {
+  parityCounter.resetCounts();
+  res.json(parityCounter.status(state.live ? state.live.number : null));
+});
+
 app.get('/api/mirror-counter', (req, res) => {
   res.json({
     channelId: mirrorCounter.getChannel(),
@@ -1729,6 +1748,67 @@ app.post('/api/draw-two-three/reset', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// « Victoire V1 / V2 » (voir victoire-vb.js) — prédit ensemble la victoire du joueur (V1) ou du
+// banquier (V2), avec attente de l'autre côté puis relance à N+3, déclencheurs trouvés par l'analyse.
+// ---------------------------------------------------------------------------
+app.get('/api/victoire-vb', (req, res) => res.json(victoireVb.status()));
+
+app.post('/api/victoire-vb/config', (req, res) => {
+  victoireVb.configure(req.body || {});
+  res.json(victoireVb.status());
+});
+
+app.post('/api/victoire-vb/channel', async (req, res) => {
+  const idsList = victoireVb.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ ok: false, error: 'Identifiant de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ ok: false, error: check.error });
+  victoireVb.configure({ channels: idsList });
+  const notice = await victoireVb.test();
+  res.json({ ok: true, channel: check.chat, notice, victoireVb: victoireVb.status() });
+});
+
+app.delete('/api/victoire-vb/channel', (req, res) => {
+  victoireVb.configure({ channels: [] });
+  res.json(victoireVb.status());
+});
+
+app.post('/api/victoire-vb/test', async (req, res) => {
+  const r = await victoireVb.test();
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/scan', async (req, res) => {
+  await victoireVb.analyzeNow();
+  await victoireVb.tick();
+  res.json(victoireVb.status());
+});
+
+app.post('/api/victoire-vb/apply', (req, res) => {
+  const r = victoireVb.applyBySid(String((req.body && req.body.sid) || ''));
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/rule', (req, res) => {
+  const r = victoireVb.setRuleEnabled(String((req.body && req.body.id) || ''), !!(req.body && req.body.enabled));
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.delete('/api/victoire-vb/rule', (req, res) => {
+  const r = victoireVb.removeRule(String((req.body && req.body.id) || (req.query && req.query.id) || ''));
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/send-list', async (req, res) => {
+  const ok = await victoireVb.sendListToAdmin();
+  res.status(ok ? 200 : 400).json({ ok, error: ok ? null : (victoireVb.status().lastError || 'Envoi impossible'), victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/reset', (req, res) => {
+  res.json(victoireVb.resetStats());
+});
+
+// ---------------------------------------------------------------------------
 // « VIP » (voir vip.js) — liste à cocher de toutes les stratégies + IA :
 // après 3 pertes consécutives OU 3 prédictions consécutives du même costume
 // sur une stratégie cochée, relais de ses 2 prochaines prédictions dans le
@@ -2477,6 +2557,7 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     });
   }
   panels.push(await singlePanel('draw-two-three', 'Nul / 2-3', drawTwoThree, 'draw-two-three'));
+  panels.push(await singlePanel('victoire-vb', 'Victoire V1 / V2', victoireVb, 'victoire-vb'));
   panels.push(await singlePanel('vip', 'VIP', vip, 'vip'));
   panels.push(await singlePanel('predit', 'Prédit IA', predit, 'predit'));
   // Jeu 21 a DEUX canaux distincts (exacte / valeur), pas un seul comme les
@@ -2582,7 +2663,7 @@ async function removeChannelEverywhere(id) {
   }
   const modules = [
     ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
-    ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics],
+    ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
     ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch],
@@ -2663,7 +2744,7 @@ const CC_TRACKER_PANELS = [
   ['costume-faible-top', 'Costume faible', costumeFaibleTop, '#/costume-faible-top'],
 ];
 const CC_SIMPLE_MODULES = [
-  ['predit', 'Prédit IA', predit, '#/predit'], ['draw-two-three', 'Nul / 2-3', drawTwoThree, '#/draw-two-three'],
+  ['predit', 'Prédit IA', predit, '#/predit'], ['draw-two-three', 'Nul / 2-3', drawTwoThree, '#/draw-two-three'], ['victoire-vb', 'Victoire V1 / V2', victoireVb, '#/victoire-vb'],
   ['vip', 'VIP', vip, '#/vip'], ['statistics', 'Statistiques', statistics, '#/statistics'],
   ['cards-count', 'Comptage 2/2', cardsCount, '#/cards-count'], ['formation', 'Formation', formationRelay, '#/formation'],
   ['like-react', 'J\'aime', likeReact, '#/like-react'],
@@ -2926,7 +3007,7 @@ function configuredChannelList() {
   } catch (_) {}
   const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType],
     // sources qui manquaient : leurs canaux n'apparaissaient pas dans « Type de mise »
-    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Statistiques', statistics]];
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics]];
   for (const [label, mod] of panelsList) {
     try {
       const st = mod.status() || {};
@@ -2940,7 +3021,7 @@ function configuredChannelList() {
   for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Jeu 21', game21Predict], ['Formation', formationRelay],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
     ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
-    ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['VIP', vip], ['Prédit IA', predit],
+    ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['VIP', vip], ['Prédit IA', predit],
     ['Statistiques', statistics], ['Stabilité du jeu', gameStability]]) {
     try { likeReact.collectFrom(mod.panel, label, add); } catch (_) {}
   }

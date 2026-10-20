@@ -160,11 +160,13 @@ const PANELS = {
   statistics: { mod: './statistics' },
   cardsCount: { mod: './cards-count' },
   drawTwoThree: { mod: './draw-two-three' },          // « Nul / 2-3 »
+  victoireVb: { mod: './victoire-vb' },               // « Victoire V1 / V2 »
   vip: { mod: './vip' },
   formationRelay: { mod: './formation-relay' },
   predictionControl: { mod: './prediction-control' },
   lossNotice: { mod: './loss-notice' },
   mirrorCounter: { mod: './mirror-counter' },
+  parityCounter: { mod: './parity-counter' },         // « Compte parité »
   betType: { mod: './bet-type' },                  // « Type de mise »
   likeReact: { mod: './like-react' },              // « J'aime » (réactions automatiques)
   copyAnnounce: { mod: './copy-announce' },        // « Copie et annonce »

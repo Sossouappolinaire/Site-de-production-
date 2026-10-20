@@ -1,10 +1,12 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v73',
-  name: 'cinq-formats-2-2-avec-ou-sans-distribution',
-  date: '2026-10-16',
+  version: 'v75',
+  name: 'compte-parite',
+  date: '2026-10-20',
   features: [
+    'Nouveau bouton « Compte parité » (accueil, menu, Aide) : compte la fin du numéro de jeu (0 à 9) pour le joueur et le banquier séparément ; le point pair ou impair du côté range le chiffre dans « Taux parité pair » ou « Taux parité impair » avec pourcentages ; à chaque fin de jeu, envoi du message du côté gagnant seulement (option, rien si égalité) avec compte à rebours du reset ; réglages : canal, envoyer pour joueur seul / banquier seul / les deux, intervalle de reset ; export / import inclus (parity-counter.js)',
+    'Nouvelle stratégie « Victoire V1 / V2 » (page Stratégies, menu et accueil) : V1 = victoire du joueur, V2 = victoire du banquier, envoyés ensemble dans un seul message comme les deux costumes ; dès qu’un côté est validé (✅0️⃣, ✅1️⃣…) on attend l’autre ; s’il ne valide pas à +1 il est relancé à N+3 dans le même message (+1 et N+3 réglables) ; déclencheurs (gagnants précédents, cartes, décalage +n) trouvés et appliqués automatiquement par l’analyse (ajouter / modifier / supprimer, avec seuil statistique), liste aussi dans le chat privé (/victoire) ; canal, canal du site, rattrapages, taux minimal réglables ; déclencheurs de V1 et de V2 trouvés séparément (le message contient toujours les deux, le pourcentage le plus élevé en haut) ; canal des relances séparé (un message simple par relance, rattrapages propres) ; export / import inclus (victoire-vb.js)',
     'Formats 102 à 106 (prédiction 2/2) : avec ou sans le mot « distribution » (102 et 106 avec ; 103, 104 et 105 simplement « 2/2 »)',
     '« 2/3 → distribution 2/2 » : 5 formats simples au choix (102 à 106, « Il y aura distribution 2/2 »), choisis en cliquant sur leur aperçu dans la page de la stratégie ; champ « Avance » unique (jusqu’à 20) ; 106 formats au total',
     'Nouveau format 102 « Il y aura distribution 2/2 » (sans « Joueur », même mise en page que le 76), utilisé par défaut par « 2/3 → distribution 2/2 » — 102 formats au total',

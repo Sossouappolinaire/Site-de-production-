@@ -33,11 +33,13 @@ const overlap = require('./overlap');
 const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
 const drawTwoThree = require('./draw-two-three');
+const victoireVb = require('./victoire-vb');
 const vip = require('./vip');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
 const mirrorCounter = require('./mirror-counter');
+const parityCounter = require('./parity-counter');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
 const predictionControl = require('./prediction-control');
@@ -608,12 +610,19 @@ function wire(b) {
     const view = drawTwoThree.listView();
     (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, view.text, { reply_markup: view.markup }).catch(() => {});
   });
+  // « Victoire V1 / V2 » : liste cliquable des règles trouvées / appliquées par l'analyse (voir victoire-vb.js)
+  b.onText(/^\/victoire\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const view = victoireVb.listView();
+    (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, view.text, { reply_markup: view.markup }).catch(() => {});
+  });
   b.on('callback_query', async (q) => {
     try {
       const data = String((q && q.data) || '');
-      if (!data.startsWith('dtn:')) return;
+      const isVvb = data.startsWith('vvb:');
+      if (!data.startsWith('dtn:') && !isVvb) return;
       if (!q.from || q.from.id !== Number(state.adminId)) { b.answerCallbackQuery(q.id, { text: 'Réservé à l\'administrateur' }).catch(() => {}); return; }
-      const r = drawTwoThree.handleCallback(data);
+      const r = isVvb ? victoireVb.handleCallback(data) : drawTwoThree.handleCallback(data);
       await b.answerCallbackQuery(q.id, { text: r.answer || '' }).catch(() => {});
       if (q.message && r.text) {
         await b.editMessageText(r.text, { chat_id: q.message.chat.id, message_id: q.message.message_id, reply_markup: r.markup || { inline_keyboard: [] } }).catch(() => {});
@@ -2141,6 +2150,8 @@ async function tick() {
       cardsCount.tick(),
       // panneau « Nul / 2-3 » : prédit ensemble le match nul (X) ou le 2/3 (voir draw-two-three.js)
       drawTwoThree.tick(),
+      // panneau « Victoire V1 / V2 » : prédit ensemble la victoire du joueur (V1) ou du banquier (V2), déclencheurs trouvés par l'analyse (voir victoire-vb.js)
+      victoireVb.tick(),
       // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
       // relais des 2 prochaines prédictions d'une stratégie cochée après 3
       // pertes consécutives, ou après 3 prédictions consécutives du même
@@ -2329,6 +2340,7 @@ async function applyDbConfigs() {
   await statistics.restoreFromDb();
   await cardsCount.restoreFromDb();
   await drawTwoThree.restoreFromDb();
+  await victoireVb.restoreFromDb();
   await vip.restoreFromDb();
   try { const raw = await db.getSetting('ignored_channels'); if (raw) store.patch({ ignoredChannels: JSON.parse(raw) }); } catch (_) {} // canaux supprimés (Envois)
   await predictionControl.restoreFromDb();
@@ -2339,6 +2351,7 @@ async function applyDbConfigs() {
   const restoredCount = await restorePredictions();
   if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
   await mirrorCounter.loadFromDb();
+  await parityCounter.restoreFromDb();
   await lossNotice.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
 }
@@ -2444,6 +2457,9 @@ async function startLoop() {
   drawTwoThree.restore();
   drawTwoThree.setSender(senderFor);
   drawTwoThree.setAdminId(() => state.adminId);
+  victoireVb.restore();
+  victoireVb.setSender(senderFor);
+  victoireVb.setAdminId(() => state.adminId);
   vip.restore();
   vip.setSender(senderFor);
   formationRelay.restore();
@@ -2470,11 +2486,20 @@ async function startLoop() {
     return msg.message_id;
   });
   mirrorCounter.scheduleHourlyReset();
+  // « Compte parité » (bouton de l'accueil) : fin de numéro 0-9 du joueur / banquier, un message par côté choisi (voir parity-counter.js)
+  parityCounter.setSender(async (channelId, text) => {
+    const sender = senderFor();
+    if (!sender) throw new Error('Aucun token API configuré dans les réglages.');
+    const msg = await sender.sendMessage(channelId, text);
+    return msg.message_id;
+  });
+  parityCounter.scheduleReset();
   // base de données : chaque jeu terminé est archivé par date
   setOnFinished((round) => {
     if (db.ready) db.saveGame(round);
     mirrorCounter.bump(round);
     mirrorCounter.publish(round.number).catch((e) => console.error('Compteur (Taux Miroir) :', e.message));
+    parityCounter.onFinished(round).catch((e) => console.error('Compte parité :', e.message));
   });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
