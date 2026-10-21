@@ -323,6 +323,7 @@
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
         <a href="#/loss-return" data-nav="loss-return">📉 Retour après perte</a>
         <a href="#/loss-relaunch" data-nav="loss-relaunch">🔁 Relance après perte</a>
+        <a href="#/prev-suit" data-nav="prev-suit">⏮️ Costume N-1 → +4</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
@@ -630,6 +631,7 @@
       <div class="home-grid">
         ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
         ${card('#/loss-relaunch', '🔁', 'Relance après perte', `${((snapshot.lossRelaunch || {}).configs || []).length} configuration(s) · une prédiction perdue → même costume à +N`)}
+        ${card('#/prev-suit', '⏮️', 'Costume N-1 → +4', `${Object.keys((snapshot.prevSuit || {}).selected || {}).length} source(s) cochée(s) • ${(snapshot.prevSuit || {}).sentCount || 0} prédiction(s) • ${(snapshot.prevSuit || {}).enabled ? 'actif' : 'inactif'}`)}
       </div>
 
       <div class="home-section-label">Suivi, statistiques et communauté</div>
@@ -2496,6 +2498,10 @@ Faites-en bon usage !
         what: 'Prédit ensemble la victoire du joueur (V1) ou du banquier (V2), dans un seul message comme les deux costumes. Dès qu’un côté est validé, il attend l’autre ; si l’autre ne valide pas à +1, il est relancé à N+3 dans le même message.',
         steps: ['Ouvre « Victoire V1 / V2 » (aussi dans « Stratégies »), renseigne le canal et le rattrapage, puis active.', 'Les déclencheurs (après quels gagnants / quelles cartes, et à quel +n) sont trouvés et appliqués automatiquement par l’analyse ; ils apparaissent dans « Déclencheurs actifs ».'],
         tips: ['Un déclencheur n’est retenu que s’il valide nettement mieux que le taux général : tant que l’historique ne montre rien de net, rien n’est envoyé.', 'L’autre côté doit valider à +1 et la relance part à N+3 : ces deux nombres sont modifiables dans les réglages. La liste des changements arrive aussi dans le chat privé (commande /victoire).'] },
+      { g: 'auto', icon: '⏮️', title: 'Costume N-1 → +4', hash: '#/prev-suit',
+        what: 'Tu coches des stratégies / configurations de tout le site ; le bot observe leurs prédictions. Quand le costume prédit au jeu N est venu au jeu N-1 mais n’est pas sorti au jeu N, il prédit le même costume au jeu N+4 dans le canal (ID) choisi.',
+        steps: ['Ouvre « Costume N-1 → +4 », coche les stratégies / configurations à observer.', 'Renseigne le canal d’envoi (ID), le décalage (+4 par défaut), les rattrapages et le format, coche « Activer » puis enregistre.'],
+        tips: ['Exemple : une configuration cochée prédit 12♦️ ; ♦️ est venu au jeu 11 et n’est pas sorti au jeu 12 → envoi de 16♦️.', 'Un canal peut servir plusieurs configurations : cocher l’une d’elles suit toutes les prédictions publiées dans ses canaux.'] },
       { g: 'auto', icon: '👑', title: 'VIP', hash: '#/vip',
         what: 'Surveille ensemble toutes les stratégies de costumes et l’IA. Quand l’une enchaîne des pertes consécutives ou des prédictions consécutives du même costume, ses prochaines prédictions sont relayées dans le canal VIP.',
         steps: ['Ouvre « VIP » et coche « Formation ».', 'Règle le nombre de pertes consécutives, le nombre de prédictions relayées ensuite, les mêmes valeurs pour les répétitions de costume, et le canal VIP, puis enregistre.'] },
@@ -4169,6 +4175,63 @@ Faites-en bon usage !
       if (!confirm('Remettre à zéro le « Compte parité » maintenant ?')) return;
       try { await api('/api/parity-counter/reset', 'POST', {}); await refresh(); parityCounterPage(); toast('Remis à zéro.'); }
       catch (e) { toast(e.message, 'error'); }
+    }
+
+    // « Costume N-1 → +4 » (voir prev-suit.js) : cases à cocher sur toutes les stratégies / configurations du site.
+    function prevSuitPage() {
+      setNav('prev-suit');
+      const p = snapshot.prevSuit || {};
+      const src = p.sources || [];
+      const groups = {};
+      src.forEach((x) => { (groups[x.group || 'Autres'] = groups[x.group || 'Autres'] || []).push(x); });
+      const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : '🚫 annulé';
+      const groupHtml = Object.keys(groups).map((g) => `<details style="margin-top:8px" ${groups[g].some((x) => x.selected) ? 'open' : ''}><summary><b>${esc(g)}</b> <span class="small muted">— ${groups[g].filter((x) => x.selected).length}/${groups[g].length} cochée(s)</span></summary>
+          <div style="margin:6px 0 4px 10px"><button class="button small ghost" onclick="prevSuitToggleGroup(${esc(JSON.stringify(g))}, true)">Tout cocher</button> <button class="button small ghost" onclick="prevSuitToggleGroup(${esc(JSON.stringify(g))}, false)">Tout décocher</button></div>
+          ${groups[g].map((x) => `<label class="check" style="display:block;margin-top:4px"><input type="checkbox" class="psSrc" data-group="${esc(g)}" data-key="${esc(x.key)}" ${x.selected ? 'checked' : ''}> ${esc(x.name)} <span class="small muted">— ${esc((x.channels || []).join(', '))}</span></label>`).join('')}
+        </details>`).join('');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Observation</span><h2 style="margin-top:7px">⏮️ Costume N-1 → +4</h2><p class="small">Coche des stratégies / configurations du site : le bot observe leurs prédictions. Si le costume prédit au jeu <b>N</b> est <b>venu au jeu N-1</b> (main du joueur) et <b>n'est pas sorti au jeu N</b>, il prédit le même costume au jeu <b>N+4</b> (décalage réglable) dans le canal choisi. Ex. : 12♦️ prédit, ♦️ venu au 11, absent au 12 → <b>16♦️</b>.</p></div></div>
+        <div class="grid two">
+          <div class="card">
+            <h3>Envoi et réglages</h3>
+            <div class="field"><label>ID ou @nom du canal d'envoi</label><input id="psChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Décalage (prédit à N + …)</label><input id="psOffset" type="number" min="1" max="40" value="${p.offset ?? 4}"></div>
+            <div class="field"><label>Rattrapages de la nouvelle prédiction</label><input id="psMaxR" type="number" min="0" max="9" value="${p.maxR ?? 2}"></div>
+            <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 107))})</label><input id="psFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 107))}" value="${p.format ?? 107}"></div>
+            <label class="check"><input id="psEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer « Costume N-1 → +4 »</label>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="savePrevSuit()">Enregistrer</button><button class="button small ghost" onclick="testPrevSuit()">Envoyer un test</button><button class="button small danger" onclick="resetPrevSuit()">Remettre les stats à zéro</button></div>
+            ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+            <p class="small" style="margin-top:10px">En observation : <b>${p.following || 0}</b> • déclenchées : <b>${p.triggered || 0}</b> • non déclenchées : <b>${p.notTriggered || 0}</b> • envoyées : <b>${p.sentCount || 0}</b> • gagnées <b>${p.won || 0}</b> / perdues <b>${p.lost || 0}</b> (${p.rate || 0} %)</p>
+            ${(p.missingSelected || []).length ? `<p class="small" style="color:#f59e0b">${p.missingSelected.length} source(s) cochée(s) n'existent plus (ou n'ont plus de canal).</p>` : ''}
+          </div>
+          <div class="card">
+            <h3>Stratégies / configurations à observer</h3>
+            <p class="small">Un canal peut servir plusieurs configurations : cocher l'une d'elles suit toutes les prédictions publiées dans ses canaux. Le canal d'envoi n'est jamais observé.</p>
+            ${groupHtml || '<p class="small">Aucune stratégie ni configuration avec un canal pour le moment : renseigne d’abord un canal dans une stratégie.</p>'}
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="savePrevSuit()">Enregistrer</button></div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px"><h3>Prédictions envoyées</h3>
+          ${(p.recent || []).length ? `<table class="table"><thead><tr><th>Jeu</th><th>Costume</th><th>Origine</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>${p.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>№${e.originTarget ?? '—'} ${esc(e.src || '')}</td><td>${statusBadge(e.status)}</td><td>${e.step ?? 0}/${p.maxR ?? 2}</td></tr>`).join('')}</tbody></table>` : '<p class="small">Aucune prédiction envoyée pour le moment.</p>'}
+        </div>
+        <div class="card" style="margin-top:16px"><h3>Dernières observations</h3>
+          ${(p.lastWatches || []).length ? `<table class="table"><thead><tr><th>Jeu</th><th>Costume</th><th>Source</th><th>Résultat</th><th>Détail</th></tr></thead><tbody>${p.lastWatches.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${esc(e.src || '')}</td><td>${esc(e.status)}</td><td class="small">${esc(e.why || '')}${e.launch ? ' · ' + esc(e.launch) : ''}</td></tr>`).join('')}</tbody></table>` : '<p class="small">Rien observé pour le moment.</p>'}
+        </div>`;
+    }
+    function prevSuitToggleGroup(group, on) { document.querySelectorAll('.psSrc').forEach((c) => { if (c.dataset.group === group) c.checked = on; }); }
+    async function savePrevSuit() {
+      const selected = [...document.querySelectorAll('.psSrc')].filter((c) => c.checked).map((c) => c.dataset.key);
+      try {
+        await api('/api/prev-suit/config', 'POST', { enabled: $('#psEnabled')?.checked, channels: val('psChannel'), offset: val('psOffset'), maxR: val('psMaxR'), format: val('psFormat'), selected });
+        await refresh(); prevSuitPage(); toast('« Costume N-1 → +4 » enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testPrevSuit() {
+      try { await savePrevSuit(); const r = await api('/api/prev-suit/test', 'POST', {}); toast(r.ok ? 'Prédiction de test envoyée dans le canal.' : (r.error || 'Échec')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetPrevSuit() {
+      if (!confirm('Remettre à zéro les statistiques et le suivi ?')) return;
+      try { await api('/api/prev-suit/reset', 'POST', {}); await refresh(); prevSuitPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
     }
 
     // « VIP » (voir vip.js) : liste à cocher de toutes les stratégies + IA ;
@@ -5988,6 +6051,7 @@ Faites-en bon usage !
         else if (h === '#/slow-mode') slowModePage();
         else if (h === '#/draw-two-three') drawTwoThreePage();
         else if (h === '#/victoire-vb') victoireVbPage();
+        else if (h === '#/prev-suit') prevSuitPage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
