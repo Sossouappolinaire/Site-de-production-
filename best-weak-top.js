@@ -110,7 +110,7 @@ const TZ = process.env.RESET_TZ || 'Africa/Abidjan';
 const KEYCAP = (n) => `${Number(n)}\uFE0F\u20E3`;
 const dayKey = (ts = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
 
-const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance']; // + « multi » (par défaut)
+const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance', 'lossnext']; // + « multi » (par défaut)
 const RELAUNCH_WAIT = 1;      // mode relance : nombre de jeux attendus APRÈS la sortie du 1er costume (v43) : le costume pas sorti ne doit pas venir …
 const RELAUNCH_OFFSET = 3;    // … alors il est relancé à (jeu du 1er costume sorti) + 3 par défaut (réglable ; ou choisi par l'analyse auto)
 const RELAUNCH_MIN_OFFSET = 3; // analyse auto : on teste les relances de +3 jusqu'à +n
@@ -143,6 +143,121 @@ function setRankProvider(strategy, fn) { if (typeof fn === 'function') rankProvi
 const testRankProviders = {};
 function setTestRankProvider(strategy, fn) { if (typeof fn === 'function') testRankProviders[strategy] = fn; }
 
+// ─── Mode « Perte → Xᵉ prédiction » (bouton « Perte → 3ᵉ ») ─────────────────────────────────────────────────────
+// SOURCES suivies (une ou plusieurs, au choix à la création) :
+//   • 'rank'     : 2 à 4 des 4 meilleurs d'une stratégie (Dizaine ou Costume faible) — clés `rank:1` … `rank:4`
+//   • 'strategy' : stratégies existantes du bot / IA / stratégies enregistrées — clé = clé de la stratégie
+//   • 'channel'  : canaux Telegram — clé `channel:<id>`
+// RÈGLE : dès qu'une source a perdu N fois de suite (N = « pertes avant l'envoi », 1 par défaut ; un gain remet son compte à zéro),
+// on la suit : on laisse passer (X-1) de ses prédictions puis la Xᵉ est envoyée dans le canal (X = 3 par défaut : 2 laissées passer).
+// Ensuite on n'envoie plus rien tant qu'UNE AUTRE source n'a pas atteint ses N pertes. Une seule prédiction envoyée à la fois.
+function loadLossNext(c) {
+  c = c || {};
+  const kind = c.lnKind === 'strategy' || c.lnKind === 'channel' ? c.lnKind : 'rank';
+  const phase = c.lnPhase === 'count' ? 'count' : 'idle';
+  const key = (v) => { const t = String(v == null ? '' : v).trim(); return /^\d$/.test(t) ? `rank:${t}` : t; };
+  const nth = c.lnNth !== undefined && c.lnNth !== null ? sanitizeLnNth(c.lnNth) : sanitizeLnSkip(c.lnSkip) + 1;
+  return {
+    lnKind: kind,
+    lnSources: kind === 'rank' ? [] : [...new Set((Array.isArray(c.lnSources) ? c.lnSources : String(c.lnSources || '').split(/[\s,;]+/)).map((x) => String(x).trim()).filter(Boolean))],
+    lnNth: nth,                                                       // prédiction envoyée après la perte : 1 = la prochaine, 3 = la 3ᵉ…
+    lnSkip: nth - 1,                                                  // = prédictions laissées passer
+    lnLosses: sanitizeLnLosses(c.lnLosses),                           // pertes de suite avant de déclencher
+    lnStreak: c.lnStreak && typeof c.lnStreak === 'object' ? c.lnStreak : {},
+    lnPhase: phase,                                                   // idle : on attend · count : on suit une source
+    lnFollow: phase === 'count' && c.lnFollow != null ? key(c.lnFollow) : null,
+    lnLeft: phase === 'count' ? Math.max(0, Number(c.lnLeft) || 0) : 0, // prédictions encore à laisser passer
+    lnLast: c.lnLast != null && c.lnLast !== '' ? key(c.lnLast) : null, // dernière source envoyée (ignorée jusqu'à la perte d'une autre)
+    lnCounted: Number.isFinite(Number(c.lnCounted)) ? Number(c.lnCounted) : 0, // dernier jeu cible déjà compté (anti-doublon)
+    lnSeen: Array.isArray(c.lnSeen) ? c.lnSeen.slice(-600) : [],      // sources non « rank » : prédictions/résultats déjà lus
+    lnBase: c.lnBase && typeof c.lnBase === 'object' ? c.lnBase : {}, // sources non « rank » : historique déjà passé au moment de l'ajout
+  };
+}
+const lnKindOf = (c) => (c && (c.lnKind === 'strategy' || c.lnKind === 'channel') ? c.lnKind : 'rank');
+const lossNextBusy = new Set();
+const rankKey = (r) => `rank:${r}`;
+// résultat (ok = gagné, sinon perdu après tous les rattrapages) d'une source suivie
+function lossNextResult(cfg, key, ok) {
+  if (cfg.lnPhase === 'count') return; // un suivi est déjà en cours : on n'en ouvre pas un second
+  if (cfg.lnLast === key && !ok) return; // « attend qu'un AUTRE ait une perte »
+  const st = cfg.lnStreak || (cfg.lnStreak = {});
+  if (ok) { if (st[key]) { st[key] = 0; persist(); } return; }
+  st[key] = (Number(st[key]) || 0) + 1;
+  if (st[key] >= sanitizeLnLosses(cfg.lnLosses)) {
+    cfg.lnPhase = 'count'; cfg.lnFollow = key; cfg.lnLeft = sanitizeLnNth(cfg.lnNth) - 1; cfg.lnCounted = 0; cfg.lnStreak = {};
+  }
+  persist();
+}
+// nouvelle prédiction d'une source : si c'est la source suivie, on la laisse passer (X-1 fois) puis on envoie la suivante
+async function lossNextPrediction(cfg, key, target, suit) {
+  if (cfg.lnPhase !== 'count' || key !== cfg.lnFollow) return;
+  target = Number(target);
+  if (!Number.isFinite(target) || !suit) return;
+  if (cyclePending(cfg) || lossNextBusy.has(cfg.id)) return;
+  if (target <= (Number(cfg.lnCounted) || 0)) return; // même prédiction déjà comptée
+  if (cfg.lnLeft > 0) { cfg.lnLeft -= 1; cfg.lnCounted = target; persist(); return; } // prédiction laissée passer
+  lossNextBusy.add(cfg.id);
+  try {
+    const ok = await sendTrigger(cfg, { target, suit, reason: 'lossnext', role: key });
+    if (ok) { cfg.lnLast = key; cfg.lnPhase = 'idle'; cfg.lnFollow = null; cfg.lnLeft = 0; cfg.lnCounted = target; persist(); }
+  } finally { lossNextBusy.delete(cfg.id); }
+}
+// sources « rank » : branchées sur les rangs de la stratégie (voir recordResult / record)
+const lossNextRankCfgs = (strategy) => enabledOf(strategy, 'lossnext').filter((c) => lnKindOf(c) === 'rank');
+function lossNextOnRankResult(strategy, rank, ok) {
+  for (const cfg of lossNextRankCfgs(strategy)) if ((cfg.ranks || []).includes(rank)) lossNextResult(cfg, rankKey(rank), ok);
+}
+async function handleLossNextPrediction(strategy, rank, data) {
+  for (const cfg of lossNextRankCfgs(strategy)) if ((cfg.ranks || []).includes(rank)) await lossNextPrediction(cfg, rankKey(rank), data.target, data.suit);
+}
+// sources « strategy » / « channel » : lecture régulière des prédictions de la source (mêmes données que « Copie et annonce »)
+async function lossNextPoll() {
+  const cfgs = panel.configs.filter((c) => c.enabled && modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank');
+  if (!cfgs.length) return;
+  let ca; try { ca = require('./copy-announce'); } catch (_) { return; }
+  const maxDone = maxFinishedGameNumber();
+  for (const cfg of cfgs) {
+    const seen = new Set(cfg.lnSeen || []);
+    let touched = false;
+    for (const key of cfg.lnSources || []) {
+      const entries = ca.sourceEntries(lnKindOf(cfg) === 'channel' && !String(key).startsWith('channel:') ? `channel:${key}` : key)
+        .filter((e) => e.suit && e.uid).sort((a, b) => a.target - b.target);
+      if (!cfg.lnBase[key]) { // première lecture : l'historique déjà joué n'est jamais rejoué
+        for (const e of entries) { seen.add(`p:${e.uid}`); if (e.status === 'gagné' || e.status === 'perdu') seen.add(`r:${e.uid}`); }
+        cfg.lnBase[key] = Date.now(); touched = true; continue;
+      }
+      for (const e of entries) {
+        if (e.status === 'gagné' || e.status === 'perdu') {
+          if (!seen.has(`r:${e.uid}`)) { seen.add(`r:${e.uid}`); touched = true; lossNextResult(cfg, key, e.status === 'gagné'); }
+        }
+        if (!seen.has(`p:${e.uid}`)) {
+          seen.add(`p:${e.uid}`); touched = true;
+          if (e.status === 'en attente' && Number(e.target) > maxDone) await lossNextPrediction(cfg, key, e.target, e.suit);
+        }
+      }
+    }
+    if (touched) { cfg.lnSeen = [...seen].slice(-600); persist(); }
+  }
+}
+function lossNextSourceName(cfg, key) {
+  if (String(key).startsWith('rank:')) return RANK_LABELS[Number(String(key).slice(5))] || key;
+  try {
+    const ca = require('./copy-announce');
+    if (String(key).startsWith('channel:') || lnKindOf(cfg) === 'channel') { const id = String(key).replace(/^channel:/, ''); return `Canal ${panel.channelTitles[id] || (ca.panel && ca.panel.channelTitles && ca.panel.channelTitles[id]) || id}`; }
+    const o = ca.options().find((x) => x.key === key); if (o) return o.name;
+  } catch (_) { /* nom brut */ }
+  return String(key);
+}
+function lossNextLabel(c) {
+  const n = lossNextSourceName(c, c.lnFollow);
+  const need = sanitizeLnLosses(c.lnLosses);
+  if (c.lnPhase === 'count') {
+    const rest = Number(c.lnLeft) || 0;
+    return `Perte${need > 1 ? 's' : ''} de « ${n} » : ${rest > 0 ? `encore ${rest} prédiction(s) à laisser passer, puis envoi` : 'la prochaine prédiction de cette source est envoyée'}`;
+  }
+  return c.lnLast ? `En attente de ${need} perte${need > 1 ? 's' : ''} d'une AUTRE source que « ${lossNextSourceName(c, c.lnLast)} » (dernier envoi)` : `En attente de ${need} perte${need > 1 ? 's' : ''} de suite d'une source cochée`;
+}
+
 // numéro de jeu → rangs ayant prédit (mode multi, mémoire seulement)
 const collector = new Map();
 
@@ -165,8 +280,13 @@ const sanitizeName = (v) => String(v == null ? '' : v).trim().slice(0, 60);
 const modeOf = (c) => (c && MODES.includes(c.mode) ? c.mode : 'multi');
 const multiLike = (c) => modeOf(c) === 'multi' || modeOf(c) === 'relance'; // messages à plusieurs costumes (♦️ 95% ─┐ / N° / ♣️ 94% ─┘)
 const simpleMode = (c) => !multiLike(c); // tout sauf « multi » et « relance » : message simple au format choisi
-const hasRanksMode = (m) => m === 'multi' || m === 'test' || m === 'relance';
-const defaultRanks = (m) => (m === 'test' ? TEST_DEFAULT_RANKS : m === 'relance' ? RELAUNCH_DEFAULT_RANKS : DEFAULT_RANKS).slice();
+const hasRanksMode = (m) => m === 'multi' || m === 'test' || m === 'relance' || m === 'lossnext';
+const LOSSNEXT_DEFAULT_RANKS = [1, 2, 3, 4]; // mode « Perte → Xᵉ prédiction » : les 4 meilleurs cochés par défaut
+const LOSSNEXT_SKIP = 2;                     // prédictions laissées passer après la perte : la 3ᵉ est envoyée
+const sanitizeLnSkip = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(0, Math.min(20, n)) : LOSSNEXT_SKIP; };
+const sanitizeLnNth = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(21, n)) : LOSSNEXT_SKIP + 1; }; // Xᵉ prédiction envoyée (3 par défaut)
+const sanitizeLnLosses = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(10, n)) : 1; };      // pertes de suite avant l'envoi
+const defaultRanks = (m) => (m === 'lossnext' ? LOSSNEXT_DEFAULT_RANKS : m === 'test' ? TEST_DEFAULT_RANKS : m === 'relance' ? RELAUNCH_DEFAULT_RANKS : DEFAULT_RANKS).slice();
 const srcMode = (c) => SRC_MODES.includes(modeOf(c));
 // ── réglages du mode relance : attente (N+2), numéro de la relance (N+7), analyse auto du +n, envoi vers un autre canal ──
 const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
@@ -244,6 +364,7 @@ function applySaved(saved) {
       enabled: c.enabled !== false, sentCount: Number(c.sentCount) || 0, wins: Number(c.wins) || 0, losses: Number(c.losses) || 0, lastSentAt: c.lastSentAt || null,
       lossGate: mode === 'test' && !!c.lossGate, gateFrom: [1, 2, 3, 4].includes(Number(c.gateFrom)) ? Number(c.gateFrom) : null,
     };
+    if (mode === 'lossnext') Object.assign(o, loadLossNext(c));
     if (mode === 'relance') Object.assign(o, loadRelaunch(c));
     return o;
   }).filter((c) => c.channels.length);
@@ -270,7 +391,7 @@ async function restoreFromDb() {
 // ---------------------------------------------------------------------------
 // Configurations + ANTI-DOUBLONS DE CONFIGURATION
 // ---------------------------------------------------------------------------
-const configKey = (c) => `${modeOf(c)}|${c.strategy}|${hasRanksMode(modeOf(c)) ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}${modeOf(c) === 'test' && c.lossGate ? '|gate' : ''}`;
+const configKey = (c) => `${modeOf(c)}|${c.strategy}|${modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank' ? `${lnKindOf(c)}:${[...(c.lnSources || [])].map(String).sort().join(',')}` : ''}|${hasRanksMode(modeOf(c)) ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}${modeOf(c) === 'test' && c.lossGate ? '|gate' : ''}`;
 const shareChannel = (a, b) => { const mine = new Set((a.channels || []).map(String)); return (b.channels || []).some((ch) => mine.has(String(ch))); };
 function findDuplicate(cfg, excludeId) {
   return panel.configs.find((o) => o.id !== excludeId && configKey(o) === configKey(cfg) && shareChannel(o, cfg)) || null;
@@ -293,20 +414,29 @@ function dedupeConfigs() {
 function addConfig(input = {}) {
   const mode = sanitizeMode(input.mode);
   const src = SRC_MODES.includes(mode);
-  const strategy = src ? mode : sanitizeStrategy(input.strategy);
+  const lnFree = mode === 'lossnext' && (input.lnKind === 'strategy' || input.lnKind === 'channel'); // sources : stratégies existantes / canaux (pas de classement)
+  const strategy = src ? mode : (lnFree ? 'dizaine' : sanitizeStrategy(input.strategy));
   if (!strategy) throw new Error('Choisis la stratégie (Dizaine ou Costume faible).');
   const sources = src ? parseChannels(input.sources).map(String) : [];
   if (src && !sources.length) throw new Error(mode === 'scan' ? 'Sélectionne au moins un canal détecté.' : 'Coche au moins un canal à suivre.');
   const channels = parseChannels(input.channels);
   if (!channels.length) throw new Error('Renseigne au moins un ID de canal.');
   const cfg = {
-    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto', relance: 'Relance' }[mode] || ''),
+    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto', relance: 'Relance', lossnext: 'Perte → prédiction suivante' }[mode] || ''),
     strategy, channels, sources, rot: {}, maxR: sanitizeMaxR(input.maxR), format: sanitizeFormat(input.format),
-    ranks: !hasRanksMode(mode) ? [] : (input.ranks === undefined ? defaultRanks(mode) : sanitizeRanks(input.ranks, mode)),
+    ranks: !hasRanksMode(mode) || lnFree ? [] : (input.ranks === undefined ? defaultRanks(mode) : sanitizeRanks(input.ranks, mode)),
     cycleRole: 1, cycleWaiting: false, cycleDone: [],
     enabled: true, sentCount: 0, wins: 0, losses: 0, lastSentAt: null,
     lossGate: mode === 'test' && !!input.lossGate, gateFrom: null,
   };
+  if (mode === 'lossnext') {
+    Object.assign(cfg, loadLossNext({ lnKind: input.lnKind, lnSources: input.lnSources, lnNth: input.lnNth, lnSkip: input.lnSkip, lnLosses: input.lnLosses }));
+    if (lnFree) {
+      if (!cfg.lnSources.length) throw new Error(cfg.lnKind === 'channel' ? 'Coche au moins un canal à suivre.' : 'Coche au moins une stratégie à suivre.');
+      if (cfg.lnKind === 'strategy') { const known = new Set(require('./copy-announce').options().map((o) => o.key)); const bad = cfg.lnSources.find((k) => !known.has(k)); if (bad) throw new Error(`Stratégie inconnue : ${bad}`); }
+      if (cfg.lnKind === 'channel') { cfg.lnSources = cfg.lnSources.map((k) => String(k).replace(/^channel:/, '')); if (cfg.lnSources.some((id) => channels.some((d) => String(d).toLowerCase() === String(id).toLowerCase()))) throw new Error("Le canal d'envoi ne peut pas être l'un des canaux suivis (boucle infinie)."); }
+    }
+  }
   if (mode === 'relance') Object.assign(cfg, relaunchFields(input), { relStats: {}, relObs: [], relOffsetAuto: null, relOutWins: 0, relOutLosses: 0, relOutSent: 0 });
   if (mode === 'test') cfg.testRank = cfg.ranks[0]; // on commence par le premier rang choisi (normalement le meilleur)
   const dup = findDuplicate(cfg);
@@ -319,14 +449,26 @@ function updateConfig(id, patch = {}) {
   const old = JSON.parse(JSON.stringify(c));
   try {
     if (patch.sources !== undefined && srcMode(c)) { const src = parseChannels(patch.sources).map(String); if (!src.length) throw new Error('Choisis au moins un canal à suivre.'); c.sources = src; }
-    if (patch.strategy !== undefined && !srcMode(c)) { const s = sanitizeStrategy(patch.strategy); if (!s) throw new Error('Stratégie invalide.'); c.strategy = s; }
+    if (patch.strategy !== undefined && !srcMode(c) && !(modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank')) { const s = sanitizeStrategy(patch.strategy); if (!s) throw new Error('Stratégie invalide.'); c.strategy = s; }
     if (patch.channels !== undefined) { const ch = parseChannels(patch.channels); if (!ch.length) throw new Error('Renseigne au moins un ID de canal.'); c.channels = ch; }
     if (patch.maxR !== undefined) c.maxR = sanitizeMaxR(patch.maxR);
     if (patch.name !== undefined) c.name = sanitizeName(patch.name) || c.name;
     if (patch.format !== undefined) c.format = sanitizeFormat(patch.format);
-    if (patch.ranks !== undefined && hasRanksMode(modeOf(c))) {
+    if (patch.ranks !== undefined && hasRanksMode(modeOf(c)) && !(modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank')) {
       c.ranks = sanitizeRanks(patch.ranks, modeOf(c));
       if (modeOf(c) === 'test' && !c.ranks.includes(Number(c.testRank))) c.testRank = c.ranks[0];
+    }
+    if (modeOf(c) === 'lossnext') {
+      let reset = false;
+      if (patch.lnNth !== undefined) { c.lnNth = sanitizeLnNth(patch.lnNth); c.lnSkip = c.lnNth - 1; reset = true; }
+      else if (patch.lnSkip !== undefined) { c.lnSkip = sanitizeLnSkip(patch.lnSkip); c.lnNth = c.lnSkip + 1; reset = true; }
+      if (patch.lnLosses !== undefined) { c.lnLosses = sanitizeLnLosses(patch.lnLosses); reset = true; }
+      if (patch.lnSources !== undefined && lnKindOf(c) !== 'rank') {
+        const list = [...new Set((Array.isArray(patch.lnSources) ? patch.lnSources : String(patch.lnSources).split(/[\s,;]+/)).map((x) => String(x).trim().replace(/^channel:/, lnKindOf(c) === 'channel' ? '' : 'channel:')).filter(Boolean))];
+        if (!list.length) throw new Error(lnKindOf(c) === 'channel' ? 'Coche au moins un canal à suivre.' : 'Coche au moins une stratégie à suivre.');
+        c.lnSources = list; c.lnBase = {}; reset = true;
+      }
+      if (reset) { c.lnPhase = 'idle'; c.lnFollow = null; c.lnLeft = 0; c.lnStreak = {}; c.lnCounted = 0; }
     }
     if (patch.lossGate !== undefined && modeOf(c) === 'test') { c.lossGate = !!patch.lossGate; c.gateFrom = null; }
     if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
@@ -541,6 +683,11 @@ function recordResult(strategy, ref, field, step) {
         for (const cfg of gated) { if ((cfg.ranks || []).includes(lostRank)) { cfg.gateFrom = lostRank; touched = true; } }
         if (touched) persist();
       }
+    }
+    // mode « Perte → Xᵉ prédiction » (sources « rang ») : gain ou perte d'un des rangs cochés
+    if ((field === 'losses' || field === 'wins') && (testRankProviders[strategy] || rankProviders[strategy]) && lossNextRankCfgs(strategy).length) {
+      const rk = Number((testRankProviders[strategy] || rankProviders[strategy])(ref));
+      if (rk >= 1 && rk <= 4) lossNextOnRankResult(strategy, rk, field === 'wins');
     }
     if (!enabledOf(strategy, 'trigger').length) return;
     const ts = ensureTrigDay();
@@ -780,6 +927,7 @@ async function record(strategy, rank, data) {
       await handleCyclePrediction(strategy, rank, data).catch((e) => { panel.lastError = e.message; });
     }
     await handleTestPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
+    await handleLossNextPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
     if (!validRank || !multiConfigs(strategy).length) return;
     const now = Date.now();
     for (const [k, v] of collector) if (now - v.at > 60 * 60 * 1000) collector.delete(k);
@@ -1158,6 +1306,7 @@ async function tick() {
   try { await retryRelayOut(); } catch (e) { panel.lastError = e.message; }
   try { await checkAbsence(); } catch (e) { panel.lastError = e.message; }
   try { await checkPatterns(); } catch (e) { panel.lastError = e.message; }
+  try { await lossNextPoll(); } catch (e) { panel.lastError = e.message; }
 }
 setOnShoeReset(() => {
   collector.clear();
@@ -1198,9 +1347,11 @@ function status() {
   return {
     strategies: STRATEGIES, rankLabels: RANK_LABELS, triggerLabel: TRIGGER_LABEL, cycleLabel: `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}`, formatCount: fmt.FORMAT_COUNT,
     configs: panel.configs.map((c) => ({
-      ...c, mode: modeOf(c), strategyLabel: modeOf(c) === 'follow' ? 'Suivi des canaux cochés' : (modeOf(c) === 'scan' ? 'Détection auto des canaux' : STRATEGIES[c.strategy]), sourceNames: (c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)),
+      ...c, mode: modeOf(c), strategyLabel: modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank' ? (lnKindOf(c) === 'channel' ? 'Canaux suivis' : 'Stratégies existantes suivies') : modeOf(c) === 'follow' ? 'Suivi des canaux cochés' : (modeOf(c) === 'scan' ? 'Détection auto des canaux' : STRATEGIES[c.strategy]), sourceNames: (c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)),
       ranksLabel: modeOf(c) === 'follow' ? `Suit : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : modeOf(c) === 'scan' ? `Surveille : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')} · un costume ✅0️⃣ → l'autre à N+2` : modeOf(c) === 'trigger' ? TRIGGER_LABEL : (modeOf(c) === 'cycle' ? `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}` : (modeOf(c) === 'relance' ? `Costumes : ${(c.ranks && c.ranks.length ? c.ranks : RELAUNCH_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + ')} · un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(c)} → relancé à ${c.relAuto ? (relaunchAwaitingVerdict(c) ? `N+? (analyse auto de +${RELAUNCH_MIN_OFFSET} à +${c.relMaxN} : en attente du verdict)` : `N+${relaunchOffset(c)} (choisi par l'analyse auto)`) : `N+${relaunchOffset(c)}`}${(c.relChannels || []).length ? ` · aussi vers ${c.relChannels.map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : ''}` : modeOf(c) === 'test' ? `Rangs : ${(c.ranks && c.ranks.length ? c.ranks : TEST_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' → ')} · rang suivant après une perte` : (c.ranks || DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + '))),
       testLabel: modeOf(c) === 'test' ? (c.lossGate ? (c.gateFrom ? `Perte du « ${RANK_LABELS[c.gateFrom]} » → prochaine source : ${RANK_LABELS[(c.ranks || TEST_DEFAULT_RANKS)[((c.ranks || TEST_DEFAULT_RANKS).indexOf(c.gateFrom) + 1) % (c.ranks || TEST_DEFAULT_RANKS).length]]}` : 'Envoi après une perte : en attente d’une perte parmi les rangs choisis') : `Prochaine source : ${RANK_LABELS[c.testRank] || RANK_LABELS[1]}`) : null,
+      lossNextLabel: modeOf(c) === 'lossnext' ? lossNextLabel(c) : null,
+      lnSourceNames: modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank' ? (c.lnSources || []).map((k) => lossNextSourceName(c, k)) : [],
       cycleLabel: modeOf(c) === 'cycle' ? (c.cycleWaiting ? 'Les 4 sont passées : en attente d’une perte parmi les 4' : `Suit actuellement : ${RANK_LABELS[c.cycleRole] || RANK_LABELS[1]}${(c.cycleDone || []).length ? ` (déjà passés : ${c.cycleDone.map((r) => RANK_LABELS[r]).join(', ')})` : ''}`) : null,
       channelNames: c.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
       relObs: undefined, relObsCount: Array.isArray(c.relObs) ? c.relObs.length : 0,
