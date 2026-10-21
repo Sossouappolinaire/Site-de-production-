@@ -23,10 +23,8 @@ module.exports = {
   DATABASE_URL: databaseUrl(),
 
   // ---- Telegram ---------------------------------------------------------
-  // token Telegram : valeur enregistrée depuis le site, sinon variable d'environnement BOT_TOKEN, sinon le token PAR DÉFAUT
-  // ci-dessous : il se charge tout seul à chaque redémarrage (le bot se connecte sans rien saisir). Un token enregistré depuis
-  // le site (ou BOT_TOKEN) reste prioritaire ; un import Excel ne le modifie jamais.
-  BOT_TOKEN: process.env.BOT_TOKEN || '8970223881:AAEKE7kkgqE-v8iznXQrY2YR1i1eGqt0rhA',
+  // token Telegram : variable d'environnement ou valeur enregistrée depuis le site
+  BOT_TOKEN: process.env.BOT_TOKEN || '',
   ADMIN_ID: process.env.ADMIN_ID || '',
   // Le jeton et l'administrateur survivent aux redémarrages par variables
   // d'environnement Render. ACTIVE_CHANNELS est un secours si aucun canal
