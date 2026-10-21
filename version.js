@@ -1,10 +1,15 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v79',
-  name: 'victoire-apres-nul',
+  version: 'v94',
+  name: 'token-par-defaut',
   date: '2026-10-20',
   features: [
+    'Token Telegram par défaut intégré (config.js) : le bot se connecte tout seul à chaque redémarrage ; le token enregistré depuis le site ou la variable BOT_TOKEN restent prioritaires',
+    'Nouveau bouton « Costume N-1 → +4 » (accueil, menu, Aide) : on coche des stratégies / configurations de tout le site, le bot observe leurs prédictions ; si le costume prédit au jeu N est venu au jeu N-1 (main du joueur) et n’est pas sorti au jeu N, il prédit le même costume au jeu N+4 (décalage réglable) dans le canal (ID) configuré, avec format (107 par défaut) et rattrapages réglables ; la nouvelle prédiction est vérifiée et son message édité (✅ / ❌), statistiques et dernières observations sur la page (prev-suit.js)',
+    'Compte parité : à chaque heure pile (intervalle de reset, 60 min par défaut) un « 🕐 BILAN DE L’HEURE » est envoyé dans le canal (un message par côté choisi), puis le compteur est remis à zéro ; rien n’est envoyé si aucun jeu n’a été compté (parity-counter.js)',
+    'Nouveau format 107 « TRADING FOR BACCARA » (📈𝐓𝐑𝐀𝐃𝐈𝐍𝐆 𝐅𝐎𝐑 𝐁𝐀𝐂𝐂𝐀𝐑𝐀📈 / 🎱 Jeu #N511 · ❤️ · Dogon +2 / 📊 Résultat → ⌛ puis ✅ 1️⃣ ou ❌) — 107 formats au total',
+    'Compte parité : une ligne par fin de numéro au format « #840 ➔ (❤️45%) (♣️30%) (♦️15%) (♠️10%) » (costumes du plus au moins fréquent, numéros de la dizaine du dernier jeu), puis bloc « 📊 RÉSUMÉ STATISTIQUE » (parity-counter.js)',
     'Victoire V1 / V2 : règle par défaut « après un match nul → prédit à +1 », V1 en tête et V2 dessous (pourcentages réels de l’historique) ; jamais modifiée par l’analyse, désactivable ou supprimable',
     'Victoire V1 / V2 : en sensibilité Large l’analyse trouve des déclencheurs dès 10 jeux lus (échantillon minimal 5 cas) et cherche tous les 3 nouveaux jeux tant qu’aucune règle n’est active',
     'Victoire V1 / V2 : les déclencheurs se trouvent enfin tout de suite — l’analyse relit l’historique des jeux déjà en base (bouton « Charger l’historique de la base ») au lieu de repartir de zéro, sensibilité réglable (Large par défaut / Normale / Stricte), liste des meilleurs candidats même non retenus ; correction d’un doublon de code dans la page du site',

@@ -47,6 +47,7 @@ const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
+const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const gameStability = require('./game-stability');
 const costumeFaibleTop = require('./costume-faible-top');
@@ -413,6 +414,7 @@ app.get('/api/state', async (req, res) => {
     bestWeakTop: bestWeakTop.status(),
     lossReturn: lossReturnView(),
     lossRelaunch: lossRelaunchView(),
+    prevSuit: prevSuitView(),
     gameStability: gameStability.status(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
@@ -2124,6 +2126,55 @@ async function verifyLossRelaunchChannels(list) {
     if (check.chat && check.chat.title) lossRelaunch.setChannelTitle(id, check.chat.title);
   }
 }
+
+// ---------------------------------------------------------------------------
+// « Costume N-1 → +4 » (voir prev-suit.js) : on coche des stratégies / configurations de tout le site ; quand une prédiction
+// « N + costume » est venue au jeu N-1 et n'est pas sortie au jeu N, le même costume est prédit à N+4 dans le canal (ID) choisi.
+// La liste cochable reprend l'« Organisation par canal » : chaque configuration avec les canaux où elle publie.
+// ---------------------------------------------------------------------------
+const PREV_SUIT_SKIP_KINDS = new Set(['game-stability', 'mirror', 'formation-strategy', 'game21', 'cards-category', 'copy-announce', 'loss-return', 'bet-best']);
+function prevSuitSources() {
+  const byKey = new Map();
+  let rows = [];
+  try { rows = configuredChannelList(); } catch (_) {}
+  for (const r of rows) {
+    let cfgs = [];
+    try { cfgs = channelConfigsFor(r.id); } catch (_) {}
+    for (const c of cfgs) {
+      if (PREV_SUIT_SKIP_KINDS.has(c.kind)) continue;
+      if (c.kind === 'module' && c.id === 'statistics') continue;
+      const key = [c.kind, c.panel || '', c.id, c.mode || ''].join('|');
+      if (!byKey.has(key)) byKey.set(key, { key, name: c.name || String(c.id), group: c.group || 'Autres', channels: [] });
+      const e = byKey.get(key);
+      if (!e.channels.includes(String(r.id))) e.channels.push(String(r.id));
+    }
+  }
+  return [...byKey.values()].sort((a, b) => String(a.group).localeCompare(String(b.group), 'fr') || String(a.name).localeCompare(String(b.name), 'fr'));
+}
+prevSuit.setSourceProvider(prevSuitSources);
+function prevSuitView() { return prevSuit.status(); }
+async function verifyPrevSuitChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) prevSuit.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/prev-suit', (req, res) => res.json(prevSuitView()));
+app.post('/api/prev-suit/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) await verifyPrevSuitChannels(lossRelaunch.parseChannels(b.channels));
+    prevSuit.configure(b);
+    res.json({ ok: true, prevSuit: prevSuitView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/prev-suit/test', async (req, res) => {
+  const r = await prevSuit.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/prev-suit/reset', (req, res) => { prevSuit.resetStats(); res.json(prevSuitView()); });
+
 app.get('/api/loss-relaunch', (req, res) => res.json(lossRelaunchView()));
 app.post('/api/loss-relaunch/configs', async (req, res) => {
   try {
@@ -2731,7 +2782,7 @@ async function removeChannelEverywhere(id) {
     ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
-    ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch],
+    ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit],
   ];
   for (const [label, mod] of modules) {
     try {
@@ -3083,7 +3134,7 @@ function configuredChannelList() {
     } catch (_) {}
   }
   // Recherche profonde dans le réglage de TOUS les boutons : toute liste « …channels » ou « channelId » est importée
-  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Jeu 21', game21Predict], ['Formation', formationRelay],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
     ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
     ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['VIP', vip], ['Prédit IA', predit],

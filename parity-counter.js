@@ -128,13 +128,23 @@ function suitCells(cell) {
   const topCount = SUIT_ORDER.filter((x) => (c[x] || 0) === max).length;
   return SUIT_ORDER.map((x) => ({ suit: x, count: c[x] || 0, pct: pct(c[x] || 0, total), dominant: total > 0 && max > 0 && topCount === 1 && (c[x] || 0) === max }));
 }
-function block(parityName, icon, name, counts, digits = ALL, suits) {
+// Une ligne par fin de numéro, au format « #840 ➔ (❤️45%) (♣️30%) (♦️15%) (♠️10%) » : le numéro est celui de la dizaine du
+// dernier jeu terminé (jeu #845 → #840 à #849) et les costumes sont rangés du plus fréquent au moins fréquent.
+// Sans aucun jeu pour ce chiffre : « #840 ➔ — ».
+const pctInt = (count, total) => (total ? Math.round((count / total) * 100) : 0);
+function suitLine(label, cell) {
+  const cells = suitCells(cell);
+  const total = cells.reduce((n, r) => n + r.count, 0);
+  if (!total) return `${label} ➔ —`;
+  const sorted = cells.map((r, i) => ({ ...r, i })).sort((x, y) => y.count - x.count || x.i - y.i); // égalité : ordre ❤️ ♦️ ♠️ ♣️
+  return `${label} ➔ ` + sorted.map((r) => `(${r.suit}${pctInt(r.count, total)}%)`).join(' ');
+}
+function block(parityName, icon, name, counts, digits = ALL, suits, gameNumber) {
   const total = digits.reduce((s, d) => s + counts[d], 0);
-  const lines = [`📈 Taux parité ${parityName} — ${icon} ${name}`, '━━━━━━━━━━━━━━━━━━'];
-  for (const d of digits) {
-    const sc = suitCells(suits && suits[d]).map((r) => `(${SUIT_PLAIN[r.suit]}${r.pct}%)`).join(' ');
-    lines.push(`${DIGITS[d]} : ${counts[d]}  (${pct(counts[d], total)}%)  ${sc}`);
-  }
+  const g = Number(gameNumber);
+  const base = gameNumber != null && gameNumber !== '' && Number.isInteger(g) && g >= 0 ? Math.floor(g / 10) * 10 : null;
+  const lines = [`📈 Taux parité ${parityName} — ${icon} ${name}  (${total} jeu${total > 1 ? 'x' : ''})`, '━━━━━━━━━━━━━━━'];
+  for (const d of digits) lines.push(suitLine(base != null ? `#${base + d}` : DIGITS[d], suits && suits[d]));
   return lines.join('\n');
 }
 
@@ -156,15 +166,24 @@ const SIDES = {
 };
 function sidesToSend() { return state.target === 'player' ? ['player'] : state.target === 'banker' ? ['banker'] : ['player', 'banker']; }
 
-function buildMessage(side, gameNumber) {
+function buildMessage(side, gameNumber, opts = {}) {
   const s = SIDES[side]; const counts = state[side];
+  const pairTotal = counts.pair.reduce((n, x) => n + x, 0);
+  const impairTotal = counts.impair.reduce((n, x) => n + x, 0);
+  const bilan = opts && opts.bilan;
+  const pad = (n) => String(n).padStart(2, '0');
+  const now = new Date();
   return [
-    block('pair', s.icon, s.name, counts.pair, ALL, counts.suits && counts.suits.pair),
+    ...(bilan ? [`🕐 BILAN DE L'HEURE — ${pad(now.getHours())}h${pad(now.getMinutes())}`, ''] : []),
+    block('pair', s.icon, s.name, counts.pair, ALL, counts.suits && counts.suits.pair, gameNumber),
     '',
-    block('impair', s.icon, s.name, counts.impair, ALL, counts.suits && counts.suits.impair),
+    block('impair', s.icon, s.name, counts.impair, ALL, counts.suits && counts.suits.impair, gameNumber),
     '',
+    '📊 RÉSUMÉ STATISTIQUE',
+    '━━━━━━━━━━━━━━━',
+    `${s.icon} ${s.name} · pair ${pairTotal} jeu${pairTotal > 1 ? 'x' : ''} · impair ${impairTotal} jeu${impairTotal > 1 ? 'x' : ''}`,
     `🎮 Jeu #${gameNumber ?? '—'}  |  📊 ${state.games} jeu(x) depuis dernier reset`,
-    `⏭ Reset dans ${formatCountdown(msUntilNextReset())}  (Intervalle ${state.intervalMin}min)`,
+    bilan ? '🔄 Compteur remis à zéro' : `⏭ Reset dans ${formatCountdown(msUntilNextReset())}  (Intervalle ${state.intervalMin}min)`,
   ].join('\n');
 }
 
@@ -187,10 +206,26 @@ async function onFinished(round) {
   if (bump(round)) await publish(round.number, round.winner);
 }
 
+// Bilan envoyé à chaque reset automatique (heure pile pour 60 min) : un message par côté choisi, PUIS remise à zéro.
+// Rien n'est envoyé si aucun jeu n'a été compté depuis le dernier reset.
+async function sendBilan() {
+  if (!state.enabled || !state.channelId || !sendFn || !state.games) return false;
+  let ok = false;
+  for (const side of sidesToSend()) {
+    try { await sendFn(state.channelId, buildMessage(side, state.lastGameNumber, { bilan: true })); ok = true; state.sentCount += 1; state.lastSentAt = Date.now(); state.lastError = null; }
+    catch (e) { state.lastError = e.message; console.error('Compte parité (bilan) :', e.message); }
+  }
+  return ok;
+}
+
 let resetTimer = null;
 function scheduleReset() {
   if (resetTimer) clearTimeout(resetTimer);
-  resetTimer = setTimeout(() => { resetCounts(); scheduleReset(); }, msUntilNextReset());
+  resetTimer = setTimeout(async () => {
+    try { await sendBilan(); } catch (_) {}
+    resetCounts();
+    scheduleReset();
+  }, msUntilNextReset());
   if (resetTimer.unref) resetTimer.unref();
 }
 
@@ -223,5 +258,5 @@ function status(gameNumber) {
 
 module.exports = {
   state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb,
-  bump, publish, onFinished, buildMessage, resetCounts, scheduleReset, test, status,
+  bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status,
 };
