@@ -139,12 +139,18 @@ function suitLine(label, cell) {
   const sorted = cells.map((r, i) => ({ ...r, i })).sort((x, y) => y.count - x.count || x.i - y.i); // égalité : ordre ❤️ ♦️ ♠️ ♣️
   return `${label} ➔ ` + sorted.map((r) => `(${r.suit}${pctInt(r.count, total)}%)`).join(' ');
 }
-function block(parityName, icon, name, counts, digits = ALL, suits, gameNumber) {
-  const total = digits.reduce((s, d) => s + counts[d], 0);
+// Liste unique de 10 lignes (une par fin de numéro 0 à 9), sans titre : les costumes des jeux à point pair ET impair sont
+// réunis pour chaque chiffre. Le nombre de jeux pair / impair reste affiché dans le résumé.
+function listBlock(pairSuits, impairSuits, gameNumber, digits = ALL) {
   const g = Number(gameNumber);
   const base = gameNumber != null && gameNumber !== '' && Number.isInteger(g) && g >= 0 ? Math.floor(g / 10) * 10 : null;
-  const lines = [`📈 Taux parité ${parityName} — ${icon} ${name}  (${total} jeu${total > 1 ? 'x' : ''})`, '━━━━━━━━━━━━━━━'];
-  for (const d of digits) lines.push(suitLine(base != null ? `#${base + d}` : DIGITS[d], suits && suits[d]));
+  const lines = [];
+  for (const d of digits) {
+    const p = (pairSuits && pairSuits[d]) || {}; const i = (impairSuits && impairSuits[d]) || {};
+    const merged = suitZeros();
+    for (const x of SUIT_ORDER) merged[x] = (p[x] || 0) + (i[x] || 0);
+    lines.push(suitLine(base != null ? `#${base + d}` : DIGITS[d], merged));
+  }
   return lines.join('\n');
 }
 
@@ -175,11 +181,9 @@ function buildMessage(side, gameNumber, opts = {}) {
   const now = new Date();
   return [
     ...(bilan ? [`🕐 BILAN DE L'HEURE — ${pad(now.getHours())}h${pad(now.getMinutes())}`, ''] : []),
-    block('pair', s.icon, s.name, counts.pair, ALL, counts.suits && counts.suits.pair, gameNumber),
+    listBlock(counts.suits && counts.suits.pair, counts.suits && counts.suits.impair, gameNumber),
     '',
-    block('impair', s.icon, s.name, counts.impair, ALL, counts.suits && counts.suits.impair, gameNumber),
-    '',
-    '📊 RÉSUMÉ STATISTIQUE',
+    ' RÉSUMÉ STATISTIQUE',
     '━━━━━━━━━━━━━━━',
     `${s.icon} ${s.name} · pair ${pairTotal} jeu${pairTotal > 1 ? 'x' : ''} · impair ${impairTotal} jeu${impairTotal > 1 ? 'x' : ''}`,
     `🎮 Jeu #${gameNumber ?? '—'}  |  📊 ${state.games} jeu(x) depuis dernier reset`,

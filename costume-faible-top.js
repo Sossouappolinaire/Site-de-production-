@@ -1196,7 +1196,7 @@ function bumpScore(trackerId, field, step = 0) {
 // score d'une prédiction vérifiée. Prédiction d'un canal (slot) : le score va au canal lui-même
 // (chaque canal est une stratégie séparée dans le bilan et pour le choix du meilleur).
 function bumpEntry(entry, field, step = 0) {
-  if (!entry.mirror) { try { require('./best-weak-top').recordResult('costumeFaible', (entry.slot !== undefined ? `${entry.trackerId}#${entry.slot}` : entry.trackerId), field, step); } catch (_) { /* jamais bloquant */ } }
+  if (!entry.mirror) { try { require('./best-weak-top').recordResult('costumeFaible', (entry.slot !== undefined ? `${entry.trackerId}#${entry.slot}` : entry.trackerId), field, step, entry.maxR); } catch (_) { /* jamais bloquant */ } }
   if (entry.mirror) {
     // relais vers le canal des meilleures : jamais compté dans les scores des canaux,
     // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)

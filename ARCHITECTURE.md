@@ -41,7 +41,8 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `predictor.js` — moteur multi-stratégies (main du JOUEUR uniquement)
 - `strategies.js` — catalogue des stratégies de prédiction (main du JOUEUR uniquement)
 - `formats.js` — adaptateur entre le moteur du bot et les 77 formats de tg-formats.js
-- `tg-formats.js` — Formats de messages Telegram pour Baccarat Pro (N°1 à N°101)
+- `tg-formats.js` — Formats de messages Telegram pour Baccarat Pro (N°1 à N°107)
+- `tg-formats-uniques.js` — Formats N°8 à N°86 : 79 mises en page toutes différentes (aucune ne ressemble à une autre)
 - `game-stability.js` — « Stabilité du jeu » (fonction DÉSACTIVÉE PAR DÉFAUT, à activer sur le site : page « Stabilité »).
 - `early-verify.js` — VÉRIFICATION ANTICIPÉE (demande admin).
 - `send-delay.js` — RETARD D'ENVOI des prédictions (demande admin).

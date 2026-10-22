@@ -1119,7 +1119,7 @@ function editPending(entry, statusFr) {
 // relais vers le canal des meilleures : jamais compté dans les scores des configurations,
 // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
 function bumpEntry(entry, field, step = 0) {
-  if (!entry.mirror) { try { require('./best-weak-top').recordResult('dizaine', entry.trackerId, field, step); } catch (_) { /* jamais bloquant */ } }
+  if (!entry.mirror) { try { require('./best-weak-top').recordResult('dizaine', entry.trackerId, field, step, entry.maxR); } catch (_) { /* jamais bloquant */ } }
   if (entry.mirror) {
     if (entry.best) {
       rollBestDay();

@@ -1,10 +1,13 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v94',
-  name: 'token-par-defaut',
-  date: '2026-10-20',
+  version: 'v98',
+  name: 'declencheur-rattrapage-3',
+  date: '2026-10-22',
   features: [
+    'Nouveau bouton d’accueil « ⚡ Envoi sur déclencheur » (menu, Aide, page dédiée avec « Créer ») : il envoie après 3 pertes CONSÉCUTIVES (au lieu de 2) d’une configuration suivie réglée sur 3 rattrapages, après 2 gains de suite au rattrapage 2 ou 3, ou quand un costume est absent 13 jeux (prédit à +1 et +5)',
+    '« Costume N-1 → +4 » : ne suit que les stratégies / configurations réglées sur 3 rattrapages ; les autres sont grisées dans la liste',
+    'Compte parité : message en liste unique de 10 lignes « #840 ➔ (❤️%) … » puis RÉSUMÉ STATISTIQUE ; Bilan toujours à l’heure pile',
     'Token Telegram par défaut intégré (config.js) : le bot se connecte tout seul à chaque redémarrage ; le token enregistré depuis le site ou la variable BOT_TOKEN restent prioritaires',
     'Nouveau bouton « Costume N-1 → +4 » (accueil, menu, Aide) : on coche des stratégies / configurations de tout le site, le bot observe leurs prédictions ; si le costume prédit au jeu N est venu au jeu N-1 (main du joueur) et n’est pas sorti au jeu N, il prédit le même costume au jeu N+4 (décalage réglable) dans le canal (ID) configuré, avec format (107 par défaut) et rattrapages réglables ; la nouvelle prédiction est vérifiée et son message édité (✅ / ❌), statistiques et dernières observations sur la page (prev-suit.js)',
     'Compte parité : à chaque heure pile (intervalle de reset, 60 min par défaut) un « 🕐 BILAN DE L’HEURE » est envoyé dans le canal (un message par côté choisi), puis le compteur est remis à zéro ; rien n’est envoyé si aucun jeu n’a été compté (parity-counter.js)',

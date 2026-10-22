@@ -11,6 +11,8 @@
 //  • La nouvelle prédiction est vérifiée à son tour (N+4, puis rattrapages) et son message est édité (✅ / ❌).
 //  • Jamais deux prédictions pour le même numéro de jeu, jamais pour un jeu déjà joué, jamais de suivi du propre canal d'envoi.
 //  • Un canal peut servir plusieurs configurations : cocher l'une d'elles suit donc toutes les prédictions publiées dans ses canaux.
+//  • RÈGLE RATTRAPAGE 3 : seules les stratégies / configurations réglées sur 3 rattrapages sont suivies. Une source dont le
+//    rattrapage est différent de 3 (ou inconnu) reste affichée mais grisée, et ses prédictions sont ignorées.
 'use strict';
 const strategyRecap = require('./strategy-recap');
 
@@ -22,6 +24,7 @@ const loss = require('./loss-return'); // lecture d'une publication (parsePost) 
 const { state, hasSuit } = require('./predictor');
 
 const DB_KEY = 'prev_suit_state';
+const SOURCE_MAXR = 3; // rattrapage exigé des sources suivies
 const DEFAULT_OFFSET = 4;
 const DEFAULT_MAXR = 2;
 const DEFAULT_FORMAT = 107;
@@ -40,6 +43,9 @@ const bot = () => (typeof sender === 'function' ? sender() : null);
 let sourceProvider = null; // fournie par server.js : () => [{ key, name, group, channels: [id…] }]
 function setSourceProvider(fn) { sourceProvider = typeof fn === 'function' ? fn : null; }
 function sources() { try { return sourceProvider ? (sourceProvider() || []) : []; } catch (_) { return []; } }
+// une source n'est suivie que si son rattrapage est exactement SOURCE_MAXR (3)
+const isFollowable = (s) => !!s && s.maxR !== null && s.maxR !== undefined && s.maxR !== '' && Number(s.maxR) === SOURCE_MAXR;
+function followableSources() { return sources().filter(isFollowable); }
 
 const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
 const isDone = (g) => !!g && g.finished && g.complete !== false;
@@ -75,7 +81,7 @@ function onOwnPost(chatId, text) {
     if ((panel.channels || []).some((c) => String(c).trim().toLowerCase() === chat)) return false; // jamais son propre canal d'envoi
     const ticked = Object.keys(panel.selected || {}).filter((k) => panel.selected[k]);
     if (!ticked.length) return false;
-    const src = sources().filter((s) => ticked.includes(s.key) && (s.channels || []).some((c) => String(c).trim().toLowerCase() === chat));
+    const src = followableSources().filter((s) => ticked.includes(s.key) && (s.channels || []).some((c) => String(c).trim().toLowerCase() === chat));
     if (!src.length) return false;
     const post = readPost(text);
     if (!post) return false;
@@ -237,10 +243,12 @@ async function test() {
 function status() {
   const st = statsOf(); const resolved = st.won + st.lost;
   const list = sources();
-  const known = new Set(list.map((s) => s.key));
+  const known = new Set(list.filter(isFollowable).map((s) => s.key));
   return {
     ...config(),
-    sources: list.map((s) => ({ key: s.key, name: s.name, group: s.group, channels: s.channels || [], selected: !!panel.selected[s.key] })),
+    sources: list.map((s) => ({ key: s.key, name: s.name, group: s.group, channels: s.channels || [], maxR: (s.maxR === null || s.maxR === undefined || s.maxR === '' ? null : Number(s.maxR)), followable: isFollowable(s), selected: !!panel.selected[s.key] })),
+    sourceMaxR: SOURCE_MAXR,
+    notFollowed: Object.keys(panel.selected).filter((k) => panel.selected[k] && list.some((s) => s.key === k && !isFollowable(s))).length,
     missingSelected: Object.keys(panel.selected).filter((k) => panel.selected[k] && !known.has(k)),
     channelNames: panel.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
     following: panel.watches.filter((e) => e.phase === 'verif').length,

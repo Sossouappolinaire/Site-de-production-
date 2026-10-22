@@ -1,4 +1,4 @@
-// formats.js — adaptateur entre le moteur du bot et les 77 formats de tg-formats.js
+// formats.js — adaptateur entre le moteur du bot et les 107 formats de tg-formats.js (8 à 86 : tg-formats-uniques.js)
 // Rôle :
 //   • normaliser le costume ('♦️' -> '♦') pour que les noms FR soient trouvés
 //   • nettoyer le texte (plus jamais de "\n" ou de "'n" visibles dans Telegram)

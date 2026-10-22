@@ -2133,6 +2133,25 @@ async function verifyLossRelaunchChannels(list) {
 // La liste cochable reprend l'« Organisation par canal » : chaque configuration avec les canaux où elle publie.
 // ---------------------------------------------------------------------------
 const PREV_SUIT_SKIP_KINDS = new Set(['game-stability', 'mirror', 'formation-strategy', 'game21', 'cards-category', 'copy-announce', 'loss-return', 'bet-best']);
+// Rattrapage (maxR) réellement réglé sur la source : « Costume N-1 → +4 » ne suit que celles à 3 rattrapages (voir prev-suit.js).
+// null = rattrapage inconnu (source sans réglage de rattrapage) → non suivie.
+function prevSuitMaxR(c) {
+  const num = (v) => (v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+  const byId = (list, id) => (Array.isArray(list) ? list : []).find((x) => x && String(x.id) === String(id));
+  try {
+    switch (c.kind) {
+      case 'strategy': { const def = strategies.LIST.find((d) => d.key === c.id); const st = (state.strategies || {})[c.id] || {}; const v = num(st.maxR); return v !== null ? v : num(def && def.defaults && def.defaults.maxR); }
+      case 'tracker': case 'slot': { const pn = CC_TRACKER_PANELS.find((x) => x[0] === c.panel); const t = pn && byId(pn[2].panel && pn[2].panel.trackers, c.id); return t ? num(t.maxR) : null; }
+      case 'best-weak': { const t = byId(bestWeakTop.panel && bestWeakTop.panel.configs, c.id); return t ? num(t.maxR) : null; }
+      case 'loss-return': { const t = byId(lossReturn.panel && lossReturn.panel.configs, c.id); return t ? num(t.maxR) : null; }
+      case 'loss-relaunch': { const t = byId(lossRelaunch.panel && lossRelaunch.panel.configs, c.id); return t ? num(t.maxR) : null; }
+      case 'bet-type': { const t = byId(betType.panel && betType.panel.trackers, c.id); return t ? num(t.maxR) : null; }
+      case 'module': { const m = CC_SIMPLE_MODULES.find((x) => x[0] === c.id); return m ? num((m[2].panel || {}).maxR) : null; }
+      case 'top-side': { const pn = [['dizaine-top', dizaineTop], ['costume-faible-top', costumeFaibleTop]].find((x) => x[0] === c.panel); const e = pn && pn[1].panel && pn[1].panel[c.id]; const v = e ? num(e.maxR) : null; return v !== null ? v : (pn ? num(pn[1].panel.maxR) : null); }
+      default: return null;
+    }
+  } catch (_) { return null; }
+}
 function prevSuitSources() {
   const byKey = new Map();
   let rows = [];
@@ -2144,7 +2163,7 @@ function prevSuitSources() {
       if (PREV_SUIT_SKIP_KINDS.has(c.kind)) continue;
       if (c.kind === 'module' && c.id === 'statistics') continue;
       const key = [c.kind, c.panel || '', c.id, c.mode || ''].join('|');
-      if (!byKey.has(key)) byKey.set(key, { key, name: c.name || String(c.id), group: c.group || 'Autres', channels: [] });
+      if (!byKey.has(key)) byKey.set(key, { key, name: c.name || String(c.id), group: c.group || 'Autres', channels: [], maxR: prevSuitMaxR(c) });
       const e = byKey.get(key);
       if (!e.channels.includes(String(r.id))) e.channels.push(String(r.id));
     }

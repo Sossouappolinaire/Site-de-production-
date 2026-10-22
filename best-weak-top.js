@@ -102,8 +102,8 @@ const RANK_LABELS = { 1: 'Le meilleur', 2: 'Le 2ᵉ meilleur', 3: 'Le 3ᵉ meill
 const DEFAULT_RANKS = [1, 4];
 const TEST_DEFAULT_RANKS = [1, 2]; // mode Test : le meilleur et le 2ᵉ meilleur par défaut
 const SUITS = ['♦️', '❤️', '♣️', '♠️'];
-const TRIGGER = { lossRun: 2, bigSteps: [2, 3], bigStepRun: 2, absenceGames: 13, offsets: [1, 5] };
-const TRIGGER_LABEL = `${TRIGGER.lossRun} pertes de suite · ${TRIGGER.bigStepRun}× rattrapage 2 ou 3 de suite · costume absent ${TRIGGER.absenceGames} jeux (+${TRIGGER.offsets.join(' et +')})`;
+const TRIGGER = { lossRun: 3, lossMaxR: 3, bigSteps: [2, 3], bigStepRun: 2, absenceGames: 13, offsets: [1, 5] }; // lossRun : pertes CONSÉCUTIVES avant l'envoi (3) · lossMaxR : seules les configurations suivies à 3 rattrapages comptent
+const TRIGGER_LABEL = `${TRIGGER.lossRun} pertes de suite (configuration à ${TRIGGER.lossMaxR} rattrapages) · ${TRIGGER.bigStepRun}× rattrapage 2 ou 3 de suite · costume absent ${TRIGGER.absenceGames} jeux (+${TRIGGER.offsets.join(' et +')})`;
 const CYCLE_ORDER = [1, 4, 2, 3]; // meilleur → plus faible → 2ᵉ → 3ᵉ → (retour au meilleur)
 const CYCLE_STAY_STEPS = [0, 1];  // ✅0️⃣ ou ✅1️⃣ : on reste sur la même configuration
 const TZ = process.env.RESET_TZ || 'Africa/Abidjan';
@@ -662,7 +662,7 @@ function ensureTrigDay() {
   return panel.trig;
 }
 // résultat d'une configuration (appelé par les stratégies à chaque prédiction vérifiée, hors relais)
-function recordResult(strategy, ref, field, step) {
+function recordResult(strategy, ref, field, step, maxR) {
   try {
     if (ref == null) return;
     // mode cycle : une fois les 4 passées, on attend qu'une des 4 configurations PERDE ; celle qui perd est suivie
@@ -693,12 +693,13 @@ function recordResult(strategy, ref, field, step) {
     const ts = ensureTrigDay();
     const key = `${strategy}:${ref}`;
     const list = (ts.results[key] = ts.results[key] || []);
-    list.push({ ok: field === 'wins', step: Number(step) || 0 });
+    list.push({ ok: field === 'wins', step: Number(step) || 0, maxR: Number(maxR) }); // maxR : rattrapages de la configuration suivie
     if (list.length > 6) list.shift();
-    const last = list.slice(-2);
+    const lastL = list.slice(-TRIGGER.lossRun);      // pertes consécutives (3) : un gain au milieu casse la série
+    const lastB = list.slice(-TRIGGER.bigStepRun);   // gains de suite au rattrapage 2 ou 3
     let reason = null;
-    if (last.length === 2 && last.every((r) => !r.ok)) reason = 'pertes';
-    else if (last.length === 2 && last.every((r) => r.ok && TRIGGER.bigSteps.includes(r.step))) reason = 'rattrapages';
+    if (lastL.length === TRIGGER.lossRun && lastL.every((r) => !r.ok && r.maxR === TRIGGER.lossMaxR)) reason = 'pertes'; // la configuration / stratégie suivie doit être à 3 rattrapages
+    else if (lastB.length === TRIGGER.bigStepRun && lastB.every((r) => r.ok && TRIGGER.bigSteps.includes(r.step))) reason = 'rattrapages';
     if (reason) ts.armed[key] = { reason, at: Date.now() }; else delete ts.armed[key];
     persist();
   } catch (e) { panel.lastError = e.message; }
