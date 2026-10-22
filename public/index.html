@@ -329,6 +329,7 @@
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
         <a href="#/test" data-nav="test">🧪 Test</a>
         <a href="#/loss-next" data-nav="loss-next">📉 Perte → 3ᵉ</a>
+        <a href="#/trigger" data-nav="trigger">⚡ Envoi sur déclencheur</a>
         <a href="#/relance" data-nav="relance">🔄 Relance</a>
         <a href="#/stability" data-nav="stability">🛡️ Stabilité</a>
         <a href="#/like-react" data-nav="like-react">J'aime</a>
@@ -611,6 +612,7 @@
         ${card('#/best-weak', '⚡', 'Meilleur + plus faible', `${((snapshot.bestWeakTop || {}).configs || []).length} configuration(s) · voir / modifier`)}
         ${card('#/test', '🧪', 'Test', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'test').length} configuration(s) · meilleur / 2ᵉ meilleur`)}
         ${card('#/loss-next', '📉', 'Perte → 3ᵉ prédiction', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'lossnext').length} configuration(s) · une perte → on envoie la 3ᵉ prédiction de celui qui a perdu`)}
+        ${card('#/trigger', '⚡', 'Envoi sur déclencheur', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'trigger').length} configuration(s) · ${(snapshot.bestWeakTop || {}).triggerLabel || '3 pertes de suite · costume absent 13 jeux'}`)}
         ${card('#/relance', '🔄', 'Relance', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'relance').length} configuration(s) · 1 à 3 costumes, relance à N+7`)}
         ${card('#/scan', '🔎', 'Détection auto', `${((snapshot.bestWeakTop || {}).detected || []).length} canal(aux) détecté(s) · ${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'scan').length} configuration(s)`)}
         ${card('#/best-weak', '👁️', 'Suivre des canaux', `${((snapshot.bestWeakTop || {}).configs || []).filter(c => c.mode === 'follow').length} configuration(s) · voir / modifier`)}
@@ -2053,12 +2055,12 @@ Faites-en bon usage !
     // -------------------------------------------------------------------
     // « Meilleur + plus faible » (voir best-weak-top.js) — 3 types de configuration :
     //   🎯 multi    : un message à 2-4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) avec leur pourcentage
-    //   ⚡ trigger  : prédiction simple sur déclencheur (2 pertes · 2× rattrapage 2/3 · costume absent 13 jeux → +1 et +5)
+    //   ⚡ trigger  : prédiction simple sur déclencheur (3 pertes de suite d'une configuration à 3 rattrapages · 2× rattrapage 2/3 · costume absent 13 jeux → +1 et +5)
     //   🔁 cycle    : on suit une configuration à la fois (meilleur → faible → 2ᵉ → 3ᵉ…), elle reste tant que ✅0️⃣/✅1️⃣
     // -------------------------------------------------------------------
     const BW_MODES = {
       multi: { icon: '🎯', title: 'Message à plusieurs costumes', sub: 'Un message avec 2 à 4 costumes (meilleur, 2ᵉ, 3ᵉ, plus faible) et leur pourcentage ; chaque costume garde son résultat (✅ ou ⏳ / ❌) dans le même message.' },
-      trigger: { icon: '⚡', title: 'Envoi sur déclencheur', sub: '2 pertes de suite · 2× rattrapage 2 ou 3 de suite · costume absent 13 jeux (prédit à +1 et +5).' },
+      trigger: { icon: '⚡', title: 'Envoi sur déclencheur', sub: '3 pertes de suite (configuration suivie à 3 rattrapages) · 2× rattrapage 2 ou 3 de suite · costume absent 13 jeux (prédit à +1 et +5).' },
       follow: { icon: '👁️', title: 'Suivi des canaux', sub: 'On coche les canaux qui reçoivent des messages à plusieurs costumes : le bot prédit le costume au meilleur taux et reste dessus tant qu’il gagne en ✅0️⃣/✅1️⃣ ; sinon il passe au 2ᵉ. Si un costume sort directement (✅0️⃣) sans l’autre, l’autre est prédit à N+2 ; si les deux sortent, on ignore.' },
       cycle: { icon: '🔁', title: 'Cycle meilleur / faible', sub: 'On suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣ ; au premier ✅2️⃣/✅3️⃣ ou ❌ on passe au plus faible, puis au 2ᵉ, puis au 3ᵉ. Les 4 passées, on attend qu’une des 4 perde : celle-ci est suivie.' },
       scan: { icon: '🔎', title: 'Détection auto des canaux', sub: 'Le bot trouve tout seul les canaux qui publient le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Tu en sélectionnes un puis tu règles le canal Telegram d’envoi, les rattrapages et le format. Surveillance : si le 1ᵉʳ costume sort directement (✅0️⃣), le 2ᵉ est prédit à N+2 — et inversement. Les deux sortis, ou aucun : rien n’est envoyé.' },
@@ -2071,18 +2073,18 @@ Faites-en bon usage !
     function bestWeakButtons(part) {
       const d = snapshot.bestWeakTop || {};
       const all = d.configs || [];
-      const list = all.filter(c => !['test', 'scan', 'relance', 'lossnext'].includes(bwModeOf(c))); // Test, Relance et Détection auto : listées dans leur propre bouton
+      const list = all.filter(c => !['test', 'scan', 'relance', 'lossnext', 'trigger'].includes(bwModeOf(c))); // Test, Relance et Détection auto : listées dans leur propre bouton
       const btn = (onclick, m, extra) => `<button class="strategy-button" onclick="${onclick}"><span class="eyebrow">${m.icon} Meilleur + plus faible</span><b>${esc(m.title)}</b><span>${esc(m.sub)}</span>${extra || ''}<em>Ouvrir →</em></button>`;
       const count = (mode) => all.filter(c => bwModeOf(c) === mode).length;
       const tag = (mode) => `<span class="strategy-stats"><span class="tag">${count(mode)} configuration(s)</span></span>`;
       const main = btn("location.hash='#/best-weak'", BW_MODES.multi, `<span class="strategy-stats"><span class="tag">${esc(list.length)} configuration(s)</span><span class="tag">${esc(d.sentCount || 0)} envoyée(s)</span></span>`);
       const cycle = btn("startBwWizard('cycle')", BW_MODES.cycle, tag('cycle'));
-      const trig = btn("startBwWizard('trigger')", BW_MODES.trigger, tag('trigger'));
+      const trig = btn("location.hash='#/trigger'", BW_MODES.trigger, tag('trigger'));
       const follow = btn("startBwWizard('follow')", BW_MODES.follow, tag('follow'));
       const test = btn("location.hash='#/test'", BW_MODES.test, tag('test'));
       const relance = btn("location.hash='#/relance'", BW_MODES.relance, tag('relance'));
       const scan = btn("location.hash='#/scan'", BW_MODES.scan, `<span class="strategy-stats"><span class="tag">${count('scan')} configuration(s)</span><span class="tag good">${esc((d.detected || []).length)} canal(aux) détecté(s)</span></span>`);
-      const cfgBtn = (c) => `<button class="strategy-button" onclick="location.hash='#/best-weak'">
+      const cfgBtn = (c) => `<button class="strategy-button" onclick="location.hash='${bwModeOf(c) === 'trigger' ? '#/trigger' : '#/best-weak'}'">
         <span class="eyebrow">${BW_MODES[bwModeOf(c)].icon} ${esc(BW_MODES[bwModeOf(c)].title)}${c.enabled ? '' : ' · en pause'}</span><b>${esc(c.name || c.strategyLabel)}</b><span>${esc(c.strategyLabel)} · Canal : ${esc((c.channelNames || []).join(', '))} · ${esc(c.maxR)} rattrapage(s)</span>
         <span class="strategy-stats"><span class="tag good">${esc(c.wins || 0)} gagné(s)</span><span class="tag bad">${esc(c.losses || 0)} perdu(s)</span></span>
         <em>Ouvrir la configuration →</em></button>`;
@@ -2112,6 +2114,31 @@ Faites-en bon usage !
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Meilleur + plus faible</span><h2 style="margin-top:7px">📉 Perte → 3ᵉ prédiction</h2>
         <p class="small">${esc(BW_MODES.lossnext.sub)} Une seule prédiction à la fois ; chaque prédiction est vérifiée avec le nombre de rattrapages choisi.</p></div>
         <div class="toolbar"><button class="button primary" onclick="startBwFlow('lossnext')">Créer</button><button class="button ghost" onclick="refresh().then(bwRerender)">Actualiser</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
+    }
+    // ⚡ « Envoi sur déclencheur » : 3 pertes de suite · 2× rattrapage 2 ou 3 de suite · costume absent 13 jeux (voir best-weak-top.js, mode « trigger »)
+    function triggerPage() {
+      setNav('trigger');
+      const p = snapshot.bestWeakTop || {};
+      const list = (p.configs || []).filter(c => bwModeOf(c) === 'trigger');
+      const rule = p.triggerLabel || BW_MODES.trigger.sub;
+      const cards = list.length ? list.map(c => {
+        const total = (Number(c.wins) || 0) + (Number(c.losses) || 0);
+        const rate = total ? Math.round((Number(c.wins) || 0) * 100 / total) : null;
+        return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
+          <span class="eyebrow">⚡ ${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}Envoi dans : ${esc((c.channelNames || []).join(', ') || 'Canal non nommé')}</h3>
+          <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s) · format ${esc(c.format || 1)} · ${esc(c.sentCount || 0)} envoyée(s) · <b class="good">${esc(c.wins || 0)}</b> gagnée(s) · <b class="bad">${esc(c.losses || 0)}</b> perdue(s)${rate === null ? '' : ` · taux ${rate}%`}</p>
+          <p class="small">Règle : ${esc(rule)}</p></div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleBestWeak('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="editBestWeakModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testBestWeak('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`;
+      }).join('') : '<div class="empty">Aucune configuration. Clique sur « Créer », choisis la stratégie (Dizaine ou Costume faible), puis le canal d’envoi, les rattrapages et le format.</div>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Meilleur + plus faible</span><h2 style="margin-top:7px">⚡ Envoi sur déclencheur</h2>
+        <p class="small">${esc(rule)}. Après <b>3 pertes consécutives</b> d’une des configurations suivies, sa prochaine prédiction est envoyée dans le canal ; un gain entre deux pertes casse la série. Les pertes ne comptent que si la configuration suivie est réglée sur <b>3 rattrapages</b>.</p></div>
+        <div class="toolbar"><button class="button primary" onclick="startBwFlow('trigger')">Créer</button><button class="button ghost" onclick="refresh().then(bwRerender)">Actualiser</button></div></div>
         ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
     }
@@ -2324,7 +2351,7 @@ Faites-en bon usage !
         ],
         tips: ['La liste complète des stratégies et leur règle est dans la section « Catalogue des stratégies » plus bas.'] },
       { g: 'ops', icon: '⚡', title: 'Meilleur + plus faible', hash: '#/best-weak',
-        what: 'Configurations qui s’appuient sur le classement du jour des stratégies « Dizaine » et « Costume faible ». Quatre types : message à plusieurs costumes, envoi sur déclencheur, cycle meilleur / faible, suivi de canaux.',
+        what: 'Configurations qui s’appuient sur le classement du jour des stratégies « Dizaine » et « Costume faible ». Types : message à plusieurs costumes, cycle meilleur / faible, suivi de canaux (l’envoi sur déclencheur a son propre bouton).',
         steps: [
           'Clique sur « Créer » et choisis le type de configuration.',
           'Choisis la stratégie (Dizaine ou Costume faible), puis les costumes ou les canaux à suivre selon le type.',
@@ -2333,7 +2360,7 @@ Faites-en bon usage !
         ],
         tips: [
           'Message à plusieurs costumes : un message avec 2 à 4 costumes et leur pourcentage ; seul le costume sorti reste. Chaque costume est vérifié séparément sur la main du joueur.',
-          'Envoi sur déclencheur : par exemple 2 pertes de suite, ou un costume absent 13 jeux.',
+          'Envoi sur déclencheur : 3 pertes de suite, ou un costume absent 13 jeux. Il a son propre bouton « ⚡ Envoi sur déclencheur ».',
           'Cycle : on suit le meilleur tant qu’il gagne en ✅0️⃣/✅1️⃣, puis on passe au suivant au premier ✅2️⃣/✅3️⃣ ou ❌.',
           'Les doublons (deux configurations identiques) sont bloqués. Test, Relance et Détection auto ont leur propre bouton.',
         ] },
@@ -2350,6 +2377,16 @@ Faites-en bon usage !
           'Une perte, c’est ❌ après tous les rattrapages. Un ✅ à un rattrapage compte comme gagné.',
           'Une seule prédiction à la fois : la suivante attend le résultat de la précédente.',
           'Il faut au moins 2 configurations classées aujourd’hui, sinon rien n’est envoyé.',
+        ] },
+      { g: 'ops', icon: '⚡', title: 'Envoi sur déclencheur', hash: '#/trigger',
+        what: 'Envoie une prédiction simple quand un déclencheur se produit : 3 pertes de suite d’une configuration à 3 rattrapages (sa prochaine prédiction est envoyée), 2 gains de suite au rattrapage 2 ou 3, ou un costume absent 13 jeux (prédit à +1 et +5).',
+        steps: [
+          'Ouvre « ⚡ Envoi sur déclencheur » et clique sur « Créer ».',
+          'Choisis la stratégie (Dizaine ou Costume faible), puis le canal d’envoi, les rattrapages et le format, et enregistre.',
+        ],
+        tips: [
+          'Les pertes doivent être consécutives : un gain entre deux pertes remet le compte à zéro.', 'Seules les configurations suivies (Dizaine / Costume faible) réglées sur 3 rattrapages comptent pour les 3 pertes ; avec un autre rattrapage, ce déclencheur ne part pas.',
+          'Sur chaque carte : Mettre en pause / Activer, Modifier, Envoyer un test, Supprimer.',
         ] },
       { g: 'ops', icon: '📉', title: 'Perte → 3ᵉ prédiction', hash: '#/loss-next',
         what: 'Suit les 4 meilleurs, des stratégies ou des canaux : dès qu’une source a perdu le nombre de fois réglé, on envoie sa Xᵉ prédiction (3ᵉ par défaut) ; puis on attend la perte d’une autre.',
@@ -2501,7 +2538,7 @@ Faites-en bon usage !
       { g: 'auto', icon: '⏮️', title: 'Costume N-1 → +4', hash: '#/prev-suit',
         what: 'Tu coches des stratégies / configurations de tout le site ; le bot observe leurs prédictions. Quand le costume prédit au jeu N est venu au jeu N-1 mais n’est pas sorti au jeu N, il prédit le même costume au jeu N+4 dans le canal (ID) choisi.',
         steps: ['Ouvre « Costume N-1 → +4 », coche les stratégies / configurations à observer.', 'Renseigne le canal d’envoi (ID), le décalage (+4 par défaut), les rattrapages et le format, coche « Activer » puis enregistre.'],
-        tips: ['Exemple : une configuration cochée prédit 12♦️ ; ♦️ est venu au jeu 11 et n’est pas sorti au jeu 12 → envoi de 16♦️.', 'Un canal peut servir plusieurs configurations : cocher l’une d’elles suit toutes les prédictions publiées dans ses canaux.'] },
+        tips: ['Seules les stratégies / configurations réglées sur 3 rattrapages sont suivies : une source avec un autre rattrapage est ignorée.', 'Exemple : une configuration cochée prédit 12♦️ ; ♦️ est venu au jeu 11 et n’est pas sorti au jeu 12 → envoi de 16♦️.', 'Un canal peut servir plusieurs configurations : cocher l’une d’elles suit toutes les prédictions publiées dans ses canaux.'] },
       { g: 'auto', icon: '👑', title: 'VIP', hash: '#/vip',
         what: 'Surveille ensemble toutes les stratégies de costumes et l’IA. Quand l’une enchaîne des pertes consécutives ou des prédictions consécutives du même costume, ses prochaines prédictions sont relayées dans le canal VIP.',
         steps: ['Ouvre « VIP » et coche « Formation ».', 'Règle le nombre de pertes consécutives, le nombre de prédictions relayées ensuite, les mêmes valeurs pour les répétitions de costume, et le canal VIP, puis enregistre.'] },
@@ -2621,7 +2658,7 @@ Faites-en bon usage !
       setNav('strategies');
       const p = snapshot.bestWeakTop || {};
       // « Test » et « Détection auto » ont leur propre page : leurs configurations ne sont pas répétées ici
-      const list = (p.configs || []).filter(c => !['test', 'scan', 'relance', 'lossnext'].includes(bwModeOf(c)));
+      const list = (p.configs || []).filter(c => !['test', 'scan', 'relance', 'lossnext', 'trigger'].includes(bwModeOf(c)));
       const cards = list.length ? list.map(c => { const m = bwModeOf(c); return `<div class="card" style="margin-bottom:12px"><div class="section-head"><div><span class="eyebrow">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)} · ${esc(c.strategyLabel)}${c.enabled ? '' : ' · en pause'}</span>
           <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}Envoi dans : ${esc((c.channelNames || []).join(', '))}</h3>
           <p class="small">${esc(c.ranksLabel || '')} · ${esc(c.maxR)} rattrapage(s)${m === 'multi' ? '' : ` · format ${esc(c.format || 1)}`} · ${esc(c.sentCount || 0)} message(s) envoyé(s) · <b class="good">${esc(c.wins || 0)}</b> gagné(s) · <b class="bad">${esc(c.losses || 0)}</b> perdu(s)${c.cycleLabel ? ` · <b>${esc(c.cycleLabel)}</b>` : ''}</p></div></div>
@@ -2631,7 +2668,7 @@ Faites-en bon usage !
           <button class="button small danger" onclick="removeBestWeak('${esc(c.id)}')">Supprimer</button></div></div>`; }).join('')
         : '<p class="small">Aucune configuration pour le moment. Clique sur « Créer ».</p>';
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">🎯 Meilleur + plus faible</h2>
-        <p class="small">Trois types de configuration pour les stratégies « Dizaine » et « Costume faible » : un message à plusieurs costumes, un envoi sur déclencheur, ou un cycle meilleur / faible. Les doublons sont bloqués : deux configurations identiques dans le même canal sont refusées, et une configuration n'envoie jamais deux fois la prédiction du même jeu${p.duplicatesBlocked ? ` (${esc(p.duplicatesBlocked)} doublon(s) de prédiction évité(s))` : ''}${p.duplicatesRemoved ? ` · ${esc(p.duplicatesRemoved)} configuration(s) en double fusionnée(s)` : ''}.</p>
+        <p class="small">Trois types de configuration pour les stratégies « Dizaine » et « Costume faible » : un message à plusieurs costumes, un cycle meilleur / faible ou le suivi de canaux. L'envoi sur déclencheur a son propre bouton. Les doublons sont bloqués : deux configurations identiques dans le même canal sont refusées, et une configuration n'envoie jamais deux fois la prédiction du même jeu${p.duplicatesBlocked ? ` (${esc(p.duplicatesBlocked)} doublon(s) de prédiction évité(s))` : ''}${p.duplicatesRemoved ? ` · ${esc(p.duplicatesRemoved)} configuration(s) en double fusionnée(s)` : ''}.</p>
         <div class="toolbar"><button class="button primary" onclick="chooseBwType()">Créer</button><button class="button ghost" onclick="reloadBestWeak()">Actualiser</button><button class="button ghost" onclick="location.hash='#/strategies'">← Stratégies</button></div></div>
         ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
         <section class="section"><div class="section-head"><div><span class="eyebrow">Configurations enregistrées</span><h2 style="margin-top:7px">${list.length} configuration(s)</h2></div></div>${cards}</section>`;
@@ -2677,7 +2714,7 @@ Faites-en bon usage !
     // « Créer » depuis la page : on choisit d'abord le type
     function chooseBwType() {
       openModal(`<div class="modal-head"><div><span class="eyebrow">Nouvelle configuration</span><h3 style="margin-top:8px">Quel type de configuration ?</h3></div></div>
-        <div style="display:grid;gap:10px;margin-top:10px">${['multi', 'trigger', 'cycle', 'follow'].map(m => `<button class="button primary" style="text-align:left" onclick="closeModal();startBwFlow('${m}')">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)}<br><small>${esc(BW_MODES[m].sub)}</small></button>`).join('')}</div>
+        <div style="display:grid;gap:10px;margin-top:10px">${['multi', 'cycle', 'follow'].map(m => `<button class="button primary" style="text-align:left" onclick="closeModal();startBwFlow('${m}')">${BW_MODES[m].icon} ${esc(BW_MODES[m].title)}<br><small>${esc(BW_MODES[m].sub)}</small></button>`).join('')}</div>
         <div class="modal-actions" style="margin-top:14px"><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
     }
     // assistant : confirmation → stratégie (celles qui utilisent meilleur et faible) → configuration → enregistrer
@@ -2767,7 +2804,7 @@ Faites-en bon usage !
         if (mode === 'lossnext') { body.name = val('bwNewName'); body.format = val('bwNewFormat'); body.lnKind = bwWizard.lnKind || 'rank'; if (body.lnKind === 'rank') body.ranks = readBestWeakRanks('bwNew'); else body.lnSources = bwWizard.lnSources; body.lnNth = val('bwNewLnNth'); body.lnLosses = val('bwNewLnLosses'); } else if (mode === 'multi') body.ranks = readBestWeakRanks('bwNew'); else if (mode === 'relance') { body.name = val('bwNewName'); body.ranks = readBestWeakRanks('bwNew', 'relance'); Object.assign(body, readBwRelance('bwNew')); } else { body.name = val('bwNewName'); body.format = val('bwNewFormat'); if (mode === 'test') { body.ranks = readBestWeakRanks('bwNew'); body.lossGate = !!$('#bwNewLossGate')?.checked; } }
         if (mode === 'follow' || mode === 'scan') body.sources = bwWizard.sources;
         await api('/api/best-weak/configs', 'POST', body);
-        closeModal(); await refresh(); if (location.hash === '#/loss-next') lossNextPage(); else if (location.hash === '#/best-weak') bestWeakPage(); else if (location.hash === '#/scan') scanPage(); else if (location.hash === '#/relance') relancePage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
+        closeModal(); await refresh(); if (location.hash === '#/loss-next') lossNextPage(); else if (location.hash === '#/trigger') triggerPage(); else if (location.hash === '#/best-weak') bestWeakPage(); else if (location.hash === '#/scan') scanPage(); else if (location.hash === '#/relance') relancePage(); else if (typeof route === 'function') route(); toast('Configuration enregistrée.');
       } catch (e) { toast(e.message, 'error'); }
     }
     function editBestWeakModal(id) {
@@ -2794,7 +2831,7 @@ Faites-en bon usage !
       } catch (e) { toast(e.message, 'error'); }
     }
     // ré-affiche la page courante (Meilleur + faible, Test ou Détection auto)
-    function bwRerender() { if (location.hash === '#/scan') return scanPage(); if (location.hash === '#/test') return testCyclePage(); if (location.hash === '#/loss-next') return lossNextPage(); if (location.hash === '#/relance') return relancePage(); return bestWeakPage(); }
+    function bwRerender() { if (location.hash === '#/scan') return scanPage(); if (location.hash === '#/test') return testCyclePage(); if (location.hash === '#/loss-next') return lossNextPage(); if (location.hash === '#/trigger') return triggerPage(); if (location.hash === '#/relance') return relancePage(); return bestWeakPage(); }
     // 📉 « Retour après perte » : suit un canal, vérifie le rattrapage configuré, mesure quand le costume perdu revient (N+D),
     // le taux du miroir et de l'inverse, et envoie le rapport vers un autre canal (voir loss-return.js)
     function lrSuitBlock(x) {
@@ -4187,7 +4224,7 @@ Faites-en bon usage !
       const statusBadge = (s) => s === 'gagné' ? '✅ gagné' : s === 'perdu' ? '❌ perdu' : s === 'en attente' ? '⏳ envoyé' : '🚫 annulé';
       const groupHtml = Object.keys(groups).map((g) => `<details style="margin-top:8px" ${groups[g].some((x) => x.selected) ? 'open' : ''}><summary><b>${esc(g)}</b> <span class="small muted">— ${groups[g].filter((x) => x.selected).length}/${groups[g].length} cochée(s)</span></summary>
           <div style="margin:6px 0 4px 10px"><button class="button small ghost" onclick="prevSuitToggleGroup(${esc(JSON.stringify(g))}, true)">Tout cocher</button> <button class="button small ghost" onclick="prevSuitToggleGroup(${esc(JSON.stringify(g))}, false)">Tout décocher</button></div>
-          ${groups[g].map((x) => `<label class="check" style="display:block;margin-top:4px"><input type="checkbox" class="psSrc" data-group="${esc(g)}" data-key="${esc(x.key)}" ${x.selected ? 'checked' : ''}> ${esc(x.name)} <span class="small muted">— ${esc((x.channels || []).join(', '))}</span></label>`).join('')}
+          ${groups[g].map((x) => `<label class="check" style="display:block;margin-top:4px;${x.followable ? '' : 'opacity:.5'}"><input type="checkbox" class="psSrc" data-group="${esc(g)}" data-key="${esc(x.key)}" ${x.selected && x.followable ? 'checked' : ''} ${x.followable ? '' : 'disabled'}> ${esc(x.name)} <span class="small muted">— ${esc((x.channels || []).join(', '))} — ${x.followable ? 'rattrapage 3 ✅' : (x.maxR === null || x.maxR === undefined ? 'rattrapage inconnu ⛔ non suivi' : 'rattrapage ' + x.maxR + ' ⛔ non suivi')}</span></label>`).join('')}
         </details>`).join('');
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Observation</span><h2 style="margin-top:7px">⏮️ Costume N-1 → +4</h2><p class="small">Coche des stratégies / configurations du site : le bot observe leurs prédictions. Si le costume prédit au jeu <b>N</b> est <b>venu au jeu N-1</b> (main du joueur) et <b>n'est pas sorti au jeu N</b>, il prédit le même costume au jeu <b>N+4</b> (décalage réglable) dans le canal choisi. Ex. : 12♦️ prédit, ♦️ venu au 11, absent au 12 → <b>16♦️</b>.</p></div></div>
         <div class="grid two">
@@ -4205,7 +4242,7 @@ Faites-en bon usage !
           </div>
           <div class="card">
             <h3>Stratégies / configurations à observer</h3>
-            <p class="small">Un canal peut servir plusieurs configurations : cocher l'une d'elles suit toutes les prédictions publiées dans ses canaux. Le canal d'envoi n'est jamais observé.</p>
+            <p class="small">Seules les stratégies / configurations réglées sur <b>${p.sourceMaxR ?? 3} rattrapages</b> sont suivies ; les autres sont grisées. Un canal peut servir plusieurs configurations : cocher l'une d'elles suit toutes les prédictions publiées dans ses canaux. Le canal d'envoi n'est jamais observé.</p>
             ${groupHtml || '<p class="small">Aucune stratégie ni configuration avec un canal pour le moment : renseigne d’abord un canal dans une stratégie.</p>'}
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="savePrevSuit()">Enregistrer</button></div>
           </div>
@@ -6033,6 +6070,7 @@ Faites-en bon usage !
         else if (h === '#/best-weak') bestWeakPage();
         else if (h === '#/test') testCyclePage();
         else if (h === '#/loss-next') lossNextPage();
+        else if (h === '#/trigger') triggerPage();
         else if (h === '#/relance') relancePage();
         else if (h === '#/stability') await stabilityPage();
         else if (h === '#/scan') scanPage();
