@@ -130,6 +130,11 @@ function setStrategyConfig(key, patch = {}) {
   if (patch.maxR !== undefined) next.maxR = Math.max(0, Math.min(9, parseInt(patch.maxR, 10) || 0));
   if (patch.b !== undefined) next.b = Math.max(0, parseInt(patch.b, 10) || 0);
   if (patch.lead !== undefined) next.lead = Math.max(1, Math.min(20, parseInt(patch.lead, 10) || 1));
+  // stratégie « Fin de numéro → costume opposé » : seuil en % et échantillon minimum
+  if (key === 'finNumero') {
+    if (patch.pctMin !== undefined) next.pctMin = Math.max(1, Math.min(100, Math.round(Number(patch.pctMin)) || 60));
+    if (patch.minN !== undefined) next.minN = Math.max(1, Math.min(5000, parseInt(patch.minN, 10) || 30));
+  }
   // paramètres de la stratégie Pair / Impair (VAR)
   if (patch.startGame !== undefined) next.startGame = Math.max(1, parseInt(patch.startGame, 10) || 1);
   if (patch.varStep !== undefined) next.varStep = Math.max(0, Math.min(99, parseInt(patch.varStep, 10) || 0));

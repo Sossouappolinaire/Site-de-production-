@@ -1082,7 +1082,7 @@ async function comboHook(tracker, syn) {
   const pctOf = (key) => { const r = ranked.find((x) => x.c.key === key); return r ? r.rate * 100 : null; };
   const rank = bwRankOfRef(myKey); // 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
   const testRank = bwTestRankOfRef(myKey);
-  if (rank || testRank) await bw.record('costumeFaible', rank, { target: syn.target, suit: syn.suit, ref: myKey, pct: pctOf(myKey), testRank });
+  if (rank || testRank) await bw.record('costumeFaible', rank, { target: syn.target, suit: syn.suit, ref: myKey, pct: pctOf(myKey), testRank, name: (ranked.find((x) => x.c.key === myKey) || { c: {} }).c.name || tracker.name || null });
 }
 
 async function send(tracker, syn) {
@@ -1196,7 +1196,7 @@ function bumpScore(trackerId, field, step = 0) {
 // score d'une prédiction vérifiée. Prédiction d'un canal (slot) : le score va au canal lui-même
 // (chaque canal est une stratégie séparée dans le bilan et pour le choix du meilleur).
 function bumpEntry(entry, field, step = 0) {
-  if (!entry.mirror) { try { require('./best-weak-top').recordResult('costumeFaible', (entry.slot !== undefined ? `${entry.trackerId}#${entry.slot}` : entry.trackerId), field, step, entry.maxR); } catch (_) { /* jamais bloquant */ } }
+  if (!entry.mirror) { try { require('./best-weak-top').recordResult('costumeFaible', (entry.slot !== undefined ? `${entry.trackerId}#${entry.slot}` : entry.trackerId), field, step, entry.maxR, entry.target); } catch (_) { /* jamais bloquant */ } }
   if (entry.mirror) {
     // relais vers le canal des meilleures : jamais compté dans les scores des canaux,
     // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)

@@ -1094,17 +1094,46 @@
   "bestWeakTop": {
     "configs": [
       {
-        "id": "t1",
-        "enabled": true,
+        "id": "bw-1792737970600-jys3",
+        "mode": "lossnext",
+        "name": "Perte3",
         "strategy": "dizaine",
-        "mode": "trigger",
         "channels": [
-          "-100"
+          -100999
         ],
+        "sources": [],
+        "rot": {},
+        "maxR": 3,
+        "format": 1,
         "ranks": [
           1,
+          2,
+          3,
           4
-        ]
+        ],
+        "cycleRole": 1,
+        "cycleWaiting": false,
+        "cycleDone": [],
+        "enabled": true,
+        "sentCount": 0,
+        "wins": 0,
+        "losses": 0,
+        "lastSentAt": null,
+        "lossGate": false,
+        "gateFrom": null,
+        "lnKind": "rank",
+        "lnSources": [],
+        "lnNth": 3,
+        "lnSkip": 2,
+        "lnLosses": 1,
+        "lnStreak": {},
+        "lnPhase": "count",
+        "lnFollow": "rank:4",
+        "lnLeft": 2,
+        "lnLast": null,
+        "lnCounted": 0,
+        "lnSeen": [],
+        "lnBase": {}
       }
     ],
     "pending": [],
@@ -1112,27 +1141,9 @@
     "watch": [],
     "detected": {},
     "trig": {
-      "day": "2026-10-22",
-      "results": {
-        "dizaine:r1": [
-          {
-            "ok": true,
-            "step": 2,
-            "maxR": 2
-          },
-          {
-            "ok": true,
-            "step": 2,
-            "maxR": 2
-          }
-        ]
-      },
-      "armed": {
-        "dizaine:r1": {
-          "reason": "rattrapages",
-          "at": 1792651300150
-        }
-      },
+      "day": "2026-10-23",
+      "results": {},
+      "armed": {},
       "absenceFired": {}
     },
     "duplicatesRemoved": 0,

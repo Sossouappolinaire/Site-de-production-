@@ -50,6 +50,9 @@ const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const gameStability = require('./game-stability');
+const absenceAlert = require('./absence-alert');
+const channelAdmin = require('./channel-admin');
+const channelLossGate = require('./channel-loss-gate');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
 const betType = require('./bet-type');
@@ -416,6 +419,8 @@ app.get('/api/state', async (req, res) => {
     lossRelaunch: lossRelaunchView(),
     prevSuit: prevSuitView(),
     gameStability: gameStability.status(),
+    absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
+    channelLossGate: (() => { const x = channelLossGate.status(); return { enabled: x.enabled, rows: x.rows, today: x.today }; })(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
@@ -2287,6 +2292,63 @@ app.post('/api/stability/threshold', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/stability/release', (req, res) => { gameStability.releaseBlock(); res.json(gameStability.status()); });
+
+// « Alerte absence de costume » (voir absence-alert.js) : alerte dans le chat privé de l'admin quand un costume est absent N jeux de suite
+app.get('/api/absence-alert', (req, res) => res.json(absenceAlert.status()));
+app.post('/api/absence-alert/config', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.threshold !== undefined) absenceAlert.setThreshold(b.threshold);
+    if (b.sides && typeof b.sides === 'object') absenceAlert.setSides(b.sides);
+    if (b.repeat !== undefined) absenceAlert.setRepeat(b.repeat);
+    if (b.enabled !== undefined) absenceAlert.setEnabled(b.enabled);
+    res.json(absenceAlert.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/absence-alert/test', async (req, res) => {
+  const r = await absenceAlert.testAlert();
+  res.status(r.ok ? 200 : 400).json({ ...r, ...absenceAlert.status() });
+});
+
+// « Envoi après perte » par canal (voir channel-loss-gate.js) : planning jour par jour, lu dans la feuille « PlanningEnvoi » de l'Excel
+app.get('/api/channel-loss-gate', (req, res) => res.json({ ...channelLossGate.status(), channelList: configuredChannelList() }));
+app.post('/api/channel-loss-gate/config', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.defaultMode !== undefined) channelLossGate.setDefaultMode(b.defaultMode);
+    if (b.enabled !== undefined) channelLossGate.setEnabled(b.enabled);
+    res.json({ ...channelLossGate.status(), channelList: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/channel-loss-gate/plan', (req, res) => { // ajoute ou remplace des lignes { date, channel, mode } (la dernière ligne gagne pour une même date + canal)
+  try {
+    const rows = Array.isArray(req.body && req.body.rows) ? req.body.rows : [];
+    if (!channelLossGate.cleanPlan(rows).length) return res.status(400).json({ error: 'Aucune ligne valide : renseigne une date, un canal et un mode (Libre ou Après perte).' });
+    channelLossGate.addRows(rows);
+    res.json({ ...channelLossGate.status(), channelList: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/channel-loss-gate/plan', (req, res) => {
+  const b = req.body || {};
+  if (b.all === true) channelLossGate.setPlan([]); else channelLossGate.removeRow(b.date, b.channel);
+  res.json({ ...channelLossGate.status(), channelList: configuredChannelList() });
+});
+app.post('/api/channel-loss-gate/release', (req, res) => { channelLossGate.release(req.body && req.body.channel); res.json({ ...channelLossGate.status(), channelList: configuredChannelList() }); });
+app.get('/api/channel-loss-gate/planning.xlsx', (req, res) => { // classeur « planning seul » à remplir
+  try {
+    const buf = require('./data-transfer').planningBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="planning-envoi-apres-perte.xlsx"');
+    res.send(buf);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/channel-loss-gate/import', express.raw({ type: () => true, limit: '5mb' }), (req, res) => { // envoi du classeur rempli (corps brut .xlsx)
+  try {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Fichier .xlsx manquant.' });
+    const r = require('./data-transfer').importPlanningBuffer(req.body);
+    res.json({ ...r, ...channelLossGate.status(), channelList: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.post('/api/best-weak/configs/:id/test', async (req, res) => {
   const r = await bestWeakTop.test(req.params.id);
   res.status(r.ok ? 200 : 400).json(r);
@@ -2959,7 +3021,7 @@ app.get('/api/diagnostics/channel-configs/:id', (req, res) => {
   if (!id) return res.status(400).json({ error: 'Identifiant de canal manquant' });
   res.json({ id, configs: channelConfigsFor(id) });
 });
-app.put('/api/diagnostics/channel-configs', async (req, res) => {
+const putChannelConfigs = async (req, res) => {
   try {
     const b = req.body || {};
     const patch = {};
@@ -3042,8 +3104,9 @@ app.put('/api/diagnostics/channel-configs', async (req, res) => {
     } else return res.status(400).json({ error: 'Type de configuration inconnu' });
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
-});
-app.delete('/api/diagnostics/channel-configs', (req, res) => {
+};
+app.put('/api/diagnostics/channel-configs', putChannelConfigs);
+const deleteChannelConfigs = (req, res) => {
   try {
     const { kind, panel: panelId, id } = req.query || {};
     if (kind === 'strategy') return res.status(400).json({ error: 'Une stratégie intégrée ne se supprime pas : retire-lui ce canal, ou mets-la en pause.' });
@@ -3060,6 +3123,22 @@ app.delete('/api/diagnostics/channel-configs', (req, res) => {
     else return res.status(400).json({ error: 'Type de configuration inconnu' });
     res.json({ ok: true });
   } catch (e) { res.status(400).json({ error: e.message }); }
+};
+app.delete('/api/diagnostics/channel-configs', deleteChannelConfigs);
+// commande Telegram /envois (channel-admin.js) : mêmes fonctions que la page « Envois → Organisation par canal »
+function invokeHandler(handler, req) {
+  return new Promise((resolve) => {
+    let status = 200;
+    const res = { status(c) { status = c; return res; }, json(b) { resolve({ status, body: b }); return res; } };
+    Promise.resolve(handler(req, res)).catch((e) => resolve({ status: 500, body: { error: e.message } }));
+  });
+}
+channelAdmin.setProvider({
+  channels: () => configuredChannelList(),
+  configs: (id) => channelConfigsFor(String(id)),
+  update: (body) => invokeHandler(putChannelConfigs, { body }),
+  remove: (query) => invokeHandler(deleteChannelConfigs, { query }),
+  resolve: (raw) => resolveChat(raw),
 });
 function parseChannelList(v) { return lossReturn.parseChannels(v); }
 

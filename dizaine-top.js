@@ -1024,7 +1024,7 @@ async function comboHook(tracker, syn) {
   const pctOf = (t) => { const r = ranked.find((x) => x.t.id === t.id); return r ? r.rate * 100 : null; };
   const rank = bwRankOfRef(tracker.id); // 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
   const testRank = bwTestRankOfRef(tracker.id);
-  if (rank || testRank) await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker), testRank });
+  if (rank || testRank) await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker), testRank, name: tracker.name });
 }
 
 async function send(tracker, syn) {
@@ -1119,7 +1119,7 @@ function editPending(entry, statusFr) {
 // relais vers le canal des meilleures : jamais compté dans les scores des configurations,
 // mais il alimente le récapitulatif de CE canal (All games / Won / Lost)
 function bumpEntry(entry, field, step = 0) {
-  if (!entry.mirror) { try { require('./best-weak-top').recordResult('dizaine', entry.trackerId, field, step, entry.maxR); } catch (_) { /* jamais bloquant */ } }
+  if (!entry.mirror) { try { require('./best-weak-top').recordResult('dizaine', entry.trackerId, field, step, entry.maxR, entry.target); } catch (_) { /* jamais bloquant */ } }
   if (entry.mirror) {
     if (entry.best) {
       rollBestDay();

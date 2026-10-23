@@ -28,6 +28,9 @@ const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
+const channelAdmin = require('./channel-admin'); // commande /envois (chat privé de l'admin)
+const absenceAlert = require('./absence-alert'); // « Alerte absence de costume » (chat privé de l'admin)
+const channelLossGate = require('./channel-loss-gate'); // « Envoi après perte » par canal, planifié dans l'Excel
 const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
@@ -194,6 +197,7 @@ const HELP =
   '/reglages — réglages actuels\n\n' +
   '*Canaux*\n' +
   '/canaux — canaux où je suis admin\n' +
+  '/envois [nom] — stratégies et configurations liées à un canal : voir, activer, pause, supprimer, renommer, changer de canal\n' +
   '/activer <id> — activer les prédictions\n' +
   '/jaime — canaux qui reçoivent les réactions automatiques (👍 🔥 ❤ 🍾)\n' +
   '/jaime test <id> — tester les réactions (tous les canaux cochés si pas d\'id)\n' +
@@ -360,6 +364,10 @@ function installChannelGuard(inst) {
   const doSend = function guardedSend(chatId, rest, fromQueue) {
     if (predictionControl.isChannelPaused(chatId) || gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
+    }
+    // « Envoi après perte » par canal (channel-loss-gate.js) : planning de l'Excel ; une prédiction est retenue tant qu'aucune perte n'a eu lieu dans le canal
+    if (!fromQueue && channelLossGate.shouldBlock(chatId, rest[0])) {
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, gated: true });
     }
     if (!fromQueue && isRecentDuplicate(chatId, rest[0])) { // même message, même canal, quelques secondes plus tôt
       state.dupSkipped = (state.dupSkipped || 0) + 1;
@@ -638,6 +646,24 @@ function wire(b) {
         await b.editMessageText(r.text, { chat_id: q.message.chat.id, message_id: q.message.message_id, reply_markup: r.markup || { inline_keyboard: [] } }).catch(() => {});
       }
     } catch (_) { /* un bouton ne doit jamais faire tomber le bot */ }
+  });
+
+  // /envois [nom|id] : les « Envois » dans le chat privé — stratégies et configurations liées à un canal, avec modification / suppression (channel-admin.js)
+  b.onText(/^\/(?:envois|liens)(?:@\w+)?(?:\s+([\s\S]+))?\s*$/i, (msg, m) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    if (msg.chat && msg.chat.type && msg.chat.type !== 'private') return; // jamais dans un canal : la liste des configurations reste dans le chat privé
+    channelAdmin.open(b, msg.chat.id, (m && m[1]) || '').catch((e) => b.sendMessage(msg.chat.id, `❌ ${e.message}`).catch(() => {}));
+  });
+  b.on('callback_query', async (q) => {
+    try {
+      if (!String((q && q.data) || '').startsWith('cad:')) return;
+      if (!q.from || q.from.id !== Number(state.adminId)) { b.answerCallbackQuery(q.id, { text: 'Réservé à l\'administrateur' }).catch(() => {}); return; }
+      await channelAdmin.handleCallback(b, q);
+    } catch (_) { /* un bouton ne doit jamais faire tomber le bot */ }
+  });
+  b.on('message', (msg) => { // réponse texte attendue après « Renommer » / « Changer de canal »
+    if (!msg || !msg.text || msg.text.startsWith('/') || !isAdmin(msg) || (msg.chat && msg.chat.type && msg.chat.type !== 'private')) return;
+    channelAdmin.handleText(b, msg).catch(() => {});
   });
 
   b.onText(/^\/canaux/, (msg) => {
@@ -1909,6 +1935,10 @@ async function sendPrediction(pred, sender, ids) {
     }
     try {
       const m = await sender.sendMessage(id, text, parse_mode ? { parse_mode } : {});
+      if (m && m.gated) { // retenue par « Envoi après perte » : ni publiée, ni comptée ; on garde seulement le canal pour suivre son résultat
+        (pred.gatedChannels = pred.gatedChannels || []).push(id);
+        continue;
+      }
       pred.messages.push({ chatId: id, messageId: m.message_id });
       countSent(pred.strategy);
     } catch (e) {
@@ -1919,6 +1949,8 @@ async function sendPrediction(pred, sender, ids) {
 
 async function updateResult(pred) {
   if (db.ready) db.closePrediction(pred);
+  // « Envoi après perte » par canal : le résultat (gagné / perdu) de chaque prédiction, envoyée OU retenue, alimente le canal
+  try { for (const id of [...new Set([...(pred.messages || []).map((m) => m.chatId), ...(pred.gatedChannels || [])])]) channelLossGate.recordResult(id, pred.status); } catch (_) { /* suivi seulement */ }
   const sender = senderFor();
   if (!sender) return;
   const { text, parse_mode } = predictionText(pred);
@@ -2342,6 +2374,8 @@ async function applyDbConfigs() {
   await lossRelaunch.restoreFromDb();
   await prevSuit.restoreFromDb();
   await gameStability.restoreFromDb();
+  await absenceAlert.restoreFromDb();
+  await channelLossGate.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
   await strategyRecap.restoreFromDb();
@@ -2426,6 +2460,10 @@ async function startLoop() {
   gameStability.restore();
   gameStability.setSender(senderFor);
   gameStability.setAdminId(() => state.adminId);
+  absenceAlert.restore();
+  absenceAlert.setSender(senderFor);
+  absenceAlert.setAdminId(() => state.adminId);
+  channelLossGate.restore();
   costumeFaibleTop.restore();
   midnightReset.restore();
   midnightReset.setSender(senderFor);
@@ -2517,6 +2555,7 @@ async function startLoop() {
     mirrorCounter.bump(round);
     mirrorCounter.publish(round.number).catch((e) => console.error('Compteur (Taux Miroir) :', e.message));
     parityCounter.onFinished(round).catch((e) => console.error('Compte parité :', e.message));
+    absenceAlert.onFinished(round).catch((e) => console.error('Alerte absence :', e.message));
   });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.

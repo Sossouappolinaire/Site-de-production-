@@ -75,7 +75,10 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `draw-two-three.js` — nouvelle stratégie « Nul / 2-3 » (demande admin).
 - `victoire-vb.js` — stratégie « Victoire V1 / V2 » (demande admin) : V1 = victoire du joueur, V2 = victoire du banquier, un seul message à deux côtés, attente de l'autre puis relance à N+3, déclencheurs trouvés et appliqués par l'analyse.
 - `parity-counter.js` — « Compte parité » (bouton de l'accueil) : fin du numéro de jeu 0-9 rangée selon la parité du point du joueur / banquier (blocs pair et impair), un message par côté, reset périodique.
-- `end-digit.js` — « Analyse fin de numéro » : costume le plus fréquent par chiffre final du numéro de jeu (0-9), joueur et banquier.
+- `end-digit.js` — « Analyse fin de numéro » (+ cache synchrone `cached()` utilisé par la stratégie `finNumero` de `strategies.js`) : costume le plus fréquent par chiffre final du numéro de jeu (0-9), joueur et banquier.
+- `absence-alert.js` — « Alerte absence » : message dans le chat privé de l'admin quand un costume est absent N jeux de suite (15 par défaut) ; branché dans `setOnFinished` (bot.js).
+- `channel-loss-gate.js` — « Envoi après perte » par canal, planifié jour par jour dans la feuille `PlanningEnvoi` de l'Excel (Date | Canal | Mode) ; branché dans `installChannelGuard` (bot.js) et alimenté par `updateResult`.
+- `channel-admin.js` — commande `/envois [nom]` (chat privé de l'admin) : stratégies et configurations liées à un canal, avec activer / pause / supprimer / renommer / changer de canal ; utilise les mêmes fonctions que « Envois » (fournies par `server.js`).
 - `slow-mode.js` — « Ralentisseur » : retient une prédiction jusqu'au début du jeu précédent ; branché dans `installChannelGuard` (bot.js), donc valable pour toutes les stratégies.
 - `statistics.js` — nouveau bouton « Statistiques » (demande admin) : ce
 

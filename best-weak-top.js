@@ -154,9 +154,18 @@ function setTestRankProvider(strategy, fn) { if (typeof fn === 'function') testR
 function loadLossNext(c) {
   c = c || {};
   const kind = c.lnKind === 'strategy' || c.lnKind === 'channel' ? c.lnKind : 'rank';
-  const phase = c.lnPhase === 'count' ? 'count' : 'idle';
   const key = (v) => { const t = String(v == null ? '' : v).trim(); return /^\d$/.test(t) ? `rank:${t}` : t; };
   const nth = c.lnNth !== undefined && c.lnNth !== null ? sanitizeLnNth(c.lnNth) : sanitizeLnSkip(c.lnSkip) + 1;
+  // FILE D'ATTENTE : chaque source qui a perdu y est gardée en mémoire (plusieurs à la fois) ; chacune attend SA Xᵉ prédiction
+  let queue = Array.isArray(c.lnQueue) ? c.lnQueue : [];
+  if (!queue.length && c.lnPhase === 'count' && c.lnFollow != null) { // ancienne sauvegarde : un seul suivi → repris tel quel
+    queue = [{ key: key(c.lnFollow), ref: c.lnFollowRef != null && c.lnFollowRef !== '' ? String(c.lnFollowRef) : null, left: Number(c.lnLeft) || 0, counted: Number(c.lnCounted) || 0 }];
+  }
+  queue = queue.filter((e) => e && e.key != null).slice(0, 12).map((e) => ({
+    id: lnId(key(e.key), e.ref), key: key(e.key), ref: e.ref != null && e.ref !== '' ? String(e.ref) : null,
+    name: e.name ? String(e.name).slice(0, 80) : null, left: Math.max(0, Number(e.left) || 0), counted: Number.isFinite(Number(e.counted)) ? Number(e.counted) : 0, at: Number(e.at) || 0,
+  }));
+  const head = queue[0] || null;
   return {
     lnKind: kind,
     lnSources: kind === 'rank' ? [] : [...new Set((Array.isArray(c.lnSources) ? c.lnSources : String(c.lnSources || '').split(/[\s,;]+/)).map((x) => String(x).trim()).filter(Boolean))],
@@ -164,51 +173,90 @@ function loadLossNext(c) {
     lnSkip: nth - 1,                                                  // = prédictions laissées passer
     lnLosses: sanitizeLnLosses(c.lnLosses),                           // pertes de suite avant de déclencher
     lnStreak: c.lnStreak && typeof c.lnStreak === 'object' ? c.lnStreak : {},
-    lnPhase: phase,                                                   // idle : on attend · count : on suit une source
-    lnFollow: phase === 'count' && c.lnFollow != null ? key(c.lnFollow) : null,
-    lnLeft: phase === 'count' ? Math.max(0, Number(c.lnLeft) || 0) : 0, // prédictions encore à laisser passer
-    lnLast: c.lnLast != null && c.lnLast !== '' ? key(c.lnLast) : null, // dernière source envoyée (ignorée jusqu'à la perte d'une autre)
-    lnCounted: Number.isFinite(Number(c.lnCounted)) ? Number(c.lnCounted) : 0, // dernier jeu cible déjà compté (anti-doublon)
+    lnQueue: queue,                                                   // sources perdantes en attente de leur prédiction à envoyer (ordre d'arrivée)
+    lnPhase: queue.length ? 'count' : 'idle',                         // compat. affichage : count = au moins un suivi en cours
+    lnFollow: head ? head.key : null,
+    lnFollowRef: head ? head.ref : null,
+    lnLeft: head ? head.left : 0,
+    lnLast: c.lnLast != null && c.lnLast !== '' ? String(c.lnLast) : null, // dernière source envoyée (ignorée jusqu'à la perte d'une autre)
+    lnCounted: head ? head.counted : 0,
     lnSeen: Array.isArray(c.lnSeen) ? c.lnSeen.slice(-600) : [],      // sources non « rank » : prédictions/résultats déjà lus
     lnBase: c.lnBase && typeof c.lnBase === 'object' ? c.lnBase : {}, // sources non « rank » : historique déjà passé au moment de l'ajout
   };
 }
+// identité d'une source suivie : la CONFIGURATION (ref) quand elle est connue, sinon la clé de la source
+const lnId = (key, ref) => (ref != null && ref !== '' ? `ref:${ref}` : `key:${key}`);
 const lnKindOf = (c) => (c && (c.lnKind === 'strategy' || c.lnKind === 'channel') ? c.lnKind : 'rank');
 const lossNextBusy = new Set();
 const rankKey = (r) => `rank:${r}`;
+// Règle : dès qu'une source a perdu N fois de suite (un gain remet son compte à zéro), elle entre dans la FILE D'ATTENTE. Plusieurs
+// sources peuvent y être en même temps : chacune garde son propre compte et on attend, pour chacune, SA Xᵉ prédiction (X-1 laissées passer,
+// la Xᵉ envoyée telle quelle dans le canal). Une fois envoyée, la source sort de la file et on attend patiemment sa prochaine perte.
+const lnSync = (cfg) => { // garde les champs d'affichage alignés sur la file
+  const q = cfg.lnQueue || [];
+  const h = q[0] || null;
+  cfg.lnPhase = q.length ? 'count' : 'idle'; cfg.lnFollow = h ? h.key : null; cfg.lnFollowRef = h ? h.ref : null; cfg.lnLeft = h ? h.left : 0; cfg.lnCounted = h ? h.counted : 0;
+};
 // résultat (ok = gagné, sinon perdu après tous les rattrapages) d'une source suivie
-function lossNextResult(cfg, key, ok) {
-  if (cfg.lnPhase === 'count') return; // un suivi est déjà en cours : on n'en ouvre pas un second
-  if (cfg.lnLast === key && !ok) return; // « attend qu'un AUTRE ait une perte »
+function lossNextResult(cfg, key, ok, ref, name) {
+  const q = cfg.lnQueue || (cfg.lnQueue = []);
+  const id = lnId(key, ref);
+  if (q.some((e) => e.id === id)) return; // cette source est déjà en attente de sa prédiction : sa perte est déjà gardée en mémoire
+  if (cfg.lnLast === id && !ok) return; // « attend qu'un AUTRE ait une perte »
   const st = cfg.lnStreak || (cfg.lnStreak = {});
-  if (ok) { if (st[key]) { st[key] = 0; persist(); } return; }
-  st[key] = (Number(st[key]) || 0) + 1;
-  if (st[key] >= sanitizeLnLosses(cfg.lnLosses)) {
-    cfg.lnPhase = 'count'; cfg.lnFollow = key; cfg.lnLeft = sanitizeLnNth(cfg.lnNth) - 1; cfg.lnCounted = 0; cfg.lnStreak = {};
+  if (ok) { if (st[id]) { st[id] = 0; persist(); } return; }
+  st[id] = (Number(st[id]) || 0) + 1;
+  if (st[id] >= sanitizeLnLosses(cfg.lnLosses)) {
+    q.push({ id, key, ref: ref != null && ref !== '' ? String(ref) : null, name: name ? String(name).slice(0, 80) : null, left: sanitizeLnNth(cfg.lnNth) - 1, counted: 0, at: Date.now() });
+    if (q.length > 12) q.shift();
+    st[id] = 0;
+    lnSync(cfg);
   }
   persist();
 }
-// nouvelle prédiction d'une source : si c'est la source suivie, on la laisse passer (X-1 fois) puis on envoie la suivante
-async function lossNextPrediction(cfg, key, target, suit) {
-  if (cfg.lnPhase !== 'count' || key !== cfg.lnFollow) return;
+// nouvelle prédiction d'une source : si elle est dans la file, on la laisse passer (X-1 fois) puis on envoie la suivante
+async function lossNextPrediction(cfg, key, target, suit, ref) {
+  const q = cfg.lnQueue || [];
+  if (!q.length) return;
+  const id = lnId(key, ref);
+  const e = q.find((x) => x.id === id);
+  if (!e) return;
   target = Number(target);
   if (!Number.isFinite(target) || !suit) return;
-  if (cyclePending(cfg) || lossNextBusy.has(cfg.id)) return;
-  if (target <= (Number(cfg.lnCounted) || 0)) return; // même prédiction déjà comptée
-  if (cfg.lnLeft > 0) { cfg.lnLeft -= 1; cfg.lnCounted = target; persist(); return; } // prédiction laissée passer
-  lossNextBusy.add(cfg.id);
+  const busyKey = `${cfg.id}|${id}`;
+  if (lossNextBusy.has(busyKey)) return;
+  if (target <= (Number(e.counted) || 0)) return; // même prédiction déjà comptée
+  if (e.left > 0) { e.left -= 1; e.counted = target; lnSync(cfg); persist(); return; } // prédiction laissée passer
+  lossNextBusy.add(busyKey);
   try {
-    const ok = await sendTrigger(cfg, { target, suit, reason: 'lossnext', role: key });
-    if (ok) { cfg.lnLast = key; cfg.lnPhase = 'idle'; cfg.lnFollow = null; cfg.lnLeft = 0; cfg.lnCounted = target; persist(); }
-  } finally { lossNextBusy.delete(cfg.id); }
+    // plusieurs sources peuvent être dues en même temps : chacune part à son tour (jamais bloquée par l'envoi encore en attente d'une autre)
+    const ok = await sendTrigger(cfg, { target, suit, reason: 'lossnext', role: e.key });
+    if (ok) { cfg.lnQueue = (cfg.lnQueue || []).filter((x) => x.id !== id); cfg.lnLast = id; lnSync(cfg); persist(); }
+  } finally { lossNextBusy.delete(busyKey); }
 }
-// sources « rank » : branchées sur les rangs de la stratégie (voir recordResult / record)
+// sources « rang » : branchées sur les 4 meilleures configurations de la stratégie (voir recordResult / record).
+// Le rang ne sert qu'à reconnaître les 4 meilleures : c'est la configuration elle-même (ref) qui est suivie.
 const lossNextRankCfgs = (strategy) => enabledOf(strategy, 'lossnext').filter((c) => lnKindOf(c) === 'rank');
-function lossNextOnRankResult(strategy, rank, ok) {
-  for (const cfg of lossNextRankCfgs(strategy)) if ((cfg.ranks || []).includes(rank)) lossNextResult(cfg, rankKey(rank), ok);
+function lossNextOnRankResult(strategy, rank, ok, ref, name) {
+  for (const cfg of lossNextRankCfgs(strategy)) if ((cfg.ranks || []).includes(rank)) lossNextResult(cfg, rankKey(rank), ok, ref, name);
 }
 async function handleLossNextPrediction(strategy, rank, data) {
-  for (const cfg of lossNextRankCfgs(strategy)) if ((cfg.ranks || []).includes(rank)) await lossNextPrediction(cfg, rankKey(rank), data.target, data.suit);
+  for (const cfg of lossNextRankCfgs(strategy)) await lossNextPrediction(cfg, rankKey(rank), data.target, data.suit, data.ref);
+}
+// RANG AU MOMENT DE LA PRÉDICTION : le classement du jour évolue entre la prédiction et son résultat (jusqu'à 4 jeux plus tard avec
+// 3 rattrapages) ; relire le rang au moment du résultat faisait attribuer la perte à une autre place, ou la perdre de vue (hors des 4).
+// On retient donc le rang d'une prédiction (configuration + jeu cible) et on le relit à son résultat.
+const rankMemo = new Map();
+const rankMemoKey = (strategy, ref, target) => `${strategy}|${ref}|${Number(target)}`;
+function rememberRank(strategy, ref, target, rank, name) {
+  if (ref == null || !Number.isFinite(Number(target)) || !(Number(rank) >= 1 && Number(rank) <= 4)) return;
+  rankMemo.set(rankMemoKey(strategy, ref, target), { rank: Number(rank), name: name || null, at: Date.now() });
+  if (rankMemo.size > 400) { const now = Date.now(); for (const [k, v] of rankMemo) if (now - v.at > 2 * 60 * 60 * 1000) rankMemo.delete(k); }
+}
+function memoRank(strategy, ref, target) {
+  const m = rankMemo.get(rankMemoKey(strategy, ref, target));
+  if (m) rankMemo.delete(rankMemoKey(strategy, ref, target));
+  return m || null;
 }
 // sources « strategy » / « channel » : lecture régulière des prédictions de la source (mêmes données que « Copie et annonce »)
 async function lossNextPoll() {
@@ -249,13 +297,14 @@ function lossNextSourceName(cfg, key) {
   return String(key);
 }
 function lossNextLabel(c) {
-  const n = lossNextSourceName(c, c.lnFollow);
   const need = sanitizeLnLosses(c.lnLosses);
-  if (c.lnPhase === 'count') {
-    const rest = Number(c.lnLeft) || 0;
-    return `Perte${need > 1 ? 's' : ''} de « ${n} » : ${rest > 0 ? `encore ${rest} prédiction(s) à laisser passer, puis envoi` : 'la prochaine prédiction de cette source est envoyée'}`;
+  const q = Array.isArray(c.lnQueue) ? c.lnQueue : [];
+  if (q.length) {
+    const parts = q.map((e) => `« ${e.name || lossNextSourceName(c, e.key)} » : ${e.left > 0 ? `encore ${e.left} prédiction(s) à laisser passer, puis envoi` : 'sa prochaine prédiction est envoyée'}`);
+    return `En mémoire (${q.length}) — ${parts.join(' · ')}`;
   }
-  return c.lnLast ? `En attente de ${need} perte${need > 1 ? 's' : ''} d'une AUTRE source que « ${lossNextSourceName(c, c.lnLast)} » (dernier envoi)` : `En attente de ${need} perte${need > 1 ? 's' : ''} de suite d'une source cochée`;
+  const last = c.lnLast ? (c.lnLast.startsWith('ref:') || c.lnLast.startsWith('key:') ? c.lnLast.slice(4) : c.lnLast) : null;
+  return last ? `En attente de ${need} perte${need > 1 ? 's' : ''} d'une AUTRE source que la dernière envoyée (${lossNextSourceName(c, last)})` : `En attente de ${need} perte${need > 1 ? 's' : ''} de suite d'une source cochée`;
 }
 
 // numéro de jeu → rangs ayant prédit (mode multi, mémoire seulement)
@@ -468,7 +517,7 @@ function updateConfig(id, patch = {}) {
         if (!list.length) throw new Error(lnKindOf(c) === 'channel' ? 'Coche au moins un canal à suivre.' : 'Coche au moins une stratégie à suivre.');
         c.lnSources = list; c.lnBase = {}; reset = true;
       }
-      if (reset) { c.lnPhase = 'idle'; c.lnFollow = null; c.lnLeft = 0; c.lnStreak = {}; c.lnCounted = 0; }
+      if (reset) { c.lnQueue = []; c.lnPhase = 'idle'; c.lnFollow = null; c.lnFollowRef = null; c.lnLeft = 0; c.lnStreak = {}; c.lnCounted = 0; }
     }
     if (patch.lossGate !== undefined && modeOf(c) === 'test') { c.lossGate = !!patch.lossGate; c.gateFrom = null; }
     if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
@@ -662,7 +711,7 @@ function ensureTrigDay() {
   return panel.trig;
 }
 // résultat d'une configuration (appelé par les stratégies à chaque prédiction vérifiée, hors relais)
-function recordResult(strategy, ref, field, step, maxR) {
+function recordResult(strategy, ref, field, step, maxR, target) {
   try {
     if (ref == null) return;
     // mode cycle : une fois les 4 passées, on attend qu'une des 4 configurations PERDE ; celle qui perd est suivie
@@ -686,8 +735,9 @@ function recordResult(strategy, ref, field, step, maxR) {
     }
     // mode « Perte → Xᵉ prédiction » (sources « rang ») : gain ou perte d'un des rangs cochés
     if ((field === 'losses' || field === 'wins') && (testRankProviders[strategy] || rankProviders[strategy]) && lossNextRankCfgs(strategy).length) {
-      const rk = Number((testRankProviders[strategy] || rankProviders[strategy])(ref));
-      if (rk >= 1 && rk <= 4) lossNextOnRankResult(strategy, rk, field === 'wins');
+      const memo = target != null ? memoRank(strategy, ref, target) : null; // rang de cette prédiction quand elle a été faite
+      const rk = memo ? memo.rank : Number((testRankProviders[strategy] || rankProviders[strategy])(ref));
+      if (rk >= 1 && rk <= 4) lossNextOnRankResult(strategy, rk, field === 'wins', ref, memo ? memo.name : null);
     }
     if (!enabledOf(strategy, 'trigger').length) return;
     const ts = ensureTrigDay();
@@ -928,6 +978,7 @@ async function record(strategy, rank, data) {
       await handleCyclePrediction(strategy, rank, data).catch((e) => { panel.lastError = e.message; });
     }
     await handleTestPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
+    rememberRank(strategy, data.ref, data.target, validTest ? testRank : rank, data.name);
     await handleLossNextPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
     if (!validRank || !multiConfigs(strategy).length) return;
     const now = Date.now();

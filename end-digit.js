@@ -86,4 +86,28 @@ async function analyze(windowN = 5000) {
   };
 }
 
-module.exports = { analyze, SUITS };
+// ---------------------------------------------------------------------------
+// Cache synchrone — utilisé par la stratégie « Fin de numéro → costume opposé » (strategies.js, finNumero).
+// detect() des stratégies est SYNCHRONE alors que analyze() est asynchrone (lecture en base) : on garde donc la dernière
+// analyse en mémoire et on la rafraîchit en arrière-plan (au plus toutes les REFRESH_MS). Aucun appel ne bloque ni ne jette.
+// ---------------------------------------------------------------------------
+const REFRESH_MS = 3 * 60 * 1000;
+const cache = { at: 0, data: null, loading: false, error: null };
+
+function refreshCache(force = false) {
+  if (cache.loading) return;
+  if (!force && cache.data && Date.now() - cache.at < REFRESH_MS) return;
+  cache.loading = true;
+  analyze(5000)
+    .then((r) => { cache.data = r; cache.at = Date.now(); cache.error = null; })
+    .catch((e) => { cache.error = e.message; cache.at = Date.now(); })
+    .finally(() => { cache.loading = false; });
+}
+
+// dernière analyse connue (ou null au tout premier appel) ; déclenche un rafraîchissement si elle est périmée
+function cached() {
+  refreshCache(false);
+  return cache.data;
+}
+
+module.exports = { analyze, cached, refreshCache, SUITS };
