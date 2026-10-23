@@ -48,6 +48,8 @@ const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
+const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const gameStability = require('./game-stability');
 const absenceAlert = require('./absence-alert');
@@ -68,6 +70,7 @@ const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const mirrorCounter = require('./mirror-counter');
 const parityCounter = require('./parity-counter');
+const distributionCounter = require('./distribution-counter'); // « Compte distribution » (v100)
 const endDigit = require('./end-digit');
 const slowMode = require('./slow-mode');
 const lossNotice = require('./loss-notice');
@@ -418,6 +421,8 @@ app.get('/api/state', async (req, res) => {
     lossReturn: lossReturnView(),
     lossRelaunch: lossRelaunchView(),
     prevSuit: prevSuitView(),
+    canalTelegram: canalTelegram.status(),
+    endDigitPredict: endDigitPredict.status(),
     gameStability: gameStability.status(),
     absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
     channelLossGate: (() => { const x = channelLossGate.status(); return { enabled: x.enabled, rows: x.rows, today: x.today }; })(),
@@ -450,6 +455,7 @@ app.get('/api/state', async (req, res) => {
     },
     lossNotice: lossNotice.getSettings(),
     parityCounter: parityCounter.status(state.live ? state.live.number : null),
+    distributionCounter: distributionCounter.status(state.live ? state.live.number : null),
     slowMode: { all: slowMode.status().all, channels: slowMode.status().channels.length, queued: slowMode.status().queue.length },
   });
 });
@@ -886,6 +892,25 @@ app.get('/api/strategies', (req, res) => {
 // carte, publié dans un canal Telegram configuré une fois (bouton
 // « Compteur » du tableau de bord). Reset automatique à chaque heure pile.
 // ---------------------------------------------------------------------------
+// « Prédiction fin de numéro » (voir end-digit-predict.js)
+app.get('/api/end-digit-predict', (req, res) => res.json(endDigitPredict.status()));
+app.post('/api/end-digit-predict/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) endDigitPredict.setChannelTitle(id, check.chat.title);
+      }
+    }
+    endDigitPredict.configure(b);
+    res.json({ ok: true, endDigitPredict: endDigitPredict.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/end-digit-predict/test', async (req, res) => { const r = await endDigitPredict.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/end-digit-predict/reset', (req, res) => { endDigitPredict.resetStats(); res.json(endDigitPredict.status()); });
+
 // « Analyse fin de numéro » (voir end-digit.js)
 app.get('/api/end-digit', async (req, res) => {
   try { res.json(await endDigit.analyze(req.query.window)); }
@@ -913,6 +938,16 @@ app.post('/api/slow-mode/flush', async (req, res) => {
   const sent = await slowMode.tick(true);
   res.json({ sent, ...slowModeView() });
 });
+
+// « Compte distribution » (voir distribution-counter.js)
+const distLive = () => (state.live ? state.live.number : null);
+app.get('/api/distribution-counter', (req, res) => res.json(distributionCounter.status(distLive())));
+app.post('/api/distribution-counter/config', (req, res) => { distributionCounter.configure(req.body || {}); res.json(distributionCounter.status(distLive())); });
+app.post('/api/distribution-counter/test', async (req, res) => {
+  const r = await distributionCounter.test(distLive());
+  res.status(r.ok ? 200 : 400).json({ ...r, distributionCounter: distributionCounter.status(distLive()) });
+});
+app.post('/api/distribution-counter/reset', (req, res) => { distributionCounter.resetCounts(); res.json(distributionCounter.status(distLive())); });
 
 // « Compte parité » (voir parity-counter.js)
 app.get('/api/parity-counter', (req, res) => res.json(parityCounter.status(state.live ? state.live.number : null)));
@@ -2198,6 +2233,31 @@ app.post('/api/prev-suit/test', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 app.post('/api/prev-suit/reset', (req, res) => { prevSuit.resetStats(); res.json(prevSuitView()); });
+
+// « Canal Telegram » (voir canal-telegram.js) : un canal = une stratégie, nommée comme le canal. Toutes les prédictions publiées dans
+// ce canal, quel que soit leur format ou leur rattrapage annoncé, sont lues de la même façon et vérifiées avec UN rattrapage unique.
+app.get('/api/canal-telegram', (req, res) => res.json(canalTelegram.status()));
+app.post('/api/canal-telegram/strategies', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const raw = String(b.channel == null ? '' : b.channel).trim();
+    if (!raw) throw new Error('Renseigne le canal Telegram (ID ou @nom).');
+    const input = { ...b, channel: raw };
+    if (botStatus().tokenSet) {
+      const check = await resolveChat(raw);
+      if (!check.ok) throw new Error(`Canal ${raw} : ${check.error}`);
+      if (check.chat) { input.chatId = check.chat.id; input.title = check.chat.title; input.username = check.chat.username; }
+    }
+    const s = canalTelegram.addStrategy(input);
+    res.json({ ok: true, strategy: s, canalTelegram: canalTelegram.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/canal-telegram/strategies/:id', (req, res) => {
+  try { const s = canalTelegram.updateStrategy(req.params.id, req.body || {}); res.json({ ok: true, strategy: s, canalTelegram: canalTelegram.status() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/canal-telegram/strategies/:id', (req, res) => { canalTelegram.removeStrategy(req.params.id); res.json(canalTelegram.status()); });
+app.post('/api/canal-telegram/strategies/:id/reset', (req, res) => { canalTelegram.resetStats(req.params.id); res.json(canalTelegram.status()); });
 
 app.get('/api/loss-relaunch', (req, res) => res.json(lossRelaunchView()));
 app.post('/api/loss-relaunch/configs', async (req, res) => {

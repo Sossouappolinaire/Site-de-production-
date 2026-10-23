@@ -1434,7 +1434,55 @@ const carteManquante = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois, carteManquante];
+// ---------------------------------------------------------------------------
+// 14) Fin de numéro → costume opposé (demande admin) — repose sur le bouton « Analyse fin de numéro »
+// ---------------------------------------------------------------------------
+// Pour chaque fin de numéro (0-9), l'analyse (end-digit.js) donne le % de jeux où chaque costume est arrivé dans la main du
+// JOUEUR. Dès qu'un costume atteint le seuil (60 % par défaut), on prédit son OPPOSÉ : ♦️ → ♠️ (et inversement), ♣️ → ❤️ (et
+// inversement). La prédiction part quand le jeu en direct est à « fin de numéro − 2 » : pour la fin de numéro 4, au jeu #34, on
+// l'envoie dès que le live est au #32 (décalage « lead » = 2, réglable). Cela couvre aussi la fin de numéro 9 à 100 % ou plus :
+// elle part quand le live arrive à la fin de numéro 7.
+// Plusieurs costumes au-dessus du seuil sur la même fin de numéro : seul celui qui a le % le plus haut est retenu.
+// Un échantillon minimum (minN jeux pour ce chiffre final) évite de prédire sur trop peu de données.
+const finNumero = {
+  key: 'finNumero',
+  name: 'Fin de numéro → costume opposé (≥ 60 %)',
+  about:
+    "Utilise l'analyse « fin de numéro » : dès qu'un costume atteint 60 % (réglable) sur la fin de numéro du jeu visé, on prédit " +
+    "son opposé (♦️ ↔ ♠️, ♣️ ↔ ❤️). La prédiction part quand le live est 2 jeux avant le jeu visé (ex. jeu #34 : envoi au #32). " +
+    "Main du joueur uniquement. Vérification avec les rattrapages.",
+  defaults: { enabled: false, format: config.DEFAULT_FORMAT, maxR: 2, b: 0, lead: 2, pctMin: 60, minN: 30, template: null, channels: [] },
+  usesB: false,
+  source: 'live',
+  detect(game, cfg) {
+    if (!game || !Number.isFinite(Number(game.number))) return null;
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 2));
+    const pctMin = Math.max(1, Math.min(100, Number(cfg && cfg.pctMin) || 60));
+    const minN = Math.max(1, Math.min(5000, parseInt(cfg && cfg.minN, 10) || 30));
+    const target = game.number + lead;
+    const digit = target % 10;
+    let snap = null;
+    try { snap = require('./end-digit').cached(); } catch (_) { snap = null; } // chargement paresseux (end-digit.js dépend de ce fichier)
+    if (!snap || !Array.isArray(snap.digits)) return null; // première analyse en cours : on réessaie au prochain passage
+    const d = snap.digits[digit];
+    if (!d || d.n < minN) return null;
+    const best = (d.player.ranked || []).find((x) => x.pct >= pctMin); // classement trié du plus fort au plus faible
+    if (!best) return null;
+    const from = normSuit(best.suit);
+    const suit = from ? INVERSE[from] : null;
+    if (!suit) return null;
+    return {
+      kind: 'suit',
+      target,
+      suit,
+      label: suit,
+      reason: `Fin de numéro ${digit} : ${from} à ${best.pct} % (${d.n} jeux) → opposé ${suit} sur #N${target} (envoi au live #N${game.number})`,
+      meta: { digit, from, pct: best.pct, n: d.n, lead },
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois, carteManquante, finNumero];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

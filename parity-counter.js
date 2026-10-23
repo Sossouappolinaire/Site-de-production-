@@ -12,6 +12,7 @@
 
 const store = require('./store');
 const db = require('./db');
+const details = require('./counter-details'); // détails du bilan : pair / impair, fins de numéro élevées, chiffre le plus fréquent
 
 const STORE_KEY = 'parityCounter';
 const DB_KEY = 'parity_counter_state';
@@ -186,6 +187,7 @@ function buildMessage(side, gameNumber, opts = {}) {
     ' RÉSUMÉ STATISTIQUE',
     '━━━━━━━━━━━━━━━',
     `${s.icon} ${s.name} · pair ${pairTotal} jeu${pairTotal > 1 ? 'x' : ''} · impair ${impairTotal} jeu${impairTotal > 1 ? 'x' : ''}`,
+    ...(bilan ? ['', details.detailsText(counts.pair, counts.impair, `${s.icon} ${s.name}`)] : []),
     `🎮 Jeu #${gameNumber ?? '—'}  |  📊 ${state.games} jeu(x) depuis dernier reset`,
     bilan ? '🔄 Compteur remis à zéro' : `⏭ Reset dans ${formatCountdown(msUntilNextReset())}  (Intervalle ${state.intervalMin}min)`,
   ].join('\n');
@@ -250,6 +252,7 @@ function status(gameNumber) {
     pairSuits: c.suits.pair.map(suitCells), impairSuits: c.suits.impair.map(suitCells),
     pairTotal: c.pair.reduce((s, n) => s + n, 0),
     impairTotal: c.impair.reduce((s, n) => s + n, 0),
+    details: details.detailsView(c.pair, c.impair),
   });
   return {
     ...config(),

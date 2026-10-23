@@ -67,6 +67,7 @@ const panel = {
   autoApply: true,        // l'analyse applique elle-même les règles trouvées
   channels: [],
   siteChannelId: null,
+  msgFormat: 'classic',   // mise en page du message : 'classic' (V1 ✅0️⃣ 72% ┣━ N°…) ou 'compact' (une ligne par côté : V1 72% ✅0️⃣)
   relanceChannels: [],    // canal(aux) qui reçoivent les RELANCES (message simple par relance) ; vide = relance dans le message d'origine
   relanceMaxR: 1,         // rattrapages de la relance
   maxR: 1,                // rattrapages
@@ -127,7 +128,7 @@ function config() {
   return {
     enabled: panel.enabled, notify: panel.notify, autoApply: panel.autoApply, channels: [...panel.channels], siteChannelId: panel.siteChannelId,
     relanceChannels: [...panel.relanceChannels], relanceMaxR: panel.relanceMaxR,
-    maxR: panel.maxR, waitGames: panel.waitGames, relanceGap: panel.relanceGap, sensitivity: panel.sensitivity,
+    maxR: panel.maxR, waitGames: panel.waitGames, relanceGap: panel.relanceGap, sensitivity: panel.sensitivity, msgFormat: panel.msgFormat,
   };
 }
 function configure(patch = {}) {
@@ -142,6 +143,7 @@ function configure(patch = {}) {
   if (patch.waitGames !== undefined) panel.waitGames = sanitizeWait(patch.waitGames);
   if (patch.relanceGap !== undefined || patch.waitGames !== undefined) panel.relanceGap = sanitizeGap(patch.relanceGap !== undefined ? patch.relanceGap : panel.relanceGap, panel.waitGames);
   if (patch.sensitivity !== undefined) panel.sensitivity = PRESETS[patch.sensitivity] ? patch.sensitivity : 'large';
+  if (patch.msgFormat !== undefined) panel.msgFormat = patch.msgFormat === 'compact' ? 'compact' : 'classic';
   persist();
   return config();
 }
@@ -190,6 +192,7 @@ function applySaved(saved) {
     panel.waitGames = sanitizeWait(saved.config.waitGames);
     panel.relanceGap = sanitizeGap(saved.config.relanceGap, panel.waitGames);
     panel.sensitivity = PRESETS[saved.config.sensitivity] ? saved.config.sensitivity : 'large';
+    panel.msgFormat = saved.config.msgFormat === 'compact' ? 'compact' : 'classic';
   }
   if (Array.isArray(saved.rules)) panel.rules = saved.rules.map(sanitizeRule).filter(Boolean).slice(0, MAX_RULES);
   panel.defaultDropped = !!saved.defaultDropped;
@@ -383,7 +386,36 @@ function sideLine(entry, side) {
   }
   return `${side}${mark} ${pc}%`;
 }
+// Format « compact » : une ligne par côté, résultat à la suite du pourcentage, relance sur la ligne du côté relancé
+//   ⚔️ N°1438⏳
+//   V1 72% ✅0️⃣
+//   V2 68% ⏳ → N°1441⏳
+function compactSideLine(entry, side) {
+  const pc = side === 'V1' ? entry.p1 : entry.p2;
+  const h = entry.hit ? entry.hit[side] : null;
+  const rl = entry.relance;
+  const isOther = !!entry.first && entry.first.side !== side;
+  let mark = '';
+  if (h !== null && h !== undefined) mark = ` ✅${digitEmoji(h)}`;
+  else if (entry.status === 'perdu') mark = ' ❌';
+  else if (isOther) {
+    if (rl && rl.status === 'gagné') mark = ` ✅${digitEmoji(rl.hit)}`;
+    else if (rl && rl.status === 'perdu') mark = ' ❌';
+    else if (rl && rl.status === 'en attente') mark = ' ⏳';
+    else if (entry.phase === 'second') mark = ' ⏳';
+    else mark = ' ➖';
+  }
+  let line = `${side} ${pc}%${mark}`;
+  if (isOther && rl && rl.status !== 'ignorée' && !rl.own) line += ` → N°${rl.target}${rl.status === 'en attente' ? '⏳' : ''}`;
+  return line;
+}
+function compactMessageText(entry) {
+  const order = entry.forceTop ? [entry.forceTop, otherSide(entry.forceTop)]
+    : [{ k: 'V1', v: entry.p1 }, { k: 'V2', v: entry.p2 }].sort((a, b) => b.v - a.v).map((x) => x.k);
+  return [`⚔️ N°${entry.target}${entry.status === 'en attente' ? '⏳' : ''}`, compactSideLine(entry, order[0]), compactSideLine(entry, order[1])].join('\n');
+}
 function messageText(entry) {
+  if (panel.msgFormat === 'compact') return compactMessageText(entry);
   const order = entry.forceTop ? [entry.forceTop, otherSide(entry.forceTop)] // règle par défaut : son côté (V1) en tête
     : [{ k: 'V1', v: entry.p1 }, { k: 'V2', v: entry.p2 }].sort((a, b) => b.v - a.v).map((x) => x.k); // le plus probable en haut
   const tail = entry.status === 'en attente' ? '⏳' : '';
@@ -449,6 +481,7 @@ function relMessageText(entry) {
   const pc = side === 'V1' ? entry.p1 : entry.p2;
   const mark = rl.status === 'gagné' ? ` ✅${digitEmoji(rl.hit)}` : rl.status === 'perdu' ? ' ❌' : rl.status === 'annulé' ? ' ➖' : '';
   const tail = rl.status === 'en attente' ? '⏳' : '';
+  if (panel.msgFormat === 'compact') return `⚔️ ${side} ${pc}%${mark} → N°${rl.target}${tail}`;
   return `${side}${mark} ${pc}%\n ┣━ N°${rl.target}${tail}`;
 }
 async function sendRelance(entry) {

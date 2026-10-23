@@ -27,6 +27,8 @@ const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » : meilleur / repli faible + inverse (v101)
+const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
 const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
 const channelAdmin = require('./channel-admin'); // commande /envois (chat privé de l'admin)
 const absenceAlert = require('./absence-alert'); // « Alerte absence de costume » (chat privé de l'admin)
@@ -44,6 +46,7 @@ const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
 const mirrorCounter = require('./mirror-counter');
 const parityCounter = require('./parity-counter');
+const distributionCounter = require('./distribution-counter'); // « Compte distribution » : 2/2, 3/2, 3/3, 2k, 3k (v100)
 const slowMode = require('./slow-mode');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
@@ -385,6 +388,8 @@ function installChannelGuard(inst) {
       try { if (m && !m.skipped && typeof rest[0] === 'string') lossRelaunch.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       // « Costume N-1 → +4 » : lecture des prédictions envoyées par les stratégies / configurations cochées (voir prev-suit.js)
       try { if (m && !m.skipped && typeof rest[0] === 'string') prevSuit.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Canal Telegram » : un canal où ce bot publie peut aussi être une stratégie (voir canal-telegram.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') canalTelegram.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       return m;
     });
   };
@@ -486,6 +491,7 @@ function wire(b) {
     try { bestWeakTop.onChannelPost(m.chat, m.text); } catch (_) { /* détection seulement */ }
     try { lossReturn.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     try { lossRelaunch.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
+    try { canalTelegram.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     const cmd = parsePredictionControlCommand(m.text);
     if (cmd) {
       const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`, m.chat);
@@ -510,6 +516,8 @@ function wire(b) {
   // Message de canal modifié (résultats ✅0️⃣ / ❌ ajoutés) : le canal reste « détecté », sans relancer la surveillance
   b.on('edited_channel_post', (m) => {
     try { if (m && m.text) { rememberChannel(m.chat); bestWeakTop.onChannelPost(m.chat, m.text, { edited: true }); } } catch (_) { /* détection seulement */ }
+    // « Canal Telegram » : une prédiction déjà lue n'est jamais recomptée (clé canal + jeu + costume) ; une publication éditée rattrape seulement une lecture manquée
+    try { if (m && m.text) canalTelegram.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
   });
 
   // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une
@@ -2167,6 +2175,10 @@ async function tick() {
       Promise.resolve(lossRelaunch.tick()),
       // « Costume N-1 → +4 » : costume venu à N-1 et absent à N → prédiction à N+4 (voir prev-suit.js)
       Promise.resolve(prevSuit.tick()),
+      // « Canal Telegram » : vérification uniforme des prédictions lues dans chaque canal-stratégie (voir canal-telegram.js)
+      Promise.resolve(canalTelegram.tick()),
+      // « Prédiction fin de numéro » : meilleur costume du joueur, repli faible + inverse si le meilleur ne valide pas (voir end-digit-predict.js)
+      Promise.resolve(endDigitPredict.tick()),
       // « Stabilité du jeu » : 4 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
       Promise.resolve(gameStability.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
@@ -2373,6 +2385,8 @@ async function applyDbConfigs() {
   await lossReturn.restoreFromDb();
   await lossRelaunch.restoreFromDb();
   await prevSuit.restoreFromDb();
+  await canalTelegram.restoreFromDb();
+  await endDigitPredict.restoreFromDb();
   await gameStability.restoreFromDb();
   await absenceAlert.restoreFromDb();
   await channelLossGate.restoreFromDb();
@@ -2399,6 +2413,7 @@ async function applyDbConfigs() {
   if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
   await mirrorCounter.loadFromDb();
   await parityCounter.restoreFromDb();
+  await distributionCounter.restoreFromDb();
   slowMode.restore();
   await slowMode.restoreFromDb();
   await lossNotice.loadFromDb();
@@ -2457,6 +2472,9 @@ async function startLoop() {
   lossRelaunch.setSender(senderFor);
   prevSuit.restore();
   prevSuit.setSender(senderFor);
+  canalTelegram.restore();
+  endDigitPredict.restore();
+  endDigitPredict.setSender(senderFor);
   gameStability.restore();
   gameStability.setSender(senderFor);
   gameStability.setAdminId(() => state.adminId);
@@ -2549,12 +2567,21 @@ async function startLoop() {
     return msg.message_id;
   });
   parityCounter.scheduleReset();
+  // « Compte distribution » (jumeau du compte parité) : 2/2, 3/2, 3/3, 2k, 3k par fin de numéro (voir distribution-counter.js)
+  distributionCounter.setSender(async (channelId, text) => {
+    const sender = senderFor();
+    if (!sender) throw new Error('Aucun token API configuré dans les réglages.');
+    const msg = await sender.sendMessage(channelId, text);
+    return msg.message_id;
+  });
+  distributionCounter.scheduleReset();
   // base de données : chaque jeu terminé est archivé par date
   setOnFinished((round) => {
     if (db.ready) db.saveGame(round);
     mirrorCounter.bump(round);
     mirrorCounter.publish(round.number).catch((e) => console.error('Compteur (Taux Miroir) :', e.message));
     parityCounter.onFinished(round).catch((e) => console.error('Compte parité :', e.message));
+    distributionCounter.onFinished(round).catch((e) => console.error('Compte distribution :', e.message));
     absenceAlert.onFinished(round).catch((e) => console.error('Alerte absence :', e.message));
   });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à

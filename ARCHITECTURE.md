@@ -75,6 +75,8 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `draw-two-three.js` — nouvelle stratégie « Nul / 2-3 » (demande admin).
 - `victoire-vb.js` — stratégie « Victoire V1 / V2 » (demande admin) : V1 = victoire du joueur, V2 = victoire du banquier, un seul message à deux côtés, attente de l'autre puis relance à N+3, déclencheurs trouvés et appliqués par l'analyse.
 - `parity-counter.js` — « Compte parité » (bouton de l'accueil) : fin du numéro de jeu 0-9 rangée selon la parité du point du joueur / banquier (blocs pair et impair), un message par côté, reset périodique.
+- `distribution-counter.js` — « Compte distribution » (v100) : jumeau de `parity-counter.js`, compte 2/2, 3/2, 3/3, 2/3, 2k, 3k par fin de numéro, joueur / banquier, pair / impair ; `counter-details.js` fournit le bloc DÉTAILS des bilans (pair / impair, fins élevées / basses, chiffre le plus fréquent) aux deux compteurs.
+- `end-digit-predict.js` — « Prédiction fin de numéro » (v101) : prédit le meilleur costume du joueur de `end-digit.js` et vérifie en silence s'il valide ; s'il ne valide pas → plus faible + inverse du meilleur, jusqu'à ce que le meilleur revalide (état par fin de numéro).
 - `end-digit.js` — « Analyse fin de numéro » (+ cache synchrone `cached()` utilisé par la stratégie `finNumero` de `strategies.js`) : costume le plus fréquent par chiffre final du numéro de jeu (0-9), joueur et banquier.
 - `absence-alert.js` — « Alerte absence » : message dans le chat privé de l'admin quand un costume est absent N jeux de suite (15 par défaut) ; branché dans `setOnFinished` (bot.js).
 - `channel-loss-gate.js` — « Envoi après perte » par canal, planifié jour par jour dans la feuille `PlanningEnvoi` de l'Excel (Date | Canal | Mode) ; branché dans `installChannelGuard` (bot.js) et alimenté par `updateResult`.
@@ -89,6 +91,7 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `costume-faible-top.js` — stratégie « Costume faible sur 2 cartes (miroir) »
 - `loss-return.js` — bouton « Retour après perte » (v47, demande admin) :
 - `loss-relaunch.js` — bouton « Relance après perte » : suit des canaux ou des configurations Relance ; dès que la main du joueur du dernier rattrapage est complète, une perte → même costume à N+R+D dans le canal choisi (D=1 = jeu suivant).
+- `canal-telegram.js` — bouton « Canal Telegram » (v99) : un canal = une stratégie (nom du canal) ; lecteur universel `parseUniversal` (n° de jeu + costume, tous formats) ; vérification uniforme (main du joueur, rattrapages réglés par canal) ; statistiques par canal ; branché dans `bot.js` (channel_post, point d'envoi unique, tick) et `server.js` (`/api/canal-telegram`).
 - `prev-suit.js` — bouton « Costume N-1 → +4 » : stratégies / configurations cochées (liste fournie par server.js) ; costume prédit à N venu à N-1 et absent à N → même costume à N+4 dans le canal choisi.
 - `formation.js` — bouton « Formation » (page Analyseur IA)
 - `formation-relay.js` — « Envoyer la formation dans le canal »

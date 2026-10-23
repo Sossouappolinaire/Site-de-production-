@@ -1,10 +1,15 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v98',
-  name: 'declencheur-rattrapage-3',
-  date: '2026-10-22',
+  version: 'v102',
+  name: 'victoire-format-compact',
+  date: '2026-10-23',
   features: [
+    '« Victoire V1 / V2 » : nouveau format de message « compact » au choix dans la page (⚔️ N°1438 / V1 72% ✅0️⃣ / V2 68% ⏳ → N°1441, une ligne par côté, relance sur la ligne du côté relancé, message de relance en une ligne) ; le format classique reste disponible et par défaut (victoire-vb.js)',
+    '« Analyse fin de numéro » : analyse de la main du JOUEUR uniquement (le banquier est retiré de l’analyse et de la page) ; nouveau bloc « Prédiction fin de numéro » : le bot envoie le meilleur costume du joueur de la fin de numéro du jeu visé (jeu en direct + avance) et vérifie en silence si ce meilleur valide ; tant qu’il valide il continue, dès qu’il ne valide pas il envoie DEUX prédictions (costume le plus faible + inverse du meilleur) jusqu’à ce que le meilleur revalide, état propre à chaque fin de numéro 0-9, canal / rattrapages / format / avance / échantillon réglables, statistiques par rôle (end-digit-predict.js)',
+    'Nouveau bouton « 🃏 Compte distribution » (accueil, menu, Aide), jumeau du « Compte parité » : compte les distributions 2/2, 3/2, 3/3 (cartes joueur / banquier), 2/3, 2k (joueur à 2 cartes) et 3k (joueur à 3 cartes) par fin de numéro de jeu, joueur et banquier séparément, blocs pair / impair ; mêmes réglages (canal, côté, côté gagnant, reset) ; export / import inclus (distribution-counter.js)',
+    'Bilans « Compte parité » et « Compte distribution » : bloc DÉTAILS — nombre de jeux pair / impair, fins de numéro élevées (5-9) et basses (0-4), détail chiffre par chiffre, fin la plus fréquente (counter-details.js)',
+    'Nouveau bouton « 📲 Canal Telegram » (accueil, menu, Aide, famille « Canaux Telegram » dans Stratégies) : un canal Telegram = UNE stratégie qui porte le nom du canal ; toutes les prédictions publiées dans ce canal sont lues par un lecteur universel (numéro de jeu + costume, quel que soit le format — 101 des 107 formats du site, lettres stylisées, petites capitales, lettres espacées — et quel que soit le rattrapage annoncé) puis vérifiées de la même façon sur la main du joueur avec UN nombre de rattrapages réglé par canal (3 par défaut) ; statistiques par canal (gagnées / perdues, taux, par rattrapage, par costume), jamais deux fois la même prédiction (canal + jeu + costume), aucun envoi (canal-telegram.js)',
     'Nouveau bouton d’accueil « ⚡ Envoi sur déclencheur » (menu, Aide, page dédiée avec « Créer ») : il envoie après 3 pertes CONSÉCUTIVES (au lieu de 2) d’une configuration suivie réglée sur 3 rattrapages, après 2 gains de suite au rattrapage 2 ou 3, ou quand un costume est absent 13 jeux (prédit à +1 et +5)',
     '« Costume N-1 → +4 » : ne suit que les stratégies / configurations réglées sur 3 rattrapages ; les autres sont grisées dans la liste',
     'Compte parité : message en liste unique de 10 lignes « #840 ➔ (❤️%) … » puis RÉSUMÉ STATISTIQUE ; Bilan toujours à l’heure pile',

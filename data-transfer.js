@@ -18,6 +18,7 @@ const strategies = require('./strategies');
 
 const store = require('./store');
 const channelHarvest = require('./channel-harvest');
+const channelLossGate = require('./channel-loss-gate');
 
 const SHEETS = {
   PANNEAUX: 'Panneaux',
@@ -27,6 +28,7 @@ const SHEETS = {
   IA_STRATEGIES: 'StrategiesIA',
   IA_ANALYSES: 'AnalysesIA',
   REGLAGES: 'Reglages',
+  ENVOI: 'PlanningEnvoi', // « Envoi après perte » par canal : une ligne Date | Canal | Mode (voir channel-loss-gate.js)
 };
 
 // ---------------------------------------------------------------------------
@@ -167,7 +169,11 @@ const PANELS = {
   lossNotice: { mod: './loss-notice' },
   mirrorCounter: { mod: './mirror-counter' },
   parityCounter: { mod: './parity-counter' },         // « Compte parité »
+  distributionCounter: { mod: './distribution-counter' }, // « Compte distribution »
+  endDigitPredict: { mod: './end-digit-predict' },        // « Prédiction fin de numéro »
   slowMode: { mod: './slow-mode' },                   // « Ralentisseur »
+  absenceAlert: { mod: './absence-alert' },           // « Alerte absence de costume »
+  channelLossGate: { mod: './channel-loss-gate' },    // « Envoi après perte » par canal (le planning se lit aussi dans la feuille PlanningEnvoi)
   betType: { mod: './bet-type' },                  // « Type de mise »
   likeReact: { mod: './like-react' },              // « J'aime » (réactions automatiques)
   copyAnnounce: { mod: './copy-announce' },        // « Copie et annonce »
@@ -431,6 +437,11 @@ async function buildWorkbook() {
   XLSX.utils.book_append_sheet(wb, toSheet(state.aiAnalyses || []), SHEETS.IA_ANALYSES);
   XLSX.utils.book_append_sheet(wb, toSheet(panelRows()), SHEETS.PANNEAUX);
   XLSX.utils.book_append_sheet(wb, toSheet(await settingRows()), SHEETS.REGLAGES);
+  { // planning « Envoi après perte » : feuille lisible Date | Canal | Mode (en-têtes seuls si aucun planning)
+    const rows = channelLossGate.sheetRows();
+    const sheet = rows.length ? toSheet(rows) : XLSX.utils.aoa_to_sheet([channelLossGate.SHEET_HEADER]);
+    XLSX.utils.book_append_sheet(wb, sheet, SHEETS.ENVOI);
+  }
 
   // Pas de feuille « Predictions », « Annonces » ni « Portes » : ce sont des
   // données issues du jeu en live (cibles en cours, compteurs de pertes).
@@ -510,6 +521,15 @@ function importWorkbook(wb) {
     applied.push(`${SHEETS.PANNEAUX} (${done.length} : ${done.join(', ')})`);
   } else skipped.push(SHEETS.PANNEAUX);
 
+  // planning « Envoi après perte » : s'il y a des lignes, il REMPLACE le planning actuel (prime sur la copie du panneau ci-dessus)
+  const envoi = fromSheet(wb, SHEETS.ENVOI);
+  if (envoi.length) {
+    try {
+      const plan = channelLossGate.setPlan(envoi);
+      applied.push(`${SHEETS.ENVOI} (${plan.length} ligne(s) valide(s) sur ${envoi.length})`);
+    } catch (e) { skipped.push(`${SHEETS.ENVOI} (${e.message})`); }
+  } else skipped.push(SHEETS.ENVOI);
+
   // Filet de sécurité : tout canal utilisé par un bouton/panneau/stratégie du
   // fichier mais absent de la feuille « Canaux » rejoint la liste des canaux.
   const added = registerHarvestedChannels();
@@ -532,4 +552,22 @@ async function importBufferAsync(buffer) {
   return report;
 }
 
-module.exports = { SHEETS, harvestAll, allChannelRows, exportBuffer, importBuffer, importBufferAsync, stripLive, keepLive };
+// classeur « planning seul » à remplir puis réimporter (site : page « Envoi après perte »)
+function planningBuffer() {
+  const wb = XLSX.utils.book_new();
+  const rows = channelLossGate.sheetRows();
+  XLSX.utils.book_append_sheet(wb, rows.length ? toSheet(rows) : XLSX.utils.aoa_to_sheet([channelLossGate.SHEET_HEADER]), SHEETS.ENVOI);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(channelLossGate.HELP_ROWS), 'Aide');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+}
+// import du planning seul (feuille « PlanningEnvoi » du classeur) — ne touche à rien d'autre
+function importPlanningBuffer(buffer) {
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const rows = fromSheet(wb, SHEETS.ENVOI);
+  if (!rows.length) throw new Error("Feuille « PlanningEnvoi » absente ou vide (colonnes : Date, Canal, Mode).");
+  const plan = channelLossGate.setPlan(rows);
+  if (!plan.length) throw new Error('Aucune ligne valide : vérifie la date (JJ/MM/AAAA), le canal et le mode (Libre ou Après perte).');
+  return { rows: rows.length, valid: plan.length };
+}
+
+module.exports = { SHEETS, harvestAll, allChannelRows, exportBuffer, planningBuffer, importPlanningBuffer, importBuffer, importBufferAsync, stripLive, keepLive };
