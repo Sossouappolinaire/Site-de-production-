@@ -324,6 +324,7 @@
         <a href="#/loss-return" data-nav="loss-return">📉 Retour après perte</a>
         <a href="#/loss-relaunch" data-nav="loss-relaunch">🔁 Relance après perte</a>
         <a href="#/prev-suit" data-nav="prev-suit">⏮️ Costume N-1 → +4</a>
+        <a href="#/canal-telegram" data-nav="canal-telegram">📲 Canal Telegram</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
         <a href="#/bet-type" data-nav="bet-type">Type de mise</a>
@@ -337,6 +338,7 @@
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/parity-counter" data-nav="parity-counter">🔢 Compte parité</a>
+        <a href="#/distribution-counter" data-nav="distribution-counter">🃏 Compte distribution</a>
         <a href="#/end-digit" data-nav="end-digit">🎯 Analyse fin de numéro</a>
         <a href="#/slow-mode" data-nav="slow-mode">⏳ Ralentisseur</a>
         <a href="#/cards-count" data-nav="cards-count">Comptage 2/2</a>
@@ -602,6 +604,7 @@
       <div class="home-grid">
         ${card('#/help', '❓', 'Aide', 'Mode d\'emploi de tous les boutons')}
         ${card('#/canaux', '📡', 'Canaux', 'Fil des prédictions, style Telegram')}
+        ${card('#/canal-telegram', '📲', 'Canal Telegram', `${((snapshot.canalTelegram || {}).count || 0)} canal(aux) = stratégie(s) • ${((snapshot.canalTelegram || {}).won || 0)} ✓ / ${((snapshot.canalTelegram || {}).lost || 0)} ✗ • tous formats uniformisés`)}
         ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
         ${card('#/stability', '🛡️', 'Stabilité du jeu', (snapshot.gameStability || {}).enabled ? `Activée · jeu ${((snapshot.gameStability || {}).state === 'unstable') ? 'instable' : ((snapshot.gameStability || {}).state === 'stable' ? 'stable' : 'en analyse')}` : 'Désactivée · à activer')}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
@@ -643,6 +646,7 @@
       <div class="home-section-label">Suivi, statistiques et communauté</div>
       <div class="home-grid">
         ${card('#/parity-counter', '🔢', 'Compte parité', `${({ both: 'Joueur + banquier', player: 'Joueur seul', banker: 'Banquier seul' })[snapshot.parityCounter?.target || 'both']} • ${snapshot.parityCounter?.games || 0} jeu(x) depuis le reset • ${snapshot.parityCounter?.sentCount || 0} message(s)`)}
+        ${card('#/distribution-counter', '🃏', 'Compte distribution', `${({ both: 'Joueur + banquier', player: 'Joueur seul', banker: 'Banquier seul' })[snapshot.distributionCounter?.target || 'both']} • 2/2 · 3/2 · 3/3 · 2k · 3k • ${snapshot.distributionCounter?.games || 0} jeu(x) • ${snapshot.distributionCounter?.sentCount || 0} message(s)`)}
         ${card('#/end-digit', '🎯', 'Analyse fin de numéro', 'Costume le plus fréquent pour chaque fin de numéro 0 à 9')}
         ${card('#/slow-mode', '⏳', 'Ralentisseur', `${snapshot.slowMode?.all ? 'Tous les canaux' : (snapshot.slowMode?.channels || 0) + ' canal(aux) ralenti(s)'} • ${snapshot.slowMode?.queued || 0} prédiction(s) en attente`)}
         ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
@@ -750,6 +754,13 @@
         <span class="strategy-stats"><span class="tag">${esc(vv.sentCount ?? 0)} préd.</span><span class="tag good">${esc(vv.won ?? 0)} ✓</span><span class="tag bad">${esc(vv.lost ?? 0)} ✗</span><span class="tag">${(vv.rules || []).length} déclencheur(s)</span></span>
         <em>Ouvrir →</em></button>`;
       fams.push(stratFamily('victoire', '⚔️', 'Victoire joueur / banquier', 'V1 et V2 comme deux costumes, déclencheurs automatiques', stratStatusTag(vv.enabled !== false ? 1 : 0, 1), stratSub('⚔️', 'Victoire V1 / V2', `${(vv.rules || []).length} déclencheur(s) actif(s)`, vvBtn)));
+      // 3 ter) Canal Telegram : un canal = une stratégie
+      const ctg = snapshot.canalTelegram || {};
+      const ctgBtns = (ctg.strategies || []).map(c => `<button class="strategy-button" onclick="location.hash='#/canal-telegram'">
+        <span class="eyebrow">${c.enabled ? '🟢 Active' : '⏸ En pause'} · 📲 Canal</span><b>${esc(c.name)}</b><span>Toutes les prédictions du canal, tous formats uniformisés · ${esc(String(c.maxR))} rattrapage(s)</span>
+        <span class="strategy-stats"><span class="tag">${esc(c.resolved)} préd.</span><span class="tag good">${esc(c.won)} ✓</span><span class="tag bad">${esc(c.lost)} ✗</span><span class="tag">${esc(c.rate)} %</span></span><em>Ouvrir →</em></button>`).join('');
+      fams.push(stratFamily('canal-tg', '📲', 'Canaux Telegram', 'Un canal = une stratégie, tous formats et rattrapages uniformisés', stratStatusTag((ctg.strategies || []).filter(c => c.enabled).length, (ctg.strategies || []).length),
+        stratSub('📲', 'Canaux suivis', `${(ctg.strategies || []).length} canal(aux)`, ctgBtns || '<div class="empty">Aucun canal. Ouvre « Canal Telegram » pour en ajouter un.</div>')));
       // 4) Combinées
       const trackers = snapshot.combined?.trackers || [];
       const combHtml = trackers.length ? stratSub('🧩', 'Sources suivies', `${trackers.length} source(s)`, trackers.map(t => `<button class="strategy-button" onclick="location.hash='#/combined'">
@@ -2626,8 +2637,8 @@ Faites-en bon usage !
         steps: ['Ouvre « Nul / 2-3 », renseigne le canal et le rattrapage, puis active.', 'Déclencheurs : 2/3 → jeu +1 ; nul 2/2 → +1 ; nul 3/2 (joueur 3, banquier 2) → +2 ; nul 3/3 → +3.'],
         tips: ['Les pourcentages sont les taux réellement observés (fenêtre jeu prédit + rattrapages) ; la page montre aussi l’analyse des matchs nuls.', 'Quand l’analyse trouve une règle à ajouter, modifier ou supprimer, elle l’envoie dans le chat privé avec un bouton « Appliquer » (liste cliquable, aussi avec /nul).'] },
       { g: 'ops', icon: '🎯', title: 'Analyse fin de numéro', hash: '#/end-digit',
-        what: 'Pour chaque fin de numéro de jeu (0 à 9), cherche quel costume arrive le plus souvent dans la main du joueur et du banquier, et propose le meilleur costume de chaque chiffre, y compris pour le prochain jeu.',
-        steps: ['Ouvre « Analyse fin de numéro » et choisis le nombre de jeux à analyser.', 'Lis le costume proposé pour chaque chiffre et pour le prochain jeu.'],
+        what: 'Pour chaque fin de numéro de jeu (0 à 9), cherche quel costume arrive le plus souvent dans la main du joueur (jamais celle du banquier), et propose le meilleur costume de chaque chiffre, y compris pour le prochain jeu.',
+        steps: ['Ouvre « Analyse fin de numéro » et choisis le nombre de jeux à analyser.', 'Lis le costume proposé pour chaque chiffre et pour le prochain jeu.', 'Pour prédire : dans le bloc « Prédiction fin de numéro », renseigne le canal, les rattrapages et l’avance, coche « Activer l’envoi ». Le bot envoie le meilleur tant qu’il valide ; s’il ne valide pas, il envoie le plus faible ET l’inverse du meilleur, jusqu’à ce que le meilleur revalide.'],
         tips: ['Avec la base de données connectée, l’analyse porte sur des milliers de jeux ; sans elle, seul le sabot en cours est lu.', 'Un petit écart avec la moyenne peut être du hasard : regarde le nombre de jeux (« faible » sous 30).'] },
       { g: 'ops', icon: '🕳️', title: 'Alerte absence', hash: '#/absence-alert',
         what: 'Compte pour chacun des 4 costumes le nombre de jeux consécutifs où il n’est pas sorti et t’envoie un message dans ton chat privé quand un costume atteint le seuil (15 jeux par défaut).',
@@ -2645,10 +2656,18 @@ Faites-en bon usage !
         what: 'Compte la fin du numéro de jeu (0 à 9) pour le joueur et le banquier séparément : si le point du côté est pair, le chiffre va dans « Taux parité pair », sinon dans « Taux parité impair », avec le pourcentage de chaque chiffre. À chaque fin de jeu, seul le message du côté gagnant est envoyé (rien en cas d’égalité), avec le compte à rebours avant le reset.',
         steps: ['Ouvre « Compte parité », renseigne le canal, choisis « Joueur », « Banquier » ou les deux, puis enregistre.', 'Règle l’intervalle de reset (60 min par défaut).'],
         tips: ['Le compteur repart de zéro à chaque reset ; changer l’intervalle remet aussi à zéro.'] },
+      { g: 'ops', icon: '🃏', title: 'Compte distribution', hash: '#/distribution-counter',
+        what: 'Jumeau du « Compte parité » : au lieu des costumes, il compte la distribution des cartes — 2/2, 3/2, 3/3 (cartes du joueur / du banquier), 2/3, ainsi que 2k (le joueur a 2 cartes) et 3k (le joueur a 3 cartes) — par fin de numéro de jeu (0 à 9), joueur et banquier séparément, selon le point pair ou impair du côté.',
+        steps: ['Ouvre « Compte distribution », renseigne le canal, choisis « Joueur », « Banquier » ou les deux, puis enregistre.', 'Règle l’intervalle de reset (60 min par défaut).'],
+        tips: ['À chaque reset, le bilan ajoute les détails : nombre de jeux pair / impair, fins de numéro élevées (5-9) et basses (0-4), chiffre par chiffre et fin la plus fréquente. Le bilan du « Compte parité » reçoit les mêmes détails.'] },
       { g: 'ops', icon: '⚔️', title: 'Victoire V1 / V2', hash: '#/victoire-vb',
         what: 'Prédit ensemble la victoire du joueur (V1) ou du banquier (V2), dans un seul message comme les deux costumes. Dès qu’un côté est validé, il attend l’autre ; si l’autre ne valide pas à +1, il est relancé à N+3 dans le même message.',
         steps: ['Ouvre « Victoire V1 / V2 » (aussi dans « Stratégies »), renseigne le canal et le rattrapage, puis active.', 'Les déclencheurs (après quels gagnants / quelles cartes, et à quel +n) sont trouvés et appliqués automatiquement par l’analyse ; ils apparaissent dans « Déclencheurs actifs ».'],
         tips: ['Un déclencheur n’est retenu que s’il valide nettement mieux que le taux général : tant que l’historique ne montre rien de net, rien n’est envoyé.', 'L’autre côté doit valider à +1 et la relance part à N+3 : ces deux nombres sont modifiables dans les réglages. La liste des changements arrive aussi dans le chat privé (commande /victoire).'] },
+      { g: 'ops', icon: '📲', title: 'Canal Telegram', hash: '#/canal-telegram',
+        what: 'Un canal Telegram devient UNE stratégie, qui porte le nom du canal. Toutes les prédictions publiées dans ce canal sont lues de la même façon, quel que soit leur format (les 107 formats du site, ceux d’autres bots, avec ou sans pourcentage…) et quel que soit le rattrapage annoncé : le bot ne retient que « numéro de jeu + costume » et vérifie lui-même chaque prédiction sur la main du joueur avec UN nombre de rattrapages unique réglé pour ce canal.',
+        steps: ['Ouvre « Canal Telegram », choisis un canal (liste des canaux où le bot est présent) ou saisis son ID / @nom.', 'Garde le nom proposé (le nom du canal) ou donne le tien, règle les rattrapages de vérification (3 par défaut), puis clique sur « Créer la stratégie ».', 'Les statistiques (gagnées / perdues, taux, répartition par rattrapage et par costume) se remplissent dès les prochaines prédictions du canal.'],
+        tips: ['Le bot doit être présent (administrateur) dans le canal pour lire ses publications ; un canal où ce bot publie lui-même fonctionne aussi.', 'Les prédictions sans costume (distribution 2/2…) ne sont pas lues. Une même prédiction (canal + jeu + costume) n’est jamais comptée deux fois, même si le message est édité.', 'Ce bouton n’envoie rien : il observe, vérifie et compte.'] },
       { g: 'auto', icon: '⏮️', title: 'Costume N-1 → +4', hash: '#/prev-suit',
         what: 'Tu coches des stratégies / configurations de tout le site ; le bot observe leurs prédictions. Quand le costume prédit au jeu N est venu au jeu N-1 mais n’est pas sorti au jeu N, il prédit le même costume au jeu N+4 dans le canal (ID) choisi.',
         steps: ['Ouvre « Costume N-1 → +4 », coche les stratégies / configurations à observer.', 'Renseigne le canal d’envoi (ID), le décalage (+4 par défaut), les rattrapages et le format, coche « Activer » puis enregistre.'],
@@ -4091,6 +4110,7 @@ Faites-en bon usage !
             <div class="field" style="margin-top:16px"><label>Canal du site (vitrine)</label><select id="vvSiteChannel">${vvSiteOptions(p.siteChannelId)}</select></div>
             <div class="field"><label>Rattrapage maximum</label><input id="vvMaxR" type="number" min="0" max="9" value="${p.maxR ?? 1}"></div>
             <div class="field" style="margin-top:16px"><label>Canal des relances <span class="small">(vide = la relance s’ajoute dans le message d’origine ; rempli = un message simple par relance, uniquement dans ce canal)</span></label><input id="vvRelChannel" value="${esc((p.relanceChannels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Format du message</label><select id="vvMsgFormat"><option value="classic" ${p.msgFormat !== 'compact' ? 'selected' : ''}>Classique (V1 ✅0️⃣ 72% / ┣━ N° / V2 …)</option><option value="compact" ${p.msgFormat === 'compact' ? 'selected' : ''}>Compact — une ligne par côté (V1 72% ✅0️⃣ · V2 68% ⏳ → N°…)</option></select></div>
             <div class="field"><label>Rattrapages de la relance</label><input id="vvRelMaxR" type="number" min="0" max="9" value="${p.relanceMaxR ?? 1}"></div>
             <div class="field"><label>L’autre côté doit valider à + <span class="small">(sinon il est relancé)</span></label><input id="vvWait" type="number" min="1" max="3" value="${p.waitGames ?? 1}"></div>
             <div class="field"><label>Relance à N+ <span class="small">(N = jeu du côté validé ; 3 = N+3)</span></label><input id="vvGap" type="number" min="2" max="9" value="${p.relanceGap ?? 3}"></div>
@@ -4149,7 +4169,7 @@ Faites-en bon usage !
     async function saveVictoireVb() {
       const rawSite = val('vvSiteChannel');
       try {
-        await api('/api/victoire-vb/config', 'POST', { enabled: $('#vvEnabled')?.checked, autoApply: $('#vvAuto')?.checked, notify: $('#vvNotify')?.checked, maxR: val('vvMaxR'), relanceChannels: ids(val('vvRelChannel')), relanceMaxR: val('vvRelMaxR'), sensitivity: val('vvSens'), waitGames: val('vvWait'), relanceGap: val('vvGap'), channels: ids(val('vvChannel')), siteChannelId: rawSite === '' ? null : rawSite });
+        await api('/api/victoire-vb/config', 'POST', { enabled: $('#vvEnabled')?.checked, autoApply: $('#vvAuto')?.checked, notify: $('#vvNotify')?.checked, maxR: val('vvMaxR'), relanceChannels: ids(val('vvRelChannel')), relanceMaxR: val('vvRelMaxR'), msgFormat: val('vvMsgFormat'), sensitivity: val('vvSens'), waitGames: val('vvWait'), relanceGap: val('vvGap'), channels: ids(val('vvChannel')), siteChannelId: rawSite === '' ? null : rawSite });
         await refresh(); victoireVbPage(); toast('Panneau « Victoire V1 / V2 » enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -4199,13 +4219,36 @@ Faites-en bon usage !
     let edWindow = 5000;
     async function endDigitPage() {
       setNav('end-digit');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse</span><h2 style="margin-top:7px">🎯 Analyse fin de numéro</h2><p class="small">Pour chaque <b>fin de numéro de jeu (0 à 9)</b> — le jeu #1223 finit par <b>3</b> — le bot cherche quel <b>costume arrive le plus souvent</b> dans la main du joueur et dans celle du banquier, et te propose le meilleur de chaque chiffre.</p></div></div><div class="card"><p class="small">Analyse en cours…</p></div>`;
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse</span><h2 style="margin-top:7px">🎯 Analyse fin de numéro</h2><p class="small">Pour chaque <b>fin de numéro de jeu (0 à 9)</b> — le jeu #1223 finit par <b>3</b> — le bot cherche quel <b>costume arrive le plus souvent</b> dans la main du <b>joueur</b> (jamais celle du banquier), et te propose le meilleur de chaque chiffre.</p></div></div><div class="card"><p class="small">Analyse en cours…</p></div>`;
       let a;
       try { a = await api('/api/end-digit?window=' + encodeURIComponent(edWindow)); }
       catch (e) { $('#app').innerHTML += `<div class="card"><p class="small" style="color:#f87171">${esc(e.message)}</p></div>`; return; }
       const suitRow = (r) => r.ranked.map((x, i) => `<span class="tag ${i === 0 ? 'good' : ''}" style="margin-right:4px">${x.suit} ${x.pct}%</span>`).join('');
+
+      const ep = snapshot.endDigitPredict || {};
+      const epModeTag = (m) => m === 'repli' ? '<span class="tag bad">repli : faible + inverse</span>' : '<span class="tag good">meilleur</span>';
+      const predictCard = `<div class="card" style="margin-bottom:16px">
+          <h3>🤖 Prédiction fin de numéro</h3>
+          <p class="small">Le bot prédit le <b>meilleur costume du joueur</b> pour la fin de numéro du jeu visé (jeu en direct + avance) et <b>vérifie en permanence</b> si ce meilleur valide, même quand il ne l'envoie pas. Tant que le meilleur valide (✅), il continue de l'envoyer. Dès qu'il ne valide pas (❌), il envoie <b>deux prédictions</b> : le costume <b>le plus faible</b> et <b>l'inverse du meilleur</b> (♦️↔♠️ · ♣️↔❤️). Quand le meilleur revalide, il repasse dessus. Chaque fin de numéro (0 à 9) a son propre état. Main du joueur uniquement.</p>
+          <div class="three-col">
+            <div class="field"><label>ID ou @nom du canal d'envoi</label><input id="epChannel" value="${esc((ep.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Rattrapages</label><input id="epMaxR" type="number" min="0" max="9" value="${ep.maxR ?? 2}"></div>
+            <div class="field"><label>Format (1 → ${esc(String(snapshot.formatCount || 107))})</label><input id="epFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 107))}" value="${ep.format ?? 1}"></div>
+            <div class="field"><label>Avance (envoi à jeu en direct + …)</label><input id="epLead" type="number" min="1" max="20" value="${ep.lead ?? 2}"></div>
+            <div class="field"><label>Échantillon minimum (jeux pour cette fin)</label><input id="epMinN" type="number" min="1" max="5000" value="${ep.minN ?? 30}"></div>
+            <div class="field"><label>&nbsp;</label><label class="check"><input id="epEnabled" type="checkbox" ${ep.enabled ? 'checked' : ''}> Activer l'envoi</label></div>
+          </div>
+          <div class="toolbar"><button class="button small primary" onclick="saveEndDigitPredict()">Enregistrer</button><button class="button small ghost" onclick="testEndDigitPredict()">Envoyer un test</button><button class="button small danger" onclick="resetEndDigitPredict()">Remettre à zéro</button></div>
+          ${ep.lastError ? `<p class="small" style="color:#f87171">${esc(ep.lastError)}</p>` : ''}
+          <p class="small" style="margin-top:10px">Envoyées : <b>${ep.sentCount || 0}</b> • gagnées <b>${ep.won || 0}</b> / perdues <b>${ep.lost || 0}</b> (${ep.rate || 0} %) • en cours ${ep.waiting || 0}${(ep.roles || []).length ? ' • ' + ep.roles.map((r) => `${esc(r.label)} : ${r.won}✓/${r.lost}✗ (${r.rate} %)`).join(' · ') : ''}</p>
+          <table class="table"><thead><tr><th>Fin</th><th>Mode actuel</th><th>Meilleur vérifié (✅ / ❌)</th><th>Dernier résultat du meilleur</th></tr></thead><tbody>
+            ${(ep.digits || []).map((d) => `<tr><td><b>${d.digit}</b></td><td>${epModeTag(d.mode)}</td><td>${d.bestWon} ✓ / ${d.bestLost} ✗ (${d.rate} %)</td><td>${d.lastOk === null ? '—' : (d.lastOk ? '✅' : '❌') + ' ' + esc(d.lastSuit || '') + ' №' + d.lastTarget}</td></tr>`).join('')}
+          </tbody></table>
+          ${(ep.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>Rôle</th><th>État</th></tr></thead><tbody>${ep.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${esc(e.role)}</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '🚫'}</td></tr>`).join('')}</tbody></table>` : ''}
+        </div>`;
       const best = (b) => (b ? `<b style="font-size:1.15em">${b.suit}</b> ${b.pct}% <span class="small muted">(${b.edge >= 0 ? '+' : ''}${b.edge} pt vs moyenne)</span>` : '—');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse</span><h2 style="margin-top:7px">🎯 Analyse fin de numéro</h2><p class="small">Pour chaque <b>fin de numéro de jeu (0 à 9)</b> — le jeu #1223 finit par <b>3</b> — le bot cherche quel <b>costume arrive le plus souvent</b> dans la main du joueur et dans celle du banquier, et te propose le meilleur de chaque chiffre. « Arrive » = le costume apparaît au moins une fois dans la main.</p></div></div>
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse</span><h2 style="margin-top:7px">🎯 Analyse fin de numéro</h2><p class="small">Pour chaque <b>fin de numéro de jeu (0 à 9)</b> — le jeu #1223 finit par <b>3</b> — le bot cherche quel <b>costume arrive le plus souvent</b> dans la main du <b>joueur</b> (jamais celle du banquier), et te propose le meilleur de chaque chiffre. « Arrive » = le costume apparaît au moins une fois dans la main.</p></div></div>
+        ${predictCard}
         <div class="card">
           <div class="toolbar"><label class="small">Jeux analysés&nbsp;
             <select id="edWin" onchange="edWindow = Number(this.value); endDigitPage()">
@@ -4217,22 +4260,35 @@ Faites-en bon usage !
         <div class="card" style="margin-top:16px">
           <h3>Proposition pour le prochain jeu (#${a.next.number}, fin <b>${a.next.digit}</b>)</h3>
           <p>👤 Joueur : ${best(a.next.player)}</p>
-          <p>🏦 Banquier : ${best(a.next.banker)}</p>
           <p class="small muted">Calculé sur ${a.next.n} jeu(x) finissant par ${a.next.digit}${a.next.n < a.goodN ? ' — échantillon encore faible, à prendre avec prudence' : ''}.</p>
         </div>
         <div class="card" style="margin-top:16px">
           <h3>Meilleur costume par fin de numéro</h3>
-          <table class="table"><thead><tr><th>Fin</th><th>Jeux</th><th>👤 Joueur — proposé</th><th>🏦 Banquier — proposé</th></tr></thead><tbody>
-            ${a.digits.map((d) => `<tr><td><b>${d.digit}</b></td><td>${d.n}${d.reliable ? '' : ' <span class="tag bad">faible</span>'}</td><td>${best(d.player.best)}</td><td>${best(d.banker.best)}</td></tr>`).join('')}
+          <table class="table"><thead><tr><th>Fin</th><th>Jeux</th><th>👤 Joueur — proposé</th></tr></thead><tbody>
+            ${a.digits.map((d) => `<tr><td><b>${d.digit}</b></td><td>${d.n}${d.reliable ? '' : ' <span class="tag bad">faible</span>'}</td><td>${best(d.player.best)}</td></tr>`).join('')}
           </tbody></table>
         </div>
         <div class="card" style="margin-top:16px">
           <h3>Détail : les quatre costumes pour chaque fin de numéro</h3>
-          <table class="table"><thead><tr><th>Fin</th><th>👤 Joueur (du plus fréquent au moins fréquent)</th><th>🏦 Banquier</th></tr></thead><tbody>
-            ${a.digits.map((d) => `<tr><td><b>${d.digit}</b></td><td>${suitRow(d.player)}</td><td>${suitRow(d.banker)}</td></tr>`).join('')}
+          <table class="table"><thead><tr><th>Fin</th><th>👤 Joueur (du plus fréquent au moins fréquent)</th></tr></thead><tbody>
+            ${a.digits.map((d) => `<tr><td><b>${d.digit}</b></td><td>${suitRow(d.player)}</td></tr>`).join('')}
           </tbody></table>
-          <p class="small muted" style="margin-top:8px">Moyenne générale — joueur : ${a.overall.player.map((x) => `${x.suit} ${x.pct}%`).join(' · ')} • banquier : ${a.overall.banker.map((x) => `${x.suit} ${x.pct}%`).join(' · ')}. Un écart faible avec la moyenne peut être du simple hasard : plus il y a de jeux, plus la proposition est fiable.</p>
+          <p class="small muted" style="margin-top:8px">Moyenne générale (joueur) : ${a.overall.player.map((x) => `${x.suit} ${x.pct}%`).join(' · ')}. Un écart faible avec la moyenne peut être du simple hasard : plus il y a de jeux, plus la proposition est fiable.</p>
         </div>`;
+    }
+
+    async function saveEndDigitPredict() {
+      try {
+        await api('/api/end-digit-predict/config', 'POST', { enabled: $('#epEnabled')?.checked, channels: val('epChannel'), maxR: val('epMaxR'), format: val('epFormat'), lead: val('epLead'), minN: val('epMinN') });
+        await refresh(); endDigitPage(); toast('« Prédiction fin de numéro » enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testEndDigitPredict() {
+      try { await saveEndDigitPredict(); const r = await api('/api/end-digit-predict/test', 'POST', {}); toast(r.ok ? 'Test envoyé dans le canal.' : (r.error || 'Échec')); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetEndDigitPredict() {
+      if (!confirm('Remettre à zéro les statistiques et l’état de chaque fin de numéro ?')) return;
+      try { await api('/api/end-digit-predict/reset', 'POST', {}); await refresh(); endDigitPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
     }
 
     // « Ralentisseur » (voir slow-mode.js) : retient une prédiction jusqu'au début du jeu précédent.
@@ -4328,6 +4384,58 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
 
+    // « Compte distribution » (voir distribution-counter.js) : 2/2, 3/2, 3/3, 2/3, 2k, 3k par fin de numéro, joueur / banquier.
+    function distributionCounterPage() {
+      setNav('distribution-counter');
+      const p = snapshot.distributionCounter || {};
+      const DG = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+      const pc = (c, t) => (t ? Math.round(100 * c / t) : 0);
+      const det = (d, label) => `<p class="small"><b>${label}</b> : ${d.total} jeu(x) • élevées (5-9) <b>${d.high}</b> • basses (0-4) <b>${d.low}</b> • fin la plus fréquente : <b>${d.total ? (d.top || []).map((x) => DG[x]).join(' ') + ' (' + d.topCount + ')' : '—'}</b></p>`;
+      const side = (key, icon, name) => {
+        const v = p[key]; if (!v) return '';
+        const t = v.dist || {};
+        const rows = (v.rows || []).map((r) => `<tr><td>${DG[r.digit]}</td><td>${r.total}</td><td>${pc(r['2/2'], r.total)}%</td><td>${pc(r['3/2'], r.total)}%</td><td>${pc(r['3/3'], r.total)}%</td><td>${pc(r['2/3'], r.total)}%</td><td>${pc(r.twoK, r.total)}%</td><td>${pc(r.threeK, r.total)}%</td></tr>`).join('');
+        return `<div class="card"><h3>${icon} ${name}</h3>
+          <table class="table"><thead><tr><th>Fin</th><th>Jeux</th><th>2/2</th><th>3/2</th><th>3/3</th><th>2/3</th><th>2k</th><th>3k</th></tr></thead><tbody>${rows}</tbody></table>
+          <p class="small">Total : 2/2 <b>${t['2/2'] || 0}</b> • 3/2 <b>${t['3/2'] || 0}</b> • 3/3 <b>${t['3/3'] || 0}</b> • 2/3 <b>${t['2/3'] || 0}</b> • 2k <b>${t.twoK || 0}</b> • 3k <b>${t.threeK || 0}</b></p>
+          ${det({ ...v.details.pair }, 'Pair')}${det({ ...v.details.impair }, 'Impair')}</div>`;
+      };
+      const mins = Math.floor((p.nextResetMs || 0) / 60000); const secs = Math.floor(((p.nextResetMs || 0) % 60000) / 1000);
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Compteur</span><h2 style="margin-top:7px">🃏 Compte distribution</h2><p class="small">Comme le « Compte parité », mais au lieu des costumes on compte la <b>distribution des cartes</b> : <b>2/2</b> (joueur 2 cartes · banquier 2), <b>3/2</b>, <b>3/3</b>, <b>2/3</b>, ainsi que <b>2k</b> (le joueur a 2 cartes) et <b>3k</b> (le joueur a 3 cartes). Par fin de numéro de jeu (0 à 9), joueur et banquier séparément, rangés selon le point pair / impair du côté. Le bilan de chaque reset ajoute les <b>détails</b> : nombre de jeux pair / impair, fins de numéro élevées (5-9) / basses (0-4) et fin la plus fréquente — les mêmes détails sont ajoutés au bilan du « Compte parité ».</p></div></div>
+        <div class="card">
+          <h3>Canal et réglages</h3>
+          <div class="field"><label>ID ou @nom du canal</label><input id="dcChannel" value="${esc(p.channelId || '')}" placeholder="-1001234567890"></div>
+          <div class="field"><label>Envoyer pour</label><select id="dcTarget"><option value="both" ${p.target === 'both' || !p.target ? 'selected' : ''}>Joueur et banquier (un message chacun)</option><option value="player" ${p.target === 'player' ? 'selected' : ''}>Joueur uniquement</option><option value="banker" ${p.target === 'banker' ? 'selected' : ''}>Banquier uniquement</option></select></div>
+          <div class="field"><label>Intervalle de reset (minutes)</label><input id="dcInterval" type="number" min="5" max="1440" value="${p.intervalMin ?? 60}"></div>
+          <label class="check"><input id="dcWinner" type="checkbox" ${p.winnerOnly !== false ? 'checked' : ''}> À chaque fin de jeu, n’envoyer que le côté qui a gagné (rien si égalité)</label>
+          <label class="check"><input id="dcEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''}> Activer le « Compte distribution »</label>
+          <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveDistributionCounter()">Enregistrer</button><button class="button small ghost" onclick="testDistributionCounter()">Envoyer un aperçu (avec détails)</button><button class="button small danger" onclick="resetDistributionCounter()">Remettre à zéro maintenant</button></div>
+          ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+          <p class="small" style="margin-top:10px">Depuis le dernier reset : <b>${p.games || 0}</b> jeu(x) • prochain reset dans <b>${mins}min ${secs}s</b> • messages envoyés : <b>${p.sentCount || 0}</b></p>
+        </div>
+        <div class="grid two" style="margin-top:16px">
+          ${p.target !== 'banker' ? side('player', '👤', 'Joueur') : ''}
+          ${p.target !== 'player' ? side('banker', '🏦', 'Banquier') : ''}
+        </div>
+        <div class="card" style="margin-top:16px"><h3>Aperçu du message</h3>
+          ${(p.previews || []).map((m) => `<pre class="small" style="white-space:pre-wrap;margin:0 0 14px">${esc(m.text)}</pre>`).join('') || '<p class="small">Rien à afficher.</p>'}
+        </div>`;
+    }
+    async function saveDistributionCounter() {
+      try {
+        await api('/api/distribution-counter/config', 'POST', { enabled: $('#dcEnabled')?.checked, winnerOnly: $('#dcWinner')?.checked, channelId: val('dcChannel'), target: val('dcTarget'), intervalMin: val('dcInterval') });
+        await refresh(); distributionCounterPage(); toast('« Compte distribution » enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testDistributionCounter() {
+      try { await saveDistributionCounter(); const r = await api('/api/distribution-counter/test', 'POST', {}); toast(r.ok ? 'Aperçu envoyé dans le canal.' : ((r.errors || []).join(' / ') || r.error || 'Échec')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetDistributionCounter() {
+      if (!confirm('Remettre à zéro le « Compte distribution » maintenant ?')) return;
+      try { await api('/api/distribution-counter/reset', 'POST', {}); await refresh(); distributionCounterPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+
     // « Costume N-1 → +4 » (voir prev-suit.js) : cases à cocher sur toutes les stratégies / configurations du site.
     function prevSuitPage() {
       setNav('prev-suit');
@@ -4383,6 +4491,62 @@ Faites-en bon usage !
     async function resetPrevSuit() {
       if (!confirm('Remettre à zéro les statistiques et le suivi ?')) return;
       try { await api('/api/prev-suit/reset', 'POST', {}); await refresh(); prevSuitPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // « Canal Telegram » (voir canal-telegram.js) : un canal = une stratégie ; tous formats et rattrapages uniformisés.
+    function canalTelegramPage() {
+      setNav('canal-telegram');
+      const p = snapshot.canalTelegram || {};
+      const known = (snapshot.channels || []);
+      const used = new Set((p.strategies || []).map((c) => String(c.channel)));
+      const statusBadge = (st) => st === 'gagné' ? '✅ gagné' : st === 'perdu' ? '❌ perdu' : st === 'en attente' ? '⏳ en cours' : '🚫 annulé';
+      const options = known.filter((c) => !used.has(String(c.id))).map((c) => `<option value="${esc(String(c.id))}">${esc(c.title || String(c.id))} — ${esc(String(c.id))}</option>`).join('');
+      const cards = (p.strategies || []).map((c) => `<div class="card" style="margin-top:16px">
+          <div class="split"><h3 style="margin:0">📲 ${esc(c.name)} <span class="small muted">— ${esc(c.username || c.channel)}</span></h3><span class="tag">${c.enabled ? '🟢 Active' : '⏸ En pause'}</span></div>
+          <p class="small" style="margin-top:8px"><b>${c.resolved}</b> prédiction(s) vérifiée(s) • gagnées <b>${c.won}</b> / perdues <b>${c.lost}</b> (<b>${c.rate} %</b>) • en cours <b>${c.waiting}</b>${c.cancelled ? ` • annulées ${c.cancelled}` : ''}</p>
+          <p class="small">Par rattrapage : ${c.steps.length ? c.steps.map((x) => `R${x.step} : <b>${x.n}</b>`).join(' · ') : '—'} &nbsp;|&nbsp; Par costume : ${c.suits.length ? c.suits.map((x) => `${esc(x.suit)} ${x.won}✓/${x.lost}✗ (${x.rate} %)`).join(' · ') : '—'}</p>
+          <div class="three-col">
+            <div class="field"><label>Nom de la stratégie</label><input id="ctgName-${esc(c.id)}" value="${esc(c.name)}" placeholder="${esc(c.title || '')}"></div>
+            <div class="field"><label>Rattrapages de vérification (identiques pour tous les formats)</label><input id="ctgMaxR-${esc(c.id)}" type="number" min="0" max="9" value="${c.maxR}"></div>
+            <div class="field"><label>&nbsp;</label><label class="check"><input id="ctgOn-${esc(c.id)}" type="checkbox" ${c.enabled ? 'checked' : ''}> Active</label></div>
+          </div>
+          <div class="toolbar"><button class="button small primary" onclick="canalTelegramSave('${esc(c.id)}')">Enregistrer</button><button class="button small ghost" onclick="canalTelegramReset('${esc(c.id)}')">Statistiques à zéro</button><button class="button small danger" onclick="canalTelegramRemove('${esc(c.id)}')">Supprimer</button></div>
+          ${c.recent.length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>${c.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${statusBadge(e.status)}</td><td>${e.status === 'gagné' ? 'R' + e.step : e.status === 'en attente' ? (e.step || 0) + '/' + c.maxR : '—'}</td></tr>`).join('')}</tbody></table>` : '<p class="small muted" style="margin-top:10px">Aucune prédiction lue pour le moment : elles apparaîtront dès la prochaine publication du canal.</p>'}
+        </div>`).join('');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Observation</span><h2 style="margin-top:7px">📲 Canal Telegram</h2><p class="small">Un canal = <b>une stratégie</b>, qui porte le nom du canal. Toutes les prédictions publiées dans ce canal sont lues de la même façon, <b>quel que soit leur format et quel que soit le rattrapage annoncé</b> : le bot ne retient que le numéro de jeu et le costume, puis vérifie chaque prédiction sur la main du joueur avec le nombre de rattrapages réglé ici. Rien n'est envoyé par ce bouton.</p></div></div>
+        <div class="card">
+          <h3>Ajouter un canal</h3>
+          <div class="three-col">
+            <div class="field"><label>Canal où le bot est présent</label><select id="ctgPick" onchange="if(this.value) $('#ctgChannel').value=this.value"><option value="">— choisir dans la liste —</option>${options}</select></div>
+            <div class="field"><label>ou ID / @nom du canal</label><input id="ctgChannel" placeholder="-1001234567890 ou @moncanal"></div>
+            <div class="field"><label>Rattrapages de vérification</label><input id="ctgNewMaxR" type="number" min="0" max="9" value="${p.defaultMaxR ?? 3}"></div>
+          </div>
+          <div class="field"><label>Nom de la stratégie <span class="small">(facultatif : par défaut, le nom du canal)</span></label><input id="ctgNewName" placeholder="Nom du canal"></div>
+          <div class="toolbar"><button class="button primary" onclick="canalTelegramAdd()">Créer la stratégie</button></div>
+          <p class="small" style="margin-top:10px">${p.count || 0} canal(aux) • gagnées <b>${p.won || 0}</b> / perdues <b>${p.lost || 0}</b> (${p.rate || 0} %) • messages ignorés (pas une prédiction) : ${p.ignoredPosts || 0} • lues trop tard (jeu déjà joué) : ${p.lateSkipped || 0}</p>
+          ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+        </div>
+        ${cards || '<div class="card" style="margin-top:16px"><p class="small">Aucun canal pour le moment. Ajoute-en un ci-dessus : le bot doit être présent (administrateur) dans le canal pour lire ses publications.</p></div>'}`;
+    }
+    async function canalTelegramAdd() {
+      try {
+        const r = await api('/api/canal-telegram/strategies', 'POST', { channel: val('ctgChannel'), name: val('ctgNewName'), maxR: val('ctgNewMaxR') });
+        await refresh(); canalTelegramPage(); toast(`Stratégie « ${r.strategy.name} » créée.`);
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function canalTelegramSave(id) {
+      try {
+        await api(`/api/canal-telegram/strategies/${encodeURIComponent(id)}`, 'PUT', { name: val('ctgName-' + id), maxR: val('ctgMaxR-' + id), enabled: document.getElementById('ctgOn-' + id)?.checked });
+        await refresh(); canalTelegramPage(); toast('Enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function canalTelegramReset(id) {
+      if (!confirm('Remettre à zéro les statistiques de cette stratégie ?')) return;
+      try { await api(`/api/canal-telegram/strategies/${encodeURIComponent(id)}/reset`, 'POST', {}); await refresh(); canalTelegramPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function canalTelegramRemove(id) {
+      if (!confirm('Supprimer cette stratégie de canal (le canal Telegram lui-même n’est pas touché) ?')) return;
+      try { await api(`/api/canal-telegram/strategies/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); canalTelegramPage(); toast('Supprimée.'); } catch (e) { toast(e.message, 'error'); }
     }
 
     // « VIP » (voir vip.js) : liste à cocher de toutes les stratégies + IA ;
@@ -6199,6 +6363,7 @@ Faites-en bon usage !
         else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/parity-counter') parityCounterPage();
+        else if (h === '#/distribution-counter') distributionCounterPage();
         else if (h === '#/end-digit') endDigitPage();
         else if (h === '#/slow-mode') slowModePage();
         else if (h === '#/absence-alert') absenceAlertPage();
@@ -6206,6 +6371,7 @@ Faites-en bon usage !
         else if (h === '#/draw-two-three') drawTwoThreePage();
         else if (h === '#/victoire-vb') victoireVbPage();
         else if (h === '#/prev-suit') prevSuitPage();
+        else if (h === '#/canal-telegram') canalTelegramPage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
         else if (h === '#/announcements') await announcementsPage();
