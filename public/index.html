@@ -332,6 +332,8 @@
         <a href="#/trigger" data-nav="trigger">⚡ Envoi sur déclencheur</a>
         <a href="#/relance" data-nav="relance">🔄 Relance</a>
         <a href="#/stability" data-nav="stability">🛡️ Stabilité</a>
+        <a href="#/absence-alert" data-nav="absence-alert">🕳️ Alerte absence</a>
+        <a href="#/loss-gate" data-nav="loss-gate">🚦 Envoi après perte</a>
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/parity-counter" data-nav="parity-counter">🔢 Compte parité</a>
@@ -603,6 +605,8 @@
         ${card('#/diagnostics', '📨', 'Envois', 'Vérification des canaux')}
         ${card('#/stability', '🛡️', 'Stabilité du jeu', (snapshot.gameStability || {}).enabled ? `Activée · jeu ${((snapshot.gameStability || {}).state === 'unstable') ? 'instable' : ((snapshot.gameStability || {}).state === 'stable' ? 'stable' : 'en analyse')}` : 'Désactivée · à activer')}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
+        ${card('#/absence-alert', '🕳️', 'Alerte absence', (snapshot.absenceAlert || {}).enabled ? `Activée · seuil ${(snapshot.absenceAlert || {}).threshold} jeux` : 'Désactivée · à activer')}
+        ${card('#/loss-gate', '🚦', 'Envoi après perte', (snapshot.channelLossGate || {}).enabled ? `Activé · ${(snapshot.channelLossGate || {}).rows || 0} ligne(s) de planning` : 'Désactivé · planning dans l\'Excel')}
       </div>
 
       <div class="home-section-label">Stratégies de prédiction</div>
@@ -684,7 +688,7 @@
     //   Niveau 2 : le sous-groupe (thème) ou le mode
     //   Niveau 3 : le bouton de la stratégie, puis directement SES configurations
     const STRAT_THEMES = [
-      { id: 'num', icon: '🔢', title: 'Numéro & rythme', sub: 'Le costume ou le déclencheur vient du numéro du jeu', keys: ['costume', 'parite'] },
+      { id: 'num', icon: '🔢', title: 'Numéro & rythme', sub: 'Le costume ou le déclencheur vient du numéro du jeu', keys: ['costume', 'parite', 'finNumero'] },
       { id: 'cartes', icon: '🃏', title: 'Cartes & mains', sub: 'Lecture des cartes du joueur et du banquier', keys: ['dominant', 'matchnul', 'troisiemeBanquier', 'secondeCarte', 'deuxTrois', 'carteManquante', 'carteBanquier'] },
       { id: 'absence', icon: '🕳️', title: 'Absence de costume', sub: 'Un costume ne sort plus pendant plusieurs jeux', keys: ['absente', 'absenceJoueur', 'absenceDecalage'] },
       { id: 'ombre', icon: '👤', title: 'Prédiction dans l’ombre', sub: 'Surveillance silencieuse des 4 costumes', keys: ['ombre', 'ombreJoueur'] },
@@ -966,6 +970,7 @@ Faites-en bon usage !
           ${s.key === 'parite' ? `<div class="three-col"><div class="field"><label>Départ</label><input id="cfgStart" type="number" min="1" value="${c.startGame ?? 1}"></div><div class="field"><label>Pas VAR</label><input id="cfgVar" type="number" min="0" value="${c.varStep ?? 0}"></div><div class="field"><label>Décalage</label><input id="cfgDec" type="number" min="1" value="${c.decalage ?? 1}"></div></div>` : ''}
           ${s.key === 'absenceDecalage' ? `<div class="three-col"><div class="field"><label>Nombre d'absences (jeux consécutifs sans le costume)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Décalage (+ jeux)</label><input id="cfgDec" type="number" min="1" max="99" value="${c.decalage ?? 2}"></div></div><p class="small">Exemple : absence 4 + décalage 2. Si ❤️ est absent aux jeux 2, 3, 4 et 5, on prédit ❤️ sur le jeu 5 + 2 = <b>7</b>. Main du joueur uniquement. La prédiction part une seule fois par série d'absence. Le format, les rattrapages et le canal se règlent ci-dessous comme pour les autres stratégies.</p>` : ''}
           ${s.key === 'deuxTrois' ? distFormatPicker(c.format) : ''}
+          ${s.key === 'finNumero' ? `<div class="three-col"><div class="field"><label>Seuil du costume (%)</label><input id="cfgPctMin" type="number" min="1" max="100" value="${c.pctMin ?? 60}"></div><div class="field"><label>Jeux minimum par fin de numéro</label><input id="cfgMinN" type="number" min="1" max="5000" value="${c.minN ?? 30}"></div></div><p class="small">Basée sur le bouton « Analyse fin de numéro » (main du joueur). Dès qu'un costume atteint le seuil sur la fin de numéro du jeu visé, on prédit son <b>opposé</b> : ♦️ ↔ ♠️ et ♣️ ↔ ❤️. Avec l'avance 2, la prédiction part quand le live est 2 jeux avant : fin de numéro 4 avec ♦️ à 62 % → au jeu <b>#32</b> on envoie « #34 → ♠️ ». Si plusieurs costumes passent le seuil, celui qui a le % le plus haut est retenu. Fin de numéro 9 à 100 % ou plus : envoi quand le live arrive à la fin de numéro 7.</p>` : ''}
           ${s.key === 'absente' ? `<div class="field"><label>Jeux sans costume</label><input id="cfgStreak" type="number" min="2" max="10" value="${c.streak ?? 3}"></div>` : ''}
           ${s.key === 'ombre' ? `<div class="three-col"><div class="field"><label>Absence minimum</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><div class="field"><label>Périmètre</label><select id="cfgScope"><option value="tous" ${c.scope !== 'joueur' ? 'selected' : ''}>Joueur + banquier</option><option value="joueur" ${c.scope === 'joueur' ? 'selected' : ''}>Joueur uniquement</option></select></div></div>` : ''}
           ${s.key === 'ombreJoueur' ? `<div class="field"><label>Absence minimum (jeux sans le costume sur la main du joueur)</label><input id="cfgAbsence" type="number" min="1" max="30" value="${c.absence ?? 4}"></div><p class="small">Périmètre fixe : main du joueur uniquement (le banquier n'est jamais pris en compte).</p>` : ''}
@@ -1051,7 +1056,7 @@ Faites-en bon usage !
     async function refreshStrategyLive(key) { await refresh(); strategyPage(key); }
     function val(id) { return document.getElementById(id)?.value ?? ''; }
     async function saveStrategy(key) {
-      const patch = { enabled: $('#cfgEnabled')?.checked, recap: $('#cfgRecap')?.checked, recapHours: val('cfgRecapHours'), format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
+      const patch = { enabled: $('#cfgEnabled')?.checked, recap: $('#cfgRecap')?.checked, recapHours: val('cfgRecapHours'), format: val('cfgFormat'), maxR: val('cfgMaxR'), lead: val('cfgLead'), b: val('cfgB'), silent: $('#cfgSilent')?.checked, lossWindow: val('cfgLossWindow'), lossTrigger: val('cfgLossTrigger'), lossInterval: val('cfgLossInterval'), autoUnlockMin: val('cfgAutoUnlock'), resetOnWin: val('cfgReset') !== '0', sendOnlyNext: $('#cfgSendOnlyNext')?.checked, autoEnabled: $('#cfgAutoEnabled')?.checked, autoTrigger: val('cfgAutoTrigger'), autoRattrapage: val('cfgAutoRattrapage'), autoSkip: val('cfgAutoSkip'), autoSend: val('cfgAutoSend'), startGame: val('cfgStart'), varStep: val('cfgVar'), decalage: val('cfgDec'), streak: val('cfgStreak'), absence: val('cfgAbsence'), scope: val('cfgScope'), gap: val('cfgGap'), pctMin: val('cfgPctMin'), minN: val('cfgMinN'), aiAuto: $('#cfgAiAuto')?.checked, delayEnabled: $('#cfgDelay')?.checked, delaySec: val('cfgDelaySec'), lossNoticeEnabled: $('#cfgLossNotice')?.checked, publishedChannels: ids(val('pubChannel')), shadowChannels: ids(val('shadowChannel')) };
       if (key === 'absenceJoueur') patch.entries = readAbsenceEntries('cfg');
       if (key === 'secondeCarte') Object.assign(patch, { cardIndex: val('cfgCardIndex'), runEnabled: true, runTarget: val('cfgRunTarget'), runLosses: val('cfgRunLosses') });
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
@@ -2212,6 +2217,107 @@ Faites-en bon usage !
     // Stable = sur 4 jeux analysés, les 4 costumes sont sortis au moins une fois chez le joueur.
     // Alertes et bilan horaire : chat privé uniquement. Instable 10 min → blocage de 1 h dans les canaux cochés.
     // -------------------------------------------------------------------
+    // « Alerte absence de costume » (voir absence-alert.js) : alerte dans le chat privé quand un costume est absent N jeux de suite.
+    async function absenceAlertPage() {
+      setNav('absence-alert');
+      let d;
+      try { d = await api('/api/absence-alert'); } catch (e) { toast(e.message, 'error'); return; }
+      const sideName = { joueur: 'Main du joueur', banquier: 'Main du banquier' };
+      const tables = (d.counters || []).filter(r => r.watched).map(r => `<div class="card" style="margin-bottom:10px"><b>${esc(sideName[r.side] || r.side)}</b>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">${(r.suits || []).map(x => `<div class="card" style="min-width:90px;text-align:center;padding:10px"><div style="font-size:26px">${esc(x.suit)}</div><b class="${x.count >= d.threshold ? 'bad' : ''}">${esc(x.count)} / ${esc(d.threshold)}</b><br><small>${x.count ? `depuis N°${esc(x.since)}` : 'vient de sortir'}${x.alerted ? ' · 🔔 signalé' : ''}</small></div>`).join('')}</div></div>`).join('') || '<p class="small">Aucun côté surveillé.</p>';
+      const log = (d.log || []).length ? d.log.map(x => `<li>${esc(x.suit)} absent ${esc(x.count)} fois (${x.side === 'banquier' ? 'banquier' : 'joueur'}) · depuis N°${esc(x.since)} · dernier jeu N°${esc(x.number)} ${x.sent === false ? '· ⚠️ non envoyé' : ''}</li>`).join('') : '<li class="small">Aucune alerte pour le moment.</li>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Chat privé de l’administrateur · désactivée par défaut</span><h2 style="margin-top:7px">🕳️ Alerte absence de costume</h2>
+        <p class="small">Le bot compte, pour chacun des 4 costumes, le nombre de jeux <b>consécutifs</b> où il n’est pas sorti. Dès qu’un costume atteint le seuil (<b>${esc(d.threshold)}</b> jeux), un message part dans ton <b>chat privé</b> (jamais dans un canal) : « ⚠️ ♦️ absent ${esc(d.threshold)} fois (main du joueur) — depuis le jeu #812 ». Quand le costume sort, son compteur repart à 0. Les compteurs tournent toujours ; seuls les messages exigent l’activation.</p>
+        <div class="toolbar"><button class="button ${d.enabled ? 'danger' : 'primary'}" onclick="saveAbsenceAlert(${d.enabled ? 'false' : 'true'})">${d.enabled ? 'Désactiver la fonction' : 'Activer la fonction'}</button><button class="button ghost" onclick="absenceAlertPage()">Actualiser</button><button class="button ghost" onclick="testAbsenceAlert()">Envoyer un test</button></div></div>
+        ${d.lastError ? `<div class="notice error">${esc(d.lastError)}</div>` : ''}
+        <section class="section"><div class="card"><span class="eyebrow">${d.enabled ? '🟢 Fonction activée' : '⚪ Fonction désactivée (aucun message envoyé)'}</span>
+          <div class="three-col" style="margin-top:10px"><div class="field"><label>Seuil (jeux consécutifs sans le costume)</label><input id="aaThreshold" type="number" min="2" max="200" value="${esc(d.threshold)}"></div>
+            <div class="field"><label>Côtés surveillés</label><label class="check"><input id="aaJoueur" type="checkbox" ${d.sides.joueur ? 'checked' : ''}> Main du joueur</label><label class="check"><input id="aaBanquier" type="checkbox" ${d.sides.banquier ? 'checked' : ''}> Main du banquier</label></div>
+            <div class="field"><label>Répétition</label><label class="check"><input id="aaRepeat" type="checkbox" ${d.repeat ? 'checked' : ''}> Un message à chaque jeu supplémentaire (16, 17, 18…)</label><small>Décoché : une seule alerte au seuil par série.</small></div></div>
+          <div class="toolbar" style="margin-top:10px"><button class="button primary" onclick="saveAbsenceAlert()">Enregistrer</button></div></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">En ce moment${d.lastGame != null ? ` · dernier jeu N°${esc(d.lastGame)}` : ''}</span><h2 style="margin-top:7px">Séries d’absence en cours</h2></div></div>${tables}</section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique récent</span><h2 style="margin-top:7px">Dernières alertes</h2></div></div><div class="card"><ul style="margin:0;padding-left:18px">${log}</ul></div></section>`;
+    }
+    async function saveAbsenceAlert(enabled) {
+      const body = { threshold: Number(($('#aaThreshold') || {}).value), sides: { joueur: !!($('#aaJoueur') || {}).checked, banquier: !!($('#aaBanquier') || {}).checked }, repeat: !!($('#aaRepeat') || {}).checked };
+      if (enabled !== undefined) body.enabled = enabled;
+      try { await api('/api/absence-alert/config', 'POST', body); await refresh(); await absenceAlertPage(); toast(enabled === true ? 'Alerte absence activée.' : enabled === false ? 'Alerte absence désactivée.' : 'Réglages enregistrés.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function testAbsenceAlert() {
+      try { await api('/api/absence-alert/test', 'POST', {}); toast('Message de test envoyé dans ton chat privé.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+
+    // « Envoi après perte » par canal (voir channel-loss-gate.js) : planning jour par jour lu dans la feuille « PlanningEnvoi » de l'Excel.
+    async function lossGatePage() {
+      setNav('loss-gate');
+      let d;
+      try { d = await api('/api/channel-loss-gate'); } catch (e) { toast(e.message, 'error'); return; }
+      const chOptions = ['<option value="*">Tous les canaux (*)</option>'].concat((d.channelList || []).map(c => `<option value="${esc(c.id)}">${esc(c.title || 'Canal sans nom')} · ${esc(c.id)}</option>`)).join('');
+      const modeTag = (m) => m === 'libre' ? '<span class="tag good">Libre</span>' : '<span class="tag warn">Après perte</span>';
+      const plan = (d.plan || []).length ? `<div style="overflow-x:auto"><table class="table" style="width:100%"><thead><tr><th>Date</th><th>Canal</th><th>Mode</th><th></th></tr></thead><tbody>${d.plan.map(r => `<tr${r.date === d.today ? ' style="font-weight:600"' : ''}><td>${esc(r.date)}${r.date === d.today ? ' · aujourd’hui' : ''}</td><td><code>${esc(r.channel)}</code></td><td>${modeTag(r.mode)}</td><td><button class="button small ghost" onclick="removeLossGateRow('${esc(r.date)}','${esc(r.channel)}')">Retirer</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="small">Aucune ligne : ajoute-en ci-dessous, ou envoie le fichier Excel rempli.</p>';
+      const today = (d.channels || []).length ? d.channels.map(c => `<li><code>${esc(c.channel)}</code> · ${modeTag(c.mode)} ${c.mode === 'apres_perte' && d.enabled ? (c.waiting ? '· ⏳ <b>en attente d’une perte</b>' : '· ✅ débloqué (dernière prédiction du canal perdue)') : ''} <small>· retenues : ${esc(c.held)} · envoyées : ${esc(c.passed)}</small> ${c.waiting ? `<button class="button small ghost" onclick="releaseLossGate('${esc(c.channel)}')">Débloquer maintenant</button>` : ''}</li>`).join('') : '<li class="small">Aucun canal suivi pour le moment.</li>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Toutes les stratégies d’un canal · désactivée par défaut</span><h2 style="margin-top:7px">🚦 Envoi après perte (planifié)</h2>
+        <p class="small">Quand plusieurs stratégies publient dans un même canal, cette fonction peut <b>bloquer toutes leurs prédictions</b> et attendre une <b>perte dans le canal</b> avant d’envoyer. Le mode de chaque jour est lu dans le <b>planning de l’Excel</b> : <b>Libre</b> (tout part normalement) ou <b>Après perte</b>. Exemple : aujourd’hui Libre, demain et après-demain Après perte, le 3ᵉ jour Libre. Les prédictions retenues restent calculées et vérifiées : une prédiction du canal qui perd débloque la suivante ; si celle-ci gagne, on attend de nouveau une perte. Désactive la fonction à tout moment pour tout libérer.</p>
+        <div class="toolbar"><button class="button ${d.enabled ? 'danger' : 'primary'}" onclick="setLossGate(${d.enabled ? 'false' : 'true'})">${d.enabled ? 'Désactiver la fonction' : 'Activer la fonction'}</button><button class="button ghost" onclick="lossGatePage()">Actualiser</button></div></div>
+        ${d.lastError ? `<div class="notice error">${esc(d.lastError)}</div>` : ''}
+        <section class="section"><div class="card"><span class="eyebrow">${d.enabled ? '🟢 Fonction activée' : '⚪ Fonction désactivée (planning ignoré, tout part librement)'}</span>
+          <h3 style="margin-top:6px">Aujourd’hui : ${esc(d.today)} <small>(${esc(d.tz)})</small></h3>
+          <ul style="margin:8px 0;padding-left:18px">${today}</ul>
+          <div class="toolbar" style="margin-top:8px;align-items:center"><label class="small">Date absente du planning (canal présent dans le planning) <select id="lgDefault"><option value="apres_perte" ${d.defaultMode === 'apres_perte' ? 'selected' : ''}>Après perte (par sécurité)</option><option value="libre" ${d.defaultMode === 'libre' ? 'selected' : ''}>Libre</option></select></label><button class="button small primary" onclick="saveLossGateDefault()">Enregistrer</button></div>
+          <p class="small muted" style="margin:6px 0 0">Seules les prédictions (messages portant un numéro de jeu futur) sont retenues ; bilans et statistiques passent. Un canal absent du planning n’est jamais touché. « Perte » = une prédiction des stratégies du canal (envoyée ou retenue) dont le résultat final est perdu.</p></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Planning · ${esc(d.rows)} ligne(s)</span><h2 style="margin-top:7px">Jours « Libre » / « Après perte »</h2>
+          <p class="small">Chaque ligne : une date, un canal (ou <code>*</code> pour tous) et un mode. Tu peux les saisir ici ou les écrire dans la feuille <b>PlanningEnvoi</b> du classeur Excel (colonnes <b>Date | Canal | Mode</b>) : le fichier de configuration importé au démarrage ou par /importer est lu aussi.</p></div>
+          <div class="toolbar"><a class="button small ghost" href="/api/channel-loss-gate/planning.xlsx">⬇️ Télécharger le planning (Excel)</a><label class="button small ghost" style="cursor:pointer">⬆️ Importer un planning (Excel)<input type="file" accept=".xlsx" style="display:none" onchange="importLossGatePlan(this)"></label><button class="button small danger" onclick="clearLossGatePlan()">Tout vider</button></div></div>
+          <div class="card">${plan}</div></section>
+        <section class="section"><div class="card"><h3>Ajouter / modifier une ligne</h3>
+          <div class="three-col"><div class="field"><label>Date</label><input id="lgDate" type="date" value="${esc(d.today)}"></div><div class="field"><label>Canal</label><select id="lgChannel">${chOptions}</select></div><div class="field"><label>Mode</label><select id="lgMode"><option value="libre">Libre</option><option value="apres_perte">Après perte</option></select></div></div>
+          <div class="field"><label>Nombre de jours à la suite (à partir de cette date)</label><input id="lgDays" type="number" min="1" max="60" value="1" style="width:100px"></div>
+          <div class="toolbar"><button class="button primary" onclick="addLossGateRows()">Ajouter au planning</button></div></div></section>`;
+    }
+    async function setLossGate(on) {
+      if (on && !confirm('Activer « Envoi après perte » ? Les canaux du planning en mode « Après perte » retiendront leurs prédictions jusqu’à une perte.')) return;
+      try { await api('/api/channel-loss-gate/config', 'POST', { enabled: on }); await refresh(); await lossGatePage(); toast(on ? 'Envoi après perte activé.' : 'Envoi après perte désactivé : tout part librement.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveLossGateDefault() {
+      try { await api('/api/channel-loss-gate/config', 'POST', { defaultMode: ($('#lgDefault') || {}).value }); await lossGatePage(); toast('Mode par défaut enregistré.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function addLossGateRows() {
+      const start = ($('#lgDate') || {}).value, channel = ($('#lgChannel') || {}).value, mode = ($('#lgMode') || {}).value, days = Math.max(1, Math.min(60, parseInt(($('#lgDays') || {}).value, 10) || 1));
+      if (!start) return toast('Choisis une date.', 'error');
+      const rows = []; const base = new Date(start + 'T00:00:00Z');
+      for (let i = 0; i < days; i++) { const dt = new Date(base.getTime() + i * 86400000); rows.push({ date: dt.toISOString().slice(0, 10), channel, mode }); }
+      try { await api('/api/channel-loss-gate/plan', 'POST', { rows }); await refresh(); await lossGatePage(); toast(`${rows.length} ligne(s) ajoutée(s).`); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeLossGateRow(date, channel) {
+      try { await api('/api/channel-loss-gate/plan', 'DELETE', { date, channel }); await refresh(); await lossGatePage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function clearLossGatePlan() {
+      if (!confirm('Vider tout le planning ? Les canaux ne seront plus suivis par cette fonction.')) return;
+      try { await api('/api/channel-loss-gate/plan', 'DELETE', { all: true }); await refresh(); await lossGatePage(); toast('Planning vidé.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function releaseLossGate(channel) {
+      try { await api('/api/channel-loss-gate/release', 'POST', { channel }); await lossGatePage(); toast('Canal débloqué : la prochaine prédiction partira.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function importLossGatePlan(input) {
+      const file = input && input.files && input.files[0];
+      if (!file) return;
+      try {
+        const buf = await file.arrayBuffer();
+        const r = await fetch('/api/channel-loss-gate/import', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf, credentials: 'same-origin' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'Import impossible.');
+        await refresh(); await lossGatePage(); toast(`Planning importé : ${j.valid} ligne(s) valide(s) sur ${j.rows}.`);
+      } catch (e) { toast(e.message, 'error'); }
+      finally { try { input.value = ''; } catch (_) {} }
+    }
     async function stabilityPage() {
       setNav('stability');
       let d;
@@ -2523,6 +2629,14 @@ Faites-en bon usage !
         what: 'Pour chaque fin de numéro de jeu (0 à 9), cherche quel costume arrive le plus souvent dans la main du joueur et du banquier, et propose le meilleur costume de chaque chiffre, y compris pour le prochain jeu.',
         steps: ['Ouvre « Analyse fin de numéro » et choisis le nombre de jeux à analyser.', 'Lis le costume proposé pour chaque chiffre et pour le prochain jeu.'],
         tips: ['Avec la base de données connectée, l’analyse porte sur des milliers de jeux ; sans elle, seul le sabot en cours est lu.', 'Un petit écart avec la moyenne peut être du hasard : regarde le nombre de jeux (« faible » sous 30).'] },
+      { g: 'ops', icon: '🕳️', title: 'Alerte absence', hash: '#/absence-alert',
+        what: 'Compte pour chacun des 4 costumes le nombre de jeux consécutifs où il n’est pas sorti et t’envoie un message dans ton chat privé quand un costume atteint le seuil (15 jeux par défaut).',
+        steps: ['Ouvre « Alerte absence », règle le seuil et les côtés surveillés (joueur, banquier), puis active la fonction.', 'Utilise « Envoyer un test » pour vérifier que le message arrive dans ton chat privé.'],
+        tips: ['Une seule alerte par série d’absence, sauf si tu coches « répétition » (un message à chaque jeu supplémentaire).', 'Le compteur repart à 0 dès que le costume sort, et à chaque nouveau sabot.'] },
+      { g: 'ops', icon: '🚦', title: 'Envoi après perte', hash: '#/loss-gate',
+        what: 'Planifie, jour par jour et canal par canal, si les prédictions partent librement ou seulement après une perte dans le canal. Le planning se remplit sur la page ou dans la feuille « PlanningEnvoi » de l’Excel (Date | Canal | Mode).',
+        steps: ['Ouvre « Envoi après perte », ajoute des lignes (date, canal, Libre ou Après perte) ou importe le fichier Excel.', 'Active la fonction. Désactivée, le planning est ignoré et tout part librement.'],
+        tips: ['En mode « Après perte », les prédictions restent calculées et vérifiées : la perte d’une prédiction du canal débloque la suivante.', '« Débloquer maintenant » libère un canal à la main ; une date absente du planning suit le mode par défaut réglé sur la page.'] },
       { g: 'ops', icon: '⏳', title: 'Ralentisseur', hash: '#/slow-mode',
         what: 'Valable pour toutes les stratégies de tous les boutons : sur un canal ralenti, une prédiction destinée à un jeu lointain attend que le jeu précédent commence, puis part automatiquement (jeu 23 prédit, live au 18 : envoi quand le jeu 22 commence).',
         steps: ['Ouvre « Ralentisseur » et coche les canaux à ralentir (ou « tous les canaux »).', 'Les prédictions en attente sont listées ; « Envoyer maintenant » les libère tout de suite.'],
@@ -6087,6 +6201,8 @@ Faites-en bon usage !
         else if (h === '#/parity-counter') parityCounterPage();
         else if (h === '#/end-digit') endDigitPage();
         else if (h === '#/slow-mode') slowModePage();
+        else if (h === '#/absence-alert') absenceAlertPage();
+        else if (h === '#/loss-gate') lossGatePage();
         else if (h === '#/draw-two-three') drawTwoThreePage();
         else if (h === '#/victoire-vb') victoireVbPage();
         else if (h === '#/prev-suit') prevSuitPage();
