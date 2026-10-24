@@ -29,6 +29,7 @@ const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » : meilleur / repli faible + inverse (v101)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
+const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
 const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
 const channelAdmin = require('./channel-admin'); // commande /envois (chat privé de l'admin)
 const absenceAlert = require('./absence-alert'); // « Alerte absence de costume » (chat privé de l'admin)
@@ -365,6 +366,8 @@ function installChannelGuard(inst) {
   const edit = inst.editMessageText.bind(inst);
   inst.sendMessageUnguarded = send;
   const doSend = function guardedSend(chatId, rest, fromQueue) {
+    // « Canal Telegram » (channel-uniform.js) : prédiction réécrite dans le format imposé au canal coché (jamais bloquant : sinon message d'origine)
+    if (!fromQueue) { const u = channelUniform.rewrite(chatId, rest[0], rest[1]); if (u) rest = [u.text, u.opts, ...rest.slice(2)]; }
     if (predictionControl.isChannelPaused(chatId) || gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
@@ -396,6 +399,7 @@ function installChannelGuard(inst) {
   inst.sendMessage = function guardedSendEntry(chatId, ...rest) { return doSend(chatId, rest, false); };
   slowMode.start((chatId, args) => doSend(chatId, args, true)); // envoi réel des messages retenus par le ralentisseur
   inst.editMessageText = function guardedEdit(text, opts) {
+    { const u = channelUniform.rewrite(opts && opts.chat_id, text, opts); if (u) { text = u.text; opts = u.opts; } } // résultat (✅ / ❌) dans le même format que l'envoi
     { const r = slowMode.resolveEdit(text, opts); if (r.action === 'done') return Promise.resolve(true); opts = r.opts; } // message encore retenu / identifiant virtuel du ralentisseur
     if (opts && (opts.message_id === null || opts.message_id === undefined) && opts.inline_message_id === undefined) return Promise.resolve(true);
     const key = statusAnimator.keyFromOpts(opts);
@@ -2386,6 +2390,7 @@ async function applyDbConfigs() {
   await lossRelaunch.restoreFromDb();
   await prevSuit.restoreFromDb();
   await canalTelegram.restoreFromDb();
+  await channelUniform.restoreFromDb();
   await endDigitPredict.restoreFromDb();
   await gameStability.restoreFromDb();
   await absenceAlert.restoreFromDb();
@@ -2473,6 +2478,7 @@ async function startLoop() {
   prevSuit.restore();
   prevSuit.setSender(senderFor);
   canalTelegram.restore();
+  channelUniform.restore();
   endDigitPredict.restore();
   endDigitPredict.setSender(senderFor);
   gameStability.restore();

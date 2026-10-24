@@ -12,6 +12,7 @@ const config = require('./config');
 const fmt = require('./formats');
 const strategies = require('./strategies');
 const strategyRecap = require('./strategy-recap');
+const channelUniform = require('./channel-uniform'); // rattrapage uniforme par canal coché (« Canal Telegram » v103)
 const db = require('./db');
 const earlyVerify = require('./early-verify');
 const sendDelay = require('./send-delay');
@@ -1494,7 +1495,7 @@ function evaluate() {
       // (strategies.js/collecte) : le nombre de rattrapages suit le conseil
       // de Formation (formationLength) de la stratégie SOURCE relayée,
       // jamais un réglage indépendant de la Collecte.
-      maxR: hit.maxR != null ? hit.maxR : cfg.maxR,
+      maxR: hit.maxR != null ? hit.maxR : channelUniform.maxRFor([...strategyChannels(def.key), ...strategyChannels(def.key, 'shadow')], cfg.maxR),
       counter: hit.counter != null ? hit.counter : null,
       b: cfg.b || 0,
       format: hit.format || cfg.format,

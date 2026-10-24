@@ -92,6 +92,7 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `loss-return.js` — bouton « Retour après perte » (v47, demande admin) :
 - `loss-relaunch.js` — bouton « Relance après perte » : suit des canaux ou des configurations Relance ; dès que la main du joueur du dernier rattrapage est complète, une perte → même costume à N+R+D dans le canal choisi (D=1 = jeu suivant).
 - `canal-telegram.js` — bouton « Canal Telegram » (v99) : un canal = une stratégie (nom du canal) ; lecteur universel `parseUniversal` (n° de jeu + costume, tous formats) ; vérification uniforme (main du joueur, rattrapages réglés par canal) ; statistiques par canal ; branché dans `bot.js` (channel_post, point d'envoi unique, tick) et `server.js` (`/api/canal-telegram`).
+- `channel-uniform.js` — « Canal Telegram » (v103) : liste à cocher de tous les canaux qui reçoivent des prédictions ; par canal coché : format unique (réécriture au point d'envoi unique de `bot.js`, à partir du registre `locateRendered` de `formats.js`), rattrapage unique (`maxRFor` dans `predictor.js`), bilan toutes les 2 h (`strategy-recap.js`, `setChannelEnabled(id, on, 2)`) ; routes `/api/channel-uniform/…` dans `server.js`.
 - `prev-suit.js` — bouton « Costume N-1 → +4 » : stratégies / configurations cochées (liste fournie par server.js) ; costume prédit à N venu à N-1 et absent à N → même costume à N+4 dans le canal choisi.
 - `formation.js` — bouton « Formation » (page Analyseur IA)
 - `formation-relay.js` — « Envoyer la formation dans le canal »

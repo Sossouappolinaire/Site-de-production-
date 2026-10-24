@@ -50,6 +50,8 @@ const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
+const strategyRecap = require('./strategy-recap'); // récapitulatif / bilan par canal (était utilisé par /api/recap sans être importé ici)
+const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const gameStability = require('./game-stability');
 const absenceAlert = require('./absence-alert');
@@ -314,7 +316,7 @@ async function overlapSourceChannelHints() {
     const names = [];
     for (const id of ids.slice(0, 3)) {
       if (bot.tokenSet) {
-        const check = await resolveChat(id);
+        const check = await resolveChatCached(id, 600000); // cache 10 min : plus d'appel Telegram à chaque ouverture de page
         names.push(check.ok ? (check.chat.title || String(id)) : String(id));
       } else {
         names.push(String(id));
@@ -348,6 +350,16 @@ async function overlapSourceChannelHints() {
   await addPanelHints(suitStreak, 'streak');
   await addPanelHints(suitBreak, 'break');
   return hints;
+}
+
+// Noms des canaux affichés dans « Chevauchement » : calculés en arrière-plan (appels Telegram), jamais attendus par /api/state
+const _hintsCache = { at: 0, value: {}, busy: false };
+function overlapHintsCached() {
+  if (!_hintsCache.busy && Date.now() - _hintsCache.at > 60000) {
+    _hintsCache.busy = true;
+    overlapSourceChannelHints().then((v) => { _hintsCache.value = v; }).catch(() => {}).finally(() => { _hintsCache.at = Date.now(); _hintsCache.busy = false; });
+  }
+  return _hintsCache.value;
 }
 
 app.get('/api/state', async (req, res) => {
@@ -422,6 +434,7 @@ app.get('/api/state', async (req, res) => {
     lossRelaunch: lossRelaunchView(),
     prevSuit: prevSuitView(),
     canalTelegram: canalTelegram.status(),
+    channelUniform: channelUniformView(channelList),
     endDigitPredict: endDigitPredict.status(),
     gameStability: gameStability.status(),
     absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
@@ -433,7 +446,7 @@ app.get('/api/state', async (req, res) => {
     copyAnnounce: { ...copyAnnounce.status(), channels: channelList },
     betType: { ...betType.status(), allChannels: channelList },
     likeReact: { ...likeReact.status(), allChannels: channelList, bestChannels: channelList },
-    overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
+    overlap: { ...overlap.status(), channelHints: overlapHintsCached() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
     drawTwoThree: drawTwoThree.status(),
@@ -2258,6 +2271,60 @@ app.put('/api/canal-telegram/strategies/:id', (req, res) => {
 });
 app.delete('/api/canal-telegram/strategies/:id', (req, res) => { canalTelegram.removeStrategy(req.params.id); res.json(canalTelegram.status()); });
 app.post('/api/canal-telegram/strategies/:id/reset', (req, res) => { canalTelegram.resetStats(req.params.id); res.json(canalTelegram.status()); });
+
+// « Canal Telegram » v103 (channel-uniform.js) : liste de TOUS les canaux qui reçoivent des prédictions ; on COCHE (on ne crée plus).
+// Canal coché = suivi + format unique + rattrapage unique + bilan toutes les 2 h.
+function channelUniformView(list) {
+  let channels = list;
+  if (!Array.isArray(channels)) { try { channels = configuredChannelList(); } catch (_) { channels = []; } }
+  const ct = canalTelegram.status();
+  const rc = strategyRecap.status();
+  const same = (a, b) => String(a == null ? '' : a).toLowerCase() === String(b == null ? '' : b).toLowerCase();
+  const rows = channels.map((r) => ({ id: String(r.id), title: r.title || '', sources: Array.isArray(r.sources) ? r.sources : [] }));
+  for (const c of Object.values(channelUniform.data.channels)) if (c.enabled && !rows.some((r) => same(r.id, c.id))) rows.push({ id: String(c.id), title: '', sources: [] });
+  const out = rows.map((r) => {
+    const cfg = channelUniform.get(r.id) || { enabled: false, format: null, maxR: null };
+    const strat = ct.strategies.find((s) => same(s.channel, r.id) || (s.username && same(s.username, r.id)));
+    const obs = channelUniform.observedOf(r.id);
+    return { ...r, enabled: !!cfg.enabled, format: cfg.format, maxR: cfg.maxR, recap: strategyRecap.isEnabled(r.id), recapHours: rc.hours[r.id] || 2, observed: obs, hetero: obs.formats.length > 1 || obs.rs.length > 1, stratId: strat ? strat.id : null };
+  });
+  return { rows: out, checked: out.filter((r) => r.enabled).length, formatCount: fmt.FORMAT_COUNT };
+}
+// relie la case cochée au suivi (stratégie de canal) et au bilan toutes les 2 h
+function channelUniformSync(id, title) {
+  const cfg = channelUniform.get(id); if (!cfg) return;
+  const same = (a, b) => String(a == null ? '' : a).toLowerCase() === String(b == null ? '' : b).toLowerCase();
+  const strat = canalTelegram.status().strategies.find((s) => same(s.channel, id) || (s.username && same(s.username, id)));
+  if (cfg.enabled) {
+    if (!strat) { try { canalTelegram.addStrategy({ channel: id, title: title || undefined, maxR: cfg.maxR != null ? cfg.maxR : undefined }); } catch (_) { /* doublon : déjà suivi */ } }
+    else canalTelegram.updateStrategy(strat.id, { enabled: true, ...(cfg.maxR != null ? { maxR: cfg.maxR } : {}) });
+    strategyRecap.setChannelEnabled(id, true, 2);
+  } else {
+    if (strat) canalTelegram.updateStrategy(strat.id, { enabled: false });
+    strategyRecap.setChannelEnabled(id, false);
+  }
+}
+const channelUniformReply = () => ({ ok: true, channelUniform: channelUniformView(), canalTelegram: canalTelegram.status() });
+app.get('/api/channel-uniform', (req, res) => res.json(channelUniformView()));
+app.post('/api/channel-uniform/channel', (req, res) => {
+  try {
+    const b = req.body || {}; const id = String(b.id == null ? '' : b.id).trim();
+    if (!id) return res.status(400).json({ error: 'Canal manquant.' });
+    const patch = {}; for (const k of ['enabled', 'format', 'maxR']) if (b[k] !== undefined) patch[k] = b[k];
+    channelUniform.setChannel(id, patch);
+    channelUniformSync(id, b.title);
+    res.json(channelUniformReply());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/channel-uniform/apply-all', (req, res) => {
+  try {
+    const b = req.body || {}; const patch = {}; for (const k of ['format', 'maxR']) if (b[k] !== undefined && b[k] !== '') patch[k] = b[k];
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Renseigne un format et/ou un rattrapage.' });
+    for (const c of channelUniform.applyAll(patch)) channelUniformSync(c.id);
+    res.json(channelUniformReply());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/channel-uniform/reset-observed', (req, res) => { channelUniform.resetObserved(req.body && req.body.id); res.json(channelUniformReply()); });
 
 app.get('/api/loss-relaunch', (req, res) => res.json(lossRelaunchView()));
 app.post('/api/loss-relaunch/configs', async (req, res) => {

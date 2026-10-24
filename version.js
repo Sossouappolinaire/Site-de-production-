@@ -1,10 +1,12 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v102',
-  name: 'victoire-format-compact',
-  date: '2026-10-23',
+  version: 'v103',
+  name: 'canal-telegram-uniforme',
+  date: '2026-10-24',
   features: [
+    'Ouverture des pages beaucoup plus rapide : /api/state n’attend plus les appels Telegram (noms de canaux de « Chevauchement » calculés en arrière-plan, cache de 10 min) ; les aperçus de formats n’encombrent plus le registre de réécriture',
+    '« Canal Telegram » : on ne crée plus de canal, on COCHE dans la liste de tous les canaux qui reçoivent des prédictions (toutes stratégies et configurations) ; chaque canal coché reçoit le MÊME format de prédiction (réécrit à l’envoi et au résultat, channel-uniform.js), le même rattrapage (imposé aux stratégies du moteur, vérifié à l’identique par canal) et le bilan des prédictions toutes les 2 h ; la page montre les formats / rattrapages réellement observés par canal et un bouton « Appliquer à tous les canaux cochés »',
     '« Victoire V1 / V2 » : nouveau format de message « compact » au choix dans la page (⚔️ N°1438 / V1 72% ✅0️⃣ / V2 68% ⏳ → N°1441, une ligne par côté, relance sur la ligne du côté relancé, message de relance en une ligne) ; le format classique reste disponible et par défaut (victoire-vb.js)',
     '« Analyse fin de numéro » : analyse de la main du JOUEUR uniquement (le banquier est retiré de l’analyse et de la page) ; nouveau bloc « Prédiction fin de numéro » : le bot envoie le meilleur costume du joueur de la fin de numéro du jeu visé (jeu en direct + avance) et vérifie en silence si ce meilleur valide ; tant qu’il valide il continue, dès qu’il ne valide pas il envoie DEUX prédictions (costume le plus faible + inverse du meilleur) jusqu’à ce que le meilleur revalide, état propre à chaque fin de numéro 0-9, canal / rattrapages / format / avance / échantillon réglables, statistiques par rôle (end-digit-predict.js)',
     'Nouveau bouton « 🃏 Compte distribution » (accueil, menu, Aide), jumeau du « Compte parité » : compte les distributions 2/2, 3/2, 3/3 (cartes joueur / banquier), 2/3, 2k (joueur à 2 cartes) et 3k (joueur à 3 cartes) par fin de numéro de jeu, joueur et banquier séparément, blocs pair / impair ; mêmes réglages (canal, côté, côté gagnant, reset) ; export / import inclus (distribution-counter.js)',

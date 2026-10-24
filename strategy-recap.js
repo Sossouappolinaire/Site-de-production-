@@ -26,7 +26,7 @@ const CATCHUP_MINUTES = 20;   // rattrapage si le serveur dormait pile à l'heur
 // sent[canal]   = { day, slot }                                   (dernier créneau déjà envoyé)
 // finals        = bilans de journées terminées, en attente d'envoi : [{ chat, day, win, loss, steps }]
 // enabled[canal]= true                                            (case cochée sur le canal)
-const data = { counts: {}, sent: {}, finals: [], enabled: {}, savedAt: 0 };
+const data = { counts: {}, sent: {}, finals: [], enabled: {}, hours: {}, savedAt: 0 };
 let ctx = null;
 let running = false;
 let saveTimer = null;
@@ -45,7 +45,7 @@ function parts(ms = Date.now()) {
 // ── persistance (fichier + base, comme midnight-reset.js) ─────────────────────────────────────────────
 function persistNow() {
   data.savedAt = Date.now();
-  const v = { counts: data.counts, sent: data.sent, finals: data.finals, enabled: data.enabled, savedAt: data.savedAt };
+  const v = { counts: data.counts, sent: data.sent, finals: data.finals, enabled: data.enabled, hours: data.hours, savedAt: data.savedAt };
   try { store.patch({ strategyRecap: v }); } catch (_) { /* ignoré */ }
   if (db.ready) db.setSetting('strategy_recap', JSON.stringify(v)).catch(() => {});
 }
@@ -59,6 +59,7 @@ function load(s) {
   data.sent = s.sent || {};
   data.finals = Array.isArray(s.finals) ? s.finals.filter((f) => f && f.chat) : [];
   data.enabled = s.enabled || {};
+  data.hours = s.hours && typeof s.hours === 'object' ? s.hours : {};
   data.savedAt = s.savedAt || 0;
   // enregistrements de la v67 (comptés par stratégie, pas par canal) : ignorés, les compteurs repartent proprement par canal
   const isChan = (k) => /^-?\d+$/.test(k) || /^@/.test(k);
@@ -94,10 +95,12 @@ function strategyChannelHours() {
 const strategyEnabledChannels = () => new Set(strategyChannelHours().keys());
 function isEnabled(id) { const k = chanId(id); return !!(k && (data.enabled[k] || strategyChannelHours().has(k))); }
 // intervalle du récapitulatif d'un canal (heures) : celui de la stratégie qui l'active, sinon 2 h
-function hoursFor(id) { return strategyChannelHours().get(chanId(id)) || DEFAULT_HOURS; }
-function setChannelEnabled(id, on) {
+function hoursFor(id) { const k = chanId(id); return (data.hours && data.hours[k]) || strategyChannelHours().get(k) || DEFAULT_HOURS; }
+// hours (facultatif) : intervalle IMPOSÉ à ce canal (« Canal Telegram » : 2 h pour tous les canaux cochés), prioritaire sur celui des stratégies
+function setChannelEnabled(id, on, hours) {
   const k = chanId(id); if (!k) return false;
   if (on) data.enabled[k] = true; else delete data.enabled[k];
+  if (on && hours) data.hours[k] = Math.max(1, Math.min(12, parseInt(hours, 10) || DEFAULT_HOURS)); else if (!on) delete data.hours[k];
   persistNow();
   return true;
 }
@@ -188,7 +191,7 @@ async function tick(now = Date.now()) {
     const hoursMap = strategyChannelHours();
     for (const chat of Object.keys(data.counts)) {
       if (!data.enabled[chat] && !hoursMap.has(chat)) continue;
-      const hours = hoursMap.get(chat) || DEFAULT_HOURS;
+      const hours = hoursFor(chat);
       const slotMin = hours * 60;
       const slot = Math.floor(minutes / slotMin);                        // 2 h : 02h, 04h … 22h · 5 h : 05h, 10h, 15h, 20h
       if (slot < 1 || minutes - slot * slotMin >= CATCHUP_MINUTES) continue;
@@ -208,7 +211,7 @@ async function tick(now = Date.now()) {
 }
 
 function status() {
-  return { tz: TZ, enabled: { ...data.enabled }, viaStrategies: [...strategyEnabledChannels()], hours: Object.fromEntries(strategyChannelHours()), counts: data.counts, pendingFinals: data.finals.length };
+  return { tz: TZ, enabled: { ...data.enabled }, viaStrategies: [...strategyEnabledChannels()], hours: { ...Object.fromEntries(strategyChannelHours()), ...(data.hours || {}) }, counts: data.counts, pendingFinals: data.finals.length };
 }
 
 module.exports = { setContext, restore, restoreFromDb, noteEntry, noteResult, isEnabled, setChannelEnabled, tick, recapText, status };
