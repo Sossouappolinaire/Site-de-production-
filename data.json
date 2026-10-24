@@ -1094,16 +1094,16 @@
   "bestWeakTop": {
     "configs": [
       {
-        "id": "bw-1792737970600-jys3",
+        "id": "bw-1792875856241-wr87",
         "mode": "lossnext",
-        "name": "Perte3",
+        "name": "Perte → prédiction suivante",
         "strategy": "dizaine",
         "channels": [
-          -100999
+          -100123
         ],
         "sources": [],
         "rot": {},
-        "maxR": 3,
+        "maxR": 2,
         "format": 1,
         "ranks": [
           1,
@@ -1115,41 +1115,93 @@
         "cycleWaiting": false,
         "cycleDone": [],
         "enabled": true,
-        "sentCount": 0,
+        "sentCount": 1,
         "wins": 0,
         "losses": 0,
-        "lastSentAt": null,
+        "lastSentAt": 1792875856267,
         "lossGate": false,
         "gateFrom": null,
         "lnKind": "rank",
+        "lnRefs": [
+          "B",
+          "A",
+          "C",
+          "D"
+        ],
+        "lnRefNames": {
+          "B": "Canal B",
+          "A": "Canal A",
+          "C": "Canal C",
+          "D": "Canal D"
+        },
         "lnSources": [],
+        "lnSeries": 0,
+        "lnPauseMin": 60,
+        "lnPauseUntil": 0,
         "lnNth": 3,
         "lnSkip": 2,
         "lnLosses": 1,
-        "lnStreak": {},
-        "lnPhase": "count",
-        "lnFollow": "rank:4",
-        "lnLeft": 2,
-        "lnLast": null,
+        "lnStreak": {
+          "ref:A": 0
+        },
+        "lnQueue": [],
+        "lnPhase": "idle",
+        "lnFollow": null,
+        "lnFollowRef": null,
+        "lnLeft": 0,
+        "lnLast": "ref:A",
         "lnCounted": 0,
         "lnSeen": [],
         "lnBase": {}
       }
     ],
-    "pending": [],
-    "recentSent": [],
+    "pending": [
+      {
+        "id": "bwt-1792875856265-e8vm",
+        "configId": "bw-1792875856241-wr87",
+        "mode": "lossnext",
+        "reason": "lossnext",
+        "role": "chan:A",
+        "src": null,
+        "strategy": "dizaine",
+        "target": 115,
+        "suits": [
+          {
+            "suit": "♣️"
+          }
+        ],
+        "format": 1,
+        "strategyName": "Perte → prédiction suivante",
+        "maxR": 2,
+        "step": 0,
+        "gap": 0,
+        "skipped": 0,
+        "status": "en attente",
+        "messages": [
+          {
+            "chatId": -100123,
+            "messageId": 1
+          }
+        ],
+        "createdAt": 1792875856265,
+        "resolvedAt": null
+      }
+    ],
+    "recentSent": [
+      "bw-1792875856241-wr87:115"
+    ],
     "watch": [],
     "detected": {},
     "trig": {
-      "day": "2026-10-23",
+      "day": "2026-10-24",
       "results": {},
       "armed": {},
       "absenceFired": {}
     },
     "duplicatesRemoved": 0,
     "duplicatesBlocked": 0,
-    "sentCount": 0,
-    "lastSentAt": null,
+    "sentCount": 1,
+    "lastSentAt": 1792875856267,
     "channelTitles": {}
   },
   "lossReturn": {

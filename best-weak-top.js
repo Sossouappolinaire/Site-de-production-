@@ -140,6 +140,8 @@ function setPctProvider(strategy, fn) { if (typeof fn === 'function') pctProvide
 const rankProviders = {};
 function setRankProvider(strategy, fn) { if (typeof fn === 'function') rankProviders[strategy] = fn; }
 // rang du mode Test (position dans le classement du jour) : même règle que celle qui choisit la prédiction à envoyer
+const topProviders = {}; // classement du moment (rang → canal), pour afficher les VRAIS canaux suivis
+function setTopProvider(strategy, fn) { if (typeof fn === 'function') topProviders[strategy] = fn; }
 const testRankProviders = {};
 function setTestRankProvider(strategy, fn) { if (typeof fn === 'function') testRankProviders[strategy] = fn; }
 
@@ -163,12 +165,18 @@ function loadLossNext(c) {
   }
   queue = queue.filter((e) => e && e.key != null).slice(0, 12).map((e) => ({
     id: lnId(key(e.key), e.ref), key: key(e.key), ref: e.ref != null && e.ref !== '' ? String(e.ref) : null,
-    name: e.name ? String(e.name).slice(0, 80) : null, left: Math.max(0, Number(e.left) || 0), counted: Number.isFinite(Number(e.counted)) ? Number(e.counted) : 0, at: Number(e.at) || 0,
+    name: e.name ? String(e.name).slice(0, 80) : null, channel: e.channel ? String(e.channel).slice(0, 80) : null, sent: Math.max(0, Number(e.sent) || 0), left: Math.max(0, Number(e.left) || 0), counted: Number.isFinite(Number(e.counted)) ? Number(e.counted) : 0, at: Number(e.at) || 0,
   }));
   const head = queue[0] || null;
   return {
     lnKind: kind,
+    // canaux SUIVIS (type « rang ») : figés à la création — on suit ces configurations-là, quel que soit leur classement ensuite
+    lnRefs: kind === 'rank' ? [...new Set((Array.isArray(c.lnRefs) ? c.lnRefs : []).map((x) => String(x)).filter(Boolean))].slice(0, 4) : [],
+    lnRefNames: kind === 'rank' && c.lnRefNames && typeof c.lnRefNames === 'object' ? { ...c.lnRefNames } : {},
     lnSources: kind === 'rank' ? [] : [...new Set((Array.isArray(c.lnSources) ? c.lnSources : String(c.lnSources || '').split(/[\s,;]+/)).map((x) => String(x).trim()).filter(Boolean))],
+    lnSeries: sanitizeLnSeries(c.lnSeries),                           // 🔁 série : nombre de prédictions envoyées après une perte (0 = désactivé)
+    lnPauseMin: sanitizeLnPause(c.lnPauseMin),                        // 🔁 série : pause (minutes) une fois la série envoyée
+    lnPauseUntil: Number(c.lnPauseUntil) || 0,                        // 🔁 série : fin de la pause en cours (ms)
     lnNth: nth,                                                       // prédiction envoyée après la perte : 1 = la prochaine, 3 = la 3ᵉ…
     lnSkip: nth - 1,                                                  // = prédictions laissées passer
     lnLosses: sanitizeLnLosses(c.lnLosses),                           // pertes de suite avant de déclencher
@@ -198,21 +206,60 @@ const lnSync = (cfg) => { // garde les champs d'affichage alignés sur la file
   cfg.lnPhase = q.length ? 'count' : 'idle'; cfg.lnFollow = h ? h.key : null; cfg.lnFollowRef = h ? h.ref : null; cfg.lnLeft = h ? h.left : 0; cfg.lnCounted = h ? h.counted : 0;
 };
 // résultat (ok = gagné, sinon perdu après tous les rattrapages) d'une source suivie
-function lossNextResult(cfg, key, ok, ref, name) {
+function lossNextResult(cfg, key, ok, ref, name, channel) {
   const q = cfg.lnQueue || (cfg.lnQueue = []);
   const id = lnId(key, ref);
+  const series = sanitizeLnSeries(cfg.lnSeries);
+  if (series > 0 && !ok && (q.length || Date.now() < (Number(cfg.lnPauseUntil) || 0))) return; // 🔁 série en cours ou pause : les pertes ne comptent pas
   if (q.some((e) => e.id === id)) return; // cette source est déjà en attente de sa prédiction : sa perte est déjà gardée en mémoire
-  if (cfg.lnLast === id && !ok) return; // « attend qu'un AUTRE ait une perte »
+  if (series === 0 && cfg.lnLast === id && !ok) return; // « attend qu'un AUTRE ait une perte »
   const st = cfg.lnStreak || (cfg.lnStreak = {});
   if (ok) { if (st[id]) { st[id] = 0; persist(); } return; }
   st[id] = (Number(st[id]) || 0) + 1;
   if (st[id] >= sanitizeLnLosses(cfg.lnLosses)) {
-    q.push({ id, key, ref: ref != null && ref !== '' ? String(ref) : null, name: name ? String(name).slice(0, 80) : null, left: sanitizeLnNth(cfg.lnNth) - 1, counted: 0, at: Date.now() });
+    const entry = { id, key, ref: ref != null && ref !== '' ? String(ref) : null, name: name ? String(name).slice(0, 80) : null, channel: channel ? String(channel).slice(0, 80) : null, left: sanitizeLnNth(cfg.lnNth) - 1, counted: 0, at: Date.now() };
+    entry.sent = 0;
+    q.push(entry);
     if (q.length > 12) q.shift();
     st[id] = 0;
     lnSync(cfg);
+    notifyAdminLossNext(cfg, entry);
   }
   persist();
+}
+// Confirmation dans le CHAT PRIVÉ de l'administrateur (jamais dans un canal) : une perte a eu lieu dans tel canal, et la Xᵉ prédiction partira dans tel canal
+function notifyAdminSeries(cfg, e, done) {
+  try {
+    const bot = typeof sender === 'function' ? sender() : null;
+    const adminId = adminIdFn ? adminIdFn() : null;
+    if (!bot || !adminId) return;
+    const series = sanitizeLnSeries(cfg.lnSeries);
+    const src = e.channel || e.name || lossNextSourceName(cfg, e.key);
+    const dest = (cfg.channels || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(' + ') || 'canal non défini';
+    const text = done
+      ? `⏸️ Série terminée${cfg.name ? ` — ${cfg.name}` : ''}\n\n✅ ${series}/${series} prédictions envoyées dans : ${dest}\n😴 Pause de ${sanitizeLnPause(cfg.lnPauseMin)} min, puis on attend une nouvelle perte.`
+      : `🔁 Série en cours${cfg.name ? ` — ${cfg.name}` : ''}\n\n📨 ${e.sent}/${series} envoyée(s) dans : ${dest} (source : ${src})`;
+    const raw = typeof bot.sendMessageUnguarded === 'function' ? bot.sendMessageUnguarded.bind(bot) : bot.sendMessage.bind(bot);
+    Promise.resolve(raw(adminId, text)).catch(() => {});
+  } catch (_) { /* information seulement */ }
+}
+function notifyAdminLossNext(cfg, e) {
+  try {
+    const bot = typeof sender === 'function' ? sender() : null;
+    const adminId = adminIdFn ? adminIdFn() : null;
+    if (!bot || !adminId) return;
+    const nth = sanitizeLnNth(cfg.lnNth);
+    const src = e.channel || e.name || lossNextSourceName(cfg, e.key);
+    const rk = String(e.key).startsWith('rank:') ? RANK_LABELS[Number(String(e.key).slice(5))] : null;
+    const dest = (cfg.channels || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(' + ') || 'canal non défini';
+    const need = sanitizeLnLosses(cfg.lnLosses);
+    const text = `📉 Perte détectée${cfg.name ? ` — ${cfg.name}` : ''}\n\n`
+      + `❌ Canal : ${src}${rk ? ` (${rk})` : ''}${need > 1 ? ` · ${need} pertes de suite` : ''}\n`
+      + (sanitizeLnSeries(cfg.lnSeries) > 0 ? `📨 ${sanitizeLnSeries(cfg.lnSeries)} prédictions seront envoyées dans : ${dest}${nth > 1 ? ` (à partir de la ${nth}ᵉ)` : ''}\n` : `📨 ${nth === 1 ? 'La prochaine prédiction' : `La ${nth}ᵉ prédiction`} sera envoyée dans : ${dest}\n`)
+      + (e.left > 0 ? `⏳ ${e.left} prédiction(s) à laisser passer avant l'envoi` : '⏳ Envoi dès la prochaine prédiction de ce canal');
+    const raw = typeof bot.sendMessageUnguarded === 'function' ? bot.sendMessageUnguarded.bind(bot) : bot.sendMessage.bind(bot);
+    Promise.resolve(raw(adminId, text)).catch(() => {});
+  } catch (_) { /* information seulement */ }
 }
 // nouvelle prédiction d'une source : si elle est dans la file, on la laisse passer (X-1 fois) puis on envoie la suivante
 async function lossNextPrediction(cfg, key, target, suit, ref) {
@@ -231,26 +278,40 @@ async function lossNextPrediction(cfg, key, target, suit, ref) {
   try {
     // plusieurs sources peuvent être dues en même temps : chacune part à son tour (jamais bloquée par l'envoi encore en attente d'une autre)
     const ok = await sendTrigger(cfg, { target, suit, reason: 'lossnext', role: e.key });
-    if (ok) { cfg.lnQueue = (cfg.lnQueue || []).filter((x) => x.id !== id); cfg.lnLast = id; lnSync(cfg); persist(); }
+    if (ok) {
+      const series = sanitizeLnSeries(cfg.lnSeries);
+      if (series > 0) { // 🔁 série : on garde la source en file jusqu'à ce que les N prédictions soient parties, puis pause
+        e.sent = (Number(e.sent) || 0) + 1; e.counted = target;
+        const done = e.sent >= series;
+        if (done) { cfg.lnQueue = (cfg.lnQueue || []).filter((x) => x.id !== id); cfg.lnLast = id; cfg.lnPauseUntil = Date.now() + sanitizeLnPause(cfg.lnPauseMin) * 60000; }
+        if (done) notifyAdminSeries(cfg, e, true); // un message au début (perte) et un à la fin ; pas un par prédiction
+        lnSync(cfg); persist();
+      } else { cfg.lnQueue = (cfg.lnQueue || []).filter((x) => x.id !== id); cfg.lnLast = id; lnSync(cfg); persist(); }
+    }
   } finally { lossNextBusy.delete(busyKey); }
 }
 // sources « rang » : branchées sur les 4 meilleures configurations de la stratégie (voir recordResult / record).
 // Le rang ne sert qu'à reconnaître les 4 meilleures : c'est la configuration elle-même (ref) qui est suivie.
 const lossNextRankCfgs = (strategy) => enabledOf(strategy, 'lossnext').filter((c) => lnKindOf(c) === 'rank');
-function lossNextOnRankResult(strategy, rank, ok, ref, name) {
-  for (const cfg of lossNextRankCfgs(strategy)) if ((cfg.ranks || []).includes(rank)) lossNextResult(cfg, rankKey(rank), ok, ref, name);
+const lnChanKey = (ref) => `chan:${ref}`;
+// configurations qui suivent des CANAUX précis (figés à la création) ; les anciennes (sans canaux figés) restent suivies par rang
+const lossNextChanCfgs = (strategy) => lossNextRankCfgs(strategy).filter((c) => (c.lnRefs || []).length);
+const lossNextOldRankCfgs = (strategy) => lossNextRankCfgs(strategy).filter((c) => !(c.lnRefs || []).length);
+function lossNextOnRankResult(strategy, rank, ok, ref, name, channel) {
+  for (const cfg of lossNextOldRankCfgs(strategy)) if ((cfg.ranks || []).includes(rank)) lossNextResult(cfg, rankKey(rank), ok, ref, name, channel);
 }
 async function handleLossNextPrediction(strategy, rank, data) {
-  for (const cfg of lossNextRankCfgs(strategy)) await lossNextPrediction(cfg, rankKey(rank), data.target, data.suit, data.ref);
+  for (const cfg of lossNextOldRankCfgs(strategy)) await lossNextPrediction(cfg, rankKey(rank), data.target, data.suit, data.ref);
+  for (const cfg of lossNextChanCfgs(strategy)) if (data.ref != null && cfg.lnRefs.includes(String(data.ref))) await lossNextPrediction(cfg, lnChanKey(data.ref), data.target, data.suit, data.ref);
 }
 // RANG AU MOMENT DE LA PRÉDICTION : le classement du jour évolue entre la prédiction et son résultat (jusqu'à 4 jeux plus tard avec
 // 3 rattrapages) ; relire le rang au moment du résultat faisait attribuer la perte à une autre place, ou la perdre de vue (hors des 4).
 // On retient donc le rang d'une prédiction (configuration + jeu cible) et on le relit à son résultat.
 const rankMemo = new Map();
 const rankMemoKey = (strategy, ref, target) => `${strategy}|${ref}|${Number(target)}`;
-function rememberRank(strategy, ref, target, rank, name) {
+function rememberRank(strategy, ref, target, rank, name, channel) {
   if (ref == null || !Number.isFinite(Number(target)) || !(Number(rank) >= 1 && Number(rank) <= 4)) return;
-  rankMemo.set(rankMemoKey(strategy, ref, target), { rank: Number(rank), name: name || null, at: Date.now() });
+  rankMemo.set(rankMemoKey(strategy, ref, target), { rank: Number(rank), name: name || null, channel: channel || null, at: Date.now() });
   if (rankMemo.size > 400) { const now = Date.now(); for (const [k, v] of rankMemo) if (now - v.at > 2 * 60 * 60 * 1000) rankMemo.delete(k); }
 }
 function memoRank(strategy, ref, target) {
@@ -288,6 +349,7 @@ async function lossNextPoll() {
   }
 }
 function lossNextSourceName(cfg, key) {
+  if (String(key).startsWith('chan:')) return (cfg.lnRefNames || {})[String(key).slice(5)] || String(key).slice(5);
   if (String(key).startsWith('rank:')) return RANK_LABELS[Number(String(key).slice(5))] || key;
   try {
     const ca = require('./copy-announce');
@@ -298,9 +360,16 @@ function lossNextSourceName(cfg, key) {
 }
 function lossNextLabel(c) {
   const need = sanitizeLnLosses(c.lnLosses);
+  if (sanitizeLnSeries(c.lnSeries) > 0) { // 🔁 série après perte
+    const n = sanitizeLnSeries(c.lnSeries); const qs = Array.isArray(c.lnQueue) ? c.lnQueue : [];
+    if (qs.length) return `🔁 Série en cours — « ${qs[0].channel || qs[0].name || lossNextSourceName(c, qs[0].key)} » : ${qs[0].sent || 0}/${n} envoyée(s)${qs[0].left > 0 ? ` (encore ${qs[0].left} à laisser passer avant la 1ʳᵉ)` : ''}`;
+    const rest = (Number(c.lnPauseUntil) || 0) - Date.now();
+    if (rest > 0) return `😴 Pause : encore ${Math.ceil(rest / 60000)} min, puis on attend une perte`;
+    return `En attente de ${need} perte${need > 1 ? 's' : ''} de suite d'une source suivie → ${n} prédictions seront envoyées`;
+  }
   const q = Array.isArray(c.lnQueue) ? c.lnQueue : [];
   if (q.length) {
-    const parts = q.map((e) => `« ${e.name || lossNextSourceName(c, e.key)} » : ${e.left > 0 ? `encore ${e.left} prédiction(s) à laisser passer, puis envoi` : 'sa prochaine prédiction est envoyée'}`);
+    const parts = q.map((e) => `« ${e.channel || e.name || lossNextSourceName(c, e.key)} » : ${e.left > 0 ? `encore ${e.left} prédiction(s) à laisser passer, puis envoi` : 'sa prochaine prédiction est envoyée'}`);
     return `En mémoire (${q.length}) — ${parts.join(' · ')}`;
   }
   const last = c.lnLast ? (c.lnLast.startsWith('ref:') || c.lnLast.startsWith('key:') ? c.lnLast.slice(4) : c.lnLast) : null;
@@ -334,6 +403,8 @@ const LOSSNEXT_DEFAULT_RANKS = [1, 2, 3, 4]; // mode « Perte → Xᵉ prédicti
 const LOSSNEXT_SKIP = 2;                     // prédictions laissées passer après la perte : la 3ᵉ est envoyée
 const sanitizeLnSkip = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(0, Math.min(20, n)) : LOSSNEXT_SKIP; };
 const sanitizeLnNth = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(21, n)) : LOSSNEXT_SKIP + 1; }; // Xᵉ prédiction envoyée (3 par défaut)
+const sanitizeLnSeries = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(0, Math.min(50, n)) : 0; };        // 0 = mode normal ; N = série de N prédictions après une perte
+const sanitizeLnPause = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(0, Math.min(1440, n)) : 60; };        // pause (minutes) après une série
 const sanitizeLnLosses = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(1, Math.min(10, n)) : 1; };      // pertes de suite avant l'envoi
 const defaultRanks = (m) => (m === 'lossnext' ? LOSSNEXT_DEFAULT_RANKS : m === 'test' ? TEST_DEFAULT_RANKS : m === 'relance' ? RELAUNCH_DEFAULT_RANKS : DEFAULT_RANKS).slice();
 const srcMode = (c) => SRC_MODES.includes(modeOf(c));
@@ -440,7 +511,7 @@ async function restoreFromDb() {
 // ---------------------------------------------------------------------------
 // Configurations + ANTI-DOUBLONS DE CONFIGURATION
 // ---------------------------------------------------------------------------
-const configKey = (c) => `${modeOf(c)}|${c.strategy}|${modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank' ? `${lnKindOf(c)}:${[...(c.lnSources || [])].map(String).sort().join(',')}` : ''}|${hasRanksMode(modeOf(c)) ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}${modeOf(c) === 'test' && c.lossGate ? '|gate' : ''}`;
+const configKey = (c) => `${modeOf(c)}|${c.strategy}|${modeOf(c) === 'lossnext' ? `s${Number(c.lnSeries) || 0}|` + (lnKindOf(c) !== 'rank' ? `${lnKindOf(c)}:${[...(c.lnSources || [])].map(String).sort().join(',')}` : `refs:${[...(c.lnRefs || [])].sort().join(',')}`) : ''}|${hasRanksMode(modeOf(c)) ? (c.ranks || []).join('') : (srcMode(c) ? [...(c.sources || [])].map(String).sort().join(',') : '')}${modeOf(c) === 'test' && c.lossGate ? '|gate' : ''}`;
 const shareChannel = (a, b) => { const mine = new Set((a.channels || []).map(String)); return (b.channels || []).some((ch) => mine.has(String(ch))); };
 function findDuplicate(cfg, excludeId) {
   return panel.configs.find((o) => o.id !== excludeId && configKey(o) === configKey(cfg) && shareChannel(o, cfg)) || null;
@@ -479,7 +550,14 @@ function addConfig(input = {}) {
     lossGate: mode === 'test' && !!input.lossGate, gateFrom: null,
   };
   if (mode === 'lossnext') {
-    Object.assign(cfg, loadLossNext({ lnKind: input.lnKind, lnSources: input.lnSources, lnNth: input.lnNth, lnSkip: input.lnSkip, lnLosses: input.lnLosses }));
+    Object.assign(cfg, loadLossNext({ lnKind: input.lnKind, lnSources: input.lnSources, lnNth: input.lnNth, lnSkip: input.lnSkip, lnLosses: input.lnLosses, lnSeries: input.lnSeries, lnPauseMin: input.lnPauseMin }));
+    if (mode === 'lossnext' && input.lnSeries !== undefined && sanitizeLnSeries(input.lnSeries) < 1) throw new Error('Mets au moins 1 prédiction dans la série.');
+    if (!lnFree) { // 📡 on fige les canaux actuellement aux places cochées : le bouton suit CES canaux, pas les rangs
+      let tops = []; try { tops = topProviders[strategy] ? topProviders[strategy]() : []; } catch (_) { tops = []; }
+      const chosen = tops.filter((t) => (cfg.ranks || []).includes(Number(t.rank)));
+      if (chosen.length < 2) throw new Error('Les canaux ne sont pas encore classés aujourd\'hui (il en faut au moins 2). Réessaie quand le classement est établi.');
+      cfg.lnRefs = chosen.map((t) => String(t.ref)); cfg.lnRefNames = Object.fromEntries(chosen.map((t) => [String(t.ref), String(t.channel || t.ref).slice(0, 80)]));
+    }
     if (lnFree) {
       if (!cfg.lnSources.length) throw new Error(cfg.lnKind === 'channel' ? 'Coche au moins un canal à suivre.' : 'Coche au moins une stratégie à suivre.');
       if (cfg.lnKind === 'strategy') { const known = new Set(require('./copy-announce').options().map((o) => o.key)); const bad = cfg.lnSources.find((k) => !known.has(k)); if (bad) throw new Error(`Stratégie inconnue : ${bad}`); }
@@ -512,12 +590,19 @@ function updateConfig(id, patch = {}) {
       if (patch.lnNth !== undefined) { c.lnNth = sanitizeLnNth(patch.lnNth); c.lnSkip = c.lnNth - 1; reset = true; }
       else if (patch.lnSkip !== undefined) { c.lnSkip = sanitizeLnSkip(patch.lnSkip); c.lnNth = c.lnSkip + 1; reset = true; }
       if (patch.lnLosses !== undefined) { c.lnLosses = sanitizeLnLosses(patch.lnLosses); reset = true; }
+      if (patch.lnSeries !== undefined && sanitizeLnSeries(c.lnSeries) > 0) { const n = sanitizeLnSeries(patch.lnSeries); if (n < 1) throw new Error('Mets au moins 1 prédiction dans la série.'); c.lnSeries = n; reset = true; }
+      if (patch.lnPauseMin !== undefined && sanitizeLnSeries(c.lnSeries) > 0) { c.lnPauseMin = sanitizeLnPause(patch.lnPauseMin); reset = true; }
       if (patch.lnSources !== undefined && lnKindOf(c) !== 'rank') {
         const list = [...new Set((Array.isArray(patch.lnSources) ? patch.lnSources : String(patch.lnSources).split(/[\s,;]+/)).map((x) => String(x).trim().replace(/^channel:/, lnKindOf(c) === 'channel' ? '' : 'channel:')).filter(Boolean))];
         if (!list.length) throw new Error(lnKindOf(c) === 'channel' ? 'Coche au moins un canal à suivre.' : 'Coche au moins une stratégie à suivre.');
         c.lnSources = list; c.lnBase = {}; reset = true;
       }
-      if (reset) { c.lnQueue = []; c.lnPhase = 'idle'; c.lnFollow = null; c.lnFollowRef = null; c.lnLeft = 0; c.lnStreak = {}; c.lnCounted = 0; }
+      if (patch.lnRefs !== undefined && lnKindOf(c) === 'rank' && (c.lnRefs || []).length) {
+        const keep = [...new Set((Array.isArray(patch.lnRefs) ? patch.lnRefs : []).map(String))].filter((r) => (c.lnRefs || []).includes(r));
+        if (keep.length < 2) throw new Error('Coche au moins 2 canaux.');
+        c.lnRefs = keep; reset = true;
+      }
+      if (reset) { c.lnQueue = []; c.lnPhase = 'idle'; c.lnFollow = null; c.lnFollowRef = null; c.lnLeft = 0; c.lnStreak = {}; c.lnCounted = 0; c.lnPauseUntil = 0; }
     }
     if (patch.lossGate !== undefined && modeOf(c) === 'test') { c.lossGate = !!patch.lossGate; c.gateFrom = null; }
     if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
@@ -733,11 +818,16 @@ function recordResult(strategy, ref, field, step, maxR, target) {
         if (touched) persist();
       }
     }
-    // mode « Perte → Xᵉ prédiction » (sources « rang ») : gain ou perte d'un des rangs cochés
-    if ((field === 'losses' || field === 'wins') && (testRankProviders[strategy] || rankProviders[strategy]) && lossNextRankCfgs(strategy).length) {
+    // mode « Perte → Xᵉ prédiction » sur des CANAUX précis : le classement n'intervient pas du tout
+    if ((field === 'losses' || field === 'wins') && lossNextChanCfgs(strategy).length) {
+      const memo0 = target != null ? rankMemo.get(rankMemoKey(strategy, ref, target)) : null;
+      for (const cfg of lossNextChanCfgs(strategy)) if (cfg.lnRefs.includes(String(ref))) lossNextResult(cfg, lnChanKey(ref), field === 'wins', ref, (cfg.lnRefNames || {})[String(ref)] || (memo0 && memo0.channel) || null, (cfg.lnRefNames || {})[String(ref)] || (memo0 && memo0.channel) || null);
+    }
+    // anciennes configurations « rang » (sans canaux figés) : gain ou perte d'un des rangs cochés
+    if ((field === 'losses' || field === 'wins') && (testRankProviders[strategy] || rankProviders[strategy]) && lossNextOldRankCfgs(strategy).length) {
       const memo = target != null ? memoRank(strategy, ref, target) : null; // rang de cette prédiction quand elle a été faite
       const rk = memo ? memo.rank : Number((testRankProviders[strategy] || rankProviders[strategy])(ref));
-      if (rk >= 1 && rk <= 4) lossNextOnRankResult(strategy, rk, field === 'wins', ref, memo ? memo.name : null);
+      if (rk >= 1 && rk <= 4) lossNextOnRankResult(strategy, rk, field === 'wins', ref, memo ? memo.name : null, memo ? memo.channel : null);
     }
     if (!enabledOf(strategy, 'trigger').length) return;
     const ts = ensureTrigDay();
@@ -972,13 +1062,16 @@ async function record(strategy, rank, data) {
     const testRank = data ? Number(data.testRank) : NaN;
     const validRank = rank >= 1 && rank <= 4;
     const validTest = testRank >= 1 && testRank <= 4;
-    if (!hasEnabled(strategy) || !data || !Number.isFinite(Number(data.target)) || !data.suit || !(validRank || validTest)) return;
+    if (!hasEnabled(strategy) || !data || !Number.isFinite(Number(data.target)) || !data.suit) return;
+    // Une source déjà en attente de sa Xᵉ prédiction (« Perte → 3ᵉ ») doit continuer d'être comptée même quand elle est
+    // sortie des 4 premières places après sa perte (sinon le compte ne descend jamais et rien n'est envoyé).
+    if (!(validRank || validTest)) { await handleLossNextPrediction(strategy, null, data).catch((e) => { panel.lastError = e.message; }); return; }
     if (validRank) {
       await handleTriggerPrediction(strategy, data).catch((e) => { panel.lastError = e.message; });
       await handleCyclePrediction(strategy, rank, data).catch((e) => { panel.lastError = e.message; });
     }
     await handleTestPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
-    rememberRank(strategy, data.ref, data.target, validTest ? testRank : rank, data.name);
+    rememberRank(strategy, data.ref, data.target, validTest ? testRank : rank, data.name, data.channel);
     await handleLossNextPrediction(strategy, validTest ? testRank : rank, data).catch((e) => { panel.lastError = e.message; });
     if (!validRank || !multiConfigs(strategy).length) return;
     const now = Date.now();
@@ -1395,9 +1488,14 @@ async function test(id) {
   return msgs.length ? { ok: true, sent: msgs.length } : { ok: false, error: panel.lastError || 'Envoi impossible' };
 }
 
+function topNowAll() {
+  const out = {};
+  for (const [k, fn] of Object.entries(topProviders)) { try { out[k] = fn() || []; } catch (_) { out[k] = []; } }
+  return out;
+}
 function status() {
   return {
-    strategies: STRATEGIES, rankLabels: RANK_LABELS, triggerLabel: TRIGGER_LABEL, cycleLabel: `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}`, formatCount: fmt.FORMAT_COUNT,
+    topNow: topNowAll(), strategies: STRATEGIES, rankLabels: RANK_LABELS, triggerLabel: TRIGGER_LABEL, cycleLabel: `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}`, formatCount: fmt.FORMAT_COUNT,
     configs: panel.configs.map((c) => ({
       ...c, mode: modeOf(c), strategyLabel: modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank' ? (lnKindOf(c) === 'channel' ? 'Canaux suivis' : 'Stratégies existantes suivies') : modeOf(c) === 'follow' ? 'Suivi des canaux cochés' : (modeOf(c) === 'scan' ? 'Détection auto des canaux' : STRATEGIES[c.strategy]), sourceNames: (c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)),
       ranksLabel: modeOf(c) === 'follow' ? `Suit : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : modeOf(c) === 'scan' ? `Surveille : ${(c.sources || []).map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')} · un costume ✅0️⃣ → l'autre à N+2` : modeOf(c) === 'trigger' ? TRIGGER_LABEL : (modeOf(c) === 'cycle' ? `Cycle : ${CYCLE_ORDER.map((r) => RANK_LABELS[r]).join(' → ')}` : (modeOf(c) === 'relance' ? `Costumes : ${(c.ranks && c.ranks.length ? c.ranks : RELAUNCH_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + ')} · un costume sorti, l'autre pas venu jusqu'à N+${relaunchWait(c)} → relancé à ${c.relAuto ? (relaunchAwaitingVerdict(c) ? `N+? (analyse auto de +${RELAUNCH_MIN_OFFSET} à +${c.relMaxN} : en attente du verdict)` : `N+${relaunchOffset(c)} (choisi par l'analyse auto)`) : `N+${relaunchOffset(c)}`}${(c.relChannels || []).length ? ` · aussi vers ${c.relChannels.map((id) => panel.channelTitles[String(id)] || String(id)).join(', ')}` : ''}` : modeOf(c) === 'test' ? `Rangs : ${(c.ranks && c.ranks.length ? c.ranks : TEST_DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' → ')} · rang suivant après une perte` : (c.ranks || DEFAULT_RANKS).map((r) => RANK_LABELS[r]).join(' + '))),
@@ -1425,7 +1523,7 @@ function config() { return { count: panel.configs.length }; }
 function configure() { persist(); } // import d'une sauvegarde : réécrit l'état en base
 
 module.exports = {
-  panel, config, configure, setSender, setAdminId, setPctProvider, setRankProvider, setTestRankProvider, restore, restoreFromDb, persist, addConfig, updateConfig, removeConfig, setChannelTitle,
+  panel, config, configure, setSender, setAdminId, setPctProvider, setRankProvider, setTestRankProvider, setTopProvider, restore, restoreFromDb, persist, addConfig, updateConfig, removeConfig, setChannelTitle,
   hasEnabled, hasMultiChannels, record, recordResult, tick, test, status, parseChannels, STRATEGIES, findDuplicate, dedupeConfigs,
   onChannelPost, parseDuo, detectedList, predictionText,
 };

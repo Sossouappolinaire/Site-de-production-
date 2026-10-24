@@ -1024,7 +1024,7 @@ async function comboHook(tracker, syn) {
   const pctOf = (t) => { const r = ranked.find((x) => x.t.id === t.id); return r ? r.rate * 100 : null; };
   const rank = bwRankOfRef(tracker.id); // 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
   const testRank = bwTestRankOfRef(tracker.id);
-  if (rank || testRank) await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker), testRank, name: tracker.name });
+  await bw.record('dizaine', rank, { target: syn.target, suit: syn.suit, ref: tracker.id, pct: pctOf(tracker), testRank, name: tracker.name, channel: trackerRealName(tracker) });
 }
 
 async function send(tracker, syn) {
@@ -1669,4 +1669,5 @@ module.exports.currentWeak = currentWeak;
 module.exports.welcomeText = welcomeText;
 module.exports.testWelcome = testWelcome;
 module.exports.bumpEntry = bumpEntry;
+try { require('./best-weak-top').setTopProvider('dizaine', () => { const ranked = rankedToday(); const pick = [ranked[0], ranked[1], ranked[2], ranked.length >= 4 ? ranked[ranked.length - 1] : null]; return pick.map((r, i) => (r ? { rank: i + 1, ref: r.t.id, channel: trackerRealName(r.t), rate: Math.round(r.rate * 100) } : null)).filter(Boolean); }); } catch (_) { /* module facultatif */ }
 try { require('./best-weak-top').setRankProvider('dizaine', bwRankOfRef); require('./best-weak-top').setTestRankProvider('dizaine', bwTestRankOfRef); } catch (_) { /* module facultatif */ }

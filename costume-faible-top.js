@@ -1082,7 +1082,7 @@ async function comboHook(tracker, syn) {
   const pctOf = (key) => { const r = ranked.find((x) => x.c.key === key); return r ? r.rate * 100 : null; };
   const rank = bwRankOfRef(myKey); // 1 = meilleur, 4 = plus faible, 2 et 3 = les suivants du classement du jour
   const testRank = bwTestRankOfRef(myKey);
-  if (rank || testRank) await bw.record('costumeFaible', rank, { target: syn.target, suit: syn.suit, ref: myKey, pct: pctOf(myKey), testRank, name: (ranked.find((x) => x.c.key === myKey) || { c: {} }).c.name || tracker.name || null });
+  await bw.record('costumeFaible', rank, { target: syn.target, suit: syn.suit, ref: myKey, pct: pctOf(myKey), testRank, name: (ranked.find((x) => x.c.key === myKey) || { c: {} }).c.name || tracker.name || null, channel: (() => { try { const r = ranked.find((x) => x.c.key === myKey); return r ? contestantRealName(r.c) : null; } catch (_) { return null; } })() });
 }
 
 async function send(tracker, syn) {
@@ -1773,5 +1773,6 @@ module.exports.currentWeak = currentWeak;
 module.exports.welcomeText = welcomeText;
 module.exports.testWelcome = testWelcome;
 module.exports.bumpEntry = bumpEntry;
+try { require('./best-weak-top').setTopProvider('costumeFaible', () => { const ranked = rankedToday(); const pick = [ranked[0], ranked[1], ranked[2], ranked.length >= 4 ? ranked[ranked.length - 1] : null]; return pick.map((r, i) => (r ? { rank: i + 1, ref: r.c.key, channel: contestantRealName(r.c), rate: Math.round(r.rate * 100) } : null)).filter(Boolean); }); } catch (_) { /* module facultatif */ }
 try { require('./best-weak-top').setRankProvider('costumeFaible', bwRankOfRef); require('./best-weak-top').setTestRankProvider('costumeFaible', bwTestRankOfRef); } catch (_) { /* module facultatif */ }
 module.exports.forwardToBest = forwardToBest; // exposé pour les tests
