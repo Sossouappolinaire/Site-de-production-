@@ -4513,25 +4513,58 @@ Faites-en bon usage !
           <div class="toolbar"><button class="button small primary" onclick="canalTelegramSave('${esc(c.id)}')">Enregistrer</button><button class="button small ghost" onclick="canalTelegramReset('${esc(c.id)}')">Statistiques à zéro</button><button class="button small danger" onclick="canalTelegramRemove('${esc(c.id)}')">Supprimer</button></div>
           ${c.recent.length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>${c.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${statusBadge(e.status)}</td><td>${e.status === 'gagné' ? 'R' + e.step : e.status === 'en attente' ? (e.step || 0) + '/' + c.maxR : '—'}</td></tr>`).join('')}</tbody></table>` : '<p class="small muted" style="margin-top:10px">Aucune prédiction lue pour le moment : elles apparaîtront dès la prochaine publication du canal.</p>'}
         </div>`).join('');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Observation</span><h2 style="margin-top:7px">📲 Canal Telegram</h2><p class="small">Un canal = <b>une stratégie</b>, qui porte le nom du canal. Toutes les prédictions publiées dans ce canal sont lues de la même façon, <b>quel que soit leur format et quel que soit le rattrapage annoncé</b> : le bot ne retient que le numéro de jeu et le costume, puis vérifie chaque prédiction sur la main du joueur avec le nombre de rattrapages réglé ici. Rien n'est envoyé par ce bouton.</p></div></div>
-        <div class="card">
-          <h3>Ajouter un canal</h3>
+      const u = snapshot.channelUniform || { rows: [], checked: 0, formatCount: 107 };
+      const fc = u.formatCount || 107;
+      const obsLine = (o) => (o && o.n) ? `Observé : formats ${o.formats.map((f) => `#${f.id} (${f.n})`).join(', ')} · rattrapages ${o.rs.length ? o.rs.map((r) => `R${r.id} (${r.n})`).join(', ') : '—'}` : 'Aucune prédiction observée pour le moment.';
+      const srcLine = (a) => !a.length ? 'Aucune source repérée' : (a.slice(0, 6).map(esc).join(' · ') + (a.length > 6 ? ` · +${a.length - 6}` : ''));
+      const chanCards = (u.rows || []).map((r) => `<div class="card" style="margin-top:12px">
+          <div class="split"><label class="check"><input id="cu-on-${esc(r.id)}" type="checkbox" ${r.enabled ? 'checked' : ''}> <b>${esc(r.title || r.id)}</b> <span class="small muted">— ${esc(r.id)}</span></label><button class="button small primary" onclick="channelUniformSave('${esc(r.id)}')">Appliquer</button></div>
+          <p class="small" style="margin-top:6px">Envoient ici : ${srcLine(r.sources || [])}</p>
+          <p class="small">${esc(obsLine(r.observed))} ${r.hetero ? '<b style="color:#fbbf24">⚠️ formats ou rattrapages différents</b>' : ''}</p>
           <div class="three-col">
-            <div class="field"><label>Canal où le bot est présent</label><select id="ctgPick" onchange="if(this.value) $('#ctgChannel').value=this.value"><option value="">— choisir dans la liste —</option>${options}</select></div>
-            <div class="field"><label>ou ID / @nom du canal</label><input id="ctgChannel" placeholder="-1001234567890 ou @moncanal"></div>
-            <div class="field"><label>Rattrapages de vérification</label><input id="ctgNewMaxR" type="number" min="0" max="9" value="${p.defaultMaxR ?? 3}"></div>
+            <div class="field"><label>Format de prédiction (1 → ${fc})</label><input id="cu-fmt-${esc(r.id)}" type="number" min="1" max="${fc}" value="${r.format ?? ''}" placeholder="inchangé"></div>
+            <div class="field"><label>Rattrapages (0 → 9)</label><input id="cu-r-${esc(r.id)}" type="number" min="0" max="9" value="${r.maxR ?? ''}" placeholder="inchangé"></div>
+            <div class="field"><label>Bilan</label><span class="small">${r.enabled ? (r.recap ? `✅ toutes les ${r.recapHours} h` : '⏳ à l’enregistrement') : '—'}</span></div>
           </div>
-          <div class="field"><label>Nom de la stratégie <span class="small">(facultatif : par défaut, le nom du canal)</span></label><input id="ctgNewName" placeholder="Nom du canal"></div>
-          <div class="toolbar"><button class="button primary" onclick="canalTelegramAdd()">Créer la stratégie</button></div>
-          <p class="small" style="margin-top:10px">${p.count || 0} canal(aux) • gagnées <b>${p.won || 0}</b> / perdues <b>${p.lost || 0}</b> (${p.rate || 0} %) • messages ignorés (pas une prédiction) : ${p.ignoredPosts || 0} • lues trop tard (jeu déjà joué) : ${p.lateSkipped || 0}</p>
+          <div class="toolbar"><button class="button small ghost" onclick="channelUniformPreview('${esc(r.id)}')">Aperçu du format</button></div>
+          <pre id="cu-prev-${esc(r.id)}" class="small" style="white-space:pre-wrap;display:none;margin-top:8px"></pre>
+        </div>`).join('');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Canaux</span><h2 style="margin-top:7px">📲 Canal Telegram</h2><p class="small">Voici <b>tous les canaux qui reçoivent des prédictions</b> (toutes stratégies et configurations). On ne crée rien : on <b>coche</b> un canal. Un canal coché est suivi, reçoit <b>le même format de prédiction</b> et <b>le même rattrapage</b> quelle que soit la stratégie qui y publie, et reçoit <b>le bilan des prédictions toutes les 2 h</b>. Le format est réécrit à l’envoi et au résultat ; le rattrapage est imposé aux stratégies du moteur et vérifié à l’identique par canal ; les panneaux automatiques (Meilleur, Dizaine, Relance…) gardent leur propre rattrapage : la ligne « Observé » montre ce qui est réellement envoyé.</p></div></div>
+        <div class="card">
+          <h3>Appliquer à tous les canaux cochés (${u.checked || 0})</h3>
+          <div class="three-col">
+            <div class="field"><label>Format de prédiction (1 → ${fc})</label><input id="cuAllFmt" type="number" min="1" max="${fc}" placeholder="inchangé"></div>
+            <div class="field"><label>Rattrapages (0 → 9)</label><input id="cuAllR" type="number" min="0" max="9" placeholder="inchangé"></div>
+            <div class="field"><label>&nbsp;</label><button class="button primary" onclick="channelUniformApplyAll()">Appliquer</button></div>
+          </div>
+          <p class="small" style="margin-top:10px">${p.count || 0} canal(aux) suivi(s) • gagnées <b>${p.won || 0}</b> / perdues <b>${p.lost || 0}</b> (${p.rate || 0} %) • messages ignorés (pas une prédiction) : ${p.ignoredPosts || 0}</p>
           ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
         </div>
-        ${cards || '<div class="card" style="margin-top:16px"><p class="small">Aucun canal pour le moment. Ajoute-en un ci-dessus : le bot doit être présent (administrateur) dans le canal pour lire ses publications.</p></div>'}`;
+        ${chanCards || '<div class="card" style="margin-top:12px"><p class="small">Aucun canal ne reçoit de prédictions pour le moment : configure d’abord les canaux d’une stratégie.</p></div>'}
+        ${cards ? `<h3 style="margin-top:22px">Statistiques par canal suivi</h3>${cards}` : ''}`;
     }
-    async function canalTelegramAdd() {
+    async function channelUniformSave(id) {
       try {
-        const r = await api('/api/canal-telegram/strategies', 'POST', { channel: val('ctgChannel'), name: val('ctgNewName'), maxR: val('ctgNewMaxR') });
-        await refresh(); canalTelegramPage(); toast(`Stratégie « ${r.strategy.name} » créée.`);
+        const row = ((snapshot.channelUniform || {}).rows || []).find((x) => String(x.id) === String(id)) || {};
+        const on = document.getElementById('cu-on-' + id);
+        await api('/api/channel-uniform/channel', 'POST', { id, title: row.title || '', enabled: !!(on && on.checked), format: val('cu-fmt-' + id), maxR: val('cu-r-' + id) });
+        await refresh(); canalTelegramPage(); toast('Appliqué.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function channelUniformApplyAll() {
+      try {
+        await api('/api/channel-uniform/apply-all', 'POST', { format: val('cuAllFmt'), maxR: val('cuAllR') });
+        await refresh(); canalTelegramPage(); toast('Appliqué à tous les canaux cochés.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    let _cuCatalog = null;
+    async function channelUniformPreview(id) {
+      const f = parseInt(val('cu-fmt-' + id), 10); const box = document.getElementById('cu-prev-' + id);
+      if (!f) { toast('Renseigne un numéro de format.', 'error'); return; }
+      try {
+        if (!_cuCatalog) _cuCatalog = (await api('/api/formats')).formats || [];
+        const it = _cuCatalog.find((x) => x.id === f);
+        if (box) { box.textContent = it ? it.preview : '—'; box.style.display = 'block'; }
       } catch (e) { toast(e.message, 'error'); }
     }
     async function canalTelegramSave(id) {
