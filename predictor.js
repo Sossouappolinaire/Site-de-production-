@@ -132,7 +132,9 @@ function setStrategyConfig(key, patch = {}) {
   if (patch.b !== undefined) next.b = Math.max(0, parseInt(patch.b, 10) || 0);
   if (patch.lead !== undefined) next.lead = Math.max(1, Math.min(20, parseInt(patch.lead, 10) || 1));
   // stratégie « Fin de numéro → costume opposé » : seuil en % et échantillon minimum
-  if (key === 'finNumero') {
+  if (key === 'mama' && patch.followFinNumero !== undefined) next.followFinNumero = !!patch.followFinNumero; // « Suivre Fin de numéro » : seuil et jeux minimum repris de cette stratégie
+  if (key === 'mama' && patch.pctMax !== undefined) { const v = Number(patch.pctMax); next.pctMax = Number.isFinite(v) ? Math.max(0, Math.min(99, Math.round(v))) : 40; } // stratégie « Mama » : seuil bas (taux faible)
+  if (key === 'finNumero' || key === 'mama') {
     if (patch.pctMin !== undefined) next.pctMin = Math.max(1, Math.min(100, Math.round(Number(patch.pctMin)) || 60));
     if (patch.minN !== undefined) next.minN = Math.max(1, Math.min(5000, parseInt(patch.minN, 10) || 30));
   }

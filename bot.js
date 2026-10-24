@@ -372,7 +372,8 @@ function installChannelGuard(inst) {
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
     // « Envoi après perte » par canal (channel-loss-gate.js) : planning de l'Excel ; une prédiction est retenue tant qu'aucune perte n'a eu lieu dans le canal
-    if (!fromQueue && channelLossGate.shouldBlock(chatId, rest[0])) {
+    // + « Canal Telegram » (channel-uniform.js) : mode du jour du canal (favorable / instable 2 = 1 perte / instable 1 = 2 pertes)
+    if (!fromQueue && (channelLossGate.shouldBlock(chatId, rest[0]) || channelUniform.shouldBlock(chatId, rest[0]))) {
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, gated: true });
     }
     if (!fromQueue && isRecentDuplicate(chatId, rest[0])) { // même message, même canal, quelques secondes plus tôt
@@ -1962,7 +1963,7 @@ async function sendPrediction(pred, sender, ids) {
 async function updateResult(pred) {
   if (db.ready) db.closePrediction(pred);
   // « Envoi après perte » par canal : le résultat (gagné / perdu) de chaque prédiction, envoyée OU retenue, alimente le canal
-  try { for (const id of [...new Set([...(pred.messages || []).map((m) => m.chatId), ...(pred.gatedChannels || [])])]) channelLossGate.recordResult(id, pred.status); } catch (_) { /* suivi seulement */ }
+  try { for (const id of [...new Set([...(pred.messages || []).map((m) => m.chatId), ...(pred.gatedChannels || [])])]) { channelLossGate.recordResult(id, pred.status); channelUniform.recordResult(id, pred.status); } } catch (_) { /* suivi seulement */ }
   const sender = senderFor();
   if (!sender) return;
   const { text, parse_mode } = predictionText(pred);

@@ -1482,7 +1482,116 @@ const finNumero = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois, carteManquante, finNumero];
+// ---------------------------------------------------------------------------
+// 15) Mama — « Fin de numéro » PAR DIZAINE, avec le compteur de la dizaine et l'analyse « fin de numéro » (demande admin)
+// ---------------------------------------------------------------------------
+// À la fin de chaque dizaine (#N10, #N20…), comme « Comptage par dizaine » :
+//   1. COMPTEUR : on compte les 4 costumes dans la main du JOUEUR sur les 10 jeux (comptage « vote », au moins 6 jeux lisibles) →
+//      le costume le plus sorti = « taux élevé », le moins sorti = « taux faible » (égalité : ordre ♦️ ❤️ ♣️ ♠️).
+//   2. ANALYSE (end-digit.js) : pour chaque fin de numéro 0-9, % de jeux où ce costume est arrivé chez le joueur.
+//        • costume à TAUX ÉLEVÉ  → on cherche la fin de numéro où il est le plus haut (≥ seuil, 60 % par défaut) et on prédit son INVERSE
+//          (♦️ ↔ ♠️, ♣️ ↔ ❤️) sur le prochain jeu de la dizaine suivante qui finit par ce chiffre ;
+//        • costume à TAUX FAIBLE → on cherche la fin de numéro où il est le plus bas (≤ seuil bas, 40 % par défaut) et on prédit LE MÊME
+//          costume sur le prochain jeu qui finit par ce chiffre.
+//   3. Une prédiction par rôle et par dizaine (2 par dizaine), puis on attend la dizaine suivante. À la dizaine suivante, la fin de numéro
+//      utilisée pour le rôle « élevé » (ou « faible ») est INTERDITE : on en choisit une AUTRE qui a aussi le taux élevé (faible). Elle
+//      redevient permise à la dizaine d'après, puisqu'elle n'a pas été utilisée entre-temps.
+//   L'analyse et ses réglages (seuil 60 %, jeux minimum) SUIVENT ceux de « Fin de numéro → costume opposé » (case « Suivre », cochée par défaut).
+//   Les deux rôles utilisent toujours deux fins de numéro différentes ; la 2ᵉ prédiction part au jeu suivant la fin de dizaine.
+const mamaRuntime = { plan: null, last: { high: null, low: null } }; // mémoire de session (comme absenceRuntime)
+const mama = {
+  key: 'mama',
+  name: 'Mama — fin de numéro par dizaine',
+  about:
+    "À la fin de chaque dizaine, le compteur de la dizaine donne le costume le plus sorti (taux élevé) et le moins sorti (taux faible) chez le joueur. " +
+    "L'analyse « fin de numéro » choisit ensuite la fin de numéro où le costume élevé a le taux le plus haut (≥ 60 %) : on prédit son INVERSE sur le prochain jeu qui finit par ce chiffre ; " +
+    "et la fin de numéro où le costume faible a le taux le plus bas (≤ 40 %) : on prédit LE MÊME costume. Deux prédictions par dizaine (une par rôle) ; à la dizaine suivante la même fin de numéro " +
+    "est interdite pour chaque rôle (une autre est choisie), puis redevient permise à la dizaine d'après.",
+  defaults: { enabled: false, format: config.DEFAULT_FORMAT, maxR: 2, b: 0, lead: 1, followFinNumero: true, pctMin: 60, pctMax: 40, minN: 30, template: null, channels: [] },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished || !Number.isFinite(Number(game.number))) return null;
+    const rt = mamaRuntime;
+    // 2ᵉ prédiction de la dizaine : elle part au jeu terminé qui suit la fin de dizaine (un seul résultat possible par appel)
+    if (rt.plan && game.number > rt.plan.end && game.number <= rt.plan.end + 10) {
+      const nxt = rt.plan.queue.shift();
+      if (!rt.plan.queue.length) rt.plan = null;
+      if (nxt && nxt.target > game.number) return { ...nxt, trigger: game.number };
+      return null;
+    }
+    if (game.number % 10 !== 0) return null; // déclencheur uniquement en fin de dizaine
+    rt.plan = null;
+    // fins de numéro utilisées à la dizaine PRÉCÉDENTE : interdites cette fois-ci. Si une dizaine n'a rien prédit pour un rôle, sa
+    // fin de numéro n'a pas été « profitée » et redevient permise à la dizaine d'après.
+    const prev = rt.last; rt.last = { high: null, low: null };
+    const start = game.number - 9;
+    if (start < 1) return null;
+    // « Suivre Fin de numéro » (par défaut) : même analyse (end-digit.js, main du joueur) ET mêmes réglages que la stratégie
+    // « Fin de numéro → costume opposé » : seuil du costume (60 %) et jeux minimum par fin de numéro, lus en direct sur sa configuration
+    let ref = cfg || {};
+    if (!cfg || cfg.followFinNumero !== false) { try { const fn = require('./predictor').state.strategies.finNumero; if (fn) ref = fn; } catch (_) { /* réglages propres à Mama */ } }
+    const pctMin = Math.max(1, Math.min(100, Number(ref.pctMin) || 60));
+    const pctMaxRaw = Number(cfg && cfg.pctMax);
+    const pctMax = Number.isFinite(pctMaxRaw) ? Math.max(0, Math.min(99, pctMaxRaw)) : 40;
+    const minN = Math.max(1, Math.min(5000, parseInt(ref.minN, 10) || 30));
+    // 1) compteur de la dizaine (main du joueur, comptage « vote »)
+    const games = (ctx && ctx.games) || new Map();
+    const counts = { '♦️': 0, '❤️': 0, '♣️': 0, '♠️': 0 };
+    let readable = 0;
+    for (let n = start; n <= game.number; n++) {
+      const g = games.get(n);
+      if (!g || !g.finished) continue;
+      const suits = new Set(suitsOf(g.playerSuits));
+      if (!suits.size) continue;
+      readable += 1;
+      for (const s of suits) if (counts[s] !== undefined) counts[s] += 1;
+    }
+    if (readable < 6) return null;
+    let high = null; let low = null;
+    for (const s of SUITS) { if (!high || counts[s] > counts[high]) high = s; if (!low || counts[s] < counts[low]) low = s; }
+    if (!high || !low || counts[high] === counts[low]) return null; // aucun costume ne se détache
+    // 2) analyse « fin de numéro »
+    let snap = null;
+    try { snap = require('./end-digit').cached(); } catch (_) { snap = null; }
+    if (!snap || !Array.isArray(snap.digits)) return null;
+    const rates = (suit) => snap.digits.map((d, digit) => {
+      if (!d || d.n < minN) return null;
+      const r = (d.player.ranked || []).find((x) => normSuit(x.suit) === suit);
+      return r ? { digit, pct: r.pct, n: d.n } : null;
+    }).filter(Boolean);
+    const detail = SUITS.map((s) => `${s}:${counts[s]}`).join(' ');
+    const lastHigh = prev.high; const lastLow = prev.low;
+    const hiList = rates(high).filter((r) => r.pct >= pctMin && !(lastHigh && lastHigh.digit === r.digit))
+      .sort((a, b) => b.pct - a.pct || a.digit - b.digit);
+    const hiPick = hiList[0] || null;
+    const loList = rates(low).filter((r) => r.pct <= pctMax && !(hiPick && hiPick.digit === r.digit) && !(lastLow && lastLow.digit === r.digit))
+      .sort((a, b) => a.pct - b.pct || a.digit - b.digit);
+    const loPick = loList[0] || null;
+    const targetOf = (digit) => game.number + (digit === 0 ? 10 : digit); // prochain jeu de la dizaine suivante qui finit par ce chiffre
+    const hits = [];
+    if (hiPick) {
+      const suit = INVERSE[high];
+      hits.push({ kind: 'suit', target: targetOf(hiPick.digit), suit, label: suit,
+        reason: `Mama · dizaine #N${start}-#N${game.number} (${readable}/10 jeux) compteur ${detail} → taux élevé ${high} ; fin de numéro ${hiPick.digit} : ${high} à ${hiPick.pct} % (${hiPick.n} jeux) → inverse ${suit} sur #N${targetOf(hiPick.digit)}`,
+        meta: { role: 'haut', digit: hiPick.digit, from: high, pct: hiPick.pct, n: hiPick.n, counts } });
+      rt.last.high = { suit: high, digit: hiPick.digit };
+    }
+    if (loPick) {
+      hits.push({ kind: 'suit', target: targetOf(loPick.digit), suit: low, label: low,
+        reason: `Mama · dizaine #N${start}-#N${game.number} (${readable}/10 jeux) compteur ${detail} → taux faible ${low} ; fin de numéro ${loPick.digit} : ${low} à ${loPick.pct} % (${loPick.n} jeux) → même costume ${low} sur #N${targetOf(loPick.digit)}`,
+        meta: { role: 'bas', digit: loPick.digit, from: low, pct: loPick.pct, n: loPick.n, counts } });
+      rt.last.low = { suit: low, digit: loPick.digit };
+    }
+    if (!hits.length) return null;
+    hits.sort((a, b) => a.target - b.target); // le plus proche part tout de suite, l'autre au jeu suivant (sa cible est alors encore à venir)
+    const first = hits.shift();
+    if (hits.length) rt.plan = { end: game.number, queue: hits };
+    return { ...first, trigger: game.number };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois, carteManquante, finNumero, mama];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {

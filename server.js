@@ -2286,7 +2286,7 @@ function channelUniformView(list) {
     const cfg = channelUniform.get(r.id) || { enabled: false, format: null, maxR: null };
     const strat = ct.strategies.find((s) => same(s.channel, r.id) || (s.username && same(s.username, r.id)));
     const obs = channelUniform.observedOf(r.id);
-    return { ...r, enabled: !!cfg.enabled, format: cfg.format, maxR: cfg.maxR, recap: strategyRecap.isEnabled(r.id), recapHours: rc.hours[r.id] || 2, observed: obs, hetero: obs.formats.length > 1 || obs.rs.length > 1, stratId: strat ? strat.id : null };
+    return { ...r, enabled: !!cfg.enabled, format: cfg.format, maxR: cfg.maxR, recap: strategyRecap.isEnabled(r.id), recapHours: rc.hours[r.id] || 2, ...channelUniform.modeState(r.id), observed: obs, hetero: obs.formats.length > 1 || obs.rs.length > 1, stratId: strat ? strat.id : null };
   });
   return { rows: out, checked: out.filter((r) => r.enabled).length, formatCount: fmt.FORMAT_COUNT };
 }
@@ -2310,7 +2310,7 @@ app.post('/api/channel-uniform/channel', (req, res) => {
   try {
     const b = req.body || {}; const id = String(b.id == null ? '' : b.id).trim();
     if (!id) return res.status(400).json({ error: 'Canal manquant.' });
-    const patch = {}; for (const k of ['enabled', 'format', 'maxR']) if (b[k] !== undefined) patch[k] = b[k];
+    const patch = {}; for (const k of ['enabled', 'format', 'maxR', 'mode']) if (b[k] !== undefined) patch[k] = b[k];
     channelUniform.setChannel(id, patch);
     channelUniformSync(id, b.title);
     res.json(channelUniformReply());
@@ -2318,8 +2318,8 @@ app.post('/api/channel-uniform/channel', (req, res) => {
 });
 app.post('/api/channel-uniform/apply-all', (req, res) => {
   try {
-    const b = req.body || {}; const patch = {}; for (const k of ['format', 'maxR']) if (b[k] !== undefined && b[k] !== '') patch[k] = b[k];
-    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Renseigne un format et/ou un rattrapage.' });
+    const b = req.body || {}; const patch = {}; for (const k of ['format', 'maxR', 'mode']) if (b[k] !== undefined && b[k] !== '') patch[k] = b[k];
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Renseigne un format, un rattrapage et/ou un mode.' });
     for (const c of channelUniform.applyAll(patch)) channelUniformSync(c.id);
     res.json(channelUniformReply());
   } catch (e) { res.status(400).json({ error: e.message }); }

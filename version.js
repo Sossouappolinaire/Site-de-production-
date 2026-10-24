@@ -1,10 +1,14 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v103',
-  name: 'canal-telegram-uniforme',
+  version: 'v108',
+  name: 'mama-rotation-fin-de-numero',
   date: '2026-10-24',
   features: [
+    '« Mama » : 2 prédictions par dizaine (costume élevé → inverse, costume faible → même costume) ; la fin de numéro utilisée à la dizaine précédente est interdite pour le même rôle, et redevient permise à la dizaine d’après si elle n’a pas servi entre-temps',
+    '« Mama » suit désormais l’analyse « Fin de numéro → costume opposé » : même analyse, et seuil (60 %) / jeux minimum repris en direct de cette stratégie (case « Suivre », cochée par défaut)',
+    'Nouvelle stratégie « Mama — fin de numéro par dizaine » (désactivée par défaut) : à la fin de chaque dizaine, le compteur donne le costume le plus / le moins sorti chez le joueur ; l’analyse « fin de numéro » choisit la fin de numéro où le costume élevé est le plus haut (≥ 60 %) → on prédit son inverse, et celle où le costume faible est le plus bas (≤ 40 %) → on prédit le même costume ; si le même costume revient à la dizaine suivante, une autre fin de numéro est choisie',
+    '« Canal Telegram » : mode du jour par canal — Favorable (tout passe), Instable 1 (après une perte, la prédiction suivante part), Instable 2 (après une perte, les deux prédictions suivantes partent) ; les prédictions du canal passent par ce bouton qui décide de les laisser partir ou de les retenir',
     'Ouverture des pages beaucoup plus rapide : /api/state n’attend plus les appels Telegram (noms de canaux de « Chevauchement » calculés en arrière-plan, cache de 10 min) ; les aperçus de formats n’encombrent plus le registre de réécriture',
     '« Canal Telegram » : on ne crée plus de canal, on COCHE dans la liste de tous les canaux qui reçoivent des prédictions (toutes stratégies et configurations) ; chaque canal coché reçoit le MÊME format de prédiction (réécrit à l’envoi et au résultat, channel-uniform.js), le même rattrapage (imposé aux stratégies du moteur, vérifié à l’identique par canal) et le bilan des prédictions toutes les 2 h ; la page montre les formats / rattrapages réellement observés par canal et un bouton « Appliquer à tous les canaux cochés »',
     '« Victoire V1 / V2 » : nouveau format de message « compact » au choix dans la page (⚔️ N°1438 / V1 72% ✅0️⃣ / V2 68% ⏳ → N°1441, une ligne par côté, relance sur la ligne du côté relancé, message de relance en une ligne) ; le format classique reste disponible et par défaut (victoire-vb.js)',
