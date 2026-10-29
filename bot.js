@@ -787,8 +787,8 @@ function wire(b) {
 
   b.onText(/^\/setdb(?:\s+(\S+))?/, async (msg, m) => {
     if (!isAdmin(msg)) return deny(msg.chat.id);
-    if (!m[1]) return b.sendMessage(msg.chat.id, 'ℹ️ Usage : /setdb postgresql://user:pass@host/db');
-    const s = await db.connect(m[1]);
+    if (!m[1]) return b.sendMessage(msg.chat.id, 'ℹ️ La base Supabase est intégrée au code : /setdb ne change plus de base.');
+    const s = await db.connect();
     b.sendMessage(msg.chat.id, s.ready ? '✅ Base de données connectée, tables créées.' : `❌ Échec : ${s.error}`);
   });
 

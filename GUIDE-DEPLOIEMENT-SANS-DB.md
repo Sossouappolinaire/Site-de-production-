@@ -1,3 +1,5 @@
+> **Mise à jour v120 :** la base est désormais Supabase, intégrée au code (`db-link.js`). L'ancienne variable `DATABASE_URL` de Render est ignorée et n'est plus nécessaire.
+
 # Déploiement — Bot Baccara
 
 Le service Node.js peut démarrer sans PostgreSQL. Aucune URL de base de données,

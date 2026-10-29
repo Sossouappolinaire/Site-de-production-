@@ -15,7 +15,6 @@ des canaux Telegram et analyseur guidé par Pollinations.ai.
 | --- | --- | --- |
 | `BOT_TOKEN` | Oui pour Telegram | Token du bot Telegram |
 | `ADMIN_ID` | Recommandé | Identifiant Telegram de l'administrateur |
-| `DATABASE_URL` | Oui pour la persistance | URL PostgreSQL de la base de données |
 | `POLLINATIONS_API_KEY` | Non | Clé secrète pour l'enrichissement IA distant |
 
 | `POLLINATIONS_MODEL` | Non | Modèle Pollinations, valeur par défaut `openai` |

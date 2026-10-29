@@ -10,9 +10,9 @@ const { databaseUrl } = require('./database-url');
 let pool = null;
 let ready = false;
 let lastError = null;
-// Priorité : DATABASE_URL (Render) > dernier lien enregistré via /setdb ou le
-// panel web. Aucun lien PostgreSQL n'est intégré au code.
-let url = databaseUrl() || store.read().databaseUrl || config.DATABASE_URL || '';
+// Lien unique : Supabase (db-link.js). L'ancien DATABASE_URL, /setdb et le panel web
+// ne peuvent plus changer de base.
+let url = databaseUrl() || '';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -231,10 +231,8 @@ function mask(u) {
 }
 
 async function connect(newUrl) {
-  if (newUrl !== undefined) {
-    url = (newUrl || '').trim();
-    store.patch({ databaseUrl: url });
-  }
+  // le lien est fixé par db-link.js : toute tentative de le remplacer (/setdb, panel) est ignorée
+  url = databaseUrl() || url;
   ready = false;
   lastError = null;
   if (pool) { try { await pool.end(); } catch (_) {} pool = null; }

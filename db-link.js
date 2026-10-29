@@ -5,7 +5,7 @@
 // Supabase). Si ce fichier est publié, la base est lisible par quiconque le voit : garder le
 // dépôt PRIVÉ. Pour couper l'accès à tout moment, dans Supabase :  ALTER ROLE bot_app NOLOGIN;
 //
-// Priorité inchangée : si DATABASE_URL est déjà défini (Render), il garde la main.
+// L'ancien DATABASE_URL de Render est IGNORÉ : seule la base Supabase est utilisée.
 'use strict';
 
 const REF = 'kmvbsntmzjkpwwqgkqhz';
@@ -34,13 +34,17 @@ async function tryOne(url) {
   finally { try { if (c) await c.end(); } catch (_) { /* ignoré */ } }
 }
 
-// Renseigne process.env.DATABASE_URL avec la première adresse qui répond.
+// Renseigne le lien de la base (database-url.js) avec la première adresse Supabase qui répond.
 async function ensureDatabaseUrl() {
-  if (String(process.env.DATABASE_URL || '').trim()) return process.env.DATABASE_URL;
+  const { setDatabaseUrl } = require('./database-url');
+  if (String(process.env.DATABASE_URL || '').trim()) {
+    console.log('ℹ️  DATABASE_URL de Render ignoré (ancienne base) : seule Supabase est utilisée.');
+    delete process.env.DATABASE_URL;
+  }
   for (const url of CANDIDATES) {
     const r = await tryOne(url);
     if (r === true) {
-      process.env.DATABASE_URL = url;
+      setDatabaseUrl(url);
       console.log('🔌 Base Supabase connectée :', mask(url));
       return url;
     }

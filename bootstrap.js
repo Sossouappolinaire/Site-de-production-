@@ -93,6 +93,15 @@ async function restoreMissingStrategies() {
 // RESTAURATION DE L'ÉTAT COMPLET (Supabase = source de vérité) : compteurs,
 // panneaux et configurations de data.json sont relus depuis la base AVANT le
 // démarrage du site. Si la base n'a encore rien, l'état local est envoyé.
+// supprime tout ancien lien de base resté dans data.json (fichier local)
+function purgeOldDatabaseLink() {
+  try {
+    const store = require('./store');
+    const data = store.read();
+    if (data && data.databaseUrl) { delete data.databaseUrl; store.write(data); console.log('🧹 Ancien lien de base supprimé de data.json.'); }
+  } catch (_) { /* ignoré */ }
+}
+
 async function restoreStoreFromDb() {
   const db = require('./db');
   const store = require('./store');
@@ -102,7 +111,7 @@ async function restoreStoreFromDb() {
     if (snap && snap.value && typeof snap.value === 'object') {
       const local = store.read();
       const merged = { ...snap.value };
-      if (local.databaseUrl) merged.databaseUrl = local.databaseUrl; // jamais stocké en base
+      delete merged.databaseUrl; // l'ancien lien n'existe plus nulle part
       store.write(merged);
       console.log('♻️  État du site restauré depuis la base (' + Object.keys(snap.value).length + ' sections, sauvegardé le ' + new Date(snap.updatedAt).toISOString() + ').');
     } else {
@@ -124,6 +133,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 
 require('./db-link').ensureDatabaseUrl()
   .catch((e) => console.error('⚠️ Connexion Supabase intégrée impossible :', e.message))
+  .then(purgeOldDatabaseLink)
   .then(restoreMissingStrategies)
   .then(restoreStoreFromDb)
   .catch((e) => console.error('⚠️ Restauration des stratégies IA : erreur inattendue, démarrage normal quand même :', e.message))

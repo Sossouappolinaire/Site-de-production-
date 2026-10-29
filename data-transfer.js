@@ -287,7 +287,6 @@ async function settingRows() {
   }
   const aiAuto = lazy('./ai-auto');
   if (aiAuto && aiAuto.auto) add('ai_auto_enabled', aiAuto.auto.enabled ? 'true' : 'false');
-  add('databaseUrl', (store.read() || {}).databaseUrl);
   const db = lazy('./db');
   if (db && db.ready) {
     for (const key of DB_SETTINGS) {
@@ -325,12 +324,6 @@ async function importSettings(wb, report) {
     if (val[key] === undefined) continue;
     await saveDb(key, val[key]);
     done.push(key);
-  }
-  // lien de base : on ne remplace JAMAIS une base déjà configurée (cela
-  // couperait la connexion en cours) ; il sert seulement à un hébergement neuf.
-  if (val.databaseUrl && !(store.read() || {}).databaseUrl) {
-    store.patch({ databaseUrl: val.databaseUrl });
-    done.push('lien de base (redémarrage requis)');
   }
   report.applied.push(`${SHEETS.REGLAGES} (${done.length}${done.length ? ' : ' + done.join(', ') : ''})`);
 }
