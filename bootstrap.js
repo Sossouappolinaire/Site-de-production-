@@ -90,7 +90,42 @@ async function restoreMissingStrategies() {
   }
 }
 
-restoreMissingStrategies()
+// RESTAURATION DE L'ÉTAT COMPLET (Supabase = source de vérité) : compteurs,
+// panneaux et configurations de data.json sont relus depuis la base AVANT le
+// démarrage du site. Si la base n'a encore rien, l'état local est envoyé.
+async function restoreStoreFromDb() {
+  const db = require('./db');
+  const store = require('./store');
+  if (!db.ready) return;
+  try {
+    const snap = await db.loadStoreSnapshot();
+    if (snap && snap.value && typeof snap.value === 'object') {
+      const local = store.read();
+      const merged = { ...snap.value };
+      if (local.databaseUrl) merged.databaseUrl = local.databaseUrl; // jamais stocké en base
+      store.write(merged);
+      console.log('♻️  État du site restauré depuis la base (' + Object.keys(snap.value).length + ' sections, sauvegardé le ' + new Date(snap.updatedAt).toISOString() + ').');
+    } else {
+      await db.saveStoreSnapshot(store.read());
+      console.log('💾 Première sauvegarde de l\'état du site dans la base.');
+    }
+  } catch (e) {
+    console.error('⚠️ Restauration de l\'état depuis la base impossible — démarrage avec data.json :', e.message);
+  }
+}
+
+// sauvegarde finale propre quand Render arrête le service
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    require('./store').flushMirror().finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 4000).unref();
+  });
+}
+
+require('./db-link').ensureDatabaseUrl()
+  .catch((e) => console.error('⚠️ Connexion Supabase intégrée impossible :', e.message))
+  .then(restoreMissingStrategies)
+  .then(restoreStoreFromDb)
   .catch((e) => console.error('⚠️ Restauration des stratégies IA : erreur inattendue, démarrage normal quand même :', e.message))
   .finally(() => {
     require('./server.js');

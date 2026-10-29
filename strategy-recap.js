@@ -30,6 +30,10 @@ const data = { counts: {}, sent: {}, finals: [], enabled: {}, hours: {}, savedAt
 let ctx = null;
 let running = false;
 let saveTimer = null;
+// écouteurs « un bilan vient d'être envoyé dans ce canal » (ex. « Meilleur selon le bilan » dans best-weak-top.js)
+const bilanListeners = [];
+function onBilan(fn) { if (typeof fn === 'function') bilanListeners.push(fn); }
+async function fireBilan(chat, kind) { for (const fn of bilanListeners) { try { await fn(chat, kind); } catch (_) { /* un écouteur ne doit jamais bloquer le bilan */ } } }
 
 function setContext(c) { ctx = c; }
 
@@ -184,6 +188,7 @@ async function tick(now = Date.now()) {
       for (const f of todo) {
         if (!isEnabled(f.chat)) continue;
         await deliver(f.chat, recapText({ label: '00h00', win: f.win, loss: f.loss, steps: f.steps, final: true }));
+        await fireBilan(f.chat, 'final');
       }
     }
     // 2) récapitulatif toutes les N heures (2 h par défaut, 5 h pour « 2/3 → distribution 2/2 »)
@@ -202,6 +207,7 @@ async function tick(now = Date.now()) {
       data.sent[chat] = { day: p.key, slot, hours };                      // marqué AVANT l'envoi : jamais deux fois le même créneau
       persistNow();
       await deliver(chat, recapText({ label: `${pad(slot * hours)}h00`, win: c.win, loss: c.loss, steps: c.steps }));
+      await fireBilan(chat, 'periodic');
     }
   } catch (e) {
     console.error('Récapitulatif :', e.message);
@@ -214,4 +220,4 @@ function status() {
   return { tz: TZ, enabled: { ...data.enabled }, viaStrategies: [...strategyEnabledChannels()], hours: { ...Object.fromEntries(strategyChannelHours()), ...(data.hours || {}) }, counts: data.counts, pendingFinals: data.finals.length };
 }
 
-module.exports = { setContext, restore, restoreFromDb, noteEntry, noteResult, isEnabled, setChannelEnabled, tick, recapText, status };
+module.exports = { setContext, restore, restoreFromDb, noteEntry, noteResult, isEnabled, setChannelEnabled, onBilan, tick, recapText, status };

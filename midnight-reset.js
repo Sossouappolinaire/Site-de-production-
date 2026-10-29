@@ -179,6 +179,8 @@ async function run(dayKey, { manual = false } = {}) {
     info.lastRunAt = Date.now();
     info.lastReport = { day: dayKey, manual, export: exportRes, memory: wipe.memory.length, db: wipe.db, errors: wipe.errors.slice(0, 5) };
     persistInfo();
+    // l'état remis à zéro est écrit tout de suite dans Supabase (pas d'attente du délai de 2 s)
+    try { await store.flushMirror(); } catch (_) { /* ignoré */ }
     const bot = typeof sender === 'function' ? sender() : null;
     const adminId = predictor.state.adminId;
     if (bot && adminId) {
@@ -205,8 +207,15 @@ async function run(dayKey, { manual = false } = {}) {
 async function check(now = Date.now()) {
   if (!enabled() || info.running) return;
   const p = parts(now);
-  if (p.h !== 0 || p.m >= CATCHUP_MINUTES) return; // hors fenêtre 00h00–00h29
   if (info.lastDay === p.key) return;              // déjà fait aujourd'hui
+  const inWindow = p.h === 0 && p.m < CATCHUP_MINUTES;
+  if (!inWindow) {
+    // Premier démarrage jamais vu : on note simplement le jour, sans rien effacer.
+    if (!info.lastDay) { info.lastDay = p.key; persistInfo(); return; }
+    // Minuit manqué (service arrêté plus de 30 min) : l'état relu depuis Supabase
+    // date de la veille ou avant → remise à zéro dès le réveil, une seule fois.
+    if (info.lastDay > p.key) return;
+  }
   info.lastDay = p.key;                            // marqué AVANT : jamais deux passages le même jour
   persistInfo();
   await run(p.key);

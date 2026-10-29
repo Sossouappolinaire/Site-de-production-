@@ -78,6 +78,7 @@ async function restoreFromDb() {
     const raw = await db.getSetting(DB_KEY);
     if (raw) applyConfig(JSON.parse(raw)); else persist();
   } catch (_) { persist(); }
+  try { const rawCounts = await db.getSetting(COUNTS_KEY); if (rawCounts) applyCounts(JSON.parse(rawCounts)); } catch (_) {}
   scheduleReset();
   return config();
 }
@@ -89,10 +90,33 @@ const getChannel = () => state.channelId;
 // ---------------------------------------------------------------------------
 // Comptage
 // ---------------------------------------------------------------------------
+// Compteurs conservés en base (PostgreSQL / Supabase, réglage « parity_counter_counts ») : après un redémarrage du site, le palier
+// reprend où il en était, tant qu'on est encore dans la même tranche de reset (sinon le reset a déjà dû avoir lieu : on repart de zéro).
+const COUNTS_KEY = 'parity_counter_counts';
+function slotKey(now = new Date()) { const n = state.intervalMin; const m = now.getHours() * 60 + now.getMinutes(); return `${now.toDateString()}|${Math.floor(m / n)}|${n}`; }
+let countsTimer = null;
+function persistCounts() {
+  if (!db.ready || countsTimer) return;
+  countsTimer = setTimeout(() => {
+    countsTimer = null;
+    const saved = { slot: slotKey(), player: state.player, banker: state.banker, games: state.games, lastGameNumber: state.lastGameNumber, sinceAt: state.sinceAt };
+    db.setSetting(COUNTS_KEY, JSON.stringify(saved)).catch((e) => { state.lastError = e.message; });
+  }, 1500);
+  if (countsTimer.unref) countsTimer.unref();
+}
+const okSide = (s) => s && Array.isArray(s.pair) && s.pair.length === 10 && Array.isArray(s.impair) && s.impair.length === 10 && s.suits && Array.isArray(s.suits.pair) && s.suits.pair.length === 10 && Array.isArray(s.suits.impair) && s.suits.impair.length === 10;
+function applyCounts(c) {
+  if (!c || typeof c !== 'object' || c.slot !== slotKey() || !okSide(c.player) || !okSide(c.banker)) return false;
+  state.player = c.player; state.banker = c.banker;
+  state.games = Number(c.games) || 0; state.lastGameNumber = Number.isInteger(c.lastGameNumber) ? c.lastGameNumber : null; state.sinceAt = Number(c.sinceAt) || Date.now();
+  return true;
+}
+
 function resetCounts() {
   state.player = { pair: zeros(), impair: zeros(), suits: suitGrid() }; state.banker = { pair: zeros(), impair: zeros(), suits: suitGrid() };
   state.games = 0;
   state.sinceAt = Date.now();
+  persistCounts();
 }
 
 const pointParity = (v) => { const n = Number(v); return v != null && v !== '' && Number.isInteger(n) && n >= 0 && n <= 9 ? (n % 2 === 0 ? 'pair' : 'impair') : null; };
@@ -114,6 +138,7 @@ function bump(round) {
   if (pp) for (const x of strategies.suitsOf(round.playerSuits)) if (x in state.player.suits[pp][d]) state.player.suits[pp][d][x] += 1;
   if (bp) for (const x of strategies.suitsOf(round.bankerSuits)) if (x in state.banker.suits[bp][d]) state.banker.suits[bp][d][x] += 1;
   state.games += 1;
+  persistCounts();
   return true;
 }
 
@@ -153,6 +178,19 @@ function listBlock(pairSuits, impairSuits, gameNumber, digits = ALL) {
     lines.push(suitLine(base != null ? `#${base + d}` : DIGITS[d], merged));
   }
   return lines.join('\n');
+}
+
+// Palier (stratégie « Palier parité », parity-palier.js) : pour chaque fin de numéro 0-9, les 4 costumes de la main du côté choisi
+// (cases pair + impair réunies, comme les lignes du message), avec le même pourcentage entier que celui affiché « #840 ➔ (❤️45%) … ».
+function palier(side = 'player') {
+  const counts = state[side === 'banker' ? 'banker' : 'player'];
+  const sp = (counts.suits && counts.suits.pair) || []; const si = (counts.suits && counts.suits.impair) || [];
+  return ALL.map((d) => {
+    const merged = suitZeros();
+    for (const x of SUIT_ORDER) merged[x] = ((sp[d] || {})[x] || 0) + ((si[d] || {})[x] || 0);
+    const total = SUIT_ORDER.reduce((n, x) => n + merged[x], 0);
+    return { digit: d, total, cells: SUIT_ORDER.map((x) => ({ suit: x, count: merged[x], pct: pctInt(merged[x], total) })) };
+  });
 }
 
 // prochain reset : calé sur l'horloge locale (toutes les N minutes à partir de minuit ; 60 = heure pile)
@@ -265,5 +303,5 @@ function status(gameNumber) {
 
 module.exports = {
   state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb,
-  bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status,
+  palier, bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status,
 };

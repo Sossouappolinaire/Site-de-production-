@@ -1,0 +1,53 @@
+// db-link.js — connexion à la base Supabase « site-production-baccara », intégrée au code
+// (aucune variable d'environnement à régler sur Render).
+//
+// Accès dédié : le rôle PostgreSQL « bot_app » (limité aux tables du site, pas administrateur
+// Supabase). Si ce fichier est publié, la base est lisible par quiconque le voit : garder le
+// dépôt PRIVÉ. Pour couper l'accès à tout moment, dans Supabase :  ALTER ROLE bot_app NOLOGIN;
+//
+// Priorité inchangée : si DATABASE_URL est déjà défini (Render), il garde la main.
+'use strict';
+
+const REF = 'kmvbsntmzjkpwwqgkqhz';
+const USER = 'bot_app';
+const PASS = 'ZHv41ll3G8Rir3v1YgzncBlzqk6Hyg2u3d3o6Rfb';
+
+// Adresses essayées dans l'ordre (la première qui répond est retenue). Le « pooler » est
+// obligatoire sur Render (réseau IPv4) ; la connexion directe est le dernier recours.
+const CANDIDATES = [
+  `postgresql://${USER}.${REF}:${PASS}@aws-1-eu-west-3.pooler.supabase.com:5432/postgres`,
+  `postgresql://${USER}.${REF}:${PASS}@aws-0-eu-west-3.pooler.supabase.com:5432/postgres`,
+  `postgresql://${USER}.${REF}:${PASS}@aws-1-eu-west-3.pooler.supabase.com:6543/postgres`,
+  `postgresql://${USER}.${REF}:${PASS}@aws-0-eu-west-3.pooler.supabase.com:6543/postgres`,
+  `postgresql://${USER}:${PASS}@db.${REF}.supabase.co:5432/postgres`,
+];
+
+const mask = (u) => String(u).replace(/:\/\/([^:]+):[^@]+@/, '://$1:***@');
+
+async function tryOne(url) {
+  let c = null;
+  try {
+    const { Client } = require('pg');
+    c = new Client({ connectionString: url, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 7000 });
+    await c.connect(); await c.query('SELECT 1'); return true;
+  } catch (e) { return e.message; }
+  finally { try { if (c) await c.end(); } catch (_) { /* ignoré */ } }
+}
+
+// Renseigne process.env.DATABASE_URL avec la première adresse qui répond.
+async function ensureDatabaseUrl() {
+  if (String(process.env.DATABASE_URL || '').trim()) return process.env.DATABASE_URL;
+  for (const url of CANDIDATES) {
+    const r = await tryOne(url);
+    if (r === true) {
+      process.env.DATABASE_URL = url;
+      console.log('🔌 Base Supabase connectée :', mask(url));
+      return url;
+    }
+    console.log('ℹ️  Adresse Supabase refusée :', mask(url), '—', String(r).slice(0, 120));
+  }
+  console.error('⚠️ Aucune adresse Supabase n\'a répondu — le site démarre sans base.');
+  return '';
+}
+
+module.exports = { ensureDatabaseUrl, CANDIDATES };

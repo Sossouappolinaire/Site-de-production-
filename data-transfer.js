@@ -171,6 +171,7 @@ const PANELS = {
   parityCounter: { mod: './parity-counter' },         // « Compte parité »
   distributionCounter: { mod: './distribution-counter' }, // « Compte distribution »
   endDigitPredict: { mod: './end-digit-predict' },        // « Prédiction fin de numéro »
+  parityPalier: { mod: './parity-palier' },               // « Palier parité » (stratégie)
   slowMode: { mod: './slow-mode' },                   // « Ralentisseur »
   absenceAlert: { mod: './absence-alert' },           // « Alerte absence de costume »
   channelLossGate: { mod: './channel-loss-gate' },    // « Envoi après perte » par canal (le planning se lit aussi dans la feuille PlanningEnvoi)

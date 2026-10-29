@@ -110,7 +110,7 @@ const TZ = process.env.RESET_TZ || 'Africa/Abidjan';
 const KEYCAP = (n) => `${Number(n)}\uFE0F\u20E3`;
 const dayKey = (ts = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
 
-const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance', 'lossnext']; // + « multi » (par défaut)
+const MODES = ['trigger', 'cycle', 'follow', 'test', 'scan', 'relance', 'lossnext', 'bilan']; // + « multi » (par défaut)
 const RELAUNCH_WAIT = 1;      // mode relance : nombre de jeux attendus APRÈS la sortie du 1er costume (v43) : le costume pas sorti ne doit pas venir …
 const RELAUNCH_OFFSET = 3;    // … alors il est relancé à (jeu du 1er costume sorti) + 3 par défaut (réglable ; ou choisi par l'analyse auto)
 const RELAUNCH_MIN_OFFSET = 3; // analyse auto : on teste les relances de +3 jusqu'à +n
@@ -486,6 +486,7 @@ function applySaved(saved) {
     };
     if (mode === 'lossnext') Object.assign(o, loadLossNext(c));
     if (mode === 'relance') Object.assign(o, loadRelaunch(c));
+    if (mode === 'bilan') Object.assign(o, loadBilan(c));
     return o;
   }).filter((c) => c.channels.length);
   for (const c of panel.configs) if (modeOf(c) === 'test') c.testRank = (c.ranks || TEST_DEFAULT_RANKS).includes(Number(c.testRank)) ? Number(c.testRank) : (c.ranks || TEST_DEFAULT_RANKS)[0];
@@ -542,7 +543,7 @@ function addConfig(input = {}) {
   const channels = parseChannels(input.channels);
   if (!channels.length) throw new Error('Renseigne au moins un ID de canal.');
   const cfg = {
-    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto', relance: 'Relance', lossnext: 'Perte → prédiction suivante' }[mode] || ''),
+    id: `bw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mode, name: sanitizeName(input.name) || ({ trigger: 'Déclencheur', cycle: 'Cycle', follow: 'Suivi', test: 'Test', scan: 'Détection auto', relance: 'Relance', lossnext: 'Perte → prédiction suivante', bilan: 'Meilleur selon le bilan' }[mode] || ''),
     strategy, channels, sources, rot: {}, maxR: sanitizeMaxR(input.maxR), format: sanitizeFormat(input.format),
     ranks: !hasRanksMode(mode) || lnFree ? [] : (input.ranks === undefined ? defaultRanks(mode) : sanitizeRanks(input.ranks, mode)),
     cycleRole: 1, cycleWaiting: false, cycleDone: [],
@@ -566,6 +567,11 @@ function addConfig(input = {}) {
   }
   if (mode === 'relance') Object.assign(cfg, relaunchFields(input), { relStats: {}, relObs: [], relOffsetAuto: null, relOutWins: 0, relOutLosses: 0, relOutSent: 0 });
   if (mode === 'test') cfg.testRank = cfg.ranks[0]; // on commence par le premier rang choisi (normalement le meilleur)
+  if (mode === 'bilan') {
+    const start = parseStart(input.startTime !== undefined ? input.startTime : input.brStart, true); // erreur claire si l'heure est mal écrite
+    Object.assign(cfg, loadBilan({ brStart: start }));
+    bilanEnsureRecap(cfg);
+  }
   const dup = findDuplicate(cfg);
   if (dup) throw duplicateError(dup);
   panel.configs.push(cfg); persist(); return cfg;
@@ -605,6 +611,11 @@ function updateConfig(id, patch = {}) {
       if (reset) { c.lnQueue = []; c.lnPhase = 'idle'; c.lnFollow = null; c.lnFollowRef = null; c.lnLeft = 0; c.lnStreak = {}; c.lnCounted = 0; c.lnPauseUntil = 0; }
     }
     if (patch.lossGate !== undefined && modeOf(c) === 'test') { c.lossGate = !!patch.lossGate; c.gateFrom = null; }
+    if (modeOf(c) === 'bilan') {
+      if (patch.startTime !== undefined) c.brStart = parseStart(patch.startTime, true);
+      if (old.strategy !== c.strategy) { c.brBest = null; c.brSecond = null; c.brBestName = null; c.brSecondName = null; c.brLoss = false; } // autre stratégie : on repart du classement
+      bilanEnsureRecap(c);
+    }
     if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
     if (modeOf(c) === 'relance') {
       if (['relWait', 'relOffset', 'relMaxN', 'relAuto', 'relChannels', 'relFormat', 'relMaxR'].some((k) => patch[k] !== undefined)) Object.assign(c, relaunchFields(patch, c));
@@ -900,6 +911,108 @@ function advanceTest(cfg, entry) {
   const i = ranks.indexOf(Number(cfg.testRank));
   cfg.testRank = ranks[(i + 1) % ranks.length]; // dernier rang → retour au premier ; rang inconnu → premier
 }
+// ─── Mode « Meilleur selon le bilan » (bouton 🏆) ──────────────────────────────────────────────────────────────
+// Bouton « Créer » → une des deux stratégies (Dizaine · Costume faible) → ID du canal d'envoi, rattrapages, format de prédiction,
+// heure de démarrage des prédictions (heure d'Abidjan, chaque jour).
+// RÈGLE : à chaque bilan du canal, le bot FIGE le classement : le « meilleur » (1ᵉʳ) et le « 2ᵉ meilleur » du moment.
+//   • il prédit le meilleur figé, uniquement, jusqu'au prochain bilan ;
+//   • au bilan : si le meilleur a changé, il suit le nouveau (le classement est relu à chaque bilan) ;
+//   • si SA prédiction PERD (après tous les rattrapages) → il prédit le 2ᵉ meilleur figé jusqu'à l'envoi du bilan ;
+//   • au bilan suivant → retour au meilleur classé (le classement est relu).
+// Une seule prédiction à la fois ; rien n'est envoyé avant l'heure de démarrage (heure d'Abidjan). Nouvelle journée : on repart du classement.
+const BILAN_DEFAULT_START = '00:00';
+const BILAN_RECAP_HOURS = 2; // intervalle du bilan imposé au canal s'il n'a pas encore de bilan activé (2 h = réglage habituel)
+function parseStart(v, strict) {
+  const t = String(v == null ? '' : v).trim();
+  if (!t && !strict) return BILAN_DEFAULT_START;
+  const m = /^(\d{1,2})(?:\s*[:hH]\s*(\d{1,2})?)?$/.exec(t);
+  const h = m ? Number(m[1]) : NaN;
+  const mn = m && m[2] !== undefined ? Number(m[2]) : 0;
+  if (!m || !(h >= 0 && h <= 23) || !(mn >= 0 && mn <= 59)) {
+    if (strict) throw new Error("Heure de démarrage invalide (heure d'Abidjan, ex. 08:30).");
+    return BILAN_DEFAULT_START;
+  }
+  return `${String(h).padStart(2, '0')}:${String(mn).padStart(2, '0')}`;
+}
+function loadBilan(c) {
+  c = c || {};
+  const s = (v) => (v != null && v !== '' ? String(v) : null);
+  return {
+    brStart: parseStart(c.brStart !== undefined ? c.brStart : c.startTime, false), // heure de démarrage (Abidjan)
+    brBest: s(c.brBest), brBestName: c.brBestName ? String(c.brBestName).slice(0, 80) : null,       // meilleur figé au dernier bilan
+    brSecond: s(c.brSecond), brSecondName: c.brSecondName ? String(c.brSecondName).slice(0, 80) : null, // 2ᵉ meilleur figé
+    brLoss: !!c.brLoss,                // true = une perte a eu lieu : on prédit le 2ᵉ jusqu'au prochain bilan
+    brDay: c.brDay ? String(c.brDay) : null,
+    brBilans: Number(c.brBilans) || 0, brLastBilanAt: Number(c.brLastBilanAt) || 0,
+  };
+}
+function nowMinutesAbidjan() {
+  const p = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+  return (Number(p.find((x) => x.type === 'hour').value) % 24) * 60 + Number(p.find((x) => x.type === 'minute').value);
+}
+function startMinutes(c) { const [h, m] = String(c.brStart || BILAN_DEFAULT_START).split(':').map(Number); return (h || 0) * 60 + (m || 0); }
+// le bilan doit exister pour le canal : sinon on l'active (2 h) — sans toucher à un réglage déjà fait
+function bilanEnsureRecap(cfg) {
+  try { for (const ch of cfg.channels || []) { if (!strategyRecap.isEnabled(ch)) strategyRecap.setChannelEnabled(ch, true, BILAN_RECAP_HOURS); } } catch (_) { /* le bilan ne doit pas bloquer la création */ }
+}
+// fige le meilleur et le 2ᵉ meilleur du classement du moment
+function bilanSnapshot(cfg) {
+  let tops = []; try { tops = topProviders[cfg.strategy] ? topProviders[cfg.strategy]() : []; } catch (_) { tops = []; }
+  const at = (r) => (tops || []).find((t) => t && Number(t.rank) === r);
+  const t1 = at(1), t2 = at(2);
+  if (!t1) return false; // pas encore de classement aujourd'hui
+  cfg.brBest = String(t1.ref); cfg.brBestName = String(t1.channel || t1.ref).slice(0, 80);
+  cfg.brSecond = t2 ? String(t2.ref) : null; cfg.brSecondName = t2 ? String(t2.channel || t2.ref).slice(0, 80) : null;
+  cfg.brLoss = false;
+  return true;
+}
+const bilanBusy = new Set();
+async function handleBilanPrediction(strategy, data) {
+  if (!data || data.ref == null) return;
+  for (const cfg of enabledOf(strategy, 'bilan')) {
+    if (cyclePending(cfg) || bilanBusy.has(cfg.id)) continue;       // une seule prédiction à la fois
+    if (nowMinutesAbidjan() < startMinutes(cfg)) continue;          // avant l'heure de démarrage (Abidjan)
+    const today = dayKey();
+    let changed = false;
+    if (cfg.brDay !== today) { cfg.brDay = today; cfg.brBest = null; cfg.brSecond = null; cfg.brBestName = null; cfg.brSecondName = null; cfg.brLoss = false; changed = true; } // nouvelle journée
+    if (!cfg.brBest) { if (!bilanSnapshot(cfg)) { if (changed) persist(); continue; } changed = true; }
+    if (changed) persist();
+    const want = cfg.brLoss ? cfg.brSecond : cfg.brBest;
+    if (!want || String(data.ref) !== String(want)) continue;       // ce n'est pas la configuration suivie
+    bilanBusy.add(cfg.id);
+    try { await sendTrigger(cfg, { target: data.target, suit: data.suit, reason: 'bilan', role: cfg.brLoss ? 2 : 1 }); }
+    finally { bilanBusy.delete(cfg.id); }
+  }
+}
+// SA prédiction a perdu → le 2ᵉ meilleur jusqu'au prochain bilan (une 2ᵉ perte ne change rien : on reste sur le 2ᵉ jusqu'au bilan)
+function advanceBilan(cfg, entry) {
+  if (!cfg || entry.status !== 'perdu' || cfg.brLoss || !cfg.brSecond) return;
+  cfg.brLoss = true; persist();
+}
+// un bilan vient d'être envoyé dans ce canal : on relit le classement (le meilleur peut avoir changé) et on revient au meilleur
+function bilanOnRecap(chat) {
+  const id = String(chat == null ? '' : chat).trim();
+  let changed = false;
+  for (const cfg of panel.configs) {
+    if (!cfg.enabled || modeOf(cfg) !== 'bilan' || !(cfg.channels || []).some((ch) => String(ch).trim() === id)) continue;
+    const before = cfg.brBest;
+    cfg.brDay = dayKey();
+    if (!bilanSnapshot(cfg)) { cfg.brLoss = false; } // pas de classement : on garde l'ancien meilleur
+    cfg.brBilans = (Number(cfg.brBilans) || 0) + 1; cfg.brLastBilanAt = Date.now();
+    if (before && cfg.brBest && before !== cfg.brBest) cfg.brChanged = (Number(cfg.brChanged) || 0) + 1;
+    changed = true;
+  }
+  if (changed) persist();
+}
+function bilanLabel(c) {
+  const names = (v, n) => n || v || null;
+  const best = names(c.brBest, c.brBestName), second = names(c.brSecond, c.brSecondName);
+  const start = `démarrage ${c.brStart || BILAN_DEFAULT_START} (heure d'Abidjan)`;
+  if (!best) return `En attente du classement · ${start}`;
+  return `${c.brLoss ? `⚠️ Après une perte : on prédit le 2ᵉ meilleur${second ? ` — ${second}` : ''} jusqu'au prochain bilan` : `On prédit le meilleur — ${best} jusqu'au prochain bilan`}${second && !c.brLoss ? ` · 2ᵉ en réserve : ${second}` : ''} · ${start} · ${Number(c.brBilans) || 0} bilan(s) suivi(s)`;
+}
+try { strategyRecap.onBilan((chat) => { try { bilanOnRecap(chat); } catch (e) { panel.lastError = e.message; } }); } catch (_) { /* module facultatif */ }
+
 // prochaine prédiction d'une configuration « armée » → envoyée dans les canaux déclencheur
 async function handleTriggerPrediction(strategy, data) {
   const ts = ensureTrigDay();
@@ -1063,6 +1176,7 @@ async function record(strategy, rank, data) {
     const validRank = rank >= 1 && rank <= 4;
     const validTest = testRank >= 1 && testRank <= 4;
     if (!hasEnabled(strategy) || !data || !Number.isFinite(Number(data.target)) || !data.suit) return;
+    await handleBilanPrediction(strategy, data).catch((e) => { panel.lastError = e.message; }); // « Meilleur selon le bilan » : suit les configurations figées au dernier bilan (par identité, pas par rang)
     // Une source déjà en attente de sa Xᵉ prédiction (« Perte → 3ᵉ ») doit continuer d'être comptée même quand elle est
     // sortie des 4 premières places après sa perte (sinon le compte ne descend jamais et rien n'est envoyé).
     if (!(validRank || validTest)) { await handleLossNextPrediction(strategy, null, data).catch((e) => { panel.lastError = e.message; }); return; }
@@ -1426,6 +1540,7 @@ function verifyPending() {
         if (entry.mode === 'follow') advanceFollow(cfg, entry);
         if (entry.mode === 'cycle' && cfg) advanceCycle(cfg, entry);
         else if (entry.mode === 'test') { if (cfg) advanceTest(cfg, entry); } // le format choisi est déjà mis à jour par editTrigger
+        else if (entry.mode === 'bilan') { if (cfg) advanceBilan(cfg, entry); }
         break;
       }
       if (entry.step >= entry.maxR) {
@@ -1435,6 +1550,7 @@ function verifyPending() {
         if (entry.mode === 'follow') advanceFollow(cfg, entry);
         if (entry.mode === 'cycle' && cfg) advanceCycle(cfg, entry);
         else if (entry.mode === 'test') { if (cfg) advanceTest(cfg, entry); }
+        else if (entry.mode === 'bilan') { if (cfg) advanceBilan(cfg, entry); }
         break;
       }
       entry.step += 1; changed = true;
@@ -1502,6 +1618,7 @@ function status() {
       testLabel: modeOf(c) === 'test' ? (c.lossGate ? (c.gateFrom ? `Perte du « ${RANK_LABELS[c.gateFrom]} » → prochaine source : ${RANK_LABELS[(c.ranks || TEST_DEFAULT_RANKS)[((c.ranks || TEST_DEFAULT_RANKS).indexOf(c.gateFrom) + 1) % (c.ranks || TEST_DEFAULT_RANKS).length]]}` : 'Envoi après une perte : en attente d’une perte parmi les rangs choisis') : `Prochaine source : ${RANK_LABELS[c.testRank] || RANK_LABELS[1]}`) : null,
       lossNextLabel: modeOf(c) === 'lossnext' ? lossNextLabel(c) : null,
       lnSourceNames: modeOf(c) === 'lossnext' && lnKindOf(c) !== 'rank' ? (c.lnSources || []).map((k) => lossNextSourceName(c, k)) : [],
+      bilanLabel: modeOf(c) === 'bilan' ? bilanLabel(c) : null,
       cycleLabel: modeOf(c) === 'cycle' ? (c.cycleWaiting ? 'Les 4 sont passées : en attente d’une perte parmi les 4' : `Suit actuellement : ${RANK_LABELS[c.cycleRole] || RANK_LABELS[1]}${(c.cycleDone || []).length ? ` (déjà passés : ${c.cycleDone.map((r) => RANK_LABELS[r]).join(', ')})` : ''}`) : null,
       channelNames: c.channels.map((id) => panel.channelTitles[String(id)] || String(id)),
       relObs: undefined, relObsCount: Array.isArray(c.relObs) ? c.relObs.length : 0,

@@ -20,6 +20,22 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 
+-- état complet du site (équivalent de data.json : compteurs, configurations)
+CREATE TABLE IF NOT EXISTS app_state (
+  key        TEXT PRIMARY KEY,
+  value      JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- anti-doublon des messages / prédictions envoyés aux canaux (send-dedupe.js)
+CREATE TABLE IF NOT EXISTS sent_dedupe (
+  key        TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL,
+  channel    TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sent_dedupe_kind_idx ON sent_dedupe (kind);
+
 CREATE TABLE IF NOT EXISTS games (
   number        BIGINT PRIMARY KEY,
   played_on     DATE        NOT NULL,
@@ -595,6 +611,28 @@ async function getSetting(key) {
 }
 
 
+// ---- état complet du site (miroir de data.json) ----------------------------
+// Supabase/PostgreSQL est la source durable : compteurs, panneaux et
+// configurations survivent aux redémarrages (disque Render éphémère).
+async function saveStoreSnapshot(data) {
+  const clean = { ...(data || {}) };
+  delete clean.databaseUrl; // le lien de la base ne doit jamais être stocké dans la base
+  return q(
+    `INSERT INTO app_state (key, value, updated_at) VALUES ('store', $1::jsonb, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [JSON.stringify(clean)]
+  );
+}
+
+async function loadStoreSnapshot() {
+  const r = await q(`SELECT value, updated_at FROM app_state WHERE key = 'store'`);
+  if (!r || !r.rows[0]) return null;
+  let value = r.rows[0].value;
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return null; } }
+  return { value, updatedAt: r.rows[0].updated_at };
+}
+
+
 // ---- configuration de l'application (token, canaux, admin, réglages) -------
 // Tout est enregistré en base : après un redémarrage, le bot repart avec le
 // token, l'ID administrateur, les canaux et les réglages déjà configurés.
@@ -867,6 +905,7 @@ module.exports = {
   saveAiAnalysis, loadAiAnalyses,
   lastGames, gameByNumber, gamesInRange, predictionsByDate, predictionSummary,
   overview, availableDates, readOnlyQuery,
+  saveStoreSnapshot, loadStoreSnapshot,
   saveAppConfig, loadAppConfig, savePreditState, loadPreditState, saveAfterLossState, loadAfterLossState,
   afterLossSendExists, reserveAfterLossSend, releaseAfterLossSend, clearAfterLossSent, listAfterLossSent,
   savePredictionControlState, loadPredictionControlState,

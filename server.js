@@ -49,6 +49,7 @@ const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
+const parityPalier = require('./parity-palier'); // « Palier parité » (v114)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
 const strategyRecap = require('./strategy-recap'); // récapitulatif / bilan par canal (était utilisé par /api/recap sans être importé ici)
 const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
@@ -436,6 +437,7 @@ app.get('/api/state', async (req, res) => {
     canalTelegram: canalTelegram.status(),
     channelUniform: channelUniformView(channelList),
     endDigitPredict: endDigitPredict.status(),
+    parityPalier: parityPalier.status(),
     gameStability: gameStability.status(),
     absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
     channelLossGate: (() => { const x = channelLossGate.status(); return { enabled: x.enabled, rows: x.rows, today: x.today }; })(),
@@ -924,6 +926,25 @@ app.post('/api/end-digit-predict/config', async (req, res) => {
 app.post('/api/end-digit-predict/test', async (req, res) => { const r = await endDigitPredict.test(); res.status(r.ok ? 200 : 400).json(r); });
 app.post('/api/end-digit-predict/reset', (req, res) => { endDigitPredict.resetStats(); res.json(endDigitPredict.status()); });
 
+// « Palier parité » (voir parity-palier.js)
+app.get('/api/parity-palier', (req, res) => res.json(parityPalier.status()));
+app.post('/api/parity-palier/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) parityPalier.setChannelTitle(id, check.chat.title);
+      }
+    }
+    parityPalier.configure(b);
+    res.json({ ok: true, parityPalier: parityPalier.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/parity-palier/test', async (req, res) => { const r = await parityPalier.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/parity-palier/reset', (req, res) => { parityPalier.resetStats(); res.json(parityPalier.status()); });
+
 // « Analyse fin de numéro » (voir end-digit.js)
 app.get('/api/end-digit', async (req, res) => {
   try { res.json(await endDigit.analyze(req.query.window)); }
@@ -976,6 +997,10 @@ app.post('/api/parity-counter/reset', (req, res) => {
   parityCounter.resetCounts();
   res.json(parityCounter.status(state.live ? state.live.number : null));
 });
+
+const sendDedupe = require('./send-dedupe');
+app.get('/api/send-dedupe', (req, res) => res.json(sendDedupe.status()));
+app.post('/api/send-dedupe', (req, res) => res.json(sendDedupe.configure(req.body || {})));
 
 app.get('/api/mirror-counter', (req, res) => {
   res.json({
@@ -3088,7 +3113,7 @@ function channelConfigsFor(channelId) {
     }
   }
   for (const c of ((bestWeakTop.panel && bestWeakTop.panel.configs) || [])) {
-    if (has(c.channels)) out.push({ kind: 'best-weak', id: c.id, group: 'Meilleur + plus faible / Relance / Test', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: c.mode === 'relance' ? '#/relance' : c.mode === 'test' ? '#/test' : '#/best-weak', canDelete: true });
+    if (has(c.channels)) out.push({ kind: 'best-weak', id: c.id, group: 'Meilleur + plus faible / Relance / Test', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: c.mode === 'relance' ? '#/relance' : c.mode === 'test' ? '#/test' : c.mode === 'bilan' ? '#/bilan' : '#/best-weak', canDelete: true });
   }
   for (const c of ((lossReturn.panel && lossReturn.panel.configs) || [])) {
     if (has(c.channels)) out.push({ kind: 'loss-return', id: c.id, group: 'Retour après perte', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: '#/loss-return', canDelete: true });

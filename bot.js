@@ -14,6 +14,7 @@ const fmt = require('./formats');
 const statusAnimator = require('./status-animator');
 const sendDelay = require('./send-delay');
 const midnightReset = require('./midnight-reset');
+const sendDedupe = require('./send-dedupe'); // anti-doublon des messages et prédictions envoyés aux canaux
 const strategyRecap = require('./strategy-recap');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
@@ -27,6 +28,7 @@ const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const parityPalier = require('./parity-palier'); // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité (v114)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » : meilleur / repli faible + inverse (v101)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
 const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
@@ -380,6 +382,8 @@ function installChannelGuard(inst) {
       state.dupSkipped = (state.dupSkipped || 0) + 1;
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
+    // Anti-doublon persistant (send-dedupe.js) : même message ou même jeu + costume déjà envoyé dans ce canal → ignoré (réservation en base)
+    const go = (ddKeys) => {
     // « Ralentisseur » (slow-mode.js) : canal ralenti + jeu futur dont le précédent n'a pas commencé → message retenu, envoi automatique plus tard
     if (!fromQueue && slowMode.shouldHold(chatId, rest[0])) return Promise.resolve(slowMode.hold(chatId, rest));
     // prédiction « en cours » → animation du statut (status-animator.js)
@@ -395,6 +399,15 @@ function installChannelGuard(inst) {
       // « Canal Telegram » : un canal où ce bot publie peut aussi être une stratégie (voir canal-telegram.js)
       try { if (m && !m.skipped && typeof rest[0] === 'string') canalTelegram.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       return m;
+    }, (err) => { sendDedupe.release(ddKeys); throw err; });
+    };
+    if (fromQueue) return go([]);
+    return sendDedupe.claim(chatId, rest[0]).then((c) => {
+      if (!c.ok) {
+        state.dupSkipped = (state.dupSkipped || 0) + 1;
+        return { message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, duplicate: true };
+      }
+      return go(c.keys);
     });
   };
   inst.sendMessage = function guardedSendEntry(chatId, ...rest) { return doSend(chatId, rest, false); };
@@ -2184,6 +2197,8 @@ async function tick() {
       Promise.resolve(canalTelegram.tick()),
       // « Prédiction fin de numéro » : meilleur costume du joueur, repli faible + inverse si le meilleur ne valide pas (voir end-digit-predict.js)
       Promise.resolve(endDigitPredict.tick()),
+      // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité, 3 rattrapages, enchaînement (voir parity-palier.js)
+      Promise.resolve(parityPalier.tick()),
       // « Stabilité du jeu » : 4 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
       Promise.resolve(gameStability.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
@@ -2393,6 +2408,7 @@ async function applyDbConfigs() {
   await canalTelegram.restoreFromDb();
   await channelUniform.restoreFromDb();
   await endDigitPredict.restoreFromDb();
+  await parityPalier.restoreFromDb();
   await gameStability.restoreFromDb();
   await absenceAlert.restoreFromDb();
   await channelLossGate.restoreFromDb();
@@ -2482,6 +2498,8 @@ async function startLoop() {
   channelUniform.restore();
   endDigitPredict.restore();
   endDigitPredict.setSender(senderFor);
+  parityPalier.restore();
+  parityPalier.setSender(senderFor);
   gameStability.restore();
   gameStability.setSender(senderFor);
   gameStability.setAdminId(() => state.adminId);
