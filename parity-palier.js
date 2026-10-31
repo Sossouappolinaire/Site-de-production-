@@ -5,6 +5,8 @@
 // FAIBLE pourcentage de la ligne.
 //
 // Règles :
+//   • v121 : si DEUX costumes ou plus ont le même pourcentage, où que ce soit dans la ligne (bas, milieu ou haut), pas de prédiction pour
+//     cette fin de numéro ; sinon le costume au plus faible pourcentage est prédit.
 //   • un seul costume doit être au plus faible pourcentage. Si deux costumes ou plus sont à égalité tout en bas (ex. « #530 ➔ ♦️36 ❤️21
 //     ♠️21 ♣️21 », « #532 ➔ ♠️50 ♣️25 ❤️13 ♦️13 », « #537 » à 25 % partout) → pas de prédiction pour cette fin de numéro, on passe à la
 //     suivante (même principe pour les lignes à 0 % : seules les lignes dont UN SEUL costume est à 0 % — ex. #1271 et #1276 — donnent
@@ -79,6 +81,8 @@ function pickLowest(cells, minN = 1, total = null) {
   if (!Array.isArray(cells) || cells.length < 2) return null;
   const sum = total != null ? total : cells.reduce((n, c) => n + (c.count || 0), 0);
   if (!sum || sum < minN) return null;
+  // v121 : une égalité n'importe où dans la ligne (2, 3 ou 4 costumes au même pourcentage, en bas, au milieu ou en haut) = pas de prédiction
+  if (new Set(cells.map((c) => c.pct)).size !== cells.length) return null;
   const min = Math.min(...cells.map((c) => c.pct));
   const lows = cells.filter((c) => c.pct === min);
   return lows.length === 1 ? { suit: lows[0].suit, pct: lows[0].pct } : null;
@@ -264,7 +268,7 @@ function status() {
     const sorted = r.cells.map((c, i) => ({ ...c, i })).sort((a, b) => b.count - a.count || a.i - b.i);
     return {
       digit: r.digit, label: base != null ? `#${base + r.digit}` : String(r.digit), total: r.total, cells: sorted.map(({ suit, pct: p }) => ({ suit, pct: p })),
-      pick: pick ? pick.suit : null, reason: pick ? '' : (r.total < panel.minN || !r.total ? 'pas assez de données' : 'égalité au plus faible'),
+      pick: pick ? pick.suit : null, reason: pick ? '' : (r.total < panel.minN || !r.total ? 'pas assez de données' : 'égalité entre costumes'),
     };
   });
   const known = maxKnownGameNumber();
