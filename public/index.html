@@ -765,6 +765,13 @@
         <span class="strategy-stats"><span class="tag">${esc(pp.sentCount ?? 0)} préd.</span><span class="tag good">${esc(pp.won ?? 0)} ✓</span><span class="tag bad">${esc(pp.lost ?? 0)} ✗</span></span>
         <em>Ouvrir →</em></button>`;
       fams.push(stratFamily('palier', '🔢', 'Palier parité', 'Le costume au plus faible pourcentage du palier du Compte parité', stratStatusTag(pp.enabled ? 1 : 0, 1), stratSub('🔢', 'Palier parité', `${pp.resolved || 0} prédiction(s) terminée(s)`, ppBtn)));
+      // 3 bis-3) Palier parité égalité : deux taux faibles égaux → costume du 2e taux
+      const pe = snapshot.parityEgalite || {};
+      const peBtn = `<button class="strategy-button" onclick="location.hash='#/parity-egalite'">
+        <span class="eyebrow">${pe.enabled ? '🟢 Active' : '⏸ En pause'}</span><b>⚖️ Palier parité égalité</b><span>Quand une ligne du palier a deux taux faibles égaux, prédit le costume du deuxième taux, à +${esc(pe.offset ?? 0)}, envoyé ${esc(pe.sendAt ?? 2)} jeux avant…</span>
+        <span class="strategy-stats"><span class="tag">${esc(pe.sentCount ?? 0)} préd.</span><span class="tag good">${esc(pe.won ?? 0)} ✓</span><span class="tag bad">${esc(pe.lost ?? 0)} ✗</span></span>
+        <em>Ouvrir →</em></button>`;
+      fams.push(stratFamily('egalite', '⚖️', 'Palier parité égalité', 'Deux taux faibles égaux : le costume du deuxième taux', stratStatusTag(pe.enabled ? 1 : 0, 1), stratSub('⚖️', 'Palier parité égalité', `${pe.resolved || 0} prédiction(s) terminée(s)`, peBtn)));
       // 3 ter) Canal Telegram : un canal = une stratégie
       const ctg = snapshot.canalTelegram || {};
       const ctgBtns = (ctg.strategies || []).map(c => `<button class="strategy-button" onclick="location.hash='#/canal-telegram'">
@@ -4395,6 +4402,51 @@ Faites-en bon usage !
       try { await api('/api/parity-palier/reset', 'POST', {}); await refresh(); parityPalierPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
     }
 
+    // « Palier parité égalité » (voir parity-egalite.js) : deux taux faibles égaux → costume du deuxième taux.
+    function parityEgalitePage() {
+      setNav('strategies');
+      const pe = snapshot.parityEgalite || {};
+      const fc = String(snapshot.formatCount || 107);
+      const rowHtml = (pe.rows || []).map((r) => `<tr><td><b>${esc(r.label)}</b></td><td>${r.total ? r.cells.map((c) => `${esc(c.suit)}${c.pct}%`).join(' · ') : '—'}</td><td>${r.pick ? `<span class="tag good">${esc(r.pick)} prédit → №${r.target}</span>` : `<span class="tag">— ${esc(r.reason)}</span>`}</td></tr>`).join('');
+      const upcoming = (pe.upcoming || []).length ? `<p class="small muted">À venir : ${pe.upcoming.map((u) => `№${u.target} ${esc(u.suit)}`).join(' · ')}</p>` : '';
+      const recent = (pe.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>2e taux</th><th>État</th></tr></thead><tbody>${pe.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${e.pct ?? '—'} %</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '🚫'}</td></tr>`).join('')}</tbody></table>` : '';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">⚖️ Palier parité égalité</h2>
+        <p class="small">Même palier que « Palier parité » (une ligne par fin de numéro, main du <b>joueur</b>), mais cette stratégie ne prédit que les lignes où <b>deux costumes ou plus sont à égalité au taux le plus faible</b>. Elle ne prédit pas l'un des deux costumes à égalité : elle prédit le costume du <b>deuxième taux</b> parmi les 4 (si ce deuxième taux est lui aussi partagé, pas de prédiction). La ligne « fin d » du palier de la dizaine passée vise le jeu de même fin dans la dizaine suivante, <b>+0 ou +3</b> selon le réglage (palier #510-#519, ligne #511 : +0 → jeu 521, +3 → jeu 524). Elle part quand le jeu en direct est à <b>2 jeux</b> (réglable) du jeu visé : jeu visé 10 → envoyée au jeu 8.</p></div></div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="three-col">
+            <div class="field"><label>ID ou @nom du canal d'envoi</label><input id="peChannel" value="${esc((pe.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Décalage du jeu visé</label><select id="peOffset"><option value="0" ${(pe.offset || 0) === 0 ? 'selected' : ''}>+0 (jeu 521)</option><option value="3" ${pe.offset === 3 ? 'selected' : ''}>+3 (jeu 524)</option></select></div>
+            <div class="field"><label>Envoi quand le jeu en direct est à … jeux du jeu visé</label><input id="peSendAt" type="number" min="1" max="10" value="${pe.sendAt ?? 2}"></div>
+            <div class="field"><label>Rattrapages</label><input id="peMaxR" type="number" min="0" max="9" value="${pe.maxR ?? 3}"></div>
+            <div class="field"><label>Format (1 → ${esc(fc)})</label><input id="peFormat" type="number" min="1" max="${esc(fc)}" value="${pe.format ?? 1}"></div>
+            <div class="field"><label>Costumes comptés minimum dans la ligne</label><input id="peMinN" type="number" min="1" max="5000" value="${pe.minN ?? 1}"></div>
+            <div class="field"><label>&nbsp;</label><label class="check"><input id="peEnabled" type="checkbox" ${pe.enabled ? 'checked' : ''}> Activer l'envoi</label></div>
+          </div>
+          <div class="toolbar"><button class="button small primary" onclick="saveParityEgalite()">Enregistrer</button><button class="button small ghost" onclick="testParityEgalite()">Envoyer un test</button><button class="button small danger" onclick="resetParityEgalite()">Remettre à zéro</button><button class="button small ghost" onclick="refresh().then(parityEgalitePage)">Actualiser</button></div>
+          ${pe.lastError ? `<p class="small" style="color:#f87171">${esc(pe.lastError)}</p>` : ''}
+          <p class="small" style="margin-top:10px">Envoyées : <b>${pe.sentCount || 0}</b> • gagnées <b>${pe.won || 0}</b> / perdues <b>${pe.lost || 0}</b> (${pe.rate || 0} %) • en cours ${pe.waiting || 0}${(pe.steps || []).length ? ' • par rattrapage : ' + pe.steps.map((x) => `R${x.step} : ${x.n}`).join(' · ') : ''}</p>
+          ${upcoming}
+        </div>
+        <div class="card"><h3>${pe.frozenSource != null ? `Palier figé #${pe.frozenSource}–#${pe.frozenSource + 9} → prédit les jeux ${pe.frozenSource + 10 + (pe.offset || 0)} à ${pe.frozenSource + 19 + (pe.offset || 0)}` : 'Palier figé : pas encore (attend la fin de la main du joueur au prochain jeu finissant par 9)'}</h3>
+          <table class="table"><thead><tr><th>Ligne</th><th>Costumes (du plus au moins fréquent)</th><th>Décision</th></tr></thead><tbody>${rowHtml}</tbody></table>
+          <p class="small muted" style="margin-top:8px">Les pourcentages sont ceux du message « Compte parité » (pair + impair réunis) au moment où la dizaine s'est terminée.</p>
+          ${recent}
+        </div>`;
+    }
+    async function saveParityEgalite() {
+      try {
+        await api('/api/parity-egalite/config', 'POST', { enabled: $('#peEnabled')?.checked, channels: val('peChannel'), maxR: val('peMaxR'), format: val('peFormat'), minN: val('peMinN'), sendAt: val('peSendAt'), offset: val('peOffset') });
+        await refresh(); parityEgalitePage(); toast('« Palier parité égalité » enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testParityEgalite() {
+      try { await saveParityEgalite(); const r = await api('/api/parity-egalite/test', 'POST', {}); toast(r.ok ? 'Test envoyé dans le canal.' : (r.error || 'Échec')); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetParityEgalite() {
+      if (!confirm('Remettre à zéro les statistiques de « Palier parité égalité » ?')) return;
+      try { await api('/api/parity-egalite/reset', 'POST', {}); await refresh(); parityEgalitePage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+
     // « Ralentisseur » (voir slow-mode.js) : retient une prédiction jusqu'au début du jeu précédent.
     // -----------------------------------------------------------------------
     async function slowModePage() {
@@ -6509,6 +6561,7 @@ Faites-en bon usage !
         else if (h === '#/distribution-counter') distributionCounterPage();
         else if (h === '#/end-digit') endDigitPage();
         else if (h === '#/parity-palier') parityPalierPage();
+        else if (h === '#/parity-egalite') parityEgalitePage();
         else if (h === '#/slow-mode') slowModePage();
         else if (h === '#/absence-alert') absenceAlertPage();
         else if (h === '#/loss-gate') lossGatePage();
