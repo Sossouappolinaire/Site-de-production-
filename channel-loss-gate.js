@@ -151,6 +151,7 @@ function liveNumber() {
 }
 function isPredictionText(text) {
   if (typeof text !== 'string') return false;
+  if (/RÉSUMÉ STATISTIQUE/.test(text)) return false; // message du « Compte parité » : ses lignes #N ne sont pas des prédictions
   const live = liveNumber();
   if (!live) return false;
   const re = /(?:N°|№|#)\s*(\d{1,6})/g;

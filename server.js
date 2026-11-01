@@ -49,6 +49,7 @@ const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
+const parityEgalite = require('./parity-egalite'); // « Palier parité égalité »
 const parityPalier = require('./parity-palier'); // « Palier parité » (v114)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
 const strategyRecap = require('./strategy-recap'); // récapitulatif / bilan par canal (était utilisé par /api/recap sans être importé ici)
@@ -438,6 +439,7 @@ app.get('/api/state', async (req, res) => {
     channelUniform: channelUniformView(channelList),
     endDigitPredict: endDigitPredict.status(),
     parityPalier: parityPalier.status(),
+    parityEgalite: parityEgalite.status(),
     gameStability: gameStability.status(),
     absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
     channelLossGate: (() => { const x = channelLossGate.status(); return { enabled: x.enabled, rows: x.rows, today: x.today }; })(),
@@ -944,6 +946,25 @@ app.post('/api/parity-palier/config', async (req, res) => {
 });
 app.post('/api/parity-palier/test', async (req, res) => { const r = await parityPalier.test(); res.status(r.ok ? 200 : 400).json(r); });
 app.post('/api/parity-palier/reset', (req, res) => { parityPalier.resetStats(); res.json(parityPalier.status()); });
+
+// « Palier parité égalité » (voir parity-egalite.js)
+app.get('/api/parity-egalite', (req, res) => res.json(parityEgalite.status()));
+app.post('/api/parity-egalite/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) parityEgalite.setChannelTitle(id, check.chat.title);
+      }
+    }
+    parityEgalite.configure(b);
+    res.json({ ok: true, parityEgalite: parityEgalite.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/parity-egalite/test', async (req, res) => { const r = await parityEgalite.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/parity-egalite/reset', (req, res) => { parityEgalite.resetStats(); res.json(parityEgalite.status()); });
 
 // « Analyse fin de numéro » (voir end-digit.js)
 app.get('/api/end-digit', async (req, res) => {

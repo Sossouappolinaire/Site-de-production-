@@ -42,6 +42,7 @@ const hash = (t) => crypto.createHash('sha1').update(t).digest('hex');
 
 function predictionKeys(chan, text, ttl) {
   if (/[✅❌]/.test(text)) return []; // résultat, pas une prédiction
+  if (/RÉSUMÉ STATISTIQUE/.test(text)) return []; // message du « Compte parité » (lignes #840 ➔ …) : jamais une prédiction
   let post = null;
   // « en cours » serait lu comme le costume cœur par le lecteur de publications : on l'écarte avant lecture
   try { post = require('./loss-return').parsePost(text.replace(/\bcours\b/gi, ' ')); } catch (_) { post = null; }

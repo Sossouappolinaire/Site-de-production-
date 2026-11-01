@@ -95,6 +95,7 @@ function startedMax() {
 // plus petit numéro de jeu FUTUR cité dans le message (jeu dont le précédent n'a pas encore commencé), sinon null
 function futureTarget(text, started = startedMax()) {
   if (typeof text !== 'string' || !started) return null;
+  if (/RÉSUMÉ STATISTIQUE/.test(text)) return null; // message du « Compte parité » : jamais retenu
   let best = null;
   const re = /(?:N°|№|#)\s*(\d{1,6})/g;
   let m;

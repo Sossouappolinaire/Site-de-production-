@@ -28,6 +28,7 @@ const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const parityEgalite = require('./parity-egalite'); // « Palier parité égalité » : 2e taux quand deux taux faibles sont égaux
 const parityPalier = require('./parity-palier'); // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité (v114)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » : meilleur / repli faible + inverse (v101)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
@@ -2199,6 +2200,8 @@ async function tick() {
       Promise.resolve(endDigitPredict.tick()),
       // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité, 3 rattrapages, enchaînement (voir parity-palier.js)
       Promise.resolve(parityPalier.tick()),
+      // « Palier parité égalité » : deux taux faibles égaux → costume du 2e taux, +0 ou +3, envoi 2 jeux avant (voir parity-egalite.js)
+      Promise.resolve(parityEgalite.tick()),
       // « Stabilité du jeu » : 4 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
       Promise.resolve(gameStability.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
@@ -2409,6 +2412,7 @@ async function applyDbConfigs() {
   await channelUniform.restoreFromDb();
   await endDigitPredict.restoreFromDb();
   await parityPalier.restoreFromDb();
+  await parityEgalite.restoreFromDb();
   await gameStability.restoreFromDb();
   await absenceAlert.restoreFromDb();
   await channelLossGate.restoreFromDb();
@@ -2500,6 +2504,8 @@ async function startLoop() {
   endDigitPredict.setSender(senderFor);
   parityPalier.restore();
   parityPalier.setSender(senderFor);
+  parityEgalite.restore();
+  parityEgalite.setSender(senderFor);
   gameStability.restore();
   gameStability.setSender(senderFor);
   gameStability.setAdminId(() => state.adminId);
