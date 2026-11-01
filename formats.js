@@ -1,4 +1,4 @@
-// formats.js — adaptateur entre le moteur du bot et les 107 formats de tg-formats.js (8 à 86 : tg-formats-uniques.js)
+// formats.js — adaptateur entre le moteur du bot et les 77 formats de tg-formats.js
 // Rôle :
 //   • normaliser le costume ('♦️' -> '♦') pour que les noms FR soient trouvés
 //   • nettoyer le texte (plus jamais de "\n" ou de "'n" visibles dans Telegram)
@@ -8,7 +8,7 @@
 const tg = require('./tg-formats');
 const animator = require('./status-animator');
 
-const FORMAT_COUNT = 107;  // 107 = TRADING FOR BACCARA · 90-91 = ÉTOILE/ÉCLAIR BACCARA · 92-101 = 10 formats proposés (ChatGPT) · 102-106 = « Il y aura distribution 2/2 » (5 formats simples)
+const FORMAT_COUNT = 108;  // 108 = JOUEUR (Couleur de la carte / Rattrapages / Résultats) · 107 = TRADING FOR BACCARA · 90-91 = ÉTOILE/ÉCLAIR BACCARA · 92-101 = 10 formats proposés (ChatGPT) · 102-106 = « Il y aura distribution 2/2 » (5 formats simples)
 
 // costumes utilisés par le moteur (avec sélecteur emoji) -> clés de tg-formats
 function normalizeSuit(suit) {
@@ -41,27 +41,6 @@ function mapStatus(status) {
   return null;
 }
 
-// Registre des derniers messages rendus (texte final → formats + données de la prédiction).
-// Sert à channel-uniform.js : au point d'envoi, le message est retrouvé ici pour être re-rendu dans le format imposé au canal,
-// sans jamais « deviner » le contenu en lisant le texte.
-const RECENT_MAX = 400;
-const recent = new Map();
-function recordRendered(text, formatId, payload, parseMode) {
-  if (!text || text.length < 6) return;
-  recent.delete(text);
-  recent.set(text, { formatId, payload: { ...payload }, parse_mode: parseMode || null });
-  if (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value);
-}
-// exact : le texte est exactement un message rendu ; sinon on cherche un message rendu CONTENU dans un texte plus long (décor autour)
-function locateRendered(text) {
-  if (typeof text !== 'string' || !text) return null;
-  const rec = recent.get(text);
-  if (rec) return { rec, key: text, exact: true };
-  let found = null;
-  for (const [k, v] of recent) if (k.length >= 12 && text.includes(k) && (!found || k.length > found.key.length)) found = { rec: v, key: k, exact: false };
-  return found;
-}
-
 /**
  * renderMessage — construit le message Telegram final.
  * @returns {{text: string, parse_mode: (string|null)}}
@@ -87,8 +66,6 @@ function renderMessage(formatId, data = {}, template = null, opts = {}) {
   }
   const raw = sanitize(out && out.text ? out.text : out);
   const result = finalize(raw, out && out.parse_mode);
-  if (!(opts && (opts.noRecord || opts.noAnimate))) { // les aperçus (noAnimate) ne saturent pas le registre
-    try { recordRendered(result.text, clampFormat(formatId), payload, result.parse_mode); } catch (_) { /* registre seulement */ } }
   // message de prédiction « en cours » : signalé à l'animateur de statut
   // (status-animator.js) qui l'animera dès son envoi. Aperçus : noAnimate.
   if (payload.status === null && !(opts && opts.noAnimate)) animator.registerPending(result.text);
@@ -155,7 +132,6 @@ function formatCatalog() {
 
 module.exports = {
   FORMAT_COUNT,
-  locateRendered,
   normalizeSuit,
   sanitize,
   clampFormat,
