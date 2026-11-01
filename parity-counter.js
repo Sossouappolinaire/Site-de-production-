@@ -6,7 +6,7 @@
 // Le pourcentage de chaque chiffre est calculé sur le total de SON bloc.
 //
 // Envoi (réglage « Envoyer pour ») : le joueur seulement, le banquier seulement, ou les deux — un message par côté,
-// posté après chaque jeu terminé dans le canal choisi. Remise à zéro automatique toutes les N minutes (60 par défaut,
+// posté À CHAQUE FIN DE JEU (gagnant ou non) dans le canal choisi. Remise à zéro automatique toutes les N minutes (60 par défaut,
 // calée sur l'heure pile), avec le compte à rebours dans le message.
 'use strict';
 
@@ -28,8 +28,7 @@ const strategies = require('./strategies');
 const state = {
   enabled: true,
   channelId: '',
-  target: 'both',      // both | player | banker
-  winnerOnly: true,    // à chaque fin de jeu, n'envoie que le message du côté GAGNANT (nul : rien)
+  target: 'player',    // player (défaut : seule la main du joueur est suivie) | banker | both
   intervalMin: 60,
   player: { pair: zeros(), impair: zeros(), suits: suitGrid() },
   banker: { pair: zeros(), impair: zeros(), suits: suitGrid() },
@@ -49,14 +48,13 @@ function setSender(fn) { sendFn = typeof fn === 'function' ? fn : null; }
 // ---------------------------------------------------------------------------
 const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
 function config() {
-  return { enabled: state.enabled, channelId: state.channelId, target: state.target, winnerOnly: state.winnerOnly, intervalMin: state.intervalMin };
+  return { enabled: state.enabled, channelId: state.channelId, target: state.target, intervalMin: state.intervalMin };
 }
 function applyConfig(c) {
   if (!c || typeof c !== 'object') return;
   if (c.enabled !== undefined) state.enabled = c.enabled !== false;
   if (c.channelId !== undefined) state.channelId = String(c.channelId == null ? '' : c.channelId).trim();
-  if (c.target !== undefined) state.target = TARGETS.includes(c.target) ? c.target : 'both';
-  if (c.winnerOnly !== undefined) state.winnerOnly = c.winnerOnly !== false;
+  if (c.target !== undefined) state.target = TARGETS.includes(c.target) ? c.target : 'player';
   if (c.intervalMin !== undefined) state.intervalMin = clampInt(c.intervalMin, 5, 1440, 60);
 }
 function persist() {
@@ -167,15 +165,23 @@ function suitLine(label, cell) {
 }
 // Liste unique de 10 lignes (une par fin de numéro 0 à 9), sans titre : les costumes des jeux à point pair ET impair sont
 // réunis pour chaque chiffre. Le nombre de jeux pair / impair reste affiché dans le résumé.
+// v122 : chaque ligne dit si le numéro est DÉJÀ PASSÉ ou PAS ENCORE PASSÉ dans la dizaine du dernier jeu terminé :
+//   ✅ #840 ➔ …   numéro déjà passé (jeu terminé)
+//   ✅ #845 ➔ … ◀ dernier jeu terminé
+//   ⏳ #846 ➔ …   numéro pas encore passé (les pourcentages sont ceux des dizaines précédentes depuis le reset)
 function listBlock(pairSuits, impairSuits, gameNumber, digits = ALL) {
   const g = Number(gameNumber);
-  const base = gameNumber != null && gameNumber !== '' && Number.isInteger(g) && g >= 0 ? Math.floor(g / 10) * 10 : null;
+  const known = gameNumber != null && gameNumber !== '' && Number.isInteger(g) && g >= 0;
+  const base = known ? Math.floor(g / 10) * 10 : null;
+  const cur = known ? g % 10 : null;
   const lines = [];
   for (const d of digits) {
     const p = (pairSuits && pairSuits[d]) || {}; const i = (impairSuits && impairSuits[d]) || {};
     const merged = suitZeros();
     for (const x of SUIT_ORDER) merged[x] = (p[x] || 0) + (i[x] || 0);
-    lines.push(suitLine(base != null ? `#${base + d}` : DIGITS[d], merged));
+    if (base == null) { lines.push(suitLine(DIGITS[d], merged)); continue; }
+    const passed = d <= cur;
+    lines.push(`${passed ? '✅' : '⏳'} ${suitLine(`#${base + d}`, merged)}${d === cur ? ' ◀' : ''}`);
   }
   return lines.join('\n');
 }
@@ -221,6 +227,7 @@ function buildMessage(side, gameNumber, opts = {}) {
   return [
     ...(bilan ? [`🕐 BILAN DE L'HEURE — ${pad(now.getHours())}h${pad(now.getMinutes())}`, ''] : []),
     listBlock(counts.suits && counts.suits.pair, counts.suits && counts.suits.impair, gameNumber),
+    ...(Number.isInteger(Number(gameNumber)) && gameNumber != null ? ['✅ déjà passé  ·  ⏳ pas encore passé  ·  ◀ dernier jeu'] : []),
     '',
     ' RÉSUMÉ STATISTIQUE',
     '━━━━━━━━━━━━━━━',
@@ -231,14 +238,12 @@ function buildMessage(side, gameNumber, opts = {}) {
   ].join('\n');
 }
 
-const winnerSide = (w) => (w === 'Joueur' ? 'player' : w === 'Banquier' ? 'banker' : null);
-// publie, après chaque jeu terminé, le message du côté GAGNANT (si « gagnant seulement » ; un nul n'envoie rien),
-// sinon un message par côté choisi
-async function publish(gameNumber, winner) {
+// publie le compteur À CHAQUE FIN DE JEU (v122) : un message par côté choisi (joueur, banquier ou les deux), quel que soit le gagnant
+// (le filtre « côté gagnant seulement » a été retiré ; un nul envoie aussi le compteur)
+async function publish(gameNumber) {
   if (!state.enabled || !state.channelId || !sendFn) return false;
   let ok = false;
-  const sides = state.winnerOnly ? sidesToSend().filter((sd) => sd === winnerSide(winner)) : sidesToSend();
-  for (const side of sides) {
+  for (const side of sidesToSend()) {
     try { await sendFn(state.channelId, buildMessage(side, gameNumber)); ok = true; state.sentCount += 1; state.lastSentAt = Date.now(); state.lastError = null; }
     catch (e) { state.lastError = e.message; console.error('Compte parité :', e.message); }
   }
@@ -247,7 +252,14 @@ async function publish(gameNumber, winner) {
 // à appeler à chaque jeu terminé : compte puis publie
 async function onFinished(round) {
   if (!state.enabled) return;
-  if (bump(round)) await publish(round.number, round.winner);
+  if (!round || !round.finished) return;
+  const counted = bump(round);
+  // v122 : le compteur part à CHAQUE fin de jeu, même si le jeu n'a pas pu être compté (cartes absentes, points illisibles) ; jamais deux fois le même numéro
+  const num = Number(round.number);
+  if (!counted && !Number.isInteger(num)) return;
+  if (state.lastPublished === num) return;
+  state.lastPublished = num;
+  await publish(round.number);
 }
 
 // Bilan envoyé à chaque reset automatique (heure pile pour 60 min) : un message par côté choisi, PUIS remise à zéro.
