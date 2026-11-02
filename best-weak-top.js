@@ -961,8 +961,14 @@ function bilanSnapshot(cfg) {
   const at = (r) => (tops || []).find((t) => t && Number(t.rank) === r);
   const t1 = at(1), t2 = at(2);
   if (!t1) return false; // pas encore de classement aujourd'hui
+  // liste du bilan = les 2 meilleurs du moment. Si un seul est classé (minimum de prédictions non atteint pour les autres),
+  // on garde comme 2e l'ancien meilleur / ancien 2e de la liste précédente (s'il est différent du nouveau meilleur) :
+  // sans 2e, une perte ne pourrait jamais faire passer le bot au 2e meilleur.
+  const prev = [[cfg.brBest, cfg.brBestName], [cfg.brSecond, cfg.brSecondName]].find(([r]) => r && String(r) !== String(t1.ref));
   cfg.brBest = String(t1.ref); cfg.brBestName = String(t1.channel || t1.ref).slice(0, 80);
-  cfg.brSecond = t2 ? String(t2.ref) : null; cfg.brSecondName = t2 ? String(t2.channel || t2.ref).slice(0, 80) : null;
+  if (t2) { cfg.brSecond = String(t2.ref); cfg.brSecondName = String(t2.channel || t2.ref).slice(0, 80); }
+  else if (prev) { cfg.brSecond = String(prev[0]); cfg.brSecondName = prev[1] || null; }
+  else { cfg.brSecond = null; cfg.brSecondName = null; }
   cfg.brLoss = false;
   return true;
 }
@@ -977,7 +983,9 @@ async function handleBilanPrediction(strategy, data) {
     // nouvelle journée : le classement du jour est relu s'il existe ; à 00h00 les compteurs sont à zéro et personne n'est encore classé
     // (minimum de prédictions non atteint) : on GARDE alors le dernier meilleur connu au lieu de rester bloqué jusqu'au 1ᵉʳ classement
     // (même règle que Dizaine / Costume faible : « tant que personne n'est classé, on garde le dernier meilleur connu »)
-    if (cfg.brDay !== today) { cfg.brDay = today; cfg.brLoss = false; bilanSnapshot(cfg); changed = true; }
+    // nouvelle journée : on NE relit PAS le classement ici — le meilleur ne change qu'à l'envoi d'un bilan (bilanOnRecap) ;
+    // en attendant ce bilan, on garde la liste du dernier bilan (meilleur + 2e meilleur)
+    if (cfg.brDay !== today) { cfg.brDay = today; changed = true; }
     if (!cfg.brBest) { if (!bilanSnapshot(cfg)) { if (changed) persist(); continue; } changed = true; }
     if (changed) persist();
     const want = cfg.brLoss ? cfg.brSecond : cfg.brBest;
