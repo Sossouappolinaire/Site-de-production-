@@ -1670,6 +1670,18 @@ let lastShoeSeq = 0;
 // LES DEUX la même prédiction « ombre » encore non envoyée (state.predictions
 // pas encore mis à jour par la première) → double envoi dans le canal public.
 let ticking = false;
+// v123 : garde-fous de la boucle principale. Un envoi Telegram ou une requête qui ne répond jamais laissait `ticking` à vrai pour
+// toujours : plus aucun jeu lu, plus aucune vérification, les prédictions restaient « en attente » (surtout après 00h00).
+let tickStartedAt = 0;
+let tickSeq = 0;
+const TICK_MAX_MS = 120000;     // un passage plus long que ça est considéré comme bloqué : le suivant reprend la main
+const FETCH_MAX_MS = 60000;     // lecture complète de l'API (miroirs + découverte + proxys)
+const MODULES_MAX_MS = 45000;   // tous les panneaux de prédiction ensemble
+function raceTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => { t = setTimeout(() => reject(new Error(`${label} : délai de ${Math.round(ms / 1000)} s dépassé`)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
 
 async function sendBilan(key, snapshot) {
   // Un bilan est un nouvel envoi. Il ne doit pas contourner l'interrupteur
@@ -2030,11 +2042,18 @@ async function ensureDb() {
 }
 
 async function tick() {
-  if (ticking) return; // un tick précédent tourne encore : on saute celui-ci
+  if (ticking) {
+    // un tick précédent tourne encore : on saute celui-ci, sauf s'il est bloqué depuis trop longtemps (v123)
+    if (Date.now() - tickStartedAt < TICK_MAX_MS) return;
+    console.error(`⚠️ Passage de la boucle bloqué depuis ${Math.round((Date.now() - tickStartedAt) / 1000)} s : reprise forcée`);
+    state.lastError = 'boucle principale bloquée : reprise forcée';
+  }
   ticking = true;
+  tickStartedAt = Date.now();
+  const myTick = ++tickSeq;
   try {
-    await ensureDb();
-    const games = await api.fetchGames();
+    await raceTimeout(ensureDb(), 30000, 'base de données');
+    const games = await raceTimeout(api.fetchGames(), FETCH_MAX_MS, 'API 1xbet');
     state.lastError = null;
     registerGames(games);
 
@@ -2158,7 +2177,7 @@ async function tick() {
     // Promise.all pour qu'ils partent tous au même tick, sans s'attendre
     // les uns les autres.
     if (predictionControl.isPaused()) return;
-    await Promise.all([
+    await raceTimeout(Promise.all([
       // panneau « Prédit » : prédictions certifiées à 100% (IA)
       predit.tick(),
       // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
@@ -2236,11 +2255,11 @@ async function tick() {
       // pertes consécutives, ou après 3 prédictions consécutives du même
       // costume, dans le canal VIP configuré (voir vip.js).
       vip.tick(),
-    ]);
+    ]), MODULES_MAX_MS, 'panneaux de prédiction');
   } catch (e) {
     state.lastError = e.message;
   } finally {
-    ticking = false;
+    if (tickSeq === myTick) ticking = false; // un ancien passage bloqué qui se termine tard ne doit pas libérer le passage en cours
   }
 }
 

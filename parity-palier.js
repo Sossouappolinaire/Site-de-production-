@@ -43,7 +43,7 @@ const fmt = require('./formats');
 const config = require('./config');
 const loss = require('./loss-return'); // liste d'ID de canaux (parseChannels)
 const parityCounter = require('./parity-counter');
-const { state, hasSuit } = require('./predictor');
+const { state, hasSuit, setOnShoeReset } = require('./predictor');
 
 const DB_KEY = 'parity_palier_state';
 const STORE_KEY = 'parityPalier';
@@ -62,6 +62,9 @@ const panel = {
 let sender = null;
 function setSender(fn) { sender = typeof fn === 'function' ? fn : null; }
 const bot = () => (typeof sender === 'function' ? sender() : null);
+const SEND_MAX_MS = 20000, TICK_MAX_MS = 90000, PENDING_MAX_MS = 20 * 60 * 1000;
+// v124 : un envoi / une édition Telegram qui ne répond jamais ne doit plus figer le panneau
+const withTimeout = (p, ms, label) => { let t; const to = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${label} : délai de ${Math.round(ms / 1000)} s dépassé`)), ms); }); return Promise.race([Promise.resolve(p), to]).finally(() => clearTimeout(t)); };
 
 const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
 const isDone = (g) => !!g && g.finished && g.complete !== false;
@@ -118,7 +121,7 @@ function renderFor(entry, statusFr) {
 async function sendToChannels(out) {
   const b = bot();
   if (!b) { panel.lastError = 'Aucun token Telegram configuré'; return []; }
-  const results = await Promise.all((panel.channels || []).map((id) => b.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {})
+  const results = await Promise.all((panel.channels || []).map((id) => withTimeout(b.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {}), SEND_MAX_MS, 'envoi Telegram')
     .then((m) => (m && m.skipped ? { ok: false, skipped: true, id } : { ok: true, id, messageId: m.message_id }))
     .catch((e) => ({ ok: false, id, error: e.message }))));
   const sent = [];
@@ -129,7 +132,7 @@ function editSent(entry, statusFr) {
   const b = bot(); if (!b) return;
   const out = renderFor(entry, statusFr);
   for (const m of entry.messages || []) {
-    Promise.resolve().then(() => b.editMessageText(out.text, { chat_id: m.chatId, message_id: m.messageId, ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}) }))
+    Promise.resolve().then(() => withTimeout(b.editMessageText(out.text, { chat_id: m.chatId, message_id: m.messageId, ...(out.parse_mode ? { parse_mode: out.parse_mode } : {}) }), SEND_MAX_MS, 'édition Telegram'))
       .then(() => { entry.editFail = null; })
       .catch((e) => {
         const msg = String((e && e.message) || e);
@@ -148,11 +151,15 @@ function canTarget(target) {
   return !hasPlayerCards(state.games.get(target));
 }
 const inflight = new Set();
+// v123 : un numéro de jeu revient chaque jour (le sabot repart à #1 à 00h00) : un doublon n'existe que dans le sabot en cours,
+// jamais avec une prédiction de la veille encore gardée dans l'historique
+const DUP_WINDOW_MS = 2 * 3600 * 1000;
+const isDuplicate = (target, suit) => panel.pendingMessages.some((s) => s.target === target && s.suit === suit && (s.status === 'en attente' || Date.now() - (Number(s.createdAt) || 0) < DUP_WINDOW_MS));
 async function launch(target, digit, suit, lowPct) {
   if (!panel.channels.length) return false;
   if (!canTarget(target)) return false; // jeu en direct > numéro à prédire : ignorée
   const key = `${target}:${suit}`;
-  if (panel.pendingMessages.some((s) => s.target === target && s.suit === suit) || inflight.has(key)) { panel.duplicatesBlocked += 1; return false; }
+  if (isDuplicate(target, suit) || inflight.has(key)) { panel.duplicatesBlocked += 1; return false; }
   inflight.add(key);
   try {
     const entry = { id: `pp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, cfgId: 'parity-palier', suit, target, digit, pct: lowPct, maxR: panel.maxR, format: panel.format, step: 0, status: 'en attente', messages: [], createdAt: Date.now(), resolvedAt: null };
@@ -164,13 +171,46 @@ async function launch(target, digit, suit, lowPct) {
   } finally { inflight.delete(key); }
 }
 
+// ── nouveau sabot (v123) ────────────────────────────────────────────────────
+// À 00h00 (heure d'Abidjan) le jeu repart à #1. Avant ce correctif rien ne remettait ce panneau à zéro : le curseur d'enchaînement
+// restait vers #1440, la prédiction de la veille restait « en attente » (jeu jamais rejoué) et, en mode « Une à la fois », plus
+// aucune prédiction ne partait de la journée.
+//   • les prédictions en attente de l'ancien sabot sont annulées, le curseur et la liste « Liste » repartent à zéro ;
+//   • le dernier palier figé (historique de la veille) est conservé et sert de palier pour la 1ʳᵉ dizaine (jeux 1 à 9) ; il est
+//     remplacé par le vrai palier dès que la main du joueur du jeu 9 est terminée.
+const STALE_AHEAD = 60; // une prédiction qui vise plus de 60 jeux au-delà du jeu en direct vient forcément d'un sabot précédent
+function rebaseForNewShoe() {
+  let changed = false;
+  for (const s of panel.pendingMessages) if (s.status === 'en attente') { s.status = 'annulé'; s.resolvedAt = Date.now(); changed = true; }
+  if (panel.cursor) { panel.cursor = 0; changed = true; }
+  if (panel.done.length) { panel.done = []; changed = true; }
+  if (panel.frozen && panel.frozen.source !== -10) { panel.frozen = { ...panel.frozen, origin: panel.frozen.origin != null ? panel.frozen.origin : panel.frozen.source, source: -10, carried: true }; changed = true; }
+  inflight.clear();
+  if (changed) persist();
+  return changed;
+}
+setOnShoeReset(() => { try { rebaseForNewShoe(); } catch (e) { panel.lastError = e.message; } });
+
 // ── cycle (appelé à chaque passage du bot) ──────────────────────────────────
-let ticking = false;
+let ticking = false, tickStartedAt = 0, tickSeq = 0;
 async function tick() {
-  if (ticking) return;
-  ticking = true;
+  if (ticking) {
+    // v124 : un passage resté bloqué (envoi Telegram sans réponse…) est abandonné au bout de 90 s : le suivant reprend la main
+    if (Date.now() - tickStartedAt < TICK_MAX_MS) return;
+    panel.lastError = 'passage bloqué : reprise forcée'; inflight.clear();
+  }
+  ticking = true; tickStartedAt = Date.now(); const myTick = ++tickSeq;
   try {
     let changed = false;
+    // sécurité : état resté d'un sabot précédent (relance du serveur pendant le changement de jour, jeux relus après une coupure…)
+    const knownNow = maxKnownGameNumber();
+    if (knownNow) {
+      const staleFrozen = panel.frozen && panel.frozen.source > knownNow + 20;
+      const stalePending = panel.pendingMessages.some((s) => s.status === 'en attente' && s.target > knownNow + STALE_AHEAD);
+      if (staleFrozen || stalePending || (Number(panel.cursor) || 0) > knownNow + STALE_AHEAD) { rebaseForNewShoe(); changed = true; }
+    }
+    // v124 : une prédiction « en attente » trop ancienne (jeu jamais reçu, redémarrage, coupure…) est libérée : elle ne bloque plus la suivante
+    for (const s of panel.pendingMessages) if (s.status === 'en attente' && Date.now() - (Number(s.createdAt) || 0) > PENDING_MAX_MS) { s.status = 'annulé'; s.resolvedAt = Date.now(); changed = true; }
     const maxDone = maxPlayerFinalNumber();
     // 0) palier de la dizaine passée : figé dès que la main du joueur du jeu x9 est terminée
     for (let src = Math.floor(maxKnownGameNumber() / 10) * 10; src >= 0 && src > ((panel.frozen && panel.frozen.source) ?? -1); src -= 10) {
@@ -220,9 +260,10 @@ async function tick() {
             if (Math.floor(n / 10) * 10 !== fz.source + 10) continue; // palier de cette dizaine pas encore figé : on attend
             if (panel.done.includes(n)) continue;
             if (!canTarget(n)) continue;
-            panel.done.push(n); if (panel.done.length > DONE_MAX) panel.done = panel.done.slice(-DONE_MAX); changed = true;
             const pick = pickForDigit(n % 10); // égalité ou palier vide : pas de prédiction pour ce numéro
-            if (pick) await launch(n, n % 10, pick.suit, pick.pct);
+            // v124 : le numéro n'est marqué « traité » que si la prédiction est partie (ou n'existe pas) ; un envoi raté est retenté au passage suivant
+            if (pick && !(await launch(n, n % 10, pick.suit, pick.pct)) && !isDuplicate(n, pick.suit)) continue;
+            panel.done.push(n); if (panel.done.length > DONE_MAX) panel.done = panel.done.slice(-DONE_MAX); changed = true;
           }
         }
       } else if (!panel.pendingMessages.some((s) => s.status === 'en attente') && known) {
@@ -239,7 +280,7 @@ async function tick() {
     panel.pendingMessages = [...panel.pendingMessages.filter((s) => s.status !== 'en attente').slice(-SENT_RESOLVED_MAX), ...panel.pendingMessages.filter((s) => s.status === 'en attente')];
     if (changed || panel.pendingMessages.length !== before) persist();
   } catch (e) { panel.lastError = e.message; }
-  finally { ticking = false; }
+  finally { if (tickSeq === myTick) ticking = false; }
 }
 
 // ── réglages ────────────────────────────────────────────────────────────────
@@ -256,7 +297,15 @@ function configure(patch = {}) {
   persist();
   return config_();
 }
-function resetStats() { panel.stats = emptyStats(); panel.cursor = 0; panel.frozen = null; panel.done = []; panel.pendingMessages = panel.pendingMessages.filter((s) => s.status === 'en attente'); persist(); }
+// v124 : libère TOUT ce qui était « en attente » (prédictions jamais vérifiées), remet le curseur et la liste « Liste » à zéro
+function unblockAll() {
+  let n = 0;
+  for (const s of panel.pendingMessages) if (s.status === 'en attente') { s.status = 'annulé'; s.resolvedAt = Date.now(); n += 1; }
+  panel.cursor = 0; panel.done = []; inflight.clear(); panel.lastError = null;
+  return n;
+}
+function unblock() { const n = unblockAll(); persist(); return n; }
+function resetStats() { panel.stats = emptyStats(); unblockAll(); panel.frozen = null; persist(); }
 function setChannelTitle(id, title) { const k = String(id == null ? '' : id).trim(); if (!k || !title) return; panel.channelTitles[k] = String(title).slice(0, 120); persist(); }
 
 async function test() {
@@ -273,7 +322,7 @@ function status() {
     const pick = pickLowest(r.cells, panel.minN, r.total);
     const sorted = r.cells.map((c, i) => ({ ...c, i })).sort((a, b) => b.count - a.count || a.i - b.i);
     return {
-      digit: r.digit, label: base != null ? `#${base + r.digit}` : String(r.digit), total: r.total, cells: sorted.map(({ suit, pct: p }) => ({ suit, pct: p })),
+      digit: r.digit, label: base != null ? `#${(fz.origin != null ? fz.origin : base) + r.digit}` : String(r.digit), total: r.total, cells: sorted.map(({ suit, pct: p }) => ({ suit, pct: p })),
       pick: pick ? pick.suit : null, reason: pick ? '' : (r.total < panel.minN || !r.total ? 'pas assez de données' : 'égalité (faible non unique ou égalité au milieu)'),
     };
   });
@@ -281,7 +330,7 @@ function status() {
   const waiting = panel.pendingMessages.filter((s) => s.status === 'en attente');
   const nextTarget = known ? Math.max(Number(panel.cursor) || 0, known + panel.lead) : null;
   return {
-    ...config_(), rows, frozenSource: fz ? fz.source : null, cursor: panel.cursor || 0, nextTarget,
+    ...config_(), rows, frozenSource: fz ? (fz.origin != null ? fz.origin : fz.source) : null, cursor: panel.cursor || 0, nextTarget,
     sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, duplicatesBlocked: panel.duplicatesBlocked, won: st.won, lost: st.lost, resolved, rate: pct(st.won, resolved),
     steps: Object.entries(st.byStep || {}).map(([k, n]) => ({ step: Number(k), n: Number(n) })).sort((a, b) => a.step - b.step),
     waiting: waiting.length,
@@ -309,11 +358,12 @@ function applySaved(saved) {
   panel.stats = saved.stats && typeof saved.stats === 'object' ? saved.stats : null;
   panel.sentCount = Number(saved.sentCount) || 0; panel.lastSentAt = saved.lastSentAt || null;
   panel.channelTitles = saved.channelTitles && typeof saved.channelTitles === 'object' ? saved.channelTitles : {};
+  unblockAll(); // v124 : au redémarrage, rien ne reste bloqué « en attente »
 }
 function restore() { try { const s = (store.read() || {})[STORE_KEY]; if (s) applySaved(s); } catch (_) {} }
 async function restoreFromDb() {
   if (!db.ready) return;
-  try { const raw = await db.getSetting(DB_KEY); if (raw) applySaved(JSON.parse(raw)); else persist(); } catch (_) { persist(); }
+  try { const raw = await db.getSetting(DB_KEY); if (raw) { applySaved(JSON.parse(raw)); persist(); } else persist(); } catch (_) { persist(); }
 }
 
-module.exports = { panel, setSender, restore, restoreFromDb, persist, tick, status, test, config: config_, configure, resetStats, setChannelTitle, pickLowest };
+module.exports = { panel, setSender, restore, restoreFromDb, persist, tick, status, test, config: config_, configure, resetStats, unblock, setChannelTitle, pickLowest };

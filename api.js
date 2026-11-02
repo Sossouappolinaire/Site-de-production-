@@ -246,12 +246,18 @@ function merge(lists) {
   return [...map.values()].sort((a, b) => b.number - a.number);
 }
 
+// v123 : durée maximale du repli par proxys publics (allorigins, corsproxy… lents ou en panne). Avant, la boucle pouvait durer
+// 4 adresses × 3 proxys × 9 s = 108 s ; pendant ce temps le tick du bot restait occupé et plus aucun jeu n'était vérifié.
+const PROXY_BUDGET_MS = 20000;
+
 async function fetchGames() {
   const diagnostics = [];
+  let answered = false; // au moins un miroir a répondu avec un JSON valide (même sans aucun jeu dedans)
   const direct = await Promise.all(
     endpoints().map(async (url) => {
       const result = await get(url);
       if (result.error) diagnostics.push(`${new URL(url).hostname}: ${result.error}`);
+      if (usable(result.data)) answered = true;
       return usable(result.data) ? parseChamp(result.data) : [];
     }),
   );
@@ -273,6 +279,7 @@ async function fetchGames() {
       endpoints(ids).map(async (url) => {
         const result = await get(url);
         if (result.error) diagnostics.push(`${new URL(url).hostname}: ${result.error}`);
+        if (usable(result.data)) answered = true;
         return usable(result.data) ? parseChamp(result.data) : [];
       }),
     );
@@ -280,9 +287,17 @@ async function fetchGames() {
     if (discoveredMerged.length) return discoveredMerged;
   }
 
+  // v123 : le flux a répondu correctement mais ne contient aucun jeu (changement de sabot à 00h00 : la table est vide quelques
+  // instants). Ce n'est PAS une panne : on rend une liste vide et on réessaie au prochain passage, sans lancer les proxys publics
+  // ni déclarer « API injoignable » (ce qui bloquait la vérification et affichait une erreur à chaque minuit).
+  if (answered) return [];
+
   const viaProxy = [];
+  const deadline = Date.now() + PROXY_BUDGET_MS;
+  proxyLoop:
   for (const url of endpoints([...new Set([...champIds(), ...ids])]).slice(0, 4)) {
     for (const p of config.PROXIES) {
+      if (Date.now() > deadline) { diagnostics.push('proxy: délai dépassé'); break proxyLoop; }
       const result = await get(p(url));
       if (result.error) diagnostics.push(`proxy: ${result.error}`);
       const parsed = usable(result.data) ? parseChamp(result.data) : [];

@@ -278,7 +278,8 @@ let resetTimer = null;
 function scheduleReset() {
   if (resetTimer) clearTimeout(resetTimer);
   resetTimer = setTimeout(async () => {
-    try { await sendBilan(); } catch (_) {}
+    // v124 : si l'envoi du bilan ne répond pas (Telegram), le reset a lieu quand même après 30 s
+    try { await Promise.race([sendBilan(), new Promise((r) => { const t = setTimeout(r, 30000); if (t.unref) t.unref(); })]); } catch (_) {}
     resetCounts();
     scheduleReset();
   }, msUntilNextReset());

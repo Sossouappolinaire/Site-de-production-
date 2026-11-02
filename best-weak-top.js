@@ -974,7 +974,10 @@ async function handleBilanPrediction(strategy, data) {
     if (nowMinutesAbidjan() < startMinutes(cfg)) continue;          // avant l'heure de démarrage (Abidjan)
     const today = dayKey();
     let changed = false;
-    if (cfg.brDay !== today) { cfg.brDay = today; cfg.brBest = null; cfg.brSecond = null; cfg.brBestName = null; cfg.brSecondName = null; cfg.brLoss = false; changed = true; } // nouvelle journée
+    // nouvelle journée : le classement du jour est relu s'il existe ; à 00h00 les compteurs sont à zéro et personne n'est encore classé
+    // (minimum de prédictions non atteint) : on GARDE alors le dernier meilleur connu au lieu de rester bloqué jusqu'au 1ᵉʳ classement
+    // (même règle que Dizaine / Costume faible : « tant que personne n'est classé, on garde le dernier meilleur connu »)
+    if (cfg.brDay !== today) { cfg.brDay = today; cfg.brLoss = false; bilanSnapshot(cfg); changed = true; }
     if (!cfg.brBest) { if (!bilanSnapshot(cfg)) { if (changed) persist(); continue; } changed = true; }
     if (changed) persist();
     const want = cfg.brLoss ? cfg.brSecond : cfg.brBest;

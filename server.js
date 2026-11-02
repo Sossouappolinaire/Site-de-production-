@@ -946,6 +946,7 @@ app.post('/api/parity-palier/config', async (req, res) => {
 });
 app.post('/api/parity-palier/test', async (req, res) => { const r = await parityPalier.test(); res.status(r.ok ? 200 : 400).json(r); });
 app.post('/api/parity-palier/reset', (req, res) => { parityPalier.resetStats(); res.json(parityPalier.status()); });
+app.post('/api/parity-palier/unblock', (req, res) => { const n = parityPalier.unblock(); res.json({ ok: true, released: n, parityPalier: parityPalier.status() }); });
 
 // « Palier parité égalité » (voir parity-egalite.js)
 app.get('/api/parity-egalite', (req, res) => res.json(parityEgalite.status()));
@@ -965,6 +966,7 @@ app.post('/api/parity-egalite/config', async (req, res) => {
 });
 app.post('/api/parity-egalite/test', async (req, res) => { const r = await parityEgalite.test(); res.status(r.ok ? 200 : 400).json(r); });
 app.post('/api/parity-egalite/reset', (req, res) => { parityEgalite.resetStats(); res.json(parityEgalite.status()); });
+app.post('/api/parity-egalite/unblock', (req, res) => { const n = parityEgalite.unblock(); res.json({ ok: true, released: n, parityEgalite: parityEgalite.status() }); });
 
 // « Analyse fin de numéro » (voir end-digit.js)
 app.get('/api/end-digit', async (req, res) => {
