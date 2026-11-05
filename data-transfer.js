@@ -173,6 +173,8 @@ const PANELS = {
   endDigitPredict: { mod: './end-digit-predict' },        // « Prédiction fin de numéro »
   parityEgalite: { mod: './parity-egalite' },             // « Palier parité égalité » (stratégie)
   parityPalier: { mod: './parity-palier' },               // « Palier parité » (stratégie)
+  endDigitTrio: { mod: './end-digit-trio' },              // « Trio fin de numéro » (stratégie)
+  distributionFaible: { mod: './distribution-faible' },   // « Distribution faible » (stratégie)
   slowMode: { mod: './slow-mode' },                   // « Ralentisseur »
   absenceAlert: { mod: './absence-alert' },           // « Alerte absence de costume »
   channelLossGate: { mod: './channel-loss-gate' },    // « Envoi après perte » par canal (le planning se lit aussi dans la feuille PlanningEnvoi)

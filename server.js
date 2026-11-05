@@ -51,6 +51,8 @@ const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
 const parityEgalite = require('./parity-egalite'); // « Palier parité égalité »
 const parityPalier = require('./parity-palier'); // « Palier parité » (v114)
+const endDigitTrio = require('./end-digit-trio'); // « Trio fin de numéro » (v127)
+const distributionFaible = require('./distribution-faible'); // « Distribution faible » (v125)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
 const strategyRecap = require('./strategy-recap'); // récapitulatif / bilan par canal (était utilisé par /api/recap sans être importé ici)
 const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
@@ -439,6 +441,8 @@ app.get('/api/state', async (req, res) => {
     channelUniform: channelUniformView(channelList),
     endDigitPredict: endDigitPredict.status(),
     parityPalier: parityPalier.status(),
+    endDigitTrio: endDigitTrio.status(),
+    distributionFaible: distributionFaible.status(),
     parityEgalite: parityEgalite.status(),
     gameStability: gameStability.status(),
     absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
@@ -947,6 +951,49 @@ app.post('/api/parity-palier/config', async (req, res) => {
 app.post('/api/parity-palier/test', async (req, res) => { const r = await parityPalier.test(); res.status(r.ok ? 200 : 400).json(r); });
 app.post('/api/parity-palier/reset', (req, res) => { parityPalier.resetStats(); res.json(parityPalier.status()); });
 app.post('/api/parity-palier/unblock', (req, res) => { const n = parityPalier.unblock(); res.json({ ok: true, released: n, parityPalier: parityPalier.status() }); });
+
+// « Distribution faible » (voir distribution-faible.js)
+app.get('/api/distribution-faible', (req, res) => res.json(distributionFaible.status()));
+app.post('/api/distribution-faible/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) distributionFaible.setChannelTitle(id, check.chat.title);
+      }
+    }
+    distributionFaible.configure(b);
+    res.json({ ok: true, distributionFaible: distributionFaible.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/distribution-faible/test', async (req, res) => { const r = await distributionFaible.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/distribution-faible/reset', (req, res) => { distributionFaible.resetStats(); res.json(distributionFaible.status()); });
+app.post('/api/distribution-faible/unblock', (req, res) => { const n = distributionFaible.unblock(); res.json({ ok: true, released: n, distributionFaible: distributionFaible.status() }); });
+
+// « Trio fin de numéro » (voir end-digit-trio.js)
+app.get('/api/end-digit-trio', (req, res) => res.json(endDigitTrio.status()));
+app.post('/api/end-digit-trio/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (botStatus().tokenSet) {
+      for (const field of ['channels', 'followChannels']) {
+        if (b[field] === undefined) continue;
+        for (const id of lossRelaunch.parseChannels(b[field])) {
+          const check = await resolveChat(id);
+          if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+          if (check.chat && check.chat.title) endDigitTrio.setChannelTitle(id, check.chat.title);
+        }
+      }
+    }
+    endDigitTrio.configure(b);
+    res.json({ ok: true, endDigitTrio: endDigitTrio.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/end-digit-trio/test', async (req, res) => { const r = await endDigitTrio.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/end-digit-trio/reset', (req, res) => { endDigitTrio.resetStats(); res.json(endDigitTrio.status()); });
+app.post('/api/end-digit-trio/unblock', (req, res) => { const n = endDigitTrio.unblock(); res.json({ ok: true, released: n, endDigitTrio: endDigitTrio.status() }); });
 
 // « Palier parité égalité » (voir parity-egalite.js)
 app.get('/api/parity-egalite', (req, res) => res.json(parityEgalite.status()));

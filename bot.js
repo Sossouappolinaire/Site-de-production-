@@ -29,7 +29,9 @@ const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const parityEgalite = require('./parity-egalite'); // « Palier parité égalité » : 2e taux quand deux taux faibles sont égaux
+const distributionFaible = require('./distribution-faible'); // « Distribution faible » : distribution au taux le plus faible du Compte distribution (v125)
 const parityPalier = require('./parity-palier'); // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité (v114)
+const endDigitTrio = require('./end-digit-trio'); // « Trio fin de numéro » : 3 meilleures fins de numéro par dizaine + suivi dans un autre canal (v127)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » : meilleur / repli faible + inverse (v101)
 const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
 const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
@@ -2219,6 +2221,10 @@ async function tick() {
       Promise.resolve(endDigitPredict.tick()),
       // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité, 3 rattrapages, enchaînement (voir parity-palier.js)
       Promise.resolve(parityPalier.tick()),
+      // « Trio fin de numéro » : à chaque fin de dizaine, les 3 meilleures fins de numéro de l'analyse (50-59 % : le costume, 60 % et + : son inverse) + suivi dans un autre canal (voir end-digit-trio.js)
+      Promise.resolve(endDigitTrio.tick()),
+      // « Distribution faible » : 2/2, 3/2, 3/3, 2k, 3k au taux faible (3-15 %) du Compte distribution, une à la fois, écart ≥ 2 (voir distribution-faible.js)
+      Promise.resolve(distributionFaible.tick()),
       // « Palier parité égalité » : deux taux faibles égaux → costume du 2e taux, +0 ou +3, envoi 2 jeux avant (voir parity-egalite.js)
       Promise.resolve(parityEgalite.tick()),
       // « Stabilité du jeu » : 4 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
@@ -2431,6 +2437,8 @@ async function applyDbConfigs() {
   await channelUniform.restoreFromDb();
   await endDigitPredict.restoreFromDb();
   await parityPalier.restoreFromDb();
+  await endDigitTrio.restoreFromDb();
+  await distributionFaible.restoreFromDb();
   await parityEgalite.restoreFromDb();
   await gameStability.restoreFromDb();
   await absenceAlert.restoreFromDb();
@@ -2523,6 +2531,10 @@ async function startLoop() {
   endDigitPredict.setSender(senderFor);
   parityPalier.restore();
   parityPalier.setSender(senderFor);
+  endDigitTrio.restore();
+  endDigitTrio.setSender(senderFor);
+  distributionFaible.restore();
+  distributionFaible.setSender(senderFor);
   parityEgalite.restore();
   parityEgalite.setSender(senderFor);
   gameStability.restore();

@@ -34,6 +34,8 @@ const state = {
   banker: { pair: zeros(), impair: zeros(), suits: suitGrid() },
   games: 0,
   lastGameNumber: null,
+  prevTop: { player: null, banker: null }, // v126 : costume(s) au taux max de chaque fin 0-9 à la fin de la dizaine précédente (comparaison du récap)
+  lastRecap: null,
   sinceAt: Date.now(),
   sentCount: 0,
   lastSentAt: null,
@@ -97,7 +99,7 @@ function persistCounts() {
   if (!db.ready || countsTimer) return;
   countsTimer = setTimeout(() => {
     countsTimer = null;
-    const saved = { slot: slotKey(), player: state.player, banker: state.banker, games: state.games, lastGameNumber: state.lastGameNumber, sinceAt: state.sinceAt };
+    const saved = { slot: slotKey(), player: state.player, banker: state.banker, prevTop: state.prevTop, games: state.games, lastGameNumber: state.lastGameNumber, sinceAt: state.sinceAt };
     db.setSetting(COUNTS_KEY, JSON.stringify(saved)).catch((e) => { state.lastError = e.message; });
   }, 1500);
   if (countsTimer.unref) countsTimer.unref();
@@ -106,6 +108,8 @@ const okSide = (s) => s && Array.isArray(s.pair) && s.pair.length === 10 && Arra
 function applyCounts(c) {
   if (!c || typeof c !== 'object' || c.slot !== slotKey() || !okSide(c.player) || !okSide(c.banker)) return false;
   state.player = c.player; state.banker = c.banker;
+  const okTop = (t) => Array.isArray(t) && t.length === 10 && t.every((x) => typeof x === 'string');
+  state.prevTop = { player: c.prevTop && okTop(c.prevTop.player) ? c.prevTop.player : null, banker: c.prevTop && okTop(c.prevTop.banker) ? c.prevTop.banker : null };
   state.games = Number(c.games) || 0; state.lastGameNumber = Number.isInteger(c.lastGameNumber) ? c.lastGameNumber : null; state.sinceAt = Number(c.sinceAt) || Date.now();
   return true;
 }
@@ -113,6 +117,7 @@ function applyCounts(c) {
 function resetCounts() {
   state.player = { pair: zeros(), impair: zeros(), suits: suitGrid() }; state.banker = { pair: zeros(), impair: zeros(), suits: suitGrid() };
   state.games = 0;
+  state.prevTop = { player: null, banker: null }; // nouvelle tranche : plus de dizaine précédente à comparer
   state.sinceAt = Date.now();
   persistCounts();
 }
@@ -249,6 +254,53 @@ async function publish(gameNumber) {
   }
   return ok;
 }
+// ---------------------------------------------------------------------------
+// v126 — Récap de FIN DE DIZAINE (jeu finissant par 9) : les fins de numéro 0 à 9 alignées deux par deux, avec le costume au taux max
+// de chacune (cases pair + impair réunies, comme les lignes du message). ✅ = même costume que lors de la dizaine précédente,
+// 🔰 = variation. Égalité au taux max : les costumes à égalité sont tous affichés. Aucun jeu pour ce chiffre : « — ».
+// ---------------------------------------------------------------------------
+function topSuitsOf(side) {
+  const counts = state[side === 'banker' ? 'banker' : 'player'];
+  const sp = (counts.suits && counts.suits.pair) || []; const si = (counts.suits && counts.suits.impair) || [];
+  return ALL.map((d) => {
+    const merged = suitZeros();
+    for (const x of SUIT_ORDER) merged[x] = ((sp[d] || {})[x] || 0) + ((si[d] || {})[x] || 0);
+    const max = Math.max(...SUIT_ORDER.map((x) => merged[x]));
+    if (!max) return '—';
+    return SUIT_ORDER.filter((x) => merged[x] === max).join('');
+  });
+}
+function buildDizaineMessage(side, gameNumber) {
+  const s = SIDES[side]; const now = topSuitsOf(side); const prev = state.prevTop[side];
+  const g = Number(gameNumber);
+  const base = Number.isInteger(g) && g >= 0 ? Math.floor(g / 10) * 10 : null;
+  const cell = (d) => `${d}:${now[d]}${now[d] === '—' ? '' : (prev && prev[d] !== now[d] ? '🔰' : '✅')}`;
+  const lines = [];
+  for (let d = 0; d < 10; d += 2) lines.push(`${cell(d)} ⚖️ ${cell(d + 1)}`);
+  // en bas : pour chaque variation (🔰), le costume qu'il y avait à la dizaine précédente ➜ le costume qui l'a remplacé
+  const changes = prev ? ALL.filter((d) => now[d] !== '—' && prev[d] !== now[d]).map((d) => `🔰 ${d} : ${prev[d]} ➜ ${now[d]}`) : [];
+  return [
+    `${s.icon} ${s.name} · fin de dizaine${base != null ? ` #${base}-#${base + 9}` : ''}`,
+    '',
+    ...lines,
+    ...(changes.length ? ['', `Récapitulatif :${base != null ? ` #${base}-#${base + 9}` : ''}`, '', ...changes] : []),
+    '',
+    '✅ même costume que la dizaine précédente  ·  🔰 variation',
+  ].join('\n');
+}
+async function dizaineRecap(gameNumber) {
+  const wanted = sidesToSend();
+  for (const side of ['player', 'banker']) {
+    const text = buildDizaineMessage(side, gameNumber);
+    const top = topSuitsOf(side);
+    state.prevTop[side] = top; // la dizaine qui vient de finir devient la référence de la suivante
+    if (!wanted.includes(side) || !state.channelId || !sendFn) continue;
+    try { await sendFn(state.channelId, text); state.sentCount += 1; state.lastSentAt = Date.now(); state.lastError = null; }
+    catch (e) { state.lastError = e.message; console.error('Compte parité (fin de dizaine) :', e.message); }
+  }
+  persistCounts();
+}
+
 // à appeler à chaque jeu terminé : compte puis publie
 async function onFinished(round) {
   if (!state.enabled) return;
@@ -260,6 +312,11 @@ async function onFinished(round) {
   if (state.lastPublished === num) return;
   state.lastPublished = num;
   await publish(round.number);
+  // v126 : fin de dizaine (jeu finissant par 9) → récap aligné 0-1, 2-3, 4-5, 6-7, 8-9, une seule fois par numéro
+  if (num % 10 === 9 && state.lastRecap !== num) {
+    state.lastRecap = num;
+    try { await dizaineRecap(num); } catch (e) { state.lastError = e.message; console.error('Compte parité (fin de dizaine) :', e.message); }
+  }
 }
 
 // Bilan envoyé à chaque reset automatique (heure pile pour 60 min) : un message par côté choisi, PUIS remise à zéro.
@@ -316,5 +373,5 @@ function status(gameNumber) {
 
 module.exports = {
   state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb,
-  palier, bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status,
+  palier, bump, publish, onFinished, buildMessage, buildDizaineMessage, dizaineRecap, topSuitsOf, sendBilan, resetCounts, scheduleReset, test, status,
 };
