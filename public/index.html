@@ -772,6 +772,20 @@
         <span class="strategy-stats"><span class="tag">${esc(pe.sentCount ?? 0)} préd.</span><span class="tag good">${esc(pe.won ?? 0)} ✓</span><span class="tag bad">${esc(pe.lost ?? 0)} ✗</span></span>
         <em>Ouvrir →</em></button>`;
       fams.push(stratFamily('egalite', '⚖️', 'Palier parité égalité', 'Deux taux faibles égaux : le costume du deuxième taux', stratStatusTag(pe.enabled ? 1 : 0, 1), stratSub('⚖️', 'Palier parité égalité', `${pe.resolved || 0} prédiction(s) terminée(s)`, peBtn)));
+      // 3 bis-4) Distribution faible : distribution au plus faible taux du Compte distribution (2/2, 3/2, 3/3, 2k, 3k)
+      const df = snapshot.distributionFaible || {};
+      const dfBtn = `<button class="strategy-button" onclick="location.hash='#/distribution-faible'">
+        <span class="eyebrow">${df.enabled ? '● Active' : '○ En pause'}</span><b>📉 Distribution faible</b><span>Lit le RÉSUMÉ du Compte distribution et prédit 2/2, 3/2, 3/3, 2k ou 3k au taux faible (${esc(df.lowMin ?? 3)}–${esc(df.lowMax ?? 15)} %) après ${esc(df.minGames ?? 15)} jeux cumulés ; une à la fois, écart ≥ ${esc(df.minGap ?? 2)}</span>
+        <span class="strategy-stats"><span class="tag">${esc(df.sentCount ?? 0)} préd.</span><span class="tag good">${esc(df.won ?? 0)} ✅</span><span class="tag bad">${esc(df.lost ?? 0)} ❌</span></span>
+        <em>Ouvrir →</em></button>`;
+      fams.push(stratFamily('distfaible', '📉', 'Distribution faible', 'La distribution au plus faible taux du Compte distribution', stratStatusTag(df.enabled ? 1 : 0, 1), stratSub('📉', 'Distribution faible', `${df.resolved || 0} prédiction(s) terminée(s)`, dfBtn)));
+      // 3 bis-4) Trio fin de numéro : les 3 meilleures fins de numéro de l'analyse, par dizaine, + suivi dans un autre canal
+      const et = snapshot.endDigitTrio || {};
+      const etBtn = `<button class="strategy-button" onclick="location.hash='#/end-digit-trio'">
+        <span class="eyebrow">${et.enabled ? '🟢 Active' : '⏸ En pause'}</span><b>🎯 Trio fin de numéro</b><span>À chaque fin de dizaine, prend les ${esc(et.count ?? 3)} meilleures fins de numéro de l’analyse (${esc(et.sameMin ?? 50)}–${esc((et.inverseMin ?? 60) - 1)} % : le costume, ${esc(et.inverseMin ?? 60)} % et + : son inverse) ; suivi (même costume / miroir) dans un autre canal…</span>
+        <span class="strategy-stats"><span class="tag">${esc(et.sentCount ?? 0)} préd.</span><span class="tag good">${esc(et.won ?? 0)} ✓</span><span class="tag bad">${esc(et.lost ?? 0)} ✗</span></span>
+        <em>Ouvrir →</em></button>`;
+      fams.push(stratFamily('trio', '🎯', 'Trio fin de numéro', 'Les meilleures fins de numéro par dizaine + suivi', stratStatusTag(et.enabled ? 1 : 0, 1), stratSub('🎯', 'Trio fin de numéro', `${(et.main?.resolved || 0) + (et.follow?.resolved || 0)} prédiction(s) terminée(s)`, etBtn)));
       // 3 ter) Canal Telegram : un canal = une stratégie
       const ctg = snapshot.canalTelegram || {};
       const ctgBtns = (ctg.strategies || []).map(c => `<button class="strategy-button" onclick="location.hash='#/canal-telegram'">
@@ -4402,6 +4416,115 @@ Faites-en bon usage !
       try { await api('/api/parity-palier/reset', 'POST', {}); await refresh(); parityPalierPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
     }
 
+    // « Distribution faible » (voir distribution-faible.js) : stratégie branchée sur le Compte distribution.
+    function distributionFaiblePage() {
+      setNav('strategies');
+      const df = snapshot.distributionFaible || {};
+      const fmtOpts = [102, 103, 104, 105, 106, 78, 79].map((id) => `<option value="${id}" ${Number(df.format ?? 102) === id ? 'selected' : ''}>Format ${id}</option>`).join('');
+      const rateHtml = (df.rates || []).map((r) => `<tr><td><b>${esc(r.label)}</b></td><td>${esc(r.count)}</td><td>${esc(r.pct)} %</td><td>${r.predicted ? '<span class="tag good">prédite</span>' : '<span class="tag">jamais prédite</span>'}</td></tr>`).join('');
+      const dec = df.decision || {};
+      const decHtml = dec.pick ? `<span class="tag good">${esc(dec.pick)} (${esc(dec.pct)} %) sera prédite</span>` : `<span class="tag">— ${esc(dec.reason || 'pas de décision')}</span>`;
+      const recent = (df.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Distribution</th><th>Taux</th><th>État</th></tr></thead><tbody>${df.recent.map((e) => `<tr><td>№${esc(e.target)}</td><td>${esc(e.label)}</td><td>${e.pct ?? '—'} %</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '—'}</td></tr>`).join('')}</tbody></table>` : '';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">📉 Distribution faible</h2>
+        <p class="small">La stratégie lit le <b>RÉSUMÉ DISTRIBUTION</b> du Compte distribution (« 2/2 : 13 · 3/2 : 10 · 3/3 : 18 · 2/3 : 5 | 2k : 18 (39%) · 3k : 28 (61%) ») et prédit la distribution au <b>taux le plus faible</b> : <b>2/2, 3/2, 3/3, 2k ou 3k</b> (jamais 2/3). Elle ne part que si : <b>au moins ${esc(df.minGames ?? 15)} jeux</b> sont cumulés depuis le dernier reset du compteur ; la distribution la plus faible est <b>seule</b> à ce taux ; son taux est <b>compris entre ${esc(df.lowMin ?? 3)} % et ${esc(df.lowMax ?? 15)} %</b> ; et <b>aucune distribution de la ligne</b> de la fin du jeu visé (#52x) n'affiche <b>le même taux</b>.</p>
+        <p class="small"><b>Enchaînement</b> : une prédiction à la fois, la suivante n'est envoyée qu'<b>après la vérification</b> de la précédente, avec un <b>écart d'au moins ${esc(df.minGap ?? 2)} numéros</b> (jamais deux numéros consécutifs). Vérification : jeu N puis rattrapages (N+1 … N+${esc(df.maxR ?? 3)}).</p></div></div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="three-col">
+            <div class="field"><label>ID ou @nom du canal d'envoi</label><input id="dfChannel" value="${esc((df.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Rattrapages</label><input id="dfMaxR" type="number" min="0" max="9" value="${df.maxR ?? 3}"></div>
+            <div class="field"><label>Format par défaut (2k, 3k et distributions sans format réglé)</label><select id="dfFormat">${fmtOpts}</select></div>
+            ${['2/2', '3/3', '3/2'].map((k) => { const id = 'dfFmt' + k.replace('/', ''); const cur = (df.formats || {})[k]; const pv = ((df.previews || {})[k] || {}).text || ''; return `<div class="field"><label>Format pour ${k}</label><select id="${id}" onchange="dfPreviewFormat('${k}')"><option value="">Format par défaut</option>${[102, 103, 104, 105, 106, 78, 79].map((n) => `<option value="${n}" ${Number(cur) === n ? 'selected' : ''}>Format ${n}</option>`).join('')}</select><pre class="small muted" style="white-space:pre-wrap;margin:6px 0 0">${esc(pv)}</pre></div>`; }).join('')}
+            <div class="field"><label>Jeux cumulés minimum (depuis le reset du compteur)</label><input id="dfMinGames" type="number" min="1" max="5000" value="${df.minGames ?? 15}"></div>
+            <div class="field"><label>Taux faible minimum (%)</label><input id="dfLowMin" type="number" min="0" max="100" value="${df.lowMin ?? 3}"></div>
+            <div class="field"><label>Taux faible maximum (%)</label><input id="dfLowMax" type="number" min="0" max="100" value="${df.lowMax ?? 15}"></div>
+            <div class="field"><label>Écart minimum entre deux prédictions (numéros)</label><input id="dfMinGap" type="number" min="1" max="20" value="${df.minGap ?? 2}"></div>
+            <div class="field"><label>Avance (jeux d'écart minimum avec le jeu en direct)</label><input id="dfLead" type="number" min="1" max="20" value="${df.lead ?? 1}"></div>
+            <div class="field"><label>&nbsp;</label><label class="check"><input id="dfEnabled" type="checkbox" ${df.enabled ? 'checked' : ''}> Activer l'envoi</label></div>
+          </div>
+          <div class="toolbar"><button class="button small primary" onclick="saveDistributionFaible()">Enregistrer</button><button class="button small ghost" onclick="testDistributionFaible()">Envoyer un test</button><button class="button small danger" onclick="resetDistributionFaible()">Remettre à zéro</button><button class="button small ghost" onclick="refresh().then(distributionFaiblePage)">Actualiser</button></div>
+          ${df.lastError ? `<p class="small" style="color:#f87171">${esc(df.lastError)}</p>` : ''}
+          <p class="small" style="margin-top:10px">Envoyées : <b>${df.sentCount || 0}</b> · gagnées <b>${df.won || 0}</b> / perdues <b>${df.lost || 0}</b> (${df.rate || 0} %) · en cours ${df.waiting || 0}${(df.steps || []).length ? ' · par rattrapage : ' + df.steps.map((x) => `R${x.step} : ${x.n}`).join(' · ') : ''}</p>
+          <p class="small muted">Prochain jeu visé : <b>${df.nextTarget ? '№' + df.nextTarget : '—'}</b>${df.waiting ? ' (une prédiction est en cours, la suivante attend son résultat)' : ''}.</p>
+        </div>
+        <div class="card"><h3>Résumé du compteur : ${esc(df.games ?? 0)} jeu(x) cumulé(s) depuis le dernier reset</h3>
+          <table class="table"><thead><tr><th>Distribution</th><th>Jeux</th><th>Taux</th><th>Rôle</th></tr></thead><tbody>${rateHtml}</tbody></table>
+          <p class="small" style="margin-top:8px">Décision pour le prochain jeu : ${decHtml}</p>
+          <p class="small muted" style="margin-top:8px">Les pourcentages sont ceux du message « Compte distribution » (entiers). Le compteur repart de zéro à chaque reset (intervalle réglé depuis l'accueil) : la stratégie attend alors de nouveau ${esc(df.minGames ?? 15)} jeux.</p>
+          ${recent}
+        </div>`;
+    }
+    function dfPreviewFormat() { /* l'aperçu se met à jour après « Enregistrer » */ }
+    async function saveDistributionFaible() {
+      try {
+        await api('/api/distribution-faible/config', 'POST', { enabled: $('#dfEnabled')?.checked, channels: val('dfChannel'), maxR: val('dfMaxR'), format: val('dfFormat'), formats: { '2/2': val('dfFmt22'), '3/3': val('dfFmt33'), '3/2': val('dfFmt32') }, lead: val('dfLead'), minGames: val('dfMinGames'), lowMin: val('dfLowMin'), lowMax: val('dfLowMax'), minGap: val('dfMinGap') });
+        await refresh(); distributionFaiblePage(); toast('« Distribution faible » enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testDistributionFaible() {
+      try { await saveDistributionFaible(); const r = await api('/api/distribution-faible/test', 'POST', {}); toast(r.ok ? 'Test envoyé dans le canal.' : (r.error || 'Échec')); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetDistributionFaible() {
+      if (!confirm('Remettre à zéro les statistiques et l’enchaînement de « Distribution faible » ?')) return;
+      try { await api('/api/distribution-faible/reset', 'POST', {}); await refresh(); distributionFaiblePage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // « Trio fin de numéro » (voir end-digit-trio.js) : analyse « fin de numéro » par dizaine + suivi dans un autre canal.
+    function endDigitTrioPage() {
+      setNav('strategies');
+      const et = snapshot.endDigitTrio || {};
+      const fc = String(snapshot.formatCount || 107);
+      const plan = et.plan;
+      const stateTag = (x) => x === 'envoyé' ? '<span class="tag good">envoyé</span>' : x === 'ignoré' ? '<span class="tag">ignoré (jeu déjà commencé)</span>' : '<span class="tag">⏳ prévu</span>';
+      const rowHtml = plan ? (plan.rows || []).map((r) => `<tr><td><b>${r.digit}</b> → №${plan.base + r.digit}</td><td>${r.from ? `${esc(r.from)} ${r.pct ?? '—'} %` : '—'}</td><td>${r.n ?? 0}</td><td>${r.suit ? `<span class="tag good">${esc(r.decision)}</span>` : `<span class="tag">— ${esc(r.decision)}</span>`}</td></tr>`).join('') : '';
+      const sideLine = (label, x) => `${label} : envoyées <b>${x?.sent || 0}</b> • gagnées <b>${x?.won || 0}</b> / perdues <b>${x?.lost || 0}</b> (${x?.rate || 0} %)${(x?.steps || []).length ? ' • ' + x.steps.map((y) => `R${y.step} : ${y.n}`).join(' · ') : ''}`;
+      const follows = (et.follows || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Suivi prévu</th><th>Fin</th><th>Résultat du trio</th><th>Règle</th></tr></thead><tbody>${et.follows.map((f) => `<tr><td>№${f.target} ${esc(f.suit)}</td><td>${f.digit}</td><td>№${f.fromTarget} ${esc(f.fromSuit)} ${esc(f.result)}</td><td>${f.rule === 'inverse' ? 'venu direct → inverse' : 'pas direct → même costume'}</td></tr>`).join('')}</tbody></table>` : '';
+      const recent = (et.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Type</th><th>Jeu</th><th>Costume</th><th>Taux</th><th>État</th></tr></thead><tbody>${et.recent.map((e) => `<tr><td>${e.kind === 'follow' ? '🔁 suivi' : '🎯 trio'}</td><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${e.pct != null ? e.pct + ' %' : '—'}${e.mode === 'inverse' ? ' (inverse)' : ''}</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '🚫'}</td></tr>`).join('')}</tbody></table>` : '';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">🎯 Trio fin de numéro</h2>
+        <p class="small">Branchée sur le bouton <b>Analyse fin de numéro</b> (main du <b>joueur</b>). <b>À chaque fin de dizaine</b> (jeu finissant par 9, ex. #1239), le bot relit l'analyse : pour chaque fin de numéro, le meilleur costume et son taux. Il garde les fins dont le taux est d'au moins <b>${esc(et.sameMin ?? 50)} %</b> et prend les <b>${esc(et.count ?? 3)} plus hauts taux</b> : de ${esc(et.sameMin ?? 50)} à ${esc((et.inverseMin ?? 60) - 1)} % on prédit <b>ce costume</b> ; à partir de <b>${esc(et.inverseMin ?? 60)} %</b> on prédit son <b>inverse</b> (♦️ ↔ ♠️, ♣️ ↔ ❤️). Chaque prédiction vise le jeu de la dizaine <b>suivante</b> qui finit par ce chiffre (analyse après #1230-#1239 → la fin 3 vise le #1243). Les fins prédites à la dizaine précédente sont <b>interdites</b> : on en prend d'autres ; si aucune n'est dans les taux, pas de prédiction ; s'il n'y en a qu'une, une seule part.</p>
+        <p class="small"><b>Suivi (autre canal)</b> : quand une prédiction du trio est vérifiée — si le costume n'est <b>pas venu directement</b> (❌ ou ✅ à un rattrapage), à la dizaine suivante on prédit le <b>même costume</b> sur la <b>même fin</b> ; s'il est venu <b>directement (✅0️⃣)</b>, on prédit son <b>inverse (miroir)</b> sur la même fin. Le suivi est indépendant du choix des 3 fins et part dans son propre canal ; un suivi par prédiction du trio (son résultat n'en déclenche pas un autre).</p></div></div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="three-col">
+            <div class="field"><label>Canal du TRIO (ID ou @nom)</label><input id="etChannel" value="${esc((et.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Canal du SUIVI (autre canal ; vide = pas de suivi)</label><input id="etFollow" value="${esc((et.followChannels || []).join(', '))}" placeholder="-1009876543210"></div>
+            <div class="field"><label>Rattrapages</label><input id="etMaxR" type="number" min="0" max="9" value="${et.maxR ?? 2}"></div>
+            <div class="field"><label>Format (1 → ${esc(fc)})</label><input id="etFormat" type="number" min="1" max="${esc(fc)}" value="${et.format ?? 1}"></div>
+            <div class="field"><label>Envoi quand le jeu en direct est à … jeux du numéro visé</label><input id="etLead" type="number" min="1" max="20" value="${et.lead ?? 2}"></div>
+            <div class="field"><label>Nombre de fins choisies par dizaine</label><input id="etCount" type="number" min="1" max="10" value="${et.count ?? 3}"></div>
+            <div class="field"><label>Taux minimum (le costume est prédit)</label><input id="etSame" type="number" min="1" max="100" value="${et.sameMin ?? 50}"></div>
+            <div class="field"><label>Taux à partir duquel on prédit l'INVERSE</label><input id="etInv" type="number" min="1" max="100" value="${et.inverseMin ?? 60}"></div>
+            <div class="field"><label>Jeux minimum par fin de numéro</label><input id="etMinN" type="number" min="1" max="5000" value="${et.minN ?? 30}"></div>
+            <div class="field"><label>&nbsp;</label><label class="check"><input id="etEnabled" type="checkbox" ${et.enabled ? 'checked' : ''}> Activer l'envoi</label></div>
+          </div>
+          <div class="toolbar"><button class="button small primary" onclick="saveEndDigitTrio()">Enregistrer</button><button class="button small ghost" onclick="testEndDigitTrio()">Envoyer un test</button><button class="button small ghost" onclick="unblockEndDigitTrio()">Libérer les prédictions bloquées</button><button class="button small danger" onclick="resetEndDigitTrio()">Remettre à zéro</button><button class="button small ghost" onclick="refresh().then(endDigitTrioPage)">Actualiser</button></div>
+          ${et.lastError ? `<p class="small" style="color:#f87171">${esc(et.lastError)}</p>` : ''}
+          <p class="small" style="margin-top:10px">${sideLine('🎯 Trio', et.main)}</p>
+          <p class="small">${sideLine('🔁 Suivi', et.follow)}</p>
+          <p class="small muted">En cours : ${et.waiting || 0} • prochaine analyse à la fin du jeu <b>${et.nextAnalysisAfter != null ? '№' + et.nextAnalysisAfter : '—'}</b>.</p>
+        </div>
+        <div class="card"><h3>${plan ? `Choix fait après #${plan.from}–#${plan.from + 9} → prédit les jeux ${plan.base} à ${plan.base + 9}` : 'Aucun choix pour l\'instant (attend la fin de la prochaine dizaine)'}</h3>
+          ${plan ? `<table class="table"><thead><tr><th>Fin → jeu visé</th><th>Meilleur costume</th><th>Jeux</th><th>Décision</th></tr></thead><tbody>${rowHtml}</tbody></table>
+          <p class="small muted" style="margin-top:8px">${(plan.picks || []).map((p) => `№${p.target} ${esc(p.suit)} ${stateTag(p.state)}`).join(' &nbsp; ') || 'Aucune fin de numéro dans les taux : pas de prédiction cette dizaine.'}</p>` : ''}
+          ${follows}
+          ${recent}
+        </div>`;
+    }
+    async function saveEndDigitTrio() {
+      try {
+        await api('/api/end-digit-trio/config', 'POST', { enabled: $('#etEnabled')?.checked, channels: val('etChannel'), followChannels: val('etFollow'), maxR: val('etMaxR'), format: val('etFormat'), lead: val('etLead'), count: val('etCount'), sameMin: val('etSame'), inverseMin: val('etInv'), minN: val('etMinN') });
+        await refresh(); endDigitTrioPage(); toast('« Trio fin de numéro » enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testEndDigitTrio() {
+      try { await saveEndDigitTrio(); const r = await api('/api/end-digit-trio/test', 'POST', {}); toast(r.ok ? 'Test envoyé.' : (r.error || 'Échec')); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function unblockEndDigitTrio() {
+      try { const r = await api('/api/end-digit-trio/unblock', 'POST', {}); await refresh(); endDigitTrioPage(); toast(`${r.released || 0} prédiction(s) libérée(s).`); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetEndDigitTrio() {
+      if (!confirm('Remettre à zéro les statistiques, le choix en cours et les suivis de « Trio fin de numéro » ?')) return;
+      try { await api('/api/end-digit-trio/reset', 'POST', {}); await refresh(); endDigitTrioPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+
     // « Palier parité égalité » (voir parity-egalite.js) : deux taux faibles égaux → costume du deuxième taux.
     function parityEgalitePage() {
       setNav('strategies');
@@ -6562,6 +6685,8 @@ Faites-en bon usage !
         else if (h === '#/end-digit') endDigitPage();
         else if (h === '#/parity-palier') parityPalierPage();
         else if (h === '#/parity-egalite') parityEgalitePage();
+        else if (h === '#/end-digit-trio') endDigitTrioPage();
+        else if (h === '#/distribution-faible') distributionFaiblePage();
         else if (h === '#/slow-mode') slowModePage();
         else if (h === '#/absence-alert') absenceAlertPage();
         else if (h === '#/loss-gate') lossGatePage();
