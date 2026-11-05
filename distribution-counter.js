@@ -221,4 +221,18 @@ function status(gameNumber) {
   };
 }
 
-module.exports = { state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb, bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status, distributionOf };
+// v125 : résumé lu par la stratégie « Distribution faible » (distribution-faible.js) : totaux depuis le dernier reset (= RÉSUMÉ DISTRIBUTION du message)
+// et une ligne par fin de numéro (pair + impair réunis, = les lignes « #520 ➔ (3/3 50%) … · 2k 50% · 3k 50% »)
+function summary(side = 'player') {
+  const c = side === 'banker' ? state.banker : state.player;
+  const t = totals(c);
+  const counts = { '2/2': t['2/2'], '3/2': t['3/2'], '3/3': t['3/3'], '2/3': t['2/3'], '2k': t.twoK, '3k': t.threeK };
+  const rows = ALL.map((d) => {
+    const m = distZeros(); for (const k of DISTS) m[k] = ((c.dist.pair[d] || {})[k] || 0) + ((c.dist.impair[d] || {})[k] || 0);
+    const total = DISTS.reduce((n, k) => n + m[k], 0);
+    return { digit: d, total, counts: { '2/2': m['2/2'], '3/2': m['3/2'], '3/3': m['3/3'], '2/3': m['2/3'], '2k': m['2/2'] + m['2/3'], '3k': m['3/2'] + m['3/3'] } };
+  });
+  return { games: state.games, all: t.all, counts, rows, lastGameNumber: state.lastGameNumber, sinceAt: state.sinceAt };
+}
+
+module.exports = { summary, state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb, bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status, distributionOf };
