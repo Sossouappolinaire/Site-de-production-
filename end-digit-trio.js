@@ -349,10 +349,14 @@ function status() {
 }
 
 // ── persistance ─────────────────────────────────────────────────────────────
+// v128 : tout est envoyé à Supabase (réglage « end_digit_trio_state »). Si la base est coupée au moment de l'enregistrement,
+// l'état local reste « en attente d'envoi » (dbDirty) : à la reconnexion il est POUSSÉ vers Supabase au lieu d'être écrasé par l'ancienne valeur.
+let dbDirty = false;
 function persist() {
   const saved = { config: config_(), plan: panel.plan, planBase: panel.planBase, history: panel.history, follows: panel.follows, pendingMessages: panel.pendingMessages, stats: panel.stats, sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, channelTitles: panel.channelTitles };
   try { store.patch({ [STORE_KEY]: saved }); } catch (_) {}
-  if (db.ready) db.setSetting(DB_KEY, JSON.stringify(saved)).catch((e) => { panel.lastError = e.message; });
+  if (db.ready) db.setSetting(DB_KEY, JSON.stringify(saved)).then(() => { dbDirty = false; }).catch((e) => { panel.lastError = e.message; dbDirty = true; });
+  else dbDirty = true;
 }
 function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
@@ -374,7 +378,18 @@ function applySaved(saved) {
 function restore() { try { const s = (store.read() || {})[STORE_KEY]; if (s) applySaved(s); } catch (_) {} }
 async function restoreFromDb() {
   if (!db.ready) return;
+  if (dbDirty) { persist(); return; } // changements faits pendant la coupure : on les envoie à Supabase, on ne les écrase pas
   try { const raw = await db.getSetting(DB_KEY); if (raw) { applySaved(JSON.parse(raw)); persist(); } else persist(); } catch (_) { persist(); }
 }
 
-module.exports = { panel, setSender, restore, restoreFromDb, persist, tick, status, test, config: config_, configure, resetStats, unblock, setChannelTitle, choose };
+// v128 : NOUVEAU DÉPART de 00h00 (heure d'Abidjan), appelé par midnight-reset.js. Efface TOUTES les données du jour de cette stratégie
+// (choix de la dizaine, fins interdites, suivis, prédictions envoyées, bilans gagné/perdu du trio et du suivi, compteurs) puis envoie l'état vide
+// à Supabase. Les RÉGLAGES (canaux, format, rattrapages, seuils, on/off) et les noms de canaux sont conservés.
+function wipeDay() {
+  panel.plan = null; panel.planBase = -1; panel.history = []; panel.follows = []; panel.pendingMessages = [];
+  panel.stats = null; panel.sentCount = 0; panel.lastSentAt = null; panel.duplicatesBlocked = 0; panel.lastError = null;
+  planRetryAt = 0; inflight.clear();
+  persist();
+}
+
+module.exports = { panel, setSender, restore, restoreFromDb, persist, tick, wipeDay, status, test, config: config_, configure, resetStats, unblock, setChannelTitle, choose };

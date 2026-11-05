@@ -1,10 +1,11 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v127',
-  name: 'trio-fin-de-numero',
+  version: 'v128',
+  name: 'trio-supabase-minuit',
   date: '2026-11-05',
   features: [
+    'v128 — « Trio fin de numéro » : tout son état (choix de la dizaine, fins interdites, suivis, prédictions, bilans) est envoyé à Supabase et relu seul au redémarrage ; si Supabase était coupée, les changements en attente sont POUSSÉS à la reconnexion au lieu d\'être écrasés ; à 00h00 (heure d\'Abidjan) tout est effacé, bilans gagné/perdu compris (les réglages restent) ; si Supabase est coupée à 00h00, les tables de données sont vidées dès la reconnexion ; le token API n\'est pas touché (midnight-reset.js, end-digit-trio.js)',
     'v127 — Nouvelle stratégie « 🎯 Trio fin de numéro » (page Stratégies, branchée sur « Analyse fin de numéro ») : à chaque fin de dizaine, prend les 3 fins de numéro au meilleur taux (≥ 50 %) ; taux de 50 à 59 % → on prédit le costume, 60 % et plus → son inverse ; vise la dizaine suivante (jeu finissant par ce chiffre), les fins prédites à la dizaine précédente sont interdites, moins de 3 fins dans les taux = moins de prédictions ; « Suivi » dans un AUTRE canal : si le costume n\'est pas venu directement (pas ✅0️⃣) → même costume, même fin à la dizaine suivante ; venu directement (✅0️⃣) → costume inverse (miroir), même fin (end-digit-trio.js)',
     'v126 — « Compte parité » : à chaque fin de dizaine (jeu finissant par 9), un 2e message aligne les fins de numéro deux par deux (0 et 1, 2 et 3, 4 et 5, 6 et 7, 8 et 9) avec leur costume au taux max, ex. « 0:♦️✅ ⚖️ 1:❤️✅ » ; ✅ = même costume qu\'à la dizaine précédente, 🔰 = variation, avec en bas « Récapitulatif » : pour chaque variation, le costume d\'avant ➜ le costume qui l\'a remplacé ; égalité au taux max : les costumes à égalité sont affichés ; la comparaison repart de zéro à chaque reset du compteur',
     'v125 — Nouvelle stratégie « Distribution faible » (page Stratégies) : lit le RÉSUMÉ du Compte distribution et prédit 2/2, 3/2, 3/3, 2k ou 3k (jamais 2/3) au taux le plus faible, seulement après 15 jeux cumulés, si ce taux est entre 3 % et 15 %, seul à ce taux, et si la ligne de la fin du jeu visé n\'a pas le même taux ; une prédiction à la fois, écart d\'au moins 2 numéros ; un format au choix pour chaque distribution (2/2, 3/3, 3/2) ; « Meilleur selon le bilan » : le meilleur ne change qu\'à l\'envoi du bilan (plus de relecture au changement de jour) et un 2e meilleur est toujours conservé pour la bascule après une perte',
