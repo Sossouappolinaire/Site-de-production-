@@ -324,6 +324,7 @@
         <a href="#/loss-return" data-nav="loss-return">📉 Retour après perte</a>
         <a href="#/loss-relaunch" data-nav="loss-relaunch">🔁 Relance après perte</a>
         <a href="#/prev-suit" data-nav="prev-suit">⏮️ Costume N-1 → +4</a>
+        <a href="#/miracle" data-nav="miracle">✨ Miracle prediction</a>
         <a href="#/canal-telegram" data-nav="canal-telegram">📲 Canal Telegram</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
@@ -645,6 +646,7 @@
         ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
         ${card('#/loss-relaunch', '🔁', 'Relance après perte', `${((snapshot.lossRelaunch || {}).configs || []).length} configuration(s) · une prédiction perdue → même costume à +N`)}
         ${card('#/prev-suit', '⏮️', 'Costume N-1 → +4', `${Object.keys((snapshot.prevSuit || {}).selected || {}).length} source(s) cochée(s) • ${(snapshot.prevSuit || {}).sentCount || 0} prédiction(s) • ${(snapshot.prevSuit || {}).enabled ? 'actif' : 'inactif'}`)}
+        ${card('#/miracle', '✨', 'Miracle prediction', `${(snapshot.miracle || {}).inScopeCount || 0} stratégie(s) suivie(s) • ${(snapshot.miracle || {}).sentCount || 0} prédiction(s) • ${(snapshot.miracle || {}).enabled ? 'actif' : 'inactif'}`)}
       </div>
 
       <div class="home-section-label">Suivi, statistiques et communauté</div>
@@ -2738,6 +2740,9 @@ Faites-en bon usage !
         what: 'Un canal Telegram devient UNE stratégie, qui porte le nom du canal. Toutes les prédictions publiées dans ce canal sont lues de la même façon, quel que soit leur format (les 107 formats du site, ceux d’autres bots, avec ou sans pourcentage…) et quel que soit le rattrapage annoncé : le bot ne retient que « numéro de jeu + costume » et vérifie lui-même chaque prédiction sur la main du joueur avec UN nombre de rattrapages unique réglé pour ce canal.',
         steps: ['Ouvre « Canal Telegram », choisis un canal (liste des canaux où le bot est présent) ou saisis son ID / @nom.', 'Garde le nom proposé (le nom du canal) ou donne le tien, règle les rattrapages de vérification (3 par défaut), puis clique sur « Créer la stratégie ».', 'Les statistiques (gagnées / perdues, taux, répartition par rattrapage et par costume) se remplissent dès les prochaines prédictions du canal.'],
         tips: ['Le bot doit être présent (administrateur) dans le canal pour lire ses publications ; un canal où ce bot publie lui-même fonctionne aussi.', 'Les prédictions sans costume (distribution 2/2…) ne sont pas lues. Une même prédiction (canal + jeu + costume) n’est jamais comptée deux fois, même si le message est édité.', 'Ce bouton n’envoie rien : il observe, vérifie et compte.'] },
+      { g: 'auto', icon: '✨', title: 'Miracle prediction', hash: '#/miracle',
+        what: 'Suit les stratégies existantes et n’envoie une prédiction que lorsqu’une stratégie (réglée sur 3 rattrapages) vient de PERDRE : sa prédiction suivante part dans ton canal si le jeu en direct est à 2 numéros du numéro prédit. Après 2 puis 3 pertes consécutives, tu es prévenu en privé et la stratégie est mise en attente. Quand 5 stratégies ou plus prédisent le même numéro et le même costume, l’envoi est immédiat, sans condition.',
+        steps: ['Ouvre « Miracle prediction » et choisis le mode : stratégies cochées, compteur parité + analyse fin de numéro, ou tout ce qui prédit sur le site.', 'Renseigne le canal d’envoi (ID), les rattrapages, le format, la proximité et le seuil de consensus, coche « Activer » puis enregistre.'] },
       { g: 'auto', icon: '⏮️', title: 'Costume N-1 → +4', hash: '#/prev-suit',
         what: 'Tu coches des stratégies / configurations de tout le site ; le bot observe leurs prédictions. Quand le costume prédit au jeu N est venu au jeu N-1 mais n’est pas sorti au jeu N, il prédit le même costume au jeu N+4 dans le canal (ID) choisi.',
         steps: ['Ouvre « Costume N-1 → +4 », coche les stratégies / configurations à observer.', 'Renseigne le canal d’envoi (ID), le décalage (+4 par défaut), les rattrapages et le format, coche « Activer » puis enregistre.'],
@@ -4772,6 +4777,79 @@ Faites-en bon usage !
       try { await api('/api/prev-suit/reset', 'POST', {}); await refresh(); prevSuitPage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
     }
 
+
+    // « ✨ Miracle prediction » (voir miracle-prediction.js) : 3 modes de suivi, reprise après perte, consensus.
+    function miraclePage() {
+      setNav('miracle');
+      const p = snapshot.miracle || {};
+      const src = p.sources || [];
+      const groups = {};
+      src.forEach((x) => { (groups[x.group || 'Autres'] = groups[x.group || 'Autres'] || []).push(x); });
+      const modeSel = p.mode || 'all';
+      const statusBadge = (st) => st === 'gagné' ? '✅ gagné' : st === 'perdu' ? '❌ perdu' : st === 'en attente' ? '⏳ envoyé' : '🚫 annulé';
+      const groupHtml = Object.keys(groups).map((g) => `<details style="margin-top:8px" ${groups[g].some((x) => x.inScope) ? 'open' : ''}><summary><b>${esc(g)}</b> <span class="small muted">— ${groups[g].filter((x) => x.inScope).length}/${groups[g].length} suivie(s)</span></summary>
+          ${modeSel === 'select' ? `<div style="margin:6px 0 4px 10px"><button class="button small ghost" onclick="miracleToggleGroup(${esc(JSON.stringify(g))}, true)">Tout cocher</button> <button class="button small ghost" onclick="miracleToggleGroup(${esc(JSON.stringify(g))}, false)">Tout décocher</button></div>` : ''}
+          ${groups[g].map((x) => `<label class="check" style="display:block;margin-top:4px;${x.inScope ? '' : 'opacity:.5'}"><input type="checkbox" class="mpSrc" data-group="${esc(g)}" data-key="${esc(x.key)}" ${x.selected ? 'checked' : ''} ${modeSel === 'select' ? '' : 'disabled'}> ${esc(x.name)} ${x.parity ? '🔢' : ''} <span class="small muted">— ${esc((x.channels || []).join(', '))} — ${x.followable ? 'rattrapage 3 ✅' : (x.maxR === null || x.maxR === undefined ? 'rattrapage inconnu (consensus seulement)' : 'rattrapage ' + x.maxR + ' (consensus seulement)')}</span></label>`).join('')}
+        </details>`).join('');
+      const unitRows = (p.units || []).map((u) => `<tr><td>${esc(u.names || u.chat)}</td><td>${u.mStreak || 0}</td><td>${u.streak}</td><td>${u.cooldown ? 'attend ' + u.cooldown + ' perte(s)' : '—'}</td><td>${u.avgToday || '—'} / ${u.avg || '—'}</td><td>${u.armed ? '🎯 prête (prochaine prédiction)' : '—'}</td></tr>`).join('');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Suivi des stratégies</span><h2 style="margin-top:7px">✨ Miracle prediction</h2><p class="small">Le bot suit les stratégies existantes. Quand une stratégie réglée sur <b>3 rattrapages</b> vient de <b>perdre</b>, sa <b>prédiction suivante</b> est envoyée dans ton canal, <b>si le jeu en direct est à ${p.proximity ?? 2} numéro(s) avant</b> le numéro prédit (ex. 12 prédit, jeu en direct 10 → envoi), puis il attend une nouvelle perte. Le compteur ne monte que si la prédiction reprise par Miracle <b>perd</b> : il attend alors (pertes de Miracle d'affilée + 1) nouvelles pertes de la stratégie avant de la reprendre (1 perte → 2 d'attente) ; à <b>2</b> puis <b>3</b> pertes de Miracle d'affilée tu reçois un message privé. À 00h00 tout repart de zéro, seule la <b>moyenne</b> des séries est gardée.</p></div></div>
+        <div class="grid two">
+          <div class="card">
+            <h3>Mode de suivi</h3>
+            <label class="check" style="display:block"><input type="radio" name="mpMode" value="select" ${modeSel === 'select' ? 'checked' : ''} onchange="miracleModeChanged()"> 1️⃣ Stratégies / configurations existantes que je coche</label>
+            <label class="check" style="display:block;margin-top:6px"><input type="radio" name="mpMode" value="parity" ${modeSel === 'parity' ? 'checked' : ''} onchange="miracleModeChanged()"> 2️⃣ Uniquement le compteur parité + l'analyse fin de numéro</label>
+            <label class="check" style="display:block;margin-top:6px"><input type="radio" name="mpMode" value="all" ${modeSel === 'all' ? 'checked' : ''} onchange="miracleModeChanged()"> 3️⃣ Toutes les stratégies + tout ce qui prédit sur le site</label>
+            <h3 style="margin-top:16px">Envoi et réglages</h3>
+            <div class="field"><label>ID ou @nom du canal d'envoi</label><input id="mpChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Chat privé pour les alertes de pertes (vide = administrateur)</label><input id="mpPrivate" value="${esc(p.privateChat || '')}" placeholder="ID du chat privé"></div>
+            <div class="field"><label>Rattrapages des prédictions Miracle</label><input id="mpMaxR" type="number" min="0" max="9" value="${p.maxR ?? 2}"></div>
+            <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 107))})</label><input id="mpFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 107))}" value="${p.format ?? 107}"></div>
+            <div class="field"><label>Proximité : le jeu en direct doit être à … numéro(s) avant</label><input id="mpProx" type="number" min="1" max="20" value="${p.proximity ?? 2}"></div>
+            <div class="field"><label>Consensus : nombre de stratégies d'accord</label><input id="mpCons" type="number" min="2" max="30" value="${p.consensus ?? 5}"></div>
+            <label class="check"><input id="mpEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer « Miracle prediction »</label>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveMiracle()">Enregistrer</button><button class="button small ghost" onclick="testMiracle()">Envoyer un test</button><button class="button small danger" onclick="resetMiracle()">Remettre à zéro</button></div>
+            ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+            <p class="small" style="margin-top:10px">Jeu en direct : <b>${p.live || '—'}</b> • stratégies suivies : <b>${p.inScopeCount || 0}</b> (dont <b>${p.followableCount || 0}</b> à 3 rattrapages) • prédictions observées : <b>${p.following || 0}</b> • en attente de proximité : <b>${(p.candidates || []).length}</b></p>
+            <p class="small">Envoyées : <b>${p.sentCount || 0}</b> • gagnées <b>${p.won || 0}</b> / perdues <b>${p.lost || 0}</b> (${p.rate || 0} %) • après perte : ${(p.byKind || {}).loss ? p.byKind.loss.won + '✅ ' + p.byKind.loss.lost + '❌' : '—'} • consensus : ${(p.byKind || {}).consensus ? p.byKind.consensus.won + '✅ ' + p.byKind.consensus.lost + '❌' : '—'} • alertes privées : ${p.privateNotices || 0} • trop tard : ${p.lateSkipped || 0}</p>
+          </div>
+          <div class="card">
+            <h3>Stratégies suivies ${modeSel === 'select' ? '(coche)' : '(selon le mode)'}</h3>
+            <p class="small">🔢 = utilise le compteur parité ou l'analyse fin de numéro. Seules les sources à <b>${p.sourceMaxR ?? 3} rattrapages</b> déclenchent une prédiction après perte ; les autres comptent seulement pour le consensus. Un canal partagé par plusieurs stratégies compte pour une seule dans le consensus. Le canal d'envoi n'est jamais observé.</p>
+            ${groupHtml || '<p class="small">Aucune stratégie ni configuration avec un canal pour le moment.</p>'}
+            ${modeSel === 'select' ? '<div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveMiracle()">Enregistrer</button></div>' : ''}
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px"><h3>Pertes consécutives par stratégie</h3>
+          ${unitRows ? `<table class="table"><thead><tr><th>Stratégie (canal)</th><th>Pertes Miracle d'affilée</th><th>Pertes de la stratégie</th><th>Attente</th><th>Moyenne jour / gardée</th><th>État</th></tr></thead><tbody>${unitRows}</tbody></table>` : '<p class="small">Aucune stratégie observée pour le moment.</p>'}
+        </div>
+        <div class="card" style="margin-top:16px"><h3>Prédictions Miracle envoyées</h3>
+          ${(p.recent || []).length ? `<table class="table"><thead><tr><th>Jeu</th><th>Costume</th><th>Origine</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>${p.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${e.kind === 'consensus' ? '🔥 ' : '🎯 '}${esc(e.src || '')}</td><td>${statusBadge(e.status)}</td><td>${e.step ?? 0}/${p.maxR ?? 2}</td></tr>`).join('')}</tbody></table>` : '<p class="small">Aucune prédiction envoyée pour le moment.</p>'}
+        </div>`;
+    }
+    function miracleModeChanged() {
+      const m = document.querySelector('input[name="mpMode"]:checked')?.value;
+      document.querySelectorAll('.mpSrc').forEach((c) => { c.disabled = m !== 'select'; });
+    }
+    function miracleToggleGroup(group, on) { document.querySelectorAll('.mpSrc').forEach((c) => { if (c.dataset.group === group) c.checked = on; }); }
+    async function saveMiracle() {
+      const selected = [...document.querySelectorAll('.mpSrc')].filter((c) => c.checked).map((c) => c.dataset.key);
+      const mode = document.querySelector('input[name="mpMode"]:checked')?.value || 'all';
+      const body = { enabled: $('#mpEnabled')?.checked, mode, channels: val('mpChannel'), privateChat: val('mpPrivate'), maxR: val('mpMaxR'), format: val('mpFormat'), proximity: val('mpProx'), consensus: val('mpCons') };
+      if (mode === 'select') body.selected = selected;
+      try {
+        await api('/api/miracle/config', 'POST', body);
+        await refresh(); miraclePage(); toast('« Miracle prediction » enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testMiracle() {
+      try { await saveMiracle(); const r = await api('/api/miracle/test', 'POST', {}); toast(r.ok ? 'Prédiction de test envoyée dans le canal.' : (r.error || 'Échec')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetMiracle() {
+      if (!confirm('Remettre à zéro les statistiques et le suivi des pertes ?')) return;
+      try { await api('/api/miracle/reset', 'POST', {}); await refresh(); miraclePage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+
     // « Canal Telegram » (voir canal-telegram.js) : un canal = une stratégie ; tous formats et rattrapages uniformisés.
     function canalTelegramPage() {
       setNav('canal-telegram');
@@ -6693,6 +6771,7 @@ Faites-en bon usage !
         else if (h === '#/draw-two-three') drawTwoThreePage();
         else if (h === '#/victoire-vb') victoireVbPage();
         else if (h === '#/prev-suit') prevSuitPage();
+        else if (h === '#/miracle') miraclePage();
         else if (h === '#/canal-telegram') canalTelegramPage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
