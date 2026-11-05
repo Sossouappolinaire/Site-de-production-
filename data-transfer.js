@@ -174,6 +174,7 @@ const PANELS = {
   parityEgalite: { mod: './parity-egalite' },             // « Palier parité égalité » (stratégie)
   parityPalier: { mod: './parity-palier' },               // « Palier parité » (stratégie)
   endDigitTrio: { mod: './end-digit-trio' },              // « Trio fin de numéro » (stratégie)
+  miracle: { mod: './miracle-prediction' },               // « Miracle prediction » (v129)
   distributionFaible: { mod: './distribution-faible' },   // « Distribution faible » (stratégie)
   slowMode: { mod: './slow-mode' },                   // « Ralentisseur »
   absenceAlert: { mod: './absence-alert' },           // « Alerte absence de costume »

@@ -48,6 +48,7 @@ const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
 const parityEgalite = require('./parity-egalite'); // « Palier parité égalité »
 const parityPalier = require('./parity-palier'); // « Palier parité » (v114)
@@ -437,6 +438,7 @@ app.get('/api/state', async (req, res) => {
     lossReturn: lossReturnView(),
     lossRelaunch: lossRelaunchView(),
     prevSuit: prevSuitView(),
+    miracle: miracleView(),
     canalTelegram: canalTelegram.status(),
     channelUniform: channelUniformView(channelList),
     endDigitPredict: endDigitPredict.status(),
@@ -2342,6 +2344,71 @@ app.post('/api/prev-suit/test', async (req, res) => {
 });
 app.post('/api/prev-suit/reset', (req, res) => { prevSuit.resetStats(); res.json(prevSuitView()); });
 
+// ---------------------------------------------------------------------------
+// « ✨ Miracle prediction » (voir miracle-prediction.js) : suit les stratégies / configurations existantes (3 modes : cochées,
+// compteur parité + analyse fin de numéro, tout ce qui prédit sur le site) et reprend la prédiction suivante d'une stratégie
+// (réglée sur 3 rattrapages) qui vient de perdre ; consensus de 5 stratégies = envoi sans condition.
+// ---------------------------------------------------------------------------
+// stratégies du moteur qui lisent l'« Analyse fin de numéro » (end-digit.js)
+const MIRACLE_PARITY_STRATEGIES = new Set(['finNumero', 'mama']);
+// modules qui ont leur propre canal d'envoi (absents de « Organisation par canal ») : compteur parité et analyse fin de numéro
+const MIRACLE_EXTRA_MODULES = [
+  ['parity-palier', 'Palier parité', parityPalier, 'Compteur parité'],
+  ['parity-egalite', 'Palier parité égalité', parityEgalite, 'Compteur parité'],
+  ['end-digit-predict', 'Prédiction fin de numéro', endDigitPredict, 'Analyse fin de numéro'],
+  ['end-digit-trio', 'Trio fin de numéro', endDigitTrio, 'Analyse fin de numéro'],
+];
+function miracleSources() {
+  const byKey = new Map();
+  let rows = [];
+  try { rows = configuredChannelList(); } catch (_) {}
+  for (const r of rows) {
+    let cfgs = [];
+    try { cfgs = channelConfigsFor(r.id); } catch (_) {}
+    for (const c of cfgs) {
+      if (PREV_SUIT_SKIP_KINDS.has(c.kind)) continue;
+      if (c.kind === 'module' && c.id === 'statistics') continue;
+      const key = [c.kind, c.panel || '', c.id, c.mode || ''].join('|');
+      if (!byKey.has(key)) byKey.set(key, { key, name: c.name || String(c.id), group: c.group || 'Autres', channels: [], maxR: prevSuitMaxR(c), parity: c.kind === 'strategy' && MIRACLE_PARITY_STRATEGIES.has(c.id) });
+      const e = byKey.get(key);
+      if (!e.channels.includes(String(r.id))) e.channels.push(String(r.id));
+    }
+  }
+  for (const [id, label, mod, group] of MIRACLE_EXTRA_MODULES) {
+    try {
+      const p = mod.panel || {};
+      const channels = (Array.isArray(p.channels) ? p.channels : []).map(String).filter(Boolean);
+      if (!channels.length) continue;
+      const mr = p.maxR !== undefined && p.maxR !== null && p.maxR !== '' && Number.isFinite(Number(p.maxR)) ? Number(p.maxR) : null;
+      byKey.set(`extra|${id}`, { key: `extra|${id}`, name: label, group, channels, maxR: mr, parity: true });
+    } catch (_) {}
+  }
+  return [...byKey.values()].sort((a, b) => String(a.group).localeCompare(String(b.group), 'fr') || String(a.name).localeCompare(String(b.name), 'fr'));
+}
+miracle.setSourceProvider(miracleSources);
+function miracleView() { return miracle.status(); }
+async function verifyMiracleChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) miracle.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/miracle', (req, res) => res.json(miracleView()));
+app.post('/api/miracle/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) await verifyMiracleChannels(lossRelaunch.parseChannels(b.channels));
+    miracle.configure(b);
+    res.json({ ok: true, miracle: miracleView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/miracle/test', async (req, res) => {
+  const r = await miracle.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/miracle/reset', (req, res) => { miracle.resetStats(); res.json(miracleView()); });
+
 // « Canal Telegram » (voir canal-telegram.js) : un canal = une stratégie, nommée comme le canal. Toutes les prédictions publiées dans
 // ce canal, quel que soit leur format ou leur rattrapage annoncé, sont lues de la même façon et vérifiées avec UN rattrapage unique.
 app.get('/api/canal-telegram', (req, res) => res.json(canalTelegram.status()));
@@ -3085,7 +3152,7 @@ async function removeChannelEverywhere(id) {
     ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
-    ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit],
+    ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle],
   ];
   for (const [label, mod] of modules) {
     try {
@@ -3454,7 +3521,7 @@ function configuredChannelList() {
     } catch (_) {}
   }
   // Recherche profonde dans le réglage de TOUS les boutons : toute liste « …channels » ou « channelId » est importée
-  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle], ['Jeu 21', game21Predict], ['Formation', formationRelay],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
     ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
     ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['VIP', vip], ['Prédit IA', predit],

@@ -1477,5 +1477,126 @@
     "lastSentAt": null,
     "lateSkipped": 0,
     "channelTitles": {}
+  },
+  "miracle": {
+    "config": {
+      "enabled": true,
+      "mode": "all",
+      "selected": {},
+      "channels": [
+        -1009
+      ],
+      "privateChat": "",
+      "maxR": 2,
+      "format": 107,
+      "proximity": 2,
+      "consensus": 5
+    },
+    "units": {
+      "-101": {
+        "streak": 0,
+        "cooldown": 0,
+        "armed": false,
+        "armedAt": 1793908114234,
+        "names": "StratA",
+        "lastLossAt": null,
+        "notified": 0,
+        "runs": [
+          2
+        ],
+        "avg": 0,
+        "mStreak": 0
+      }
+    },
+    "watches": [
+      {
+        "id": "mw-1793908114232-6hld",
+        "chat": "-101",
+        "target": 30,
+        "suit": "♦️",
+        "sig": "A",
+        "names": "StratA",
+        "followable": true,
+        "status": "gagné",
+        "step": 0,
+        "at": 1793908114232,
+        "taken": true,
+        "closedAt": 1793908114243
+      }
+    ],
+    "candidates": [
+      {
+        "id": "mc-1793908114235-anua",
+        "chat": "-101",
+        "target": 30,
+        "suit": "♦️",
+        "src": "StratA",
+        "status": "envoyé",
+        "streak": 0,
+        "at": 1793908114235,
+        "sentAt": 1793908114238
+      }
+    ],
+    "pendingMessages": [
+      {
+        "id": "mp-1793908114235-nwpp",
+        "cfgId": "miracle",
+        "kind": "loss",
+        "chat": "-101",
+        "streakAtSend": 0,
+        "suit": "♦️",
+        "target": 30,
+        "maxR": 2,
+        "format": 107,
+        "step": 0,
+        "status": "gagné",
+        "messages": [
+          {
+            "chatId": -1009,
+            "messageId": 1
+          }
+        ],
+        "origin": {
+          "src": "StratA",
+          "count": 1
+        },
+        "createdAt": 1793908114235,
+        "resolvedAt": 1793908114243,
+        "_recapDone": true
+      }
+    ],
+    "seen": [
+      "-101:30:♦️"
+    ],
+    "stats": {
+      "sent": 1,
+      "won": 1,
+      "lost": 0,
+      "byStep": {
+        "0": 1
+      },
+      "bySuit": {
+        "♦️": {
+          "won": 1,
+          "lost": 0
+        }
+      },
+      "byKind": {
+        "loss": {
+          "won": 1,
+          "lost": 0
+        },
+        "consensus": {
+          "won": 0,
+          "lost": 0
+        }
+      }
+    },
+    "sentCount": 1,
+    "lastSentAt": 1793908114238,
+    "lateSkipped": 0,
+    "privateNotices": 0,
+    "channelTitles": {},
+    "lastMax": 31
   }
 }

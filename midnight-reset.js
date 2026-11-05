@@ -124,7 +124,7 @@ function wipePanel(panel) {
 
 const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap', 'vip', 'cards-count',
   'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'bet-type', 'game21-predict', 'statistics',
-  'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
+  'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio', 'miracle-prediction']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
 
 const DB_TABLES = [
   ['games', 'DELETE FROM games'],
