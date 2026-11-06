@@ -22,6 +22,16 @@
 //              (Prédiction fin de numéro, Trio fin de numéro, stratégies « Fin de numéro » et « Mama ») ;
 //     all    = toutes les stratégies, toutes les configurations et tout ce qui prédit sur le site.
 //
+//  v130 — Miracle n'ATTEND PLUS aucune vérification pour envoyer :
+//     • la perte d'une stratégie suivie est constatée dès que la main du JOUEUR du dernier rattrapage est terminée (plus d'attente du banquier) ;
+//     • une prédiction Miracle encore en cours n'empêche jamais une autre d'être envoyée (autre stratégie, autre jeu, même jeu avec un autre costume) ;
+//       seul le doublon exact (même jeu ET même costume) est ignoré ;
+//     • toutes les prédictions prêtes partent en même temps (un envoi Telegram lent ne retarde plus les autres ni les vérifications) ;
+//     • un envoi refusé par le canal est retenté à chaque passage tant que le jeu visé n'est pas passé (raison visible sur la page).
+//
+//  v131 — rattrapages des prédictions Miracle : 3 par défaut (l'ancien défaut 2 enregistré est remplacé une fois par 3) ; le nombre réglé
+//         est celui du message envoyé, de la vérification (jeu N puis N+1 … N+rattrapages) et du bilan.
+//
 //  Réglages : canal(aux) d'envoi, rattrapages des prédictions Miracle, format de message, chat privé (par défaut : admin),
 //  proximité, seuil de consensus.
 //
@@ -39,7 +49,8 @@ try { strategyRecap = require('./strategy-recap'); } catch (_) { strategyRecap =
 
 const DB_KEY = 'miracle_state';
 const SOURCE_MAXR = 3;          // rattrapage exigé des stratégies suivies (règle admin)
-const DEFAULT_MAXR = 2;
+const DEFAULT_MAXR = 3;           // rattrapages par défaut des prédictions Miracle (v131 : 3, comme les stratégies suivies)
+const MAXR_VERSION = 131;         // les réglages enregistrés avant v131 gardaient l'ancien défaut (2) : remplacé une fois par 3
 const DEFAULT_FORMAT = 107;
 const DEFAULT_PROX = 2;
 const DEFAULT_CONSENSUS = 5;
@@ -58,7 +69,7 @@ const panel = {
   candidates: [],       // prédictions reprises après perte, en attente de proximité
   pendingMessages: [],  // prédictions Miracle envoyées
   seen: [], stats: null, sentCount: 0, lastSentAt: null, lateSkipped: 0, duplicatesBlocked: 0, privateNotices: 0,
-  channelTitles: {}, lastError: null, lastMax: 0,
+  channelTitles: {}, lastError: null, lastSkip: null, lastMax: 0,
 };
 
 let sender = null; let adminIdFn = null; let sourceProvider = null;
@@ -71,6 +82,21 @@ const clampInt = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.is
 const pct = (a, b) => (b > 0 ? Math.round((a * 100) / b) : 0);
 const norm = (c) => String(c == null ? '' : c).trim().toLowerCase();
 const isDone = (g) => !!g && g.finished && g.complete !== false;
+// main du joueur terminée sans attendre le banquier : jeu fini, ou 3 cartes, ou 2 cartes valant 6+ (il reste)
+const playerFinal = (g) => !!g && (g.finished ? g.complete !== false : (Number(g.playerCards) >= 3 || (Number(g.playerCards) === 2 && Number(g.playerValue) >= 6)));
+const hasPlayerCards = (g) => !!g && Array.isArray(g.player) && g.player.length > 0;
+// résultat d'une prédiction (jeu N puis rattrapages N+1 … N+maxR) lu sur la main du JOUEUR uniquement
+function verdictOf(target, suit, maxR, maxDone, onStep) {
+  for (let k = 0; k <= maxR; k++) {
+    const g = state.games.get(target + k);
+    if (!hasPlayerCards(g)) return target + k + 2 <= maxDone ? { verdict: 'annulé', hitAt: -1 } : null;
+    if (hasSuit(g, suit)) return { verdict: 'gagné', hitAt: k };
+    if (!playerFinal(g)) return null; // le joueur peut encore tirer : pas de perte tant que sa main n'est pas terminée
+    if (k === maxR) return { verdict: 'perdu', hitAt: -1 };
+    if (onStep) onStep(k + 1);
+  }
+  return null;
+}
 const maxFinishedGameNumber = () => { let m = 0; for (const g of state.games.values()) if (g.finished && g.number > m) m = g.number; return m; };
 // « jeu en direct » = plus grand numéro commencé (en distribution ou terminé)
 const liveNumber = () => { let m = 0; for (const g of state.games.values()) if ((g.finished || g.dealing) && g.number > m) m = g.number; return m; };
@@ -148,10 +174,14 @@ async function sendToChannels(out) {
   const b = bot();
   if (!b) { panel.lastError = 'Aucun token Telegram configuré'; return []; }
   const results = await Promise.all((panel.channels || []).map((id) => withTimeout(b.sendMessage(id, out.text, out.parse_mode ? { parse_mode: out.parse_mode } : {}), SEND_MAX_MS, 'envoi Telegram')
-    .then((m) => (m && m.skipped ? { ok: false, skipped: true, id } : { ok: true, id, messageId: m.message_id }))
+    .then((m) => (m && m.skipped ? { ok: false, skipped: true, id, why: m.gated ? 'mode du canal / « envoi après perte » : le canal retient cette prédiction' : m.duplicate ? 'déjà envoyée dans ce canal (anti-doublon)' : 'canal en pause, jeu instable ou ralenti' } : { ok: true, id, messageId: m.message_id }))
     .catch((e) => ({ ok: false, id, error: e.message }))));
   const sent = [];
-  for (const r of results) { if (r.ok) sent.push({ chatId: r.id, messageId: r.messageId }); else if (!r.skipped) panel.lastError = `${r.id} : ${r.error}`; }
+  for (const r of results) {
+    if (r.ok) sent.push({ chatId: r.id, messageId: r.messageId });
+    else if (r.skipped) panel.lastSkip = { chat: String(r.id), why: r.why, at: Date.now() };
+    else panel.lastError = `${r.id} : ${r.error}`;
+  }
   return sent;
 }
 function editSent(entry, statusFr) {
@@ -182,13 +212,17 @@ async function toPrivate(text) {
 }
 
 const inflight = new Set();
-const alreadySent = (target) => panel.pendingMessages.some((s) => s.target === target) || inflight.has(String(target));
+// un numéro de jeu revient chaque jour (le sabot repart à #1) : un doublon n'existe que pour le même jeu ET le même costume, en cours ou envoyé il y a moins de 2 h
+const DUP_WINDOW_MS = 2 * 3600 * 1000;
+const alreadySent = (target, suit) => inflight.has(`${target}:${suit}`)
+  || panel.pendingMessages.some((s) => s.target === target && s.suit === suit && (s.status === 'en attente' || Date.now() - (Number(s.createdAt) || 0) < DUP_WINDOW_MS));
 // envoie UNE prédiction Miracle (après perte ou consensus)
 async function launch({ target, suit, kind, src, count, chat, streakAtSend }) {
   if (!panel.channels.length) { panel.lastError = 'Renseigne le canal où envoyer les prédictions Miracle.'; return 'aucun canal'; }
   if (target <= liveNumber()) { panel.lateSkipped += 1; return 'trop tard'; }
-  if (alreadySent(target)) { panel.duplicatesBlocked += 1; return 'doublon'; }
-  inflight.add(String(target));
+  if (alreadySent(target, suit)) { panel.duplicatesBlocked += 1; return 'doublon'; }
+  const inflightKey = `${target}:${suit}`;
+  inflight.add(inflightKey);
   try {
     const entry = { id: `mp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, cfgId: 'miracle', kind, chat: chat || null, streakAtSend: streakAtSend || 0, suit, target, maxR: panel.maxR, format: panel.format, step: 0, status: 'en attente',
       messages: [], origin: { src: String(src || '').slice(0, 140), count: count || 1 }, createdAt: Date.now(), resolvedAt: null };
@@ -197,7 +231,7 @@ async function launch({ target, suit, kind, src, count, chat, streakAtSend }) {
     panel.pendingMessages.push(entry);
     const st = statsOf(); st.sent += 1; panel.sentCount += 1; panel.lastSentAt = Date.now(); panel.lastError = null;
     return 'envoyé';
-  } finally { inflight.delete(String(target)); }
+  } finally { inflight.delete(inflightKey); }
 }
 
 // ── perte d'une stratégie suivie ────────────────────────────────────────────
@@ -253,10 +287,14 @@ function keepAverages() {
 }
 
 // ── boucle (appelée à chaque cycle du bot) ──────────────────────────────────
-let ticking = false;
+const TICK_MAX_MS = 90000;
+let ticking = false; let tickStartedAt = 0; let tickSeq = 0;
 async function tick() {
-  if (ticking) return;
-  ticking = true;
+  if (ticking) {
+    if (Date.now() - tickStartedAt < TICK_MAX_MS) return;
+    panel.lastError = 'passage bloqué : reprise forcée'; inflight.clear(); // un passage resté bloqué est abandonné au bout de 90 s
+  }
+  ticking = true; tickStartedAt = Date.now(); const myTick = ++tickSeq;
   try {
     const maxDone = maxFinishedGameNumber();
     const live = liveNumber();
@@ -264,29 +302,47 @@ async function tick() {
     if (panel.lastMax && live && live < panel.lastMax - 60) {
       panel.watches = []; panel.candidates = []; panel.seen = []; panel.units = keepAverages();
       panel.pendingMessages = panel.pendingMessages.filter((s) => s.status !== 'en attente');
+      inflight.clear();
       persist();
     }
     if (live) panel.lastMax = live;
     if (!maxDone) return;
     let changed = false;
 
-    // 1) résultat des prédictions OBSERVÉES des stratégies suivies (rattrapage 3) → gagné / perdu
+    // 1) résultat des prédictions OBSERVÉES des stratégies suivies (rattrapage 3, main du joueur, sans attendre le banquier) → gagné / perdu
     for (const w of panel.watches) {
       if (w.status !== 'en cours' || !w.followable) continue;
-      let verdict = null; let hitAt = -1;
-      for (let k = 0; k <= SOURCE_MAXR; k++) {
-        const g = state.games.get(w.target + k);
-        if (!isDone(g)) { if (w.target + k + 2 <= maxDone) verdict = 'annulé'; break; }
-        if (hasSuit(g, w.suit)) { verdict = 'gagné'; hitAt = k; break; }
-        if (k === SOURCE_MAXR) verdict = 'perdu';
-      }
-      if (!verdict) continue;
-      w.status = verdict; w.step = hitAt >= 0 ? hitAt : SOURCE_MAXR; w.closedAt = Date.now(); changed = true;
-      if (verdict === 'perdu') onUnitLoss(w.chat, w);
-      else if (verdict === 'gagné') onUnitWin(w.chat, w);
+      const r = verdictOf(w.target, w.suit, SOURCE_MAXR, maxDone, null);
+      if (!r) continue;
+      w.status = r.verdict; w.step = r.hitAt >= 0 ? r.hitAt : SOURCE_MAXR; w.closedAt = Date.now(); changed = true;
+      if (r.verdict === 'perdu') onUnitLoss(w.chat, w);
+      else if (r.verdict === 'gagné') onUnitWin(w.chat, w);
     }
 
-    // 2) stratégies « armées » (perte) : on reprend leur prochaine prédiction encore à venir
+    // 2) vérification des prédictions Miracle déjà envoyées (rattrapages, résultat, édition du message) — AVANT tout nouvel envoi,
+    //    mais une prédiction encore en cours n'empêche JAMAIS d'en envoyer une autre
+    for (const s of panel.pendingMessages) {
+      if (s.status !== 'en attente') continue;
+      const r = verdictOf(s.target, s.suit, s.maxR, maxDone, (k) => { if ((s.step || 0) < k) { s.step = k; changed = true; editSent(s, null); } });
+      if (!r) continue;
+      changed = true; s.status = r.verdict; s.resolvedAt = Date.now();
+      if (r.verdict === 'gagné') s.step = r.hitAt;
+      if (r.verdict === 'annulé') continue;
+      try { if (strategyRecap && strategyRecap.noteEntry) strategyRecap.noteEntry(s); } catch (_) { /* bilan seulement */ }
+      if (r.verdict === 'perdu') onMiracleLoss(s); else if (r.verdict === 'gagné') onMiracleWin(s);
+      editSent(s, r.verdict);
+      const st = statsOf(); const bk = st.byKind[s.kind === 'consensus' ? 'consensus' : 'loss'];
+      if (r.verdict === 'gagné') { st.won += 1; bk.won += 1; st.byStep[s.step] = (st.byStep[s.step] || 0) + 1; } else { st.lost += 1; bk.lost += 1; }
+      const bs = st.bySuit[s.suit] || (st.bySuit[s.suit] = { won: 0, lost: 0 });
+      if (r.verdict === 'gagné') bs.won += 1; else bs.lost += 1;
+    }
+    for (const s of panel.pendingMessages) {
+      if (!s.editFail || Date.now() - s.editFail < 8000) continue;
+      s.editFail = null;
+      if (s.status === 'gagné' || s.status === 'perdu') editSent(s, s.status); else if (s.status === 'en attente') editSent(s, null);
+    }
+
+    // 3) stratégies « armées » (perte) : on reprend leur prochaine prédiction encore à venir
     for (const [chat, u] of Object.entries(panel.units)) {
       if (!u.armed) continue;
       const next = panel.watches.filter((w) => w.chat === chat && w.status === 'en cours' && !w.taken && w.target > live && w.at >= (u.armedAt || 0) - 15 * 60 * 1000)
@@ -298,16 +354,20 @@ async function tick() {
       changed = true;
     }
 
-    // 3) candidats : envoi quand le jeu en direct est à ± proximité AVANT le numéro prédit
+    // 4) envois : TOUS les envois prêts partent ensemble (un envoi Telegram lent ne retarde ni les autres ni les vérifications)
+    const jobs = [];
+    //    a) après perte : dès que le jeu en direct est à ± proximité AVANT le numéro prédit
     for (const c of panel.candidates) {
       if (c.status !== 'attend la proximité') continue;
       if (c.target <= live) { c.status = 'trop tard'; panel.lateSkipped += 1; changed = true; continue; }
       if (c.target - live > panel.proximity) continue; // jeu en direct encore trop loin : on attend
-      const r = await launch({ target: c.target, suit: c.suit, kind: 'loss', src: c.src, chat: c.chat, streakAtSend: c.streak });
-      c.status = r === 'envoyé' ? 'envoyé' : r; c.sentAt = Date.now(); changed = true;
+      jobs.push(launch({ target: c.target, suit: c.suit, kind: 'loss', src: c.src, chat: c.chat, streakAtSend: c.streak }).then((r) => {
+        if (r === 'envoyé') { c.status = 'envoyé'; c.sentAt = Date.now(); changed = true; return; }
+        if (r === 'non envoyé' || r === 'aucun canal') { c.tries = (Number(c.tries) || 0) + 1; if (c.tries < 60) return; } // envoi refusé : retenté au passage suivant
+        c.status = r; c.sentAt = Date.now(); changed = true;
+      }));
     }
-
-    // 4) consensus : ≥ N stratégies (signatures distinctes) sur le même numéro + même costume → envoi sans condition
+    //    b) consensus : ≥ N stratégies (signatures distinctes) sur le même numéro + même costume → envoi sans condition
     const votes = new Map();
     for (const w of panel.watches) {
       if (w.target <= live || w.status === 'annulé') continue;
@@ -318,39 +378,10 @@ async function tick() {
     }
     for (const v of votes.values()) {
       if (v.sigs.size < panel.consensus) continue;
-      if (alreadySent(v.target)) continue;
-      const r = await launch({ target: v.target, suit: v.suit, kind: 'consensus', src: `Consensus ${v.sigs.size} stratégies`, count: v.sigs.size });
-      if (r === 'envoyé') changed = true;
+      if (alreadySent(v.target, v.suit)) continue;
+      jobs.push(launch({ target: v.target, suit: v.suit, kind: 'consensus', src: `Consensus ${v.sigs.size} stratégies`, count: v.sigs.size }).then((r) => { if (r === 'envoyé') changed = true; }));
     }
-
-    // 5) vérification des prédictions Miracle envoyées (rattrapages, résultat, édition du message)
-    for (const s of panel.pendingMessages) {
-      if (s.status !== 'en attente') continue;
-      let verdict = null; let hitAt = -1;
-      for (let k = 0; k <= s.maxR; k++) {
-        const g = state.games.get(s.target + k);
-        if (!isDone(g)) { if (s.target + k + 2 <= maxDone) verdict = 'annulé'; break; }
-        if (hasSuit(g, s.suit)) { verdict = 'gagné'; hitAt = k; break; }
-        if (k === s.maxR) verdict = 'perdu';
-        else if (s.step < k + 1) { s.step = k + 1; changed = true; editSent(s, null); }
-      }
-      if (!verdict) continue;
-      changed = true; s.status = verdict; s.resolvedAt = Date.now();
-      if (verdict === 'gagné') s.step = hitAt;
-      if (verdict === 'annulé') continue;
-      try { if (strategyRecap && strategyRecap.noteEntry) strategyRecap.noteEntry(s); } catch (_) { /* bilan seulement */ }
-      if (verdict === 'perdu') onMiracleLoss(s); else if (verdict === 'gagné') onMiracleWin(s);
-      editSent(s, verdict);
-      const st = statsOf(); const bk = st.byKind[s.kind === 'consensus' ? 'consensus' : 'loss'];
-      if (verdict === 'gagné') { st.won += 1; bk.won += 1; st.byStep[s.step] = (st.byStep[s.step] || 0) + 1; } else { st.lost += 1; bk.lost += 1; }
-      const bs = st.bySuit[s.suit] || (st.bySuit[s.suit] = { won: 0, lost: 0 });
-      if (verdict === 'gagné') bs.won += 1; else bs.lost += 1;
-    }
-    for (const s of panel.pendingMessages) {
-      if (!s.editFail || Date.now() - s.editFail < 8000) continue;
-      s.editFail = null;
-      if (s.status === 'gagné' || s.status === 'perdu') editSent(s, s.status); else if (s.status === 'en attente') editSent(s, null);
-    }
+    if (jobs.length) await Promise.all(jobs.map((j) => j.catch((e) => { panel.lastError = e.message; })));
 
     await flushNotices();
 
@@ -364,19 +395,19 @@ async function tick() {
     panel.pendingMessages = [...done, ...open];
     if (changed || panel.watches.length + panel.candidates.length + panel.pendingMessages.length !== before) persist();
   } catch (err) { panel.lastError = err.message; }
-  finally { ticking = false; }
+  finally { if (tickSeq === myTick) ticking = false; }
 }
 
 // ── réglages ────────────────────────────────────────────────────────────────
 function config() {
-  return { enabled: panel.enabled, mode: panel.mode, selected: { ...panel.selected }, channels: [...panel.channels], privateChat: panel.privateChat, maxR: panel.maxR, format: panel.format, proximity: panel.proximity, consensus: panel.consensus };
+  return { enabled: panel.enabled, mode: panel.mode, selected: { ...panel.selected }, channels: [...panel.channels], privateChat: panel.privateChat, maxR: panel.maxR, maxRv: MAXR_VERSION, format: panel.format, proximity: panel.proximity, consensus: panel.consensus };
 }
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.mode !== undefined && MODES.includes(String(patch.mode))) panel.mode = String(patch.mode);
   if (patch.channels !== undefined) panel.channels = loss.parseChannels(patch.channels);
   if (patch.privateChat !== undefined) panel.privateChat = String(patch.privateChat || '').trim().slice(0, 40);
-  if (patch.maxR !== undefined) panel.maxR = clampInt(patch.maxR, 0, 9, DEFAULT_MAXR);
+  if (patch.maxR !== undefined) { panel.maxR = clampInt(patch.maxR, 0, 9, DEFAULT_MAXR); }
   if (patch.format !== undefined) panel.format = fmt.clampFormat(patch.format);
   if (patch.proximity !== undefined) panel.proximity = clampInt(patch.proximity, 1, 20, DEFAULT_PROX);
   if (patch.consensus !== undefined) panel.consensus = clampInt(patch.consensus, 2, 30, DEFAULT_CONSENSUS);
@@ -392,7 +423,7 @@ function configure(patch = {}) {
 function wipeDay() {
   panel.units = keepAverages(); // 00h00 : séries, attentes et prédictions remises à zéro ; seule la MOYENNE des séries de pertes est gardée
   panel.watches = []; panel.candidates = []; panel.seen = []; panel.pendingMessages = []; panel.stats = null;
-  panel.sentCount = 0; panel.lastSentAt = null; panel.lateSkipped = 0; panel.duplicatesBlocked = 0; panel.privateNotices = 0; panel.lastMax = 0; panel.lastError = null;
+  panel.sentCount = 0; panel.lastSentAt = null; panel.lateSkipped = 0; panel.duplicatesBlocked = 0; panel.privateNotices = 0; panel.lastMax = 0; panel.lastError = null; panel.lastSkip = null; inflight.clear();
   persist();
 }
 function resetStats() { panel.stats = emptyStats(); panel.watches = []; panel.candidates = []; panel.units = {}; panel.pendingMessages = panel.pendingMessages.filter((s) => s.status === 'en attente'); persist(); }
@@ -425,7 +456,7 @@ function status() {
     won: st.won, lost: st.lost, rate: pct(st.won, resolved), resolved, byKind: st.byKind,
     steps: Object.entries(st.byStep || {}).map(([k, n]) => ({ step: Number(k), n: Number(n) })).sort((a, b) => a.step - b.step),
     recent: panel.pendingMessages.slice(-12).reverse().map((s) => ({ target: s.target, suit: s.suit, status: s.status, step: s.step, kind: s.kind, src: s.origin && s.origin.src, count: s.origin && s.origin.count })),
-    lastError: panel.lastError, channelTitles: panel.channelTitles,
+    lastError: panel.lastError, lastSkip: panel.lastSkip, channelTitles: panel.channelTitles,
   };
 }
 
@@ -444,6 +475,7 @@ function applySaved(saved) {
   panel.channels = loss.parseChannels(c.channels);
   panel.privateChat = String(c.privateChat || '').trim().slice(0, 40);
   panel.maxR = clampInt(c.maxR, 0, 9, DEFAULT_MAXR);
+  if (c.maxRv !== MAXR_VERSION && panel.maxR === 2) panel.maxR = DEFAULT_MAXR; // ancien défaut (2) jamais choisi → 3 ; un autre choix est gardé
   panel.format = fmt.clampFormat(c.format || DEFAULT_FORMAT);
   panel.proximity = clampInt(c.proximity, 1, 20, DEFAULT_PROX);
   panel.consensus = clampInt(c.consensus, 2, 30, DEFAULT_CONSENSUS);

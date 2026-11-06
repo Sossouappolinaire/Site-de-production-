@@ -34,23 +34,37 @@ async function tryOne(url) {
   finally { try { if (c) await c.end(); } catch (_) { /* ignoré */ } }
 }
 
-// Renseigne le lien de la base (database-url.js) avec la première adresse Supabase qui répond.
-async function ensureDatabaseUrl() {
-  const { setDatabaseUrl } = require('./database-url');
-  if (String(process.env.DATABASE_URL || '').trim()) {
-    console.log('ℹ️  DATABASE_URL de Render ignoré (ancienne base) : seule Supabase est utilisée.');
-    delete process.env.DATABASE_URL;
-  }
+// Un tour : essaie toutes les adresses dans l'ordre, retient la première qui répond.
+async function tryAll(log) {
   for (const url of CANDIDATES) {
     const r = await tryOne(url);
     if (r === true) {
+      const { setDatabaseUrl } = require('./database-url');
       setDatabaseUrl(url);
       console.log('🔌 Base Supabase connectée :', mask(url));
       return url;
     }
-    console.log('ℹ️  Adresse Supabase refusée :', mask(url), '—', String(r).slice(0, 120));
+    if (log) console.log('ℹ️  Adresse Supabase refusée :', mask(url), '—', String(r).slice(0, 120));
   }
-  console.error('⚠️ Aucune adresse Supabase n\'a répondu — le site démarre sans base.');
+  return '';
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Renseigne le lien de la base (database-url.js) avec la première adresse Supabase qui répond.
+// Au démarrage : jusqu'à 3 tours (2 s puis 5 s entre les tours) — une base qui se réveille ou un réseau pas encore prêt ne suffit plus à
+// démarrer sans base. Si tout échoue, db.js relance ensureDatabaseUrl() toutes les 30 s (reconnexion automatique, voir bot.js ensureDb).
+async function ensureDatabaseUrl(rounds = 3) {
+  if (String(process.env.DATABASE_URL || '').trim()) {
+    console.log('ℹ️  DATABASE_URL de Render ignoré (ancienne base) : seule Supabase est utilisée.');
+    delete process.env.DATABASE_URL;
+  }
+  for (let i = 0; i < rounds; i++) {
+    const url = await tryAll(true);
+    if (url) return url;
+    if (i < rounds - 1) await sleep(i === 0 ? 2000 : 5000);
+  }
+  console.error('⚠️ Aucune adresse Supabase n\'a répondu — le site démarre sans base et réessaie toutes les 30 s.');
   return '';
 }
 

@@ -233,6 +233,8 @@ function mask(u) {
 async function connect(newUrl) {
   // le lien est fixé par db-link.js : toute tentative de le remplacer (/setdb, panel) est ignorée
   url = databaseUrl() || url;
+  // aucune adresse retenue au démarrage (base injoignable) : on réessaie toutes les adresses intégrées (db-link.js) avant d'abandonner
+  if (!url) { try { url = (await require('./db-link').ensureDatabaseUrl(1)) || ''; } catch (_) { url = ''; } }
   ready = false;
   lastError = null;
   if (pool) { try { await pool.end(); } catch (_) {} pool = null; }
@@ -249,6 +251,8 @@ async function connect(newUrl) {
   } catch (e) {
     lastError = e.message;
     pool = null;
+    // l'adresse retenue ne répond plus : elle est oubliée, le prochain passage (30 s) reteste toutes les adresses
+    try { require('./database-url').setDatabaseUrl(''); url = ''; } catch (_) { /* ignoré */ }
   }
   return status();
 }

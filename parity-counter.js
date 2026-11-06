@@ -34,6 +34,7 @@ const state = {
   banker: { pair: zeros(), impair: zeros(), suits: suitGrid() },
   games: 0,
   lastGameNumber: null,
+  dz: { player: {}, banker: {} },        // v130 : costumes vus par dizaine et par fin de numéro { base: [ [costumes] | null ×10 ] } (bilan de l'heure)
   prevTop: { player: null, banker: null }, // v126 : costume(s) au taux max de chaque fin 0-9 à la fin de la dizaine précédente (comparaison du récap)
   lastRecap: null,
   sinceAt: Date.now(),
@@ -99,17 +100,26 @@ function persistCounts() {
   if (!db.ready || countsTimer) return;
   countsTimer = setTimeout(() => {
     countsTimer = null;
-    const saved = { slot: slotKey(), player: state.player, banker: state.banker, prevTop: state.prevTop, games: state.games, lastGameNumber: state.lastGameNumber, sinceAt: state.sinceAt };
+    const saved = { slot: slotKey(), player: state.player, banker: state.banker, dz: state.dz, prevTop: state.prevTop, games: state.games, lastGameNumber: state.lastGameNumber, sinceAt: state.sinceAt };
     db.setSetting(COUNTS_KEY, JSON.stringify(saved)).catch((e) => { state.lastError = e.message; });
   }, 1500);
   if (countsTimer.unref) countsTimer.unref();
 }
 const okSide = (s) => s && Array.isArray(s.pair) && s.pair.length === 10 && Array.isArray(s.impair) && s.impair.length === 10 && s.suits && Array.isArray(s.suits.pair) && s.suits.pair.length === 10 && Array.isArray(s.suits.impair) && s.suits.impair.length === 10;
+const okDz = (d) => {
+  const out = { player: {}, banker: {} };
+  for (const side of ['player', 'banker']) {
+    const src = d && typeof d === 'object' && d[side] && typeof d[side] === 'object' ? d[side] : {};
+    for (const [base, row] of Object.entries(src)) if (Number.isInteger(Number(base)) && Array.isArray(row) && row.length === 10) out[side][base] = row.map((x) => (Array.isArray(x) ? x.filter((y) => typeof y === 'string') : null));
+  }
+  return out;
+};
 function applyCounts(c) {
   if (!c || typeof c !== 'object' || c.slot !== slotKey() || !okSide(c.player) || !okSide(c.banker)) return false;
   state.player = c.player; state.banker = c.banker;
   const okTop = (t) => Array.isArray(t) && t.length === 10 && t.every((x) => typeof x === 'string');
   state.prevTop = { player: c.prevTop && okTop(c.prevTop.player) ? c.prevTop.player : null, banker: c.prevTop && okTop(c.prevTop.banker) ? c.prevTop.banker : null };
+  state.dz = okDz(c.dz);
   state.games = Number(c.games) || 0; state.lastGameNumber = Number.isInteger(c.lastGameNumber) ? c.lastGameNumber : null; state.sinceAt = Number(c.sinceAt) || Date.now();
   return true;
 }
@@ -117,6 +127,7 @@ function applyCounts(c) {
 function resetCounts() {
   state.player = { pair: zeros(), impair: zeros(), suits: suitGrid() }; state.banker = { pair: zeros(), impair: zeros(), suits: suitGrid() };
   state.games = 0;
+  state.dz = { player: {}, banker: {} };
   state.prevTop = { player: null, banker: null }; // nouvelle tranche : plus de dizaine précédente à comparer
   state.sinceAt = Date.now();
   persistCounts();
@@ -140,6 +151,12 @@ function bump(round) {
   // costumes des cartes du côté, rangés dans la même case (parité, chiffre) que le jeu
   if (pp) for (const x of strategies.suitsOf(round.playerSuits)) if (x in state.player.suits[pp][d]) state.player.suits[pp][d][x] += 1;
   if (bp) for (const x of strategies.suitsOf(round.bankerSuits)) if (x in state.banker.suits[bp][d]) state.banker.suits[bp][d][x] += 1;
+  // v130 : costumes vus à cette fin de numéro dans cette dizaine (pour le bilan de l'heure)
+  const base = Math.floor(num / 10) * 10;
+  const rec = (side, list) => { const m = state.dz[side]; const row = m[base] || (m[base] = Array(10).fill(null)); row[d] = [...new Set(list)]; };
+  if (pp) rec('player', strategies.suitsOf(round.playerSuits));
+  if (bp) rec('banker', strategies.suitsOf(round.bankerSuits));
+  for (const side of ['player', 'banker']) { const keys = Object.keys(state.dz[side]).map(Number).sort((a, b) => a - b); for (const k of keys.slice(0, Math.max(0, keys.length - 40))) delete state.dz[side][k]; }
   state.games += 1;
   persistCounts();
   return true;
@@ -161,12 +178,18 @@ function suitCells(cell) {
 // dernier jeu terminé (jeu #845 → #840 à #849) et les costumes sont rangés du plus fréquent au moins fréquent.
 // Sans aucun jeu pour ce chiffre : « #840 ➔ — ».
 const pctInt = (count, total) => (total ? Math.round((count / total) * 100) : 0);
+// v131 : barre de progression ▰▰▰▰▰▱▱▱▱▱ (10 cases) pour lire un taux d'un coup d'œil
+const bar = (pc, n = 10) => { const f = Math.max(0, Math.min(n, Math.round((pc / 100) * n))); return '▰'.repeat(f) + '▱'.repeat(n - f); };
+const TITLE_RULE = '━━━━━━━━━━━━━━━━';
+const SUB_RULE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
 function suitLine(label, cell) {
   const cells = suitCells(cell);
   const total = cells.reduce((n, r) => n + r.count, 0);
-  if (!total) return `${label} ➔ —`;
+  if (!total) return `${label} ➔ aucun jeu`;
   const sorted = cells.map((r, i) => ({ ...r, i })).sort((x, y) => y.count - x.count || x.i - y.i); // égalité : ordre ❤️ ♦️ ♠️ ♣️
-  return `${label} ➔ ` + sorted.map((r) => `(${r.suit}${pctInt(r.count, total)}%)`).join(' ');
+  const shown = sorted.filter((r) => r.count > 0); // v131 : les costumes à 0 % ne sont plus affichés (message plus court, plus lisible)
+  const lead = shown.length > 0 && shown.filter((r) => r.count === shown[0].count).length === 1; // un seul costume en tête → 👑
+  return `${label} ➔ ` + shown.map((r, k) => `${k === 0 && lead ? '👑 ' : ''}${r.suit} ${pctInt(r.count, total)} %`).join('  ·  ');
 }
 // Liste unique de 10 lignes (une par fin de numéro 0 à 9), sans titre : les costumes des jeux à point pair ET impair sont
 // réunis pour chaque chiffre. Le nombre de jeux pair / impair reste affiché dans le résumé.
@@ -186,7 +209,7 @@ function listBlock(pairSuits, impairSuits, gameNumber, digits = ALL) {
     for (const x of SUIT_ORDER) merged[x] = (p[x] || 0) + (i[x] || 0);
     if (base == null) { lines.push(suitLine(DIGITS[d], merged)); continue; }
     const passed = d <= cur;
-    lines.push(`${passed ? '✅' : '⏳'} ${suitLine(`#${base + d}`, merged)}${d === cur ? ' ◀' : ''}`);
+    lines.push(`${passed ? '✅' : '⏳'} ${suitLine(`#${base + d}`, merged)}${d === cur ? '   ◀ dernier jeu' : ''}`);
   }
   return lines.join('\n');
 }
@@ -222,25 +245,98 @@ const SIDES = {
 };
 function sidesToSend() { return state.target === 'player' ? ['player'] : state.target === 'banker' ? ['banker'] : ['player', 'banker']; }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+const hhmm = (d) => `${pad2(d.getHours())}h${pad2(d.getMinutes())}`;
+const plural = (n, w) => `${n} ${w}${n > 1 ? 'x' : ''}`;
+const RULE = '━━━━━━━━━━━━━━━';
+
+// v130 : message clair et aéré — un titre par bloc, une information par ligne, jamais de mots ou de phrases collés
 function buildMessage(side, gameNumber, opts = {}) {
   const s = SIDES[side]; const counts = state[side];
   const pairTotal = counts.pair.reduce((n, x) => n + x, 0);
   const impairTotal = counts.impair.reduce((n, x) => n + x, 0);
   const bilan = opts && opts.bilan;
-  const pad = (n) => String(n).padStart(2, '0');
-  const now = new Date();
+  const g = Number(gameNumber);
+  const known = gameNumber != null && gameNumber !== '' && Number.isInteger(g) && g >= 0;
+  const both = pairTotal + impairTotal;
+  const pairPct = pctInt(pairTotal, both); const impairPct = both ? 100 - pairPct : 0;
   return [
-    ...(bilan ? [`🕐 BILAN DE L'HEURE — ${pad(now.getHours())}h${pad(now.getMinutes())}`, ''] : []),
-    listBlock(counts.suits && counts.suits.pair, counts.suits && counts.suits.impair, gameNumber),
-    ...(Number.isInteger(Number(gameNumber)) && gameNumber != null ? ['✅ déjà passé  ·  ⏳ pas encore passé  ·  ◀ dernier jeu'] : []),
+    ...(bilan ? [`🕐 BILAN DE L'HEURE — ${hhmm(new Date())}`, TITLE_RULE, ''] : []),
+    `${s.icon} ${s.name.toUpperCase()} — COMPTE PARITÉ`,
+    TITLE_RULE,
+    ...(known ? [`🎮 Dernier jeu terminé : #${g}`] : []),
     '',
-    ' RÉSUMÉ STATISTIQUE',
-    '━━━━━━━━━━━━━━━',
-    `${s.icon} ${s.name} · pair ${pairTotal} jeu${pairTotal > 1 ? 'x' : ''} · impair ${impairTotal} jeu${impairTotal > 1 ? 'x' : ''}`,
+    '📊 COSTUMES PAR FIN DE NUMÉRO',
+    'Du plus fréquent au moins fréquent · 👑 = costume en tête',
+    SUB_RULE,
+    listBlock(counts.suits && counts.suits.pair, counts.suits && counts.suits.impair, gameNumber),
+    ...(known ? [SUB_RULE, '✅ déjà passé  ·  ⏳ pas encore passé  ·  ◀ dernier jeu'] : []),
+    '',
+    TITLE_RULE,
+    '📋 RÉSUMÉ STATISTIQUE',
+    TITLE_RULE,
+    `${s.icon} ${s.name}`,
+    `➖ Pair    ${bar(pairPct)} ${pairTotal} jeux (${pairPct} %)`,
+    `➕ Impair  ${bar(impairPct)} ${impairTotal} jeux (${impairPct} %)`,
+    `📊 Total compté depuis le dernier reset : ${state.games} jeux`,
     ...(bilan ? ['', details.detailsText(counts.pair, counts.impair, `${s.icon} ${s.name}`)] : []),
-    `🎮 Jeu #${gameNumber ?? '—'}  |  📊 ${state.games} jeu(x) depuis dernier reset`,
-    bilan ? '🔄 Compteur remis à zéro' : `⏭ Reset dans ${formatCountdown(msUntilNextReset())}  (Intervalle ${state.intervalMin}min)`,
+    '',
+    ...(bilan ? ['🔄 Compteur remis à zéro'] : [`⏭ Prochain reset : dans ${formatCountdown(msUntilNextReset())}`, `⏱ Intervalle : ${state.intervalMin} min`]),
   ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// v130 — BILAN DES DIZAINES, envoyé à chaque heure pile (juste après le bilan de l'heure, avant la remise à zéro) :
+// tout ce qui a été vu dans les dizaines de l'heure, puis UN costume proposé par fin de numéro (0 à 9) = le costume au taux le plus élevé
+// de cette fin de numéro (même taux que les lignes du compteur). Égalité au taux max : les costumes à égalité sont tous proposés.
+// ---------------------------------------------------------------------------
+function proposalOf(side) {
+  return palier(side).map((row) => {
+    if (!row.total) return { digit: row.digit, total: 0, top: [], pct: 0, ranked: [] };
+    const idx = (x) => SUIT_ORDER.indexOf(x.suit);
+    const ranked = [...row.cells].sort((x, y) => y.count - x.count || idx(x) - idx(y));
+    const max = ranked[0].count;
+    return { digit: row.digit, total: row.total, top: max ? ranked.filter((c) => c.count === max).map((c) => c.suit) : [], pct: ranked[0].pct, ranked };
+  });
+}
+function buildProposalMessage(side) {
+  const s = SIDES[side];
+  const rows = proposalOf(side);
+  const bases = Object.keys(state.dz[side] || {}).map(Number).sort((a, b) => a - b);
+  const since = new Date(state.sinceAt || Date.now());
+  const head = [
+    `🕐 BILAN DES DIZAINES — ${hhmm(new Date())}`,
+    TITLE_RULE,
+    `${s.icon} ${s.name.toUpperCase()} — COMPTE PARITÉ`,
+    '',
+    `⏱ Période : de ${hhmm(since)} à ${hhmm(new Date())}`,
+    `🎮 Jeux comptés : ${state.games}`,
+    `🔟 Dizaines vues : ${bases.length}`,
+    ...(bases.length ? ['', ...bases.map((b) => `   ▸ #${b} à #${b + 9}`)] : []),
+    '',
+    TITLE_RULE,
+    '💡 COSTUME PROPOSÉ PAR FIN DE NUMÉRO',
+    TITLE_RULE,
+    'Costume au taux le plus élevé de chaque fin de numéro,',
+    'calculé sur toutes les dizaines de l\u2019heure.',
+  ];
+  const block = (r, withDetail) => {
+    const lines = ['', SUB_RULE];
+    if (!r.total) { lines.push(`${DIGITS[r.digit]} Fin ${r.digit} — aucun jeu`); return lines; }
+    const head1 = r.top.length > 1 ? `${DIGITS[r.digit]} Fin ${r.digit}  ➜  ⚖️ ${r.top.join(' ')} à égalité` : `${DIGITS[r.digit]} Fin ${r.digit}  ➜  ✅ ${r.top[0]}`;
+    lines.push(head1);
+    lines.push(`   ${bar(r.pct)} ${r.pct} %`);
+    if (withDetail) {
+      const seen = bases.map((b) => { const row = (state.dz[side][b] || [])[r.digit]; return row && row.length ? `#${b + r.digit} ${row.join('')}` : null; }).filter(Boolean);
+      if (seen.length) lines.push(`   👁 Vu : ${seen.join('  ·  ')}`);
+    }
+    lines.push(`   📊 ${r.ranked.filter((c) => c.count > 0).map((c) => `${c.suit} ${c.pct} %`).join('  ·  ')}`);
+    return lines;
+  };
+  const tail = ['', TITLE_RULE, '✅ = costume proposé  ·  ⚖️ = égalité  ·  👁 = costumes vus', 'Barre = taux du costume proposé'];
+  let text = [...head, ...rows.flatMap((r) => block(r, true)), ...tail].join('\n');
+  if (text.length > 3900) text = [...head, ...rows.flatMap((r) => block(r, false)), ...tail].join('\n'); // trop long pour Telegram : on retire le détail par dizaine
+  return text;
 }
 
 // publie le compteur À CHAQUE FIN DE JEU (v122) : un message par côté choisi (joueur, banquier ou les deux), quel que soit le gagnant
@@ -274,18 +370,38 @@ function buildDizaineMessage(side, gameNumber) {
   const s = SIDES[side]; const now = topSuitsOf(side); const prev = state.prevTop[side];
   const g = Number(gameNumber);
   const base = Number.isInteger(g) && g >= 0 ? Math.floor(g / 10) * 10 : null;
-  const cell = (d) => `${d}:${now[d]}${now[d] === '—' ? '' : (prev && prev[d] !== now[d] ? '🔰' : '✅')}`;
+  const D = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+  const cell = (d) => `${D[d]} ${now[d]}${now[d] === '—' ? '' : (prev && prev[d] !== now[d] ? ' 🔰' : ' ✅')}`;
   const lines = [];
-  for (let d = 0; d < 10; d += 2) lines.push(`${cell(d)} ⚖️ ${cell(d + 1)}`);
-  // en bas : pour chaque variation (🔰), le costume qu'il y avait à la dizaine précédente ➜ le costume qui l'a remplacé
-  const changes = prev ? ALL.filter((d) => now[d] !== '—' && prev[d] !== now[d]).map((d) => `🔰 ${d} : ${prev[d]} ➜ ${now[d]}`) : [];
+  for (let d = 0; d < 10; d += 2) lines.push(`${cell(d)}   ⚖️   ${cell(d + 1)}`);
+  // v131 : bloc CHANGEMENTS lisible — pour chaque fin de numéro qui a varié : avant ➜ maintenant + la nature du changement
+  //   🆕 premier costume (rien à la dizaine précédente) · ➕ costume(s) ajouté(s) · ➖ costume(s) retiré(s) · 🔁 costume remplacé ; les fins identiques sont listées à part
+  const D2 = D;
+  const suitsIn = (t) => SUIT_ORDER.filter((x) => String(t || '').includes(x));
+  const changes = []; const same = [];
+  if (prev) {
+    for (const d of ALL) {
+      if (now[d] === '—' && prev[d] === '—') continue;
+      if (now[d] === prev[d]) { same.push(D2[d]); continue; }
+      if (now[d] === '—') continue; // plus aucun jeu pour cette fin : rien à comparer
+      const before = suitsIn(prev[d]); const after = suitsIn(now[d]);
+      if (prev[d] === '—' || !before.length) { changes.push(`${D2[d]} Fin ${d} : 🆕 ${now[d]}  (premier costume)`); continue; }
+      const added = after.filter((x) => !before.includes(x)); const removed = before.filter((x) => !after.includes(x));
+      const kind = added.length && removed.length ? `🔁 remplacé : ${removed.join('')} ➜ ${added.join('')}` : added.length ? `➕ ajouté : ${added.join('')}` : `➖ retiré : ${removed.join('')}`;
+      changes.push(`${D2[d]} Fin ${d} : ${prev[d]} ➜ ${now[d]}`, `      ${kind}`);
+    }
+  }
   return [
-    `${s.icon} ${s.name} · fin de dizaine${base != null ? ` #${base}-#${base + 9}` : ''}`,
-    '',
+    `${s.icon} ${s.name.toUpperCase()} — COMPTE PARITÉ`,
+    TITLE_RULE,
+    `🔟 FIN DE DIZAINE${base != null ? ` · #${base} à #${base + 9}` : ''}`,
+    'Costume au taux le plus élevé de chaque fin de numéro',
+    SUB_RULE,
     ...lines,
-    ...(changes.length ? ['', `Récapitulatif :${base != null ? ` #${base}-#${base + 9}` : ''}`, '', ...changes] : []),
-    '',
-    '✅ même costume que la dizaine précédente  ·  🔰 variation',
+    ...(prev ? [SUB_RULE, `🔄 CHANGEMENTS${base != null ? ` · #${base}-#${base + 9}` : ''}`, 'Dizaine précédente ➜ cette dizaine', '', ...(changes.length ? changes : ['Aucun changement : tous les costumes sont identiques ✅']), ...(same.length && changes.length ? ['', `✅ Inchangées : ${same.join(' ')}`] : [])] : []),
+    SUB_RULE,
+    '✅ même costume que la dizaine précédente',
+    '🔰 variation par rapport à la dizaine précédente',
   ].join('\n');
 }
 async function dizaineRecap(gameNumber) {
@@ -327,6 +443,9 @@ async function sendBilan() {
   for (const side of sidesToSend()) {
     try { await sendFn(state.channelId, buildMessage(side, state.lastGameNumber, { bilan: true })); ok = true; state.sentCount += 1; state.lastSentAt = Date.now(); state.lastError = null; }
     catch (e) { state.lastError = e.message; console.error('Compte parité (bilan) :', e.message); }
+    // v130 : bilan des dizaines de l'heure avec un costume proposé par fin de numéro
+    try { await sendFn(state.channelId, buildProposalMessage(side)); state.sentCount += 1; state.lastSentAt = Date.now(); state.lastError = null; }
+    catch (e) { state.lastError = e.message; console.error('Compte parité (bilan des dizaines) :', e.message); }
   }
   return ok;
 }
@@ -349,6 +468,7 @@ async function test(gameNumber) {
   const errors = []; let sent = 0;
   for (const side of sidesToSend()) {
     try { await sendFn(state.channelId, buildMessage(side, gameNumber)); sent += 1; } catch (e) { errors.push(e.message); }
+    if (state.games) { try { await sendFn(state.channelId, buildProposalMessage(side)); sent += 1; } catch (e) { errors.push(e.message); } } // v130 : aperçu du bilan des dizaines
   }
   if (errors.length) state.lastError = errors[0];
   return { ok: sent > 0, sent, errors };
@@ -366,12 +486,12 @@ function status(gameNumber) {
     ...config(),
     games: state.games, sinceAt: state.sinceAt, nextResetMs: msUntilNextReset(),
     player: view(state.player), banker: view(state.banker),
-    previews: sidesToSend().map((side) => ({ side, text: buildMessage(side, gameNumber) })),
+    previews: [...sidesToSend().map((side) => ({ side, text: buildMessage(side, gameNumber) })), ...sidesToSend().filter(() => state.games > 0).map((side) => ({ side, text: buildProposalMessage(side) }))],
     sentCount: state.sentCount, lastSentAt: state.lastSentAt, lastError: state.lastError,
   };
 }
 
 module.exports = {
   state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb,
-  palier, bump, publish, onFinished, buildMessage, buildDizaineMessage, dizaineRecap, topSuitsOf, sendBilan, resetCounts, scheduleReset, test, status,
+  palier, bump, publish, onFinished, buildMessage, buildProposalMessage, proposalOf, buildDizaineMessage, dizaineRecap, topSuitsOf, sendBilan, resetCounts, scheduleReset, test, status,
 };
