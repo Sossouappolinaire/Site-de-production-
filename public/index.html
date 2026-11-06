@@ -4502,6 +4502,8 @@ Faites-en bon usage !
           </div>
           <div class="toolbar"><button class="button small primary" onclick="saveEndDigitTrio()">Enregistrer</button><button class="button small ghost" onclick="testEndDigitTrio()">Envoyer un test</button><button class="button small ghost" onclick="unblockEndDigitTrio()">Libérer les prédictions bloquées</button><button class="button small danger" onclick="resetEndDigitTrio()">Remettre à zéro</button><button class="button small ghost" onclick="refresh().then(endDigitTrioPage)">Actualiser</button></div>
           ${et.lastError ? `<p class="small" style="color:#f87171">${esc(et.lastError)}</p>` : ''}
+          ${et.lastSkip ? `<p class="small" style="color:#fbbf24">Dernier envoi refusé par le canal ${esc(et.lastSkip.chat)} : ${esc(et.lastSkip.why)}.</p>` : ''}
+          ${plan && plan.softSample ? `<p class="small" style="color:#fbbf24">Début de journée : aucune fin de numéro n’a encore ${esc(et.minN ?? 30)} jeux, le choix s’appuie sur un échantillon réduit (5 jeux minimum).</p>` : ''}
           <p class="small" style="margin-top:10px">${sideLine('🎯 Trio', et.main)}</p>
           <p class="small">${sideLine('🔁 Suivi', et.follow)}</p>
           <p class="small muted">En cours : ${et.waiting || 0} • prochaine analyse à la fin du jeu <b>${et.nextAnalysisAfter != null ? '№' + et.nextAnalysisAfter : '—'}</b>.</p>
@@ -4802,13 +4804,14 @@ Faites-en bon usage !
             <h3 style="margin-top:16px">Envoi et réglages</h3>
             <div class="field"><label>ID ou @nom du canal d'envoi</label><input id="mpChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
             <div class="field"><label>Chat privé pour les alertes de pertes (vide = administrateur)</label><input id="mpPrivate" value="${esc(p.privateChat || '')}" placeholder="ID du chat privé"></div>
-            <div class="field"><label>Rattrapages des prédictions Miracle</label><input id="mpMaxR" type="number" min="0" max="9" value="${p.maxR ?? 2}"></div>
+            <div class="field"><label>Rattrapages des prédictions Miracle</label><input id="mpMaxR" type="number" min="0" max="9" value="${p.maxR ?? 3}"></div>
             <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 107))})</label><input id="mpFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 107))}" value="${p.format ?? 107}"></div>
             <div class="field"><label>Proximité : le jeu en direct doit être à … numéro(s) avant</label><input id="mpProx" type="number" min="1" max="20" value="${p.proximity ?? 2}"></div>
             <div class="field"><label>Consensus : nombre de stratégies d'accord</label><input id="mpCons" type="number" min="2" max="30" value="${p.consensus ?? 5}"></div>
             <label class="check"><input id="mpEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer « Miracle prediction »</label>
             <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveMiracle()">Enregistrer</button><button class="button small ghost" onclick="testMiracle()">Envoyer un test</button><button class="button small danger" onclick="resetMiracle()">Remettre à zéro</button></div>
             ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+            ${p.lastSkip ? `<p class="small" style="color:#fbbf24">Dernier envoi refusé par le canal ${esc(p.lastSkip.chat)} : ${esc(p.lastSkip.why)}.</p>` : ''}
             <p class="small" style="margin-top:10px">Jeu en direct : <b>${p.live || '—'}</b> • stratégies suivies : <b>${p.inScopeCount || 0}</b> (dont <b>${p.followableCount || 0}</b> à 3 rattrapages) • prédictions observées : <b>${p.following || 0}</b> • en attente de proximité : <b>${(p.candidates || []).length}</b></p>
             <p class="small">Envoyées : <b>${p.sentCount || 0}</b> • gagnées <b>${p.won || 0}</b> / perdues <b>${p.lost || 0}</b> (${p.rate || 0} %) • après perte : ${(p.byKind || {}).loss ? p.byKind.loss.won + '✅ ' + p.byKind.loss.lost + '❌' : '—'} • consensus : ${(p.byKind || {}).consensus ? p.byKind.consensus.won + '✅ ' + p.byKind.consensus.lost + '❌' : '—'} • alertes privées : ${p.privateNotices || 0} • trop tard : ${p.lateSkipped || 0}</p>
           </div>
