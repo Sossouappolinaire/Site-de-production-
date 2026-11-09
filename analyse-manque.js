@@ -4,8 +4,9 @@
 // « 🚨 ALERTE JOUEUR » part ; quand il revient, un message « ✅ RÉAPPARITION JOUEUR » indique combien de jeux il a manqué.
 //   🚨 ALERTE JOUEUR - Jeu N°314 🚨 / N311: ♠️ ♦️ | N312: … / Carte(s) disparue(s): ♥️ / 🔴 Disparition commencée au Jeu N°314
 //   ✅ RÉAPPARITION JOUEUR ✅ / ♥️ : Disparue au N°314 -> Revenue au N°316 (manqué 5 jeux) / Jeu actuel: N°316 -> ♥️ ♣️
-// Les messages partent avec le MÊME token que le reste du site (bot principal) ; seul l'ID du chat / canal destinataire se règle sur la page
-// (vide = chat privé de l'administrateur). Désactivé par défaut. Un nouveau sabot remet tout à zéro.
+// Les messages sont reçus par le bot dont on saisit l'API token sur la page, dans SON CHAT PRIVÉ (la personne qui a écrit /start à ce bot,
+// administrateur du site ou non — détecté automatiquement). Token laissé vide = bot principal du site. Un ID de chat / canal peut
+// aussi être imposé. Désactivé par défaut. Un nouveau sabot remet tout à zéro.
 'use strict';
 
 const store = require('./store');
@@ -19,7 +20,10 @@ const MAX_RECENT = 12;
 
 const panel = {
   enabled: false,
-  chatId: '',
+  token: '',      // API token du bot qui reçoit les alertes (vide = bot principal du site)
+  botName: '',
+  chatId: '',     // ID imposé (facultatif)
+  privateChatId: '', // chat privé détecté après /start
   threshold: DEFAULT_THRESHOLD,
   log: [],        // { at, kind: 'alerte'|'retour', suits, number, sent }
   open: {},       // suit → { alertGame, since } (alertes envoyées, en attente de réapparition)
@@ -34,14 +38,17 @@ const silent = {};     // suit → true : déjà au seuil au démarrage, jamais 
 // Persistance (data.json + base)
 // ---------------------------------------------------------------------------
 function persist() {
-  const saved = { enabled: panel.enabled, chatId: panel.chatId, threshold: panel.threshold, open: panel.open, log: panel.log.slice(-MAX_LOG) };
+  const saved = { enabled: panel.enabled, token: panel.token, botName: panel.botName, chatId: panel.chatId, privateChatId: panel.privateChatId, threshold: panel.threshold, open: panel.open, log: panel.log.slice(-MAX_LOG) };
   try { store.patch({ analyseManque: saved }); } catch (_) {}
   if (db.ready) db.setSetting('analyse_manque_state', JSON.stringify(saved)).catch((e) => { panel.lastError = e.message; });
 }
 function applySaved(s) {
   if (!s || typeof s !== 'object') return;
   panel.enabled = s.enabled === true;
+  panel.token = typeof s.token === 'string' ? s.token.trim() : '';
+  panel.botName = typeof s.botName === 'string' ? s.botName : '';
   panel.chatId = s.chatId != null ? String(s.chatId).trim() : '';
+  panel.privateChatId = s.privateChatId != null ? String(s.privateChatId).trim() : '';
   const th = Math.round(Number(s.threshold));
   panel.threshold = Number.isFinite(th) && th >= 2 && th <= 50 ? th : DEFAULT_THRESHOLD;
   panel.open = s.open && typeof s.open === 'object' ? s.open : {};
@@ -107,14 +114,57 @@ let sender = null;
 let adminIdFn = null;
 function setSender(fn) { sender = typeof fn === 'function' ? fn : null; }
 function setAdminId(fn) { adminIdFn = typeof fn === 'function' ? fn : null; }
-const target = () => panel.chatId || (adminIdFn ? adminIdFn() : '') || '';
+const siteBot = () => (sender ? sender() : null);
+
+// appel direct à l'API Telegram avec le token saisi sur la page
+async function tg(method, body, token) {
+  const tk = token || panel.token;
+  if (!tk) throw new Error('API token non renseigné.');
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${tk}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), signal: ctl.signal });
+    const j = await res.json().catch(() => ({}));
+    if (!j.ok) throw new Error(j.description || `Telegram HTTP ${res.status}`);
+    return j.result;
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'Telegram ne répond pas (20 s).' : e.message);
+  } finally { clearTimeout(timer); }
+}
+
+// chat privé du bot : la dernière personne qui lui a écrit (/start), qu'elle soit administrateur du site ou non
+async function detectChat() {
+  const ups = await tg('getUpdates', { limit: 100, allowed_updates: ['message', 'channel_post', 'my_chat_member'] });
+  const chats = [];
+  for (const u of (Array.isArray(ups) ? ups : []).reverse()) {
+    const c = (u.message && u.message.chat) || (u.channel_post && u.channel_post.chat) || (u.my_chat_member && u.my_chat_member.chat);
+    if (c && c.id != null && !chats.some((x) => x.id === c.id)) chats.push({ id: c.id, title: c.title || [c.first_name, c.last_name].filter(Boolean).join(' ') || c.username || String(c.id), type: c.type });
+  }
+  if (!chats.length) throw new Error('Aucun chat trouvé : ouvre le bot dans Telegram, écris-lui /start, puis clique « Détecter ».');
+  const priv = chats.find((c) => c.type === 'private') || chats[0];
+  panel.privateChatId = String(priv.id);
+  persist();
+  return { chat: priv, chats };
+}
+
 async function send(text) {
   try {
-    const bot = sender ? sender() : null;
-    if (!bot) { panel.lastError = 'Aucun token Telegram configuré sur le site (page Envois / réglages du bot).'; return false; }
-    const to = target();
-    if (!to) { panel.lastError = 'Aucun destinataire : renseigne un ID de chat / canal (ou ADMIN_ID pour ton chat privé).'; return false; }
-    const raw = bot.sendMessageUnguarded || bot.sendMessage.bind(bot); // jamais bloqué par le garde de canaux
+    if (panel.token) { // bot saisi sur la page → chat privé (ou ID imposé)
+      let to = panel.chatId || panel.privateChatId;
+      if (!to) { try { await detectChat(); to = panel.privateChatId; } catch (e) { panel.lastError = e.message; return false; } }
+      try { await tg('sendMessage', { chat_id: to, text, parse_mode: 'HTML' }); }
+      catch (e) {
+        if (!panel.chatId && /chat not found|blocked|deactivated/i.test(e.message)) { panel.privateChatId = ''; persist(); }
+        throw e;
+      }
+      panel.lastError = null; return true;
+    }
+    // aucun token saisi : bot principal du site, vers le chat imposé ou l'administrateur
+    const bot = siteBot();
+    if (!bot) { panel.lastError = 'API token non renseigné (et aucun token configuré sur le site).'; return false; }
+    const to = panel.chatId || (adminIdFn ? adminIdFn() : '') || '';
+    if (!to) { panel.lastError = 'Aucun destinataire : saisis l\'API token d\'un bot puis écris-lui /start.'; return false; }
+    const raw = bot.sendMessageUnguarded || bot.sendMessage.bind(bot);
     await raw(to, text, { parse_mode: 'HTML' });
     panel.lastError = null;
     return true;
@@ -184,6 +234,17 @@ if (typeof predictor.setOnShoeReset === 'function') predictor.setOnShoeReset(() 
 // ---------------------------------------------------------------------------
 // Réglages (site)
 // ---------------------------------------------------------------------------
+async function setToken(v) {
+  const tk = String(v == null ? '' : v).trim();
+  if (!tk) { panel.token = ''; panel.botName = ''; panel.privateChatId = ''; persist(); return ''; }
+  if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(tk)) throw new Error('API token invalide : format attendu 123456789:AAxxxxxxxx… (donné par @BotFather).');
+  const me = await tg('getMe', {}, tk).catch((e) => { throw new Error(`Token refusé par Telegram : ${e.message}`); });
+  if (tk !== panel.token) panel.privateChatId = ''; // autre bot : l'ancien chat privé ne vaut plus
+  panel.token = tk; panel.botName = me && me.username ? `@${me.username}` : '';
+  panel.lastError = null;
+  persist();
+  return panel.botName;
+}
 function setChatId(v) {
   const s = String(v == null ? '' : v).trim();
   if (s && !/^(-?\d{5,20}|@[A-Za-z][A-Za-z0-9_]{3,})$/.test(s)) throw new Error('ID invalide : un nombre (ex. 123456789 ou -1001234567890) ou @nom_du_canal.');
@@ -203,8 +264,12 @@ async function testAlert() {
 
 function status() {
   if (!counters) seedFromHistory(predictor.state.history);
+  const tk = panel.token;
+  const dest = panel.chatId || (tk ? panel.privateChatId : (adminIdFn ? adminIdFn() : '')) || '';
   return {
-    enabled: panel.enabled, threshold: panel.threshold, chatId: panel.chatId, target: String(target() || ''), tokenSet: !!(sender && sender()),
+    enabled: panel.enabled, threshold: panel.threshold, chatId: panel.chatId, privateChatId: panel.privateChatId, target: String(dest),
+    ownToken: !!tk, tokenSet: !!tk || !!siteBot(), botName: panel.botName,
+    tokenHint: tk ? `${tk.split(':')[0]}:••••${tk.slice(-4)}` : '',
     lastGame: lastNumber,
     suits: SUITS.map((suit) => ({ suit, count: counters[suit].count, since: counters[suit].since, open: panel.open[suit] || null })),
     recent: recent.slice(-panel.threshold),
@@ -214,5 +279,5 @@ function status() {
 
 module.exports = {
   panel, config, configure, restore, restoreFromDb, persist, onFinished, status,
-  setSender, setAdminId, setChatId, setThreshold, setEnabled, testAlert, buildAlert, buildReturn,
+  setSender, setAdminId, setToken, setChatId, setThreshold, setEnabled, detectChat, testAlert, buildAlert, buildReturn,
 };

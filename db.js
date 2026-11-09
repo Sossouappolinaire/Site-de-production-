@@ -347,12 +347,22 @@ async function savePrediction(p, bValue) {
   );
 }
 
-async function closePrediction(p) {
-  return q(
+// v133 : (1) une prédiction annulée n'est plus enregistrée comme « perdue » ; (2) si la clôture arrive AVANT l'insertion
+// (prédiction résolue dans le tour même de sa création, l'INSERT étant asynchrone), l'UPDATE ne trouvait aucune ligne et la
+// prédiction restait « attente » pour toujours en base (ligne fantôme rechargée comme « non vérifiée » à chaque redémarrage) :
+// on réessaie quelques secondes plus tard.
+async function closePrediction(p, attempt = 0) {
+  const status = p.status === 'gagné' ? 'gagne' : p.status === 'annulé' ? 'annule' : 'perdu';
+  const r = await q(
     `UPDATE predictions SET status=$1, rattrapage=$2, hit_number=$3, closed_at=now()
-     WHERE strategy=$4 AND target=$5 AND suit=$6`,
-    [p.status === 'gagné' ? 'gagne' : 'perdu', p.step, p.hitNumber, p.strategy || 'costume', p.target, p.suit || p.cardsLabel || '-']
+     WHERE strategy=$4 AND target=$5 AND suit=$6 AND status='attente'`,
+    [status, p.step, p.hitNumber, p.strategy || 'costume', p.target, p.suit || p.cardsLabel || '-']
   );
+  if (r && r.rowCount === 0 && attempt < 3) {
+    const t = setTimeout(() => { closePrediction(p, attempt + 1).catch(() => {}); }, 2500);
+    if (t.unref) t.unref();
+  }
+  return r;
 }
 
 // recherche une (ou plusieurs, si diffusée par plusieurs stratégies) prédiction(s)

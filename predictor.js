@@ -1133,6 +1133,17 @@ function resetShoe(reason = 'nouveau sabot') {
   return true;
 }
 
+// v133 : deux mains « compatibles » = l'une est le début de l'autre (cartes en cours d'arrivée / version appauvrie du flux)
+function handsCompatible(a, b) {
+  const x = (a || []).join(','); const y = (b || []).join(',');
+  return !x || !y || x.startsWith(y) || y.startsWith(x);
+}
+// Deux versions COMPLÈTES et TERMINÉES du même numéro avec des cartes réellement différentes = la table a redistribué.
+function contentConflict(prev, g) {
+  if (!prev || !prev.finished || !prev.complete || !g.finished || !g.complete) return false;
+  return !(handsCompatible(prev.player, g.player) && handsCompatible(prev.banker, g.banker));
+}
+
 function isNewShoe(incoming) {
   const maxDone = maxFinishedNumber();
   if (!maxDone || !incoming.length) return false;
@@ -1143,15 +1154,14 @@ function isNewShoe(incoming) {
   // le flux redescend nettement sous le dernier tour connu → la table a rebouclé
   if (maxIn + 10 < maxDone) return true;
   if (minIn <= 1 && maxDone > 10 && !state.games.has(1)) return true;
-  // même numéro de tour mais contenu différent (ou tour redevenu « en cours ») :
-  // la table a redistribué depuis le début → nouveau sabot
-  for (const g of incoming) {
-    const prev = state.games.get(g.number);
-    if (!prev || !prev.finished) continue;
-    if (!g.finished) return true;
-    if (signatureOf(g) !== signatureOf(prev)) return true;
-  }
-  return false;
+  // CORRECTIF v133 (« doublons dans Statistiques » + « prédictions jamais vérifiées ») : avant, un tour déjà terminé renvoyé
+  // par le flux dans une version appauvrie (« en cours », cartes vidées) ou simplement complétée (3ᵉ carte arrivée après la fin)
+  // déclenchait un FAUX nouveau sabot : jeux, prédictions et suivi des messages Telegram étaient effacés en plein milieu du
+  // sabot → tout était renvoyé en double et les prédictions en attente disparaissaient sans être vérifiées. Un vrai
+  // redistribué = des tours terminés ET complets dont les cartes se contredisent, sur au moins 2 tours (1 seul en tout début de sabot).
+  let conflicts = 0;
+  for (const g of incoming) { if (contentConflict(state.games.get(g.number), g)) conflicts += 1; }
+  return conflicts >= 2 || (conflicts >= 1 && maxDone <= 12);
 }
 
 function signatureOf(g) {
@@ -1891,7 +1901,7 @@ async function restorePredictions() {
   // mais par sécurité), on ne les écrase pas.
   if (state.predictions.length) return 0;
   state.predictions = rows.map((row) => {
-    const status = row.status === 'gagne' ? 'gagné' : row.status === 'perdu' ? 'perdu' : row.status === 'attente' ? 'en attente' : (row.status || 'en attente');
+    const status = row.status === 'gagne' ? 'gagné' : row.status === 'perdu' ? 'perdu' : row.status === 'annule' ? 'annulé' : row.status === 'attente' ? 'en attente' : (row.status || 'en attente');
     const hand = row.hand === 'banquier' ? 'banquier' : 'joueur';
     return {
       id: `db-${row.id}`,

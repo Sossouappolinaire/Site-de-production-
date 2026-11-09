@@ -2596,16 +2596,22 @@ app.post('/api/absence-alert/config', (req, res) => {
     res.json(absenceAlert.status());
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
-// « Analyse manque » (voir analyse-manque.js) : costume absent N jeux de suite → alerte avec le token du site (+ ID du chat, sinon chat privé admin)
+// « Analyse manque » (voir analyse-manque.js) : costume absent N jeux de suite → alerte reçue par le bot dont on saisit l'API token, dans son chat privé (vide = bot du site)
 app.get('/api/analyse-manque', (req, res) => res.json(analyseManque.status()));
-app.post('/api/analyse-manque/config', (req, res) => {
+app.post('/api/analyse-manque/config', async (req, res) => {
   try {
     const b = req.body || {};
+    if (b.token !== undefined && String(b.token).trim() !== '') await analyseManque.setToken(b.token);
+    if (b.clearToken === true) await analyseManque.setToken('');
     if (b.chatId !== undefined) analyseManque.setChatId(b.chatId);
     if (b.threshold !== undefined) analyseManque.setThreshold(b.threshold);
     if (b.enabled !== undefined) analyseManque.setEnabled(b.enabled);
     res.json(analyseManque.status());
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/analyse-manque/detect', async (req, res) => {
+  try { const r = await analyseManque.detectChat(); res.json({ chat: r.chat, ...analyseManque.status() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/analyse-manque/test', async (req, res) => {
   const r = await analyseManque.testAlert();
