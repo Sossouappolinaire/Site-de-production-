@@ -237,7 +237,7 @@ async function connect(newUrl) {
   if (!url) { try { url = (await require('./db-link').ensureDatabaseUrl(1)) || ''; } catch (_) { url = ''; } }
   ready = false;
   lastError = null;
-  lastSettings.clear(); lastSnapshot = null; // nouvelle connexion : tout est renvoyé une fois
+  lastSettings.clear(); lastSnapshot = null; predCache.clear(); // nouvelle connexion : tout est renvoyé une fois
   if (pool) { try { await pool.end(); } catch (_) {} pool = null; }
   if (!url) { lastError = 'Aucun lien de base de données configuré'; return status(); }
   if (!Pool) { lastError = "Module 'pg' absent — lance npm install"; return status(); }
@@ -276,9 +276,20 @@ async function q(sql, params = []) {
 }
 
 // ---- jeux ------------------------------------------------------------------
+// v133/v135 : la base ne garde que les GAMES_KEPT (50) derniers jeux : à chaque jeu enregistré, les plus anciens sont effacés.
+const GAMES_KEPT = 50;
+let savedSinceTrim = 0;
+async function trimGames() {
+  return q(`DELETE FROM games WHERE number NOT IN (SELECT number FROM games ORDER BY played_at DESC, number DESC LIMIT ${GAMES_KEPT})`);
+}
 async function saveGame(g) {
   // un jeu EN LIVE (non terminé) n'est jamais enregistré en base
   if (!g || !g.finished) return null;
+  const r = await saveGameRaw(g);
+  if (r) trimGames().catch(() => {}); // v135 : nettoyage à CHAQUE jeu enregistré → exactement GAMES_KEPT (50) jeux en base
+  return r;
+}
+async function saveGameRaw(g) {
   return q(
     `INSERT INTO games (number, played_on, winner, player_cards, banker_cards,
         player_suits, banker_suits, player_value, banker_value,
@@ -869,9 +880,21 @@ async function gamesInRange(minNumber, maxNumber) {
 }
 
 // prédictions d'une date
+// v133 : cache de 45 s. La Formation relançait cette requête (jusqu'à 1000 lignes) UNE FOIS PAR STRATÉGIE (19 fois) toutes les
+// 60 s, plus les Conseils : 413 000 appels et 311 millions de lignes lues en base. Un seul résultat partagé suffit.
+const predCache = new Map(); // "date|limit" → { at, rows }
 async function predictionsByDate(dateStr, limit = 200) {
   const d = normalizeDate(dateStr);
   if (!d) return [];
+  const key = `${d}|${limit}`;
+  const hit = predCache.get(key);
+  if (hit && Date.now() - hit.at < 45000) return hit.rows.slice();
+  const rows = await predictionsByDateRaw(d, limit);
+  predCache.set(key, { at: Date.now(), rows });
+  if (predCache.size > 20) predCache.delete(predCache.keys().next().value);
+  return rows.slice();
+}
+async function predictionsByDateRaw(d, limit) {
   const r = await q(
     `SELECT target, suit, hand, max_r, status, rattrapage, hit_number, created_at, strategy
        FROM predictions WHERE played_on = $1 ORDER BY target DESC LIMIT $2`, [d, limit]);

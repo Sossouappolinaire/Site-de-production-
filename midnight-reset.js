@@ -124,7 +124,9 @@ function wipePanel(panel) {
 
 const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap', 'vip', 'cards-count',
   'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'bet-type', 'game21-predict', 'statistics',
-  'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio', 'miracle-prediction']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
+  'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio', 'miracle-prediction',
+  // v133 : panneaux qui gardaient encore leurs données du jour après 00h00
+  'canal-telegram', 'loss-return', 'loss-relaunch', 'prev-suit', 'end-digit-predict', 'strategy-recap', 'distribution-counter', 'parity-counter']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
 
 const DB_TABLES = [
   ['games', 'DELETE FROM games'],
@@ -147,6 +149,8 @@ async function wipeData() {
   const { state } = predictor;
   state.wiping = true; // rend muets le rapport PDF et le bilan de fin de sabot (voir bot.js)
   try {
+    // v135 : les messages « Statistiques » encore en cours (⏰) sont terminés AVANT d'effacer jeux et suivi (sinon ils restaient bloqués)
+    try { const st = require('./statistics'); if (st && typeof st.finalizeAll === 'function') await st.finalizeAll(); } catch (e) { report.errors.push(`statistics : ${e.message}`); }
     // mémoire du moteur : jeux, historique, compteurs, prédictions (+ table predictions
     // et hooks de remise à zéro de tous les panneaux via resetShoe)
     predictor.resetShoe('minuit 00h00 — nouveau départ');

@@ -234,15 +234,33 @@ async function sendNew(g, text) {
   return sentMessages;
 }
 
+// v133 : l'édition rapporte maintenant son résultat. Avant, toute erreur était avalée ET la signature était déjà mise à jour :
+// une édition refusée (limite Telegram « trop de requêtes », réseau, message encore en file du mode lent) n'était JAMAIS
+// retentée et le message restait bloqué sur « ⏰ … » alors que les jeux suivants passaient (#N1139, #N1140 sur la capture).
+//   → { ok: true }                  tous les messages sont à jour (ou ne peuvent plus l'être : supprimés)
+//   → { ok: false, retryAfter: s }  à retenter au prochain passage (retryAfter : attente imposée par Telegram)
 async function editExisting(messages, text) {
   const bot = typeof sender === 'function' ? sender() : null;
-  if (!bot) return;
-  await Promise.all(messages.map((m) =>
-    bot.editMessageText(text, { chat_id: m.chatId, message_id: m.messageId }).catch(() => {})
-  ));
+  if (!bot) return { ok: false, retryAfter: 5 };
+  let ok = true; let retryAfter = 0;
+  await Promise.all(messages.map(async (m) => {
+    try {
+      await bot.editMessageText(text, { chat_id: m.chatId, message_id: m.messageId });
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (/not modified/i.test(msg)) return; // déjà à jour
+      if (/message to edit not found|message can't be edited|MESSAGE_ID_INVALID|chat not found/i.test(msg)) return; // message supprimé : rien à rattraper
+      ok = false;
+      const body = e && e.response && e.response.body;
+      const ra = Number((body && body.parameters && body.parameters.retry_after) || ((msg.match(/retry after (\d+)/i) || [])[1]) || 0);
+      if (ra > retryAfter) retryAfter = ra;
+    }
+  }));
+  return { ok, retryAfter };
 }
 
 const sending = new Set(); // numéros dont le premier envoi est en cours (anti-doublon)
+let editPausedUntil = 0;   // jusqu'à cet instant (ms) : aucune édition (limite Telegram)
 async function processGame(g) {
   if (!hasStarted(g)) return; // « un jeu qui n'a pas encore commencé n'est pas envoyé »
   if (!isRealLiveGame(g)) return; // pas la table réellement suivie : on bloque
@@ -262,15 +280,26 @@ async function processGame(g) {
       const sentMessages = await sendNew(g, text);
       if (sentMessages) {
         panel.tracked[g.number] = { messages: sentMessages, signature: sig, finished: !!g.finished };
+        if (!g.finished) panel.tracked[g.number].text = text; // v135 : dernière ligne « ⏰ » envoyée (utile si le jeu disparaît du flux)
         persist(); // mémorisé tout de suite : un redémarrage ne renverra pas ce jeu
       }
     } finally { sending.delete(g.number); }
     return;
   }
   if (entry.signature === sig) return; // rien de visible n'a changé depuis la dernière fois
-  entry.signature = sig;
-  entry.finished = !!g.finished;
-  await editExisting(entry.messages, text);
+  if (Date.now() < editPausedUntil) return; // pause imposée par Telegram (limite de requêtes) : on retentera
+  const r = await editExisting(entry.messages, text);
+  if (r.ok) {
+    entry.signature = sig; // la signature n'est retenue QU'APRÈS une édition réussie : sinon on retente au passage suivant
+    entry.finished = !!g.finished;
+    delete entry.fails;
+    delete entry.missingSince; delete entry.dbCheckedAt;
+    if (g.finished) delete entry.text; else entry.text = text;
+    return;
+  }
+  entry.fails = (entry.fails || 0) + 1;
+  if (r.retryAfter) editPausedUntil = Date.now() + Math.min(60, r.retryAfter) * 1000;
+  if (entry.fails >= 12) { entry.signature = sig; entry.finished = !!g.finished; delete entry.fails; } // abandon après 12 essais (message inaccessible)
 }
 
 // ---------------------------------------------------------------------------
@@ -320,9 +349,95 @@ setOnShoeReset(() => {
   // les numéros de jeu repartent à 1 à chaque nouveau sabot : le suivi de
   // l'ancien sabot n'a plus aucun sens (et créerait des collisions avec les
   // nouveaux numéros).
+  const previous = panel.tracked;
   panel.tracked = {};
   persist();
+  return finalizeEntries(previous); // v135 : les messages encore « ⏰ » de l'ancien sabot sont terminés avant l'oubli
 });
+
+// ---------------------------------------------------------------------------
+// v135 : finalisation des messages restés bloqués sur « ⏰ »
+// ---------------------------------------------------------------------------
+// Un message « ⏰ » ne pouvait plus être terminé quand le jeu avait quitté le flux ET que sa version terminée n'était plus en
+// mémoire : redémarrage du service (Render), nouveau sabot, remise à zéro de 00h00 (le suivi était effacé sans finaliser).
+// Désormais : (1) le jeu terminé est relu dans la table `games` de la base (les 50 derniers jeux) ; (2) avant d'effacer le
+// suivi (nouveau sabot, 00h00) les messages encore en cours sont finalisés ; (3) en dernier recours le message n'affiche plus ⏰
+// mais « ⚠️ … résultat non reçu » (corrigé tout seul si le vrai résultat arrive ensuite).
+const STUCK_AFTER_MS = 15000;      // jeu absent du flux depuis ce délai : on va chercher sa version terminée en base
+const GIVE_UP_MS = 180000;         // toujours rien après ce délai : dernier recours (⚠️)
+const DB_RECHECK_MS = 30000;       // délai entre deux recherches en base pour un même jeu
+const finalizing = new Set();
+
+async function gameFromDb(n) {
+  if (!db.ready || typeof db.gameByNumber !== 'function') return null;
+  try {
+    const row = await db.gameByNumber(n);
+    if (!row || !row.raw) return null;
+    const g = typeof row.raw === 'string' ? JSON.parse(row.raw) : row.raw;
+    return g && g.finished && Number(g.number) === Number(n) ? g : null;
+  } catch (_) { return null; }
+}
+
+function lastResortText(entry) {
+  const base = String(entry.text || '').replace(/^⏰\s*/, '');
+  return base ? `⚠️ ${base} — résultat non reçu` : null;
+}
+
+// termine UN message suivi ; renvoie true si le message n'a plus rien à rattraper
+async function finalizeOne(num, entry, { force = false } = {}) {
+  if (!entry || entry.finished || finalizing.has(num)) return false;
+  finalizing.add(num);
+  try {
+    let g = state.games.get(num);
+    if (!(g && g.finished)) g = ((state.history) || []).find((h) => h && h.finished && h.number === num) || null;
+    if (!g) g = await gameFromDb(num);
+    if (g && g.finished) {
+      const r = await editExisting(entry.messages, buildLine(g));
+      if (!r.ok) { if (r.retryAfter) editPausedUntil = Date.now() + Math.min(60, r.retryAfter) * 1000; return false; }
+      entry.signature = signatureOf(g); entry.finished = true;
+      delete entry.fails; delete entry.missingSince; delete entry.dbCheckedAt; delete entry.text;
+      return true;
+    }
+    const lastAge = Date.now() - (entry.missingSince || Date.now());
+    if (!force && lastAge < GIVE_UP_MS) return false;
+    const text = lastResortText(entry);
+    if (!text) { entry.finished = true; return true; }
+    const r = await editExisting(entry.messages, text);
+    if (!r.ok) { if (r.retryAfter) editPausedUntil = Date.now() + Math.min(60, r.retryAfter) * 1000; return false; }
+    // la signature reste celle d'avant : si le vrai résultat arrive plus tard, processGame() corrigera le message
+    entry.finished = true; delete entry.fails; delete entry.missingSince; delete entry.dbCheckedAt; delete entry.text;
+    return true;
+  } finally { finalizing.delete(num); }
+}
+
+// passage régulier (tick) : jeux suivis encore « ⏰ » qui ne sont plus dans le flux
+async function sweepStuck(live, hist) {
+  const now = Date.now();
+  for (const [n, entry] of Object.entries(panel.tracked)) {
+    if (!entry || entry.finished) continue;
+    const num = Number(n);
+    if (live.has(num) || hist.has(num)) { delete entry.missingSince; delete entry.dbCheckedAt; continue; }
+    if (!entry.missingSince) { entry.missingSince = now; continue; }
+    if (now - entry.missingSince < STUCK_AFTER_MS) continue;
+    if (now < editPausedUntil) continue;
+    if (entry.dbCheckedAt && now - entry.dbCheckedAt < DB_RECHECK_MS) continue;
+    entry.dbCheckedAt = now;
+    await finalizeOne(num, entry);
+  }
+}
+
+// avant d'effacer le suivi (nouveau sabot, 00h00) : tous les messages encore en cours sont finalisés (délai maximum 20 s)
+async function finalizeEntries(tracked) {
+  const todo = Object.entries(tracked || {}).filter(([, e]) => e && !e.finished);
+  if (!todo.length) return 0;
+  let done = 0;
+  const work = (async () => {
+    for (const [n, entry] of todo) { if (await finalizeOne(Number(n), entry, { force: true })) done++; }
+  })();
+  await Promise.race([work, new Promise((r) => setTimeout(r, 20000))]);
+  return done;
+}
+const finalizeAll = () => finalizeEntries(panel.tracked);
 
 // ---------------------------------------------------------------------------
 // Boucle de traitement
@@ -332,7 +447,16 @@ async function tick() {
   busy = true;
   try {
     const games = [...state.games.values()].sort((a, b) => a.number - b.number);
+    // v133 : un jeu suivi mais resté sur « ⏰ » dont le tour a quitté le flux avant d'être édité une dernière fois est
+    // terminé à partir de l'historique des tours finis (sinon il restait bloqué en cours pour toujours)
+    const live = new Set(games.map((x) => x.number));
+    const hist = new Map(((state.history) || []).filter((h) => h && h.finished).map((h) => [h.number, h]));
+    for (const [n, entry] of Object.entries(panel.tracked)) {
+      const num = Number(n);
+      if (entry && !entry.finished && !live.has(num) && hist.has(num)) await processGame(hist.get(num));
+    }
     for (const g of games) await processGame(g);
+    await sweepStuck(live, hist); // v135 : messages restés sur « ⏰ » alors que le jeu a quitté le flux
     // purge : les jeux terminés et déjà édités une dernière fois n'ont plus
     // besoin d'être gardés en mémoire indéfiniment (on garde une marge pour
     // les tours qui reviendraient en correction tardive du flux).
@@ -382,7 +506,7 @@ function statusView() {
 
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
-  restore, restoreFromDb, parseChannels, buildLine, drawingSide,
+  restore, restoreFromDb, parseChannels, buildLine, drawingSide, finalizeAll, finalizeEntries,
 };
 
 // exposé pour l'effacement de minuit (midnight-reset.js)

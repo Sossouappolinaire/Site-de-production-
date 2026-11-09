@@ -494,6 +494,8 @@ app.get('/api/games', (req, res) => {
 // Jeu « 21 » (TwentyOne) de 1xbet — jeux en live + analyse des déclencheurs
 // des cartes de valeur (A, K, Q, J) et des cartes de valeur exacte.
 // ---------------------------------------------------------------------------
+// v134 : Jeu 21 désactivé (demande admin) : toutes les routes /api/game21… répondent « désactivé ».
+app.use('/api/game21', (req, res) => res.status(410).json({ error: 'Le Jeu 21 est désactivé.' }));
 app.get('/api/game21', async (req, res) => {
   const limit = Math.min(200, parseInt(req.query.limit, 10) || 30);
   const variant = req.query.variant && req.query.variant !== 'tous' ? String(req.query.variant) : null;
@@ -3069,18 +3071,7 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   panels.push(await singlePanel('victoire-vb', 'Victoire V1 / V2', victoireVb, 'victoire-vb'));
   panels.push(await singlePanel('vip', 'VIP', vip, 'vip'));
   panels.push(await singlePanel('predit', 'Prédit IA', predit, 'predit'));
-  // Jeu 21 a DEUX canaux distincts (exacte / valeur), pas un seul comme les
-  // autres panneaux à canal unique — traité à part pour rester fidèle.
-  {
-    const g21 = game21Predict.status().config || {};
-    panels.push({
-      id: 'game21', label: 'Jeu 21', editBase: 'game21/predict',
-      items: [
-        { id: 'exacte', name: 'Format exact', usesDefault: false, channels: await resolveIds(Array.isArray(g21.exactChannels) ? g21.exactChannels : []) },
-        { id: 'valeur', name: 'Format valeur', usesDefault: false, channels: await resolveIds(Array.isArray(g21.valueChannels) ? g21.valueChannels : []) },
-      ],
-    });
-  }
+  // v134 : panneau « Jeu 21 » retiré de la page Envois (fonction désactivée).
 
   // Formation (relais) : un canal par défaut + un canal éventuel par stratégie suivie
   const frStatus = formationRelay.status();
@@ -3742,7 +3733,7 @@ app.post('/api/bet-type/scan', async (req, res) => {
 
   app.listen(config.PORT, '0.0.0.0', () => {
     console.log('Tableau de bord sur le port ' + config.PORT);
-    game21.startLoop(6000);
+    // v134 : Jeu 21 désactivé — la lecture du flux 21 de 1xbet n'est plus lancée.
     startLoop().then(() => {
       if (aiAuto.auto.enabled) aiAuto.start(persist);
       console.log('🤖 Analyseur IA temps réel démarré (clé configurée : ' + ((ai.keyLooksValid() || ai.geminiConfigured() || ai.groqConfigured() || ai.openrouterConfigured()) ? 'oui' : 'non configurée') + ')');

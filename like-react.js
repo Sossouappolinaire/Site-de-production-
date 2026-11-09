@@ -30,8 +30,12 @@ function lazy(name) { try { return require(name); } catch (_) { return null; } }
 const EMOJIS = { 1: '👍', 2: '🔥', 3: '\u2764', 4: '🍾' };
 const MAX_ATTEMPTS = 3;
 
+// v133 : bouton « J'aime » DÉSACTIVÉ (demande admin) — plus aucune réaction, plus de minuterie active ni de sauvegarde toutes les 4 s.
+// Pour le réactiver : variable d'environnement LIKE_REACT=on.
+// v134 : coupure DÉFINITIVE (demande admin) — la variable LIKE_REACT=on ne réactive plus rien.
+const FORCED_OFF = true;
 const panel = {
-  enabled: true,
+  enabled: false,
   channels: [],          // canaux cochés (id)
   states: {},            // id canal -> { 1..4 : état de suivi de chaque type }
   typeResults: {},        // canal -> type -> prédictions déclenchées et résultat vérifié
@@ -317,7 +321,7 @@ function configure(patch = {}) {
     const invalid = next.filter((id) => !validId(id));
     if (invalid.length) throw new Error('Identifiant de canal invalide : utilise -100… ou @nomducanal.');
   }
-  if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
+  if (patch.enabled !== undefined) panel.enabled = !FORCED_OFF && !!patch.enabled;
   if (next !== null) {
     const states = {};
     for (const id of next) {
@@ -526,6 +530,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // prédiction du canal, vérifie le rôle du bot, puis remet le message comme avant
 // (la réaction déjà posée par « J'aime », sinon aucune réaction).
 async function testReaction(channelId) {
+  if (FORCED_OFF) return { ok: false, error: 'Le bouton « J\'aime » est désactivé.' };
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return { ok: false, error: 'Aucun bot Telegram n\'est connecté (token manquant).' };
   try { await refreshAliases(bot); } catch (_) {}
@@ -608,7 +613,8 @@ function persist() {
 
 function applySaved(saved) {
   if (!saved || typeof saved !== 'object') return;
-  if (saved.config) panel.enabled = saved.config.enabled !== false;
+  if (saved.config) panel.enabled = !FORCED_OFF && saved.config.enabled !== false;
+  if (FORCED_OFF) panel.enabled = false;
   // aucun filtre ici : un import ou un redémarrage ne doit jamais vider la sélection (seul le plafond de 4 s'applique)
   panel.channels = parseChannels(saved.channels).slice(0, MAX_TRACKED_CHANNELS);
   panel.states = {};
@@ -648,7 +654,7 @@ async function restoreFromDb() {
 // ---------------------------------------------------------------------------
 function statusView() {
   return {
-    enabled: panel.enabled,
+    enabled: panel.enabled, disabled: FORCED_OFF,
     channels: panel.channels,
     emojis: EMOJIS,
     known: panel.known,

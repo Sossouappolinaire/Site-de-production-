@@ -2186,9 +2186,6 @@ async function tick() {
     await raceTimeout(Promise.all([
       // panneau « Prédit » : prédictions certifiées à 100% (IA)
       predit.tick(),
-      // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
-      // cartes exactes et cartes de valeur sur leurs canaux respectifs.
-      game21Predict.tick(),
       // panneau « Prédiction après perte » : relais de la prochaine
       // prédiction d'une stratégie suivie (existante ou IA) après N pertes
       // consécutives.
@@ -2575,11 +2572,7 @@ async function startLoop() {
   // canaux cochés ; revérifie les canaux au démarrage (restore → scan).
   likeReact.setSender(senderFor);
   likeReact.restore();
-  if (!global.__likeReactTimer) {
-    global.__likeReactTimer = setInterval(() => {
-      likeReact.tick({ paused: predictionControl.isPaused() }).catch(() => {});
-    }, 4000);
-  }
+  // v134 : « J'aime » désactivé pour de bon — plus aucune minuterie.
   // « Type de mise » tourne aussi sur sa propre minuterie (comme « Copie et annonce »).
   if (!global.__betTypeTimer) {
     global.__betTypeTimer = setInterval(() => {
