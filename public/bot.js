@@ -14,23 +14,48 @@ const fmt = require('./formats');
 const statusAnimator = require('./status-animator');
 const sendDelay = require('./send-delay');
 const midnightReset = require('./midnight-reset');
+const sendDedupe = require('./send-dedupe'); // anti-doublon des messages et prédictions envoyés aux canaux
+const strategyRecap = require('./strategy-recap');
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const copyAnnounce = require('./copy-announce');
+const betType = require('./bet-type');
+const likeReact = require('./like-react');
 const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
+const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
+const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
+const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
+const parityEgalite = require('./parity-egalite'); // « Palier parité égalité » : 2e taux quand deux taux faibles sont égaux
+const distributionFaible = require('./distribution-faible'); // « Distribution faible » : distribution au taux le plus faible du Compte distribution (v125)
+const parityPalier = require('./parity-palier'); // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité (v114)
+const endDigitTrio = require('./end-digit-trio'); // « Trio fin de numéro » : 3 meilleures fins de numéro par dizaine + suivi dans un autre canal (v127)
+const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » : meilleur / repli faible + inverse (v101)
+const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
+const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
+const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
+const channelAdmin = require('./channel-admin'); // commande /envois (chat privé de l'admin)
+const absenceAlert = require('./absence-alert'); // « Alerte absence de costume » (chat privé de l'admin)
+const analyseManque = require('./analyse-manque'); // « Analyse manque » (bot dédié : costume manquant 4 jeux de suite / réapparition)
+const channelLossGate = require('./channel-loss-gate'); // « Envoi après perte » par canal, planifié dans l'Excel
 const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
+const drawTwoThree = require('./draw-two-three');
+const victoireVb = require('./victoire-vb');
 const vip = require('./vip');
 const formationRelay = require('./formation-relay');
 const shoeReport = require('./shoe-report');
 const aiRepair = require('./ai-repair');
 const mirrorCounter = require('./mirror-counter');
+const parityCounter = require('./parity-counter');
+const distributionCounter = require('./distribution-counter'); // « Compte distribution » : 2/2, 3/2, 3/3, 2k, 3k (v100)
+const slowMode = require('./slow-mode');
 const dataTransfer = require('./data-transfer');
 const lossNotice = require('./loss-notice');
 const predictionControl = require('./prediction-control');
@@ -183,7 +208,11 @@ const HELP =
   '/reglages — réglages actuels\n\n' +
   '*Canaux*\n' +
   '/canaux — canaux où je suis admin\n' +
+  '/envois [nom] — stratégies et configurations liées à un canal : voir, activer, pause, supprimer, renommer, changer de canal\n' +
   '/activer <id> — activer les prédictions\n' +
+  '/jaime — canaux qui reçoivent les réactions automatiques (👍 🔥 ❤ 🍾)\n' +
+  '/jaime test <id> — tester les réactions (tous les canaux cochés si pas d\'id)\n' +
+  '/nul — liste cliquable des changements trouvés par l\'analyse « Nul / 2-3 » (ajouter / modifier / supprimer une règle)\n' +
   '/desactiver <id> — arrêter\n\n' +
   '*Interrupteur des prédictions* (commandes à taper DIRECTEMENT dans le ' +
   'canal — réservées de fait aux administrateurs de ce canal, Telegram ' +
@@ -196,8 +225,8 @@ const HELP =
   '*Prédiction*\n' +
   '/setb <n> — compteur B (apparitions consécutives max)\n' +
   '/setmaxr <n> — nombre de rattrapages vérifiés\n' +
-  '/setformat <1-87> — style du message de prédiction (87 = nouveau format)\n' +
-  '/formats [page] — liste des 87 styles (80-83 pair/impair, 84-86 ombre, 87 nouveau format)\n' +
+  '/setformat <1-107> — style du message de prédiction\n' +
+  '/formats [page] — liste des 107 styles\n' +
   '/apercu <n> — aperçu complet d\'un style (⌛ / ✅ / ❌)\n' +
   '/settemplate <texte> — style personnalisé ({game} {emoji} {suit} {status} {maxR})\n' +
   '/notemplate — revenir au style numéroté\n\n' +
@@ -323,23 +352,76 @@ function runPredictionControlCommand(cmd, by, chat) {
 // message factice sont ignorées. Les messages DÉJÀ envoyés avant l'arrêt
 // restent éditables (résultat gagné/perdu). sendMessageUnguarded sert aux
 // réponses aux commandes (/start, /statut…) dans le canal arrêté.
+// Anti-doublon GLOBAL (tous les boutons) : le même texte exact envoyé au même canal dans les 6 secondes
+// est ignoré. Les prédictions et statistiques portent toujours un numéro de jeu : un vrai second envoi
+// identique n'existe pas ; en revanche une double exécution (deux tâches, deux instances) en produisait.
+const recentSends = new Map();
+function isRecentDuplicate(chatId, text) {
+  if (typeof text !== 'string' || !text) return false;
+  const now = Date.now();
+  const key = `${String(chatId).toLowerCase()}|${text}`;
+  const prev = recentSends.get(key);
+  recentSends.set(key, now);
+  if (recentSends.size > 400) for (const [k, t] of recentSends) { if (now - t > 6000) recentSends.delete(k); }
+  return prev !== undefined && now - prev < 6000;
+}
+
 function installChannelGuard(inst) {
   if (!inst || inst.__channelGuard) return inst;
   inst.__channelGuard = true;
   const send = inst.sendMessage.bind(inst);
   const edit = inst.editMessageText.bind(inst);
   inst.sendMessageUnguarded = send;
-  inst.sendMessage = function guardedSend(chatId, ...rest) {
-    if (predictionControl.isChannelPaused(chatId)) {
+  const doSend = function guardedSend(chatId, rest, fromQueue) {
+    // « Canal Telegram » (channel-uniform.js) : prédiction réécrite dans le format imposé au canal coché (jamais bloquant : sinon message d'origine)
+    if (!fromQueue) { const u = channelUniform.rewrite(chatId, rest[0], rest[1]); if (u) rest = [u.text, u.opts, ...rest.slice(2)]; }
+    if (predictionControl.isChannelPaused(chatId) || gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
       return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
     }
+    // « Envoi après perte » par canal (channel-loss-gate.js) : planning de l'Excel ; une prédiction est retenue tant qu'aucune perte n'a eu lieu dans le canal
+    // + « Canal Telegram » (channel-uniform.js) : mode du jour du canal (favorable / instable 2 = 1 perte / instable 1 = 2 pertes)
+    if (!fromQueue && (channelLossGate.shouldBlock(chatId, rest[0]) || channelUniform.shouldBlock(chatId, rest[0]))) {
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, gated: true });
+    }
+    if (!fromQueue && isRecentDuplicate(chatId, rest[0])) { // même message, même canal, quelques secondes plus tôt
+      state.dupSkipped = (state.dupSkipped || 0) + 1;
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
+    }
+    // Anti-doublon persistant (send-dedupe.js) : même message ou même jeu + costume déjà envoyé dans ce canal → ignoré (réservation en base)
+    const go = (ddKeys) => {
+    // « Ralentisseur » (slow-mode.js) : canal ralenti + jeu futur dont le précédent n'a pas commencé → message retenu, envoi automatique plus tard
+    if (!fromQueue && slowMode.shouldHold(chatId, rest[0])) return Promise.resolve(slowMode.hold(chatId, rest));
     // prédiction « en cours » → animation du statut (status-animator.js)
     return Promise.resolve(send(chatId, ...rest)).then((m) => {
       try { statusAnimator.maybeTrack(edit, chatId, m, rest[0], rest[1]); } catch (_) { /* l'animation ne doit jamais bloquer l'envoi */ }
+      // « Retour après perte » : le bot ne reçoit pas ses propres publications de canal ; chaque message envoyé (toute stratégie,
+      // tout bouton) est donc transmis ici, depuis ce point d'envoi unique (voir loss-return.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') lossReturn.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Relance après perte » : même lecture des messages envoyés par le bot (voir loss-relaunch.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') lossRelaunch.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Costume N-1 → +4 » : lecture des prédictions envoyées par les stratégies / configurations cochées (voir prev-suit.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') prevSuit.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Miracle prediction » : lecture des prédictions de toutes les stratégies suivies (voir miracle-prediction.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') miracle.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Canal Telegram » : un canal où ce bot publie peut aussi être une stratégie (voir canal-telegram.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') canalTelegram.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       return m;
+    }, (err) => { sendDedupe.release(ddKeys); throw err; });
+    };
+    if (fromQueue) return go([]);
+    return sendDedupe.claim(chatId, rest[0]).then((c) => {
+      if (!c.ok) {
+        state.dupSkipped = (state.dupSkipped || 0) + 1;
+        return { message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, duplicate: true };
+      }
+      return go(c.keys);
     });
   };
+  inst.sendMessage = function guardedSendEntry(chatId, ...rest) { return doSend(chatId, rest, false); };
+  slowMode.start((chatId, args) => doSend(chatId, args, true)); // envoi réel des messages retenus par le ralentisseur
   inst.editMessageText = function guardedEdit(text, opts) {
+    { const u = channelUniform.rewrite(opts && opts.chat_id, text, opts); if (u) { text = u.text; opts = u.opts; } } // résultat (✅ / ❌) dans le même format que l'envoi
+    { const r = slowMode.resolveEdit(text, opts); if (r.action === 'done') return Promise.resolve(true); opts = r.opts; } // message encore retenu / identifiant virtuel du ralentisseur
     if (opts && (opts.message_id === null || opts.message_id === undefined) && opts.inline_message_id === undefined) return Promise.resolve(true);
     const key = statusAnimator.keyFromOpts(opts);
     if (key && statusAnimator.has(key)) {
@@ -353,6 +435,7 @@ function installChannelGuard(inst) {
   if (typeof inst.deleteMessage === 'function') {
     const del = inst.deleteMessage.bind(inst);
     inst.deleteMessage = function guardedDelete(chatId, messageId, ...rest) {
+      { const r = slowMode.resolveDelete(messageId); if (r.action === 'done') return Promise.resolve(true); messageId = r.id; }
       if (messageId === null || messageId === undefined) return Promise.resolve(true);
       statusAnimator.stop(`${chatId}:${messageId}`).catch(() => {});
       return del(chatId, messageId, ...rest);
@@ -378,6 +461,17 @@ function fmtDate(d) {
   const s = d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
   const [y, mo, da] = s.split('-');
   return da ? `${da}/${mo}/${y}` : s;
+}
+
+// Complète le nom des canaux de la liste (state.channels) qui n'en ont pas : après un import, les canaux
+// retrouvés dans les boutons n'avaient que leur ID. Best-effort, sans jamais bloquer l'import.
+async function fillChannelTitles(b) {
+  try {
+    const missing = (state.channels || []).filter((c) => c && c.id != null && !c.title).slice(0, 60);
+    await Promise.all(missing.map(async (c) => {
+      try { const chat = await b.getChat(c.id); if (chat && chat.title) c.title = String(chat.title).slice(0, 120); } catch (_) { /* bot absent du canal */ }
+    }));
+  } catch (_) { /* ignoré */ }
 }
 
 function wire(b) {
@@ -417,6 +511,12 @@ function wire(b) {
   b.on('channel_post', (m) => {
     rememberChannel(m.chat);
     if (!m.text) return;
+    // « Détection auto » : un message au format à deux costumes (♦️ 100%─────┐ / N°1438 / ♣️ 92% ─────┘) enregistre ce canal
+    // dans la liste des canaux détectés et alimente les configurations qui le suivent (voir best-weak-top.js)
+    try { bestWeakTop.onChannelPost(m.chat, m.text); } catch (_) { /* détection seulement */ }
+    try { lossReturn.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
+    try { lossRelaunch.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
+    try { canalTelegram.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     const cmd = parsePredictionControlCommand(m.text);
     if (cmd) {
       const reply = runPredictionControlCommand(cmd, `canal « ${m.chat.title || m.chat.id} »`, m.chat);
@@ -436,6 +536,13 @@ function wire(b) {
     };
     try { b.processUpdate({ update_id: 0, message: asMessage }); }
     catch (e) { console.error('Commande de canal :', e.message); }
+  });
+
+  // Message de canal modifié (résultats ✅0️⃣ / ❌ ajoutés) : le canal reste « détecté », sans relancer la surveillance
+  b.on('edited_channel_post', (m) => {
+    try { if (m && m.text) { rememberChannel(m.chat); bestWeakTop.onChannelPost(m.chat, m.text, { edited: true }); } } catch (_) { /* détection seulement */ }
+    // « Canal Telegram » : une prédiction déjà lue n'est jamais recomptée (clé canal + jeu + costume) ; une publication éditée rattrape seulement une lecture manquée
+    try { if (m && m.text) canalTelegram.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
   });
 
   // « Écrire au bot » : tout message texte envoyé en privé qui n'est PAS une
@@ -468,6 +575,14 @@ function wire(b) {
     if (!isAdmin(msg)) return deny(msg.chat.id);
     const reply = runPredictionControlCommand(cmd, 'administrateur');
     if (reply) b.sendMessage(msg.chat.id, reply).catch(() => {});
+  });
+
+  // /meri — dans un canal suivi par « Type de mise » : meilleur type, explication
+  // et exemple du dernier suivi réussi (français puis russe).
+  b.onText(/^\/meri(?:@\w+)?\s*$/i, (msg) => {
+    const text = betType.meriReply(msg.chat);
+    if (!text) return;
+    (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, text).catch(() => {});
   });
 
   b.onText(/^\/(aide|help)/, (msg) =>
@@ -517,6 +632,7 @@ function wire(b) {
       if (!resp.ok) throw new Error(`Téléchargement du fichier impossible (HTTP ${resp.status}).`);
       const buffer = Buffer.from(await resp.arrayBuffer());
       const report = await dataTransfer.importBufferAsync(buffer);
+      await fillChannelTitles(b); // noms des canaux retrouvés dans les boutons (visibles dans « Envois »)
       persist();
       if (db.ready) await saveConfigsToDb();
       const lines = ['✅ Import terminé.'];
@@ -537,6 +653,51 @@ function wire(b) {
   b.onText(/^\/reglages/, (msg) =>
     b.sendMessage(msg.chat.id, settingsText(), { parse_mode: 'Markdown' })
   );
+
+  // « Nul / 2-3 » : liste cliquable des trouvailles de l'analyse (ajouter / modifier / supprimer une règle),
+  // aussi envoyée toute seule dans le chat privé quand l'analyse trouve quelque chose (voir draw-two-three.js).
+  b.onText(/^\/nul\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const view = drawTwoThree.listView();
+    (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, view.text, { reply_markup: view.markup }).catch(() => {});
+  });
+  // « Victoire V1 / V2 » : liste cliquable des règles trouvées / appliquées par l'analyse (voir victoire-vb.js)
+  b.onText(/^\/victoire\b/, async (msg) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const view = victoireVb.listView();
+    (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, view.text, { reply_markup: view.markup }).catch(() => {});
+  });
+  b.on('callback_query', async (q) => {
+    try {
+      const data = String((q && q.data) || '');
+      const isVvb = data.startsWith('vvb:');
+      if (!data.startsWith('dtn:') && !isVvb) return;
+      if (!q.from || q.from.id !== Number(state.adminId)) { b.answerCallbackQuery(q.id, { text: 'Réservé à l\'administrateur' }).catch(() => {}); return; }
+      const r = isVvb ? victoireVb.handleCallback(data) : drawTwoThree.handleCallback(data);
+      await b.answerCallbackQuery(q.id, { text: r.answer || '' }).catch(() => {});
+      if (q.message && r.text) {
+        await b.editMessageText(r.text, { chat_id: q.message.chat.id, message_id: q.message.message_id, reply_markup: r.markup || { inline_keyboard: [] } }).catch(() => {});
+      }
+    } catch (_) { /* un bouton ne doit jamais faire tomber le bot */ }
+  });
+
+  // /envois [nom|id] : les « Envois » dans le chat privé — stratégies et configurations liées à un canal, avec modification / suppression (channel-admin.js)
+  b.onText(/^\/(?:envois|liens)(?:@\w+)?(?:\s+([\s\S]+))?\s*$/i, (msg, m) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    if (msg.chat && msg.chat.type && msg.chat.type !== 'private') return; // jamais dans un canal : la liste des configurations reste dans le chat privé
+    channelAdmin.open(b, msg.chat.id, (m && m[1]) || '').catch((e) => b.sendMessage(msg.chat.id, `❌ ${e.message}`).catch(() => {}));
+  });
+  b.on('callback_query', async (q) => {
+    try {
+      if (!String((q && q.data) || '').startsWith('cad:')) return;
+      if (!q.from || q.from.id !== Number(state.adminId)) { b.answerCallbackQuery(q.id, { text: 'Réservé à l\'administrateur' }).catch(() => {}); return; }
+      await channelAdmin.handleCallback(b, q);
+    } catch (_) { /* un bouton ne doit jamais faire tomber le bot */ }
+  });
+  b.on('message', (msg) => { // réponse texte attendue après « Renommer » / « Changer de canal »
+    if (!msg || !msg.text || msg.text.startsWith('/') || !isAdmin(msg) || (msg.chat && msg.chat.type && msg.chat.type !== 'private')) return;
+    channelAdmin.handleText(b, msg).catch(() => {});
+  });
 
   b.onText(/^\/canaux/, (msg) => {
     if (!isAdmin(msg)) return deny(msg.chat.id);
@@ -633,8 +794,8 @@ function wire(b) {
 
   b.onText(/^\/setdb(?:\s+(\S+))?/, async (msg, m) => {
     if (!isAdmin(msg)) return deny(msg.chat.id);
-    if (!m[1]) return b.sendMessage(msg.chat.id, 'ℹ️ Usage : /setdb postgresql://user:pass@host/db');
-    const s = await db.connect(m[1]);
+    if (!m[1]) return b.sendMessage(msg.chat.id, 'ℹ️ La base Supabase est intégrée au code : /setdb ne change plus de base.');
+    const s = await db.connect();
     b.sendMessage(msg.chat.id, s.ready ? '✅ Base de données connectée, tables créées.' : `❌ Échec : ${s.error}`);
   });
 
@@ -740,6 +901,71 @@ function wire(b) {
       await b.sendMessage(id, '🟢 *Prédictions actives*', { parse_mode: 'Markdown' });
     } catch (e) {
       b.sendMessage(msg.chat.id, `⚠️ Impossible d'écrire dans ce canal : ${e.message}`);
+    }
+  });
+
+  // ---- « J'aime » : réactions automatiques (like-react.js) -----------------
+  //   /jaime              -> liste des canaux cochés et ce que le bot y voit
+  //   /jaime test         -> teste 👍 🔥 ❤ 🍾 sur chaque canal coché
+  //   /jaime test <id>    -> teste un canal précis (coché ou non)
+  b.onText(/^\/jaimes?(?:@\w+)?(?:\s+(test|tester))?(?:\s+(\S+))?\s*$/i, async (msg, m) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const chat = msg.chat.id;
+    const say = (t) => (b.sendMessageUnguarded ? b.sendMessageUnguarded(chat, t) : b.sendMessage(chat, t)).catch(() => {});
+    const status = likeReact.status();
+    const em = status.emojis || {};
+    const typesLine = [1, 2, 3, 4].map((n) => `Type ${n} ${em[n]}`).join(' · ');
+    const nameOf = (info) => info.title || (state.channels.find((c) => String(c.id) === String(info.id)) || {}).title || 'Canal';
+    const wantTest = !!m[1];
+    const arg = m[2];
+
+    if (!wantTest) {
+      const ids = status.channels;
+      let text = `${em[1]} J'aime — réactions automatiques : ${status.enabled ? 'activé ✅' : 'désactivé ⛔'}\n${typesLine}\n\n`;
+      if (!ids.length) {
+        text += 'Aucun canal coché. Coche des canaux dans le bouton « J\'aime » du site, ou teste un ID : /jaime test -100123456789';
+      } else {
+        text += `Canaux cochés (${ids.length}) :\n`;
+        ids.forEach((id, i) => {
+          const info = likeReact.inspect(id);
+          const last = info.lastFire ? ` · dernier : ${info.lastFire.emoji} #N${info.lastFire.target ?? ''} ${info.lastFire.suit || ''}` : '';
+          text += `\n${i + 1}. ${nameOf(info)}\n   ID : ${id}\n   ${info.followed} prédiction(s) suivie(s) (${info.pending} en attente)${last}`;
+          if (!info.followed) text += '\n   ⚠ aucune prédiction du site trouvée dans ce canal';
+          if (info.lastError) text += `\n   ❌ dernière erreur Telegram : ${info.lastError}`;
+        });
+        text += '\n\nPour tester les réactions : /jaime test (tous) ou /jaime test <id>';
+      }
+      if (status.lastError) text += `\n\nDernière erreur : ${status.lastError}`;
+      return say(text);
+    }
+
+    // test : un canal précis, sinon tous les canaux cochés
+    let ids = status.channels;
+    if (arg) {
+      const parsed = /^-?\d{5,}$/.test(arg) || /^@[A-Za-z][A-Za-z0-9_]{4,}$/.test(arg) ? likeReact.parseChannels(arg) : [];
+      if (!parsed.length) return say('❌ ID de canal invalide. Exemple : /jaime test -100123456789 ou /jaime test @moncanal');
+      ids = parsed;
+    }
+    if (!ids.length) return say('Aucun canal coché à tester. Coche des canaux dans « J\'aime » ou tape /jaime test <id>.');
+    await say(`🧪 Test des réactions sur ${ids.length} canal(aux)… (le message de test est remis comme avant)`);
+    for (const id of ids) {
+      let r;
+      try { r = await likeReact.testReaction(id); }
+      catch (e) { r = { ok: false, error: e.message, info: likeReact.inspect(id) }; }
+      const info = r.info || likeReact.inspect(id);
+      let text = `${r.ok ? '✅' : '❌'} ${nameOf(info)}\nID : ${id}${info.checked ? '' : ' (non coché)'}\n`;
+      text += `Prédictions suivies : ${info.followed} (${info.pending} en attente)\n`;
+      if (r.role) text += `Rôle du bot : ${r.role === 'administrator' || r.role === 'creator' ? r.role + ' ✅' : r.role + ' ⚠ (il doit être administrateur)'}\n`;
+      if (r.results) {
+        text += Object.values(r.results).map((x) => `${x.emoji} ${x.ok ? '✅' : '❌'}`).join('   ') + '\n';
+        const bad = Object.values(r.results).filter((x) => !x.ok);
+        if (bad.length) text += bad.map((x) => `${x.emoji} refusé : ${x.error}`).join('\n') + '\n';
+        if (bad.some((x) => /REACTION_INVALID/i.test(x.error))) text += '→ Dans les paramètres du canal, onglet Réactions, autorise ces emojis.\n';
+        if (r.role && r.role !== 'administrator' && r.role !== 'creator') text += '→ Ajoute le bot comme administrateur du canal.\n';
+      } else if (r.error) {
+        text += `${r.error}\n`;
+      }
+      await say(text.trim());
     }
   });
 
@@ -1273,12 +1499,35 @@ function deactivate(id) {
   persist();
 }
 
-async function startBot(token) {
+// Un seul (re)démarrage à la fois : deux appels simultanés (démarrage + « Enregistrer et
+// redémarrer », ou import) créaient DEUX pollers sur le même token, d'où les réponses en double.
+let startChain = Promise.resolve();
+function startBot(token) {
+  const run = () => startBotInner(token);
+  const p = startChain.then(run, run);
+  startChain = p.catch(() => {});
+  return p;
+}
+
+// Anti-doublon : une même mise à jour Telegram (update_id) n'est traitée qu'une seule fois,
+// même si deux instances du bot la reçoivent.
+const seenUpdates = new Map();
+function isDuplicateUpdate(u) {
+  if (!u || u.update_id === undefined) return false;
+  const now = Date.now();
+  if (seenUpdates.has(u.update_id)) return true;
+  seenUpdates.set(u.update_id, now);
+  if (seenUpdates.size > 500) for (const [k, t] of seenUpdates) { if (now - t > 10 * 60 * 1000) seenUpdates.delete(k); }
+  return false;
+}
+
+async function startBotInner(token) {
   if (token) state.botToken = token.trim();
   persist();
   state.botError = null;
   if (bot) {
     try { await bot.stopPolling({ cancel: true }); } catch (_) {}
+    try { bot.removeAllListeners(); } catch (_) {}
     bot = null;
   }
   if (!state.botToken) {
@@ -1308,6 +1557,8 @@ async function startBot(token) {
       },
     });
     installChannelGuard(bot);
+    const rawProcessUpdate = bot.processUpdate.bind(bot);
+    bot.processUpdate = (u) => { if (isDuplicateUpdate(u)) return; return rawProcessUpdate(u); };
     wire(bot);
     const me = await bot.getMe(); // valide le token avant de lancer le polling
     state.botUsername = me.username;
@@ -1425,6 +1676,18 @@ let lastShoeSeq = 0;
 // LES DEUX la même prédiction « ombre » encore non envoyée (state.predictions
 // pas encore mis à jour par la première) → double envoi dans le canal public.
 let ticking = false;
+// v123 : garde-fous de la boucle principale. Un envoi Telegram ou une requête qui ne répond jamais laissait `ticking` à vrai pour
+// toujours : plus aucun jeu lu, plus aucune vérification, les prédictions restaient « en attente » (surtout après 00h00).
+let tickStartedAt = 0;
+let tickSeq = 0;
+const TICK_MAX_MS = 120000;     // un passage plus long que ça est considéré comme bloqué : le suivant reprend la main
+const FETCH_MAX_MS = 60000;     // lecture complète de l'API (miroirs + découverte + proxys)
+const MODULES_MAX_MS = 45000;   // tous les panneaux de prédiction ensemble
+function raceTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => { t = setTimeout(() => reject(new Error(`${label} : délai de ${Math.round(ms / 1000)} s dépassé`)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
 
 async function sendBilan(key, snapshot) {
   // Un bilan est un nouvel envoi. Il ne doit pas contourner l'interrupteur
@@ -1667,7 +1930,8 @@ async function broadcast(pred) {
     // « ombre » : un seul canal (public), utilisé uniquement une fois le mode
     // silencieux débloqué. Tant que le filtre est bloqué, rien n'est envoyé
     // nulle part (pas de canal silencieux séparé pour cette stratégie).
-    if (pred.strategy === 'ombre') return;
+    // « 2ᵉ carte du joueur » : la pause se fait en arrière-plan, sans aucun canal silencieux.
+    if (pred.strategy === 'ombre' || pred.strategy === 'secondeCarte') return;
     const shadowIds = strategyChannels(pred.strategy, 'shadow');
     if (!shadowIds.length) return;
     await sendPrediction(pred, sender, shadowIds);
@@ -1716,6 +1980,10 @@ async function sendPrediction(pred, sender, ids) {
     }
     try {
       const m = await sender.sendMessage(id, text, parse_mode ? { parse_mode } : {});
+      if (m && m.gated) { // retenue par « Envoi après perte » : ni publiée, ni comptée ; on garde seulement le canal pour suivre son résultat
+        (pred.gatedChannels = pred.gatedChannels || []).push(id);
+        continue;
+      }
       pred.messages.push({ chatId: id, messageId: m.message_id });
       countSent(pred.strategy);
     } catch (e) {
@@ -1726,6 +1994,8 @@ async function sendPrediction(pred, sender, ids) {
 
 async function updateResult(pred) {
   if (db.ready) db.closePrediction(pred);
+  // « Envoi après perte » par canal : le résultat (gagné / perdu) de chaque prédiction, envoyée OU retenue, alimente le canal
+  try { for (const id of [...new Set([...(pred.messages || []).map((m) => m.chatId), ...(pred.gatedChannels || [])])]) { channelLossGate.recordResult(id, pred.status); channelUniform.recordResult(id, pred.status); } } catch (_) { /* suivi seulement */ }
   const sender = senderFor();
   if (!sender) return;
   const { text, parse_mode } = predictionText(pred);
@@ -1778,11 +2048,18 @@ async function ensureDb() {
 }
 
 async function tick() {
-  if (ticking) return; // un tick précédent tourne encore : on saute celui-ci
+  if (ticking) {
+    // un tick précédent tourne encore : on saute celui-ci, sauf s'il est bloqué depuis trop longtemps (v123)
+    if (Date.now() - tickStartedAt < TICK_MAX_MS) return;
+    console.error(`⚠️ Passage de la boucle bloqué depuis ${Math.round((Date.now() - tickStartedAt) / 1000)} s : reprise forcée`);
+    state.lastError = 'boucle principale bloquée : reprise forcée';
+  }
   ticking = true;
+  tickStartedAt = Date.now();
+  const myTick = ++tickSeq;
   try {
-    await ensureDb();
-    const games = await api.fetchGames();
+    await raceTimeout(ensureDb(), 30000, 'base de données');
+    const games = await raceTimeout(api.fetchGames(), FETCH_MAX_MS, 'API 1xbet');
     state.lastError = null;
     registerGames(games);
 
@@ -1906,12 +2183,9 @@ async function tick() {
     // Promise.all pour qu'ils partent tous au même tick, sans s'attendre
     // les uns les autres.
     if (predictionControl.isPaused()) return;
-    await Promise.all([
+    await raceTimeout(Promise.all([
       // panneau « Prédit » : prédictions certifiées à 100% (IA)
       predit.tick(),
-      // panneau « Prédiction IA jeu 21 » : 21 classique et 21 séparés,
-      // cartes exactes et cartes de valeur sur leurs canaux respectifs.
-      game21Predict.tick(),
       // panneau « Prédiction après perte » : relais de la prochaine
       // prédiction d'une stratégie suivie (existante ou IA) après N pertes
       // consécutives.
@@ -1936,6 +2210,28 @@ async function tick() {
       dizaineTop.tick(),
       // « Meilleur + plus faible » : vérification des messages à deux costumes (voir best-weak-top.js)
       Promise.resolve(bestWeakTop.tick()),
+      // « Retour après perte » : vérification des prédictions des canaux suivis, retour N+D, rapport (voir loss-return.js)
+      Promise.resolve(lossReturn.tick()),
+      // « Relance après perte » : vérification des prédictions des canaux suivis ; une perte lance le même costume à +N (voir loss-relaunch.js)
+      Promise.resolve(lossRelaunch.tick()),
+      // « Costume N-1 → +4 » : costume venu à N-1 et absent à N → prédiction à N+4 (voir prev-suit.js)
+      Promise.resolve(prevSuit.tick()),
+      // « Miracle prediction » : reprise de la prédiction suivante d'une stratégie après sa perte, consensus de 5 stratégies (voir miracle-prediction.js)
+      Promise.resolve(miracle.tick()),
+      // « Canal Telegram » : vérification uniforme des prédictions lues dans chaque canal-stratégie (voir canal-telegram.js)
+      Promise.resolve(canalTelegram.tick()),
+      // « Prédiction fin de numéro » : meilleur costume du joueur, repli faible + inverse si le meilleur ne valide pas (voir end-digit-predict.js)
+      Promise.resolve(endDigitPredict.tick()),
+      // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité, 3 rattrapages, enchaînement (voir parity-palier.js)
+      Promise.resolve(parityPalier.tick()),
+      // « Trio fin de numéro » : à chaque fin de dizaine, les 3 meilleures fins de numéro de l'analyse (50-59 % : le costume, 60 % et + : son inverse) + suivi dans un autre canal (voir end-digit-trio.js)
+      Promise.resolve(endDigitTrio.tick()),
+      // « Distribution faible » : 2/2, 3/2, 3/3, 2k, 3k au taux faible (3-15 %) du Compte distribution, une à la fois, écart ≥ 2 (voir distribution-faible.js)
+      Promise.resolve(distributionFaible.tick()),
+      // « Palier parité égalité » : deux taux faibles égaux → costume du 2e taux, +0 ou +3, envoi 2 jeux avant (voir parity-egalite.js)
+      Promise.resolve(parityEgalite.tick()),
+      // « Stabilité du jeu » : 4 jeux analysés, alertes privées, bilan horaire, blocage des canaux (voir game-stability.js)
+      Promise.resolve(gameStability.tick()),
       // stratégie « Costume faible sur 2 cartes (miroir) » : configurations
       // multiples (voir costume-faible-top.js).
       costumeFaibleTop.tick(),
@@ -1959,16 +2255,20 @@ async function tick() {
       // début+34 déclenchées quand le jeu en live arrive à −3/−2 de la
       // cible (voir cards-count.js).
       cardsCount.tick(),
+      // panneau « Nul / 2-3 » : prédit ensemble le match nul (X) ou le 2/3 (voir draw-two-three.js)
+      drawTwoThree.tick(),
+      // panneau « Victoire V1 / V2 » : prédit ensemble la victoire du joueur (V1) ou du banquier (V2), déclencheurs trouvés par l'analyse (voir victoire-vb.js)
+      victoireVb.tick(),
       // panneau « VIP » : liste à cocher de toutes les stratégies (+ IA) ;
       // relais des 2 prochaines prédictions d'une stratégie cochée après 3
       // pertes consécutives, ou après 3 prédictions consécutives du même
       // costume, dans le canal VIP configuré (voir vip.js).
       vip.tick(),
-    ]);
+    ]), MODULES_MAX_MS, 'panneaux de prédiction');
   } catch (e) {
     state.lastError = e.message;
   } finally {
-    ticking = false;
+    if (tickSeq === myTick) ticking = false; // un ancien passage bloqué qui se termine tard ne doit pas libérer le passage en cours
   }
 }
 
@@ -2133,14 +2433,35 @@ async function applyDbConfigs() {
   await suitStreak.restoreFromDb();
   await dizaineTop.restoreFromDb();
   await bestWeakTop.restoreFromDb();
+  await lossReturn.restoreFromDb();
+  await lossRelaunch.restoreFromDb();
+  await prevSuit.restoreFromDb();
+  await miracle.restoreFromDb();
+  await canalTelegram.restoreFromDb();
+  await channelUniform.restoreFromDb();
+  await endDigitPredict.restoreFromDb();
+  await parityPalier.restoreFromDb();
+  await endDigitTrio.restoreFromDb();
+  await distributionFaible.restoreFromDb();
+  await parityEgalite.restoreFromDb();
+  await gameStability.restoreFromDb();
+  await absenceAlert.restoreFromDb();
+  await analyseManque.restoreFromDb();
+  await channelLossGate.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
+  await strategyRecap.restoreFromDb();
   await copyAnnounce.restoreFromDb();
+  await betType.restoreFromDb();
+  await likeReact.restoreFromDb();
   await suitBreak.restoreFromDb();
   await overlap.restoreFromDb();
   await statistics.restoreFromDb();
   await cardsCount.restoreFromDb();
+  await drawTwoThree.restoreFromDb();
+  await victoireVb.restoreFromDb();
   await vip.restoreFromDb();
+  try { const raw = await db.getSetting('ignored_channels'); if (raw) store.patch({ ignoredChannels: JSON.parse(raw) }); } catch (_) {} // canaux supprimés (Envois)
   await predictionControl.restoreFromDb();
   // bilans par stratégie (voir predictor.js/restorePredictions) : recharge
   // depuis la base les prédictions encore « en attente » + les dernières
@@ -2149,6 +2470,10 @@ async function applyDbConfigs() {
   const restoredCount = await restorePredictions();
   if (restoredCount) console.log(`♻️  ${restoredCount} prédiction(s) restaurée(s) depuis la base pour les bilans.`);
   await mirrorCounter.loadFromDb();
+  await parityCounter.restoreFromDb();
+  await distributionCounter.restoreFromDb();
+  slowMode.restore();
+  await slowMode.restoreFromDb();
   await lossNotice.loadFromDb();
   return { ok: true, loaded, added: missing, restored, aiStrategiesLoaded: aiRows.length };
 }
@@ -2198,15 +2523,62 @@ async function startLoop() {
   dizaineTop.restore();
   bestWeakTop.restore();
   bestWeakTop.setSender(senderFor);
+  bestWeakTop.setAdminId(() => state.adminId);
+  lossReturn.restore();
+  lossReturn.setSender(senderFor);
+  lossRelaunch.restore();
+  lossRelaunch.setSender(senderFor);
+  prevSuit.restore();
+  prevSuit.setSender(senderFor);
+  miracle.restore();
+  miracle.setSender(senderFor);
+  miracle.setAdminId(() => state.adminId);
+  canalTelegram.restore();
+  channelUniform.restore();
+  endDigitPredict.restore();
+  endDigitPredict.setSender(senderFor);
+  parityPalier.restore();
+  parityPalier.setSender(senderFor);
+  endDigitTrio.restore();
+  endDigitTrio.setSender(senderFor);
+  distributionFaible.restore();
+  distributionFaible.setSender(senderFor);
+  parityEgalite.restore();
+  parityEgalite.setSender(senderFor);
+  gameStability.restore();
+  gameStability.setSender(senderFor);
+  gameStability.setAdminId(() => state.adminId);
+  absenceAlert.restore();
+  absenceAlert.setSender(senderFor);
+  absenceAlert.setAdminId(() => state.adminId);
+  analyseManque.restore();
+  analyseManque.setSender(senderFor);
+  analyseManque.setAdminId(() => state.adminId);
+  channelLossGate.restore();
   costumeFaibleTop.restore();
   midnightReset.restore();
   midnightReset.setSender(senderFor);
+  strategyRecap.restore();
+  strategyRecap.setContext({ state, strategyChannels, senderFor, isPaused: () => predictionControl.isPaused() });
   dizaineTop.setSender(senderFor);
   dizaineTop.setAdminId(() => state.adminId);
   costumeFaibleTop.setSender(senderFor);
   costumeFaibleTop.setAdminId(() => state.adminId);
   copyAnnounce.restore();
   copyAnnounce.setSender(senderFor);
+  betType.restore();
+  betType.setSender(senderFor);
+  // « J'aime » : réactions automatiques sur les prédictions Type de mise des
+  // canaux cochés ; revérifie les canaux au démarrage (restore → scan).
+  likeReact.setSender(senderFor);
+  likeReact.restore();
+  // v134 : « J'aime » désactivé pour de bon — plus aucune minuterie.
+  // « Type de mise » tourne aussi sur sa propre minuterie (comme « Copie et annonce »).
+  if (!global.__betTypeTimer) {
+    global.__betTypeTimer = setInterval(() => {
+      betType.tick({ paused: predictionControl.isPaused() }).catch(() => {});
+    }, 4000);
+  }
   // « Copie et annonce » tourne sur SA PROPRE minuterie : elle ne dépend ni
   // du flux de jeux (tick() s'arrête si l'API échoue) ni de la pause des
   // prédictions pour mettre à jour les résultats copiés ; les annonces
@@ -2224,6 +2596,12 @@ async function startLoop() {
   statistics.setSender(senderFor);
   cardsCount.restore();
   cardsCount.setSender(senderFor);
+  drawTwoThree.restore();
+  drawTwoThree.setSender(senderFor);
+  drawTwoThree.setAdminId(() => state.adminId);
+  victoireVb.restore();
+  victoireVb.setSender(senderFor);
+  victoireVb.setAdminId(() => state.adminId);
   vip.restore();
   vip.setSender(senderFor);
   formationRelay.restore();
@@ -2250,11 +2628,31 @@ async function startLoop() {
     return msg.message_id;
   });
   mirrorCounter.scheduleHourlyReset();
+  // « Compte parité » (bouton de l'accueil) : fin de numéro 0-9 du joueur / banquier, un message par côté choisi (voir parity-counter.js)
+  parityCounter.setSender(async (channelId, text) => {
+    const sender = senderFor();
+    if (!sender) throw new Error('Aucun token API configuré dans les réglages.');
+    const msg = await sender.sendMessage(channelId, text);
+    return msg.message_id;
+  });
+  parityCounter.scheduleReset();
+  // « Compte distribution » (jumeau du compte parité) : 2/2, 3/2, 3/3, 2k, 3k par fin de numéro (voir distribution-counter.js)
+  distributionCounter.setSender(async (channelId, text) => {
+    const sender = senderFor();
+    if (!sender) throw new Error('Aucun token API configuré dans les réglages.');
+    const msg = await sender.sendMessage(channelId, text);
+    return msg.message_id;
+  });
+  distributionCounter.scheduleReset();
   // base de données : chaque jeu terminé est archivé par date
   setOnFinished((round) => {
     if (db.ready) db.saveGame(round);
     mirrorCounter.bump(round);
     mirrorCounter.publish(round.number).catch((e) => console.error('Compteur (Taux Miroir) :', e.message));
+    parityCounter.onFinished(round).catch((e) => console.error('Compte parité :', e.message));
+    distributionCounter.onFinished(round).catch((e) => console.error('Compte distribution :', e.message));
+    absenceAlert.onFinished(round).catch((e) => console.error('Alerte absence :', e.message));
+    analyseManque.onFinished(round).catch((e) => console.error('Analyse manque :', e.message));
   });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.
@@ -2306,6 +2704,8 @@ async function startLoop() {
     // « nouveau départ » de 00h00 (heure d'Abidjan) : export dans le chat privé puis
     // effacement des données, configurations conservées (voir midnight-reset.js)
     setInterval(() => { midnightReset.check().catch((e) => { state.lastError = e.message; }); }, 1000);
+    // récapitulatif des prédictions (case « Récapitulatif » de chaque stratégie) : toutes les 2 h, bilan à 00h puis remise à zéro
+    setInterval(() => { strategyRecap.tick().catch((e) => { state.lastError = e.message; }); }, 20000);
     tick();
   }
   startBot();

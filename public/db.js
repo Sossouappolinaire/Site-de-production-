@@ -10,17 +10,31 @@ const { databaseUrl } = require('./database-url');
 let pool = null;
 let ready = false;
 let lastError = null;
-// Priorité : DATABASE_URL (Render) > base « kile » par défaut (database-url.js)
-// > dernier lien enregistré via /setdb ou le panel web. La base par défaut
-// passe devant l'ancien lien resté dans data.json, pour que le changement de
-// base soit effectif même sur un service déjà déployé.
-let url = databaseUrl() || store.read().databaseUrl || config.DATABASE_URL || '';
+// Lien unique : Supabase (db-link.js). L'ancien DATABASE_URL, /setdb et le panel web
+// ne peuvent plus changer de base.
+let url = databaseUrl() || '';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- état complet du site (équivalent de data.json : compteurs, configurations)
+CREATE TABLE IF NOT EXISTS app_state (
+  key        TEXT PRIMARY KEY,
+  value      JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- anti-doublon des messages / prédictions envoyés aux canaux (send-dedupe.js)
+CREATE TABLE IF NOT EXISTS sent_dedupe (
+  key        TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL,
+  channel    TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sent_dedupe_kind_idx ON sent_dedupe (kind);
 
 CREATE TABLE IF NOT EXISTS games (
   number        BIGINT PRIMARY KEY,
@@ -217,12 +231,13 @@ function mask(u) {
 }
 
 async function connect(newUrl) {
-  if (newUrl !== undefined) {
-    url = (newUrl || '').trim();
-    store.patch({ databaseUrl: url });
-  }
+  // le lien est fixé par db-link.js : toute tentative de le remplacer (/setdb, panel) est ignorée
+  url = databaseUrl() || url;
+  // aucune adresse retenue au démarrage (base injoignable) : on réessaie toutes les adresses intégrées (db-link.js) avant d'abandonner
+  if (!url) { try { url = (await require('./db-link').ensureDatabaseUrl(1)) || ''; } catch (_) { url = ''; } }
   ready = false;
   lastError = null;
+  lastSettings.clear(); lastSnapshot = null; predCache.clear(); // nouvelle connexion : tout est renvoyé une fois
   if (pool) { try { await pool.end(); } catch (_) {} pool = null; }
   if (!url) { lastError = 'Aucun lien de base de données configuré'; return status(); }
   if (!Pool) { lastError = "Module 'pg' absent — lance npm install"; return status(); }
@@ -230,13 +245,22 @@ async function connect(newUrl) {
     pool = new Pool({
       connectionString: url,
       ssl: /localhost|127\.0\.0\.1/.test(url) ? false : { rejectUnauthorized: false },
-      max: 4,
+      max: 6,
+      connectionTimeoutMillis: 10000,   // v133 : une connexion qui ne s'ouvre pas en 10 s échoue au lieu de bloquer le bot
+      idleTimeoutMillis: 30000,
+      statement_timeout: 30000,         // une requête bloquée est coupée côté Supabase
+      query_timeout: 35000,
+      keepAlive: true,
     });
+    // sans ce récepteur, une connexion coupée par Supabase (inactivité, redémarrage) lève une erreur non gérée
+    pool.on('error', (e) => { lastError = e.message; });
     await pool.query(SCHEMA);
     ready = true;
   } catch (e) {
     lastError = e.message;
     pool = null;
+    // l'adresse retenue ne répond plus : elle est oubliée, le prochain passage (30 s) reteste toutes les adresses
+    try { require('./database-url').setDatabaseUrl(''); url = ''; } catch (_) { /* ignoré */ }
   }
   return status();
 }
@@ -252,9 +276,20 @@ async function q(sql, params = []) {
 }
 
 // ---- jeux ------------------------------------------------------------------
+// v133/v135 : la base ne garde que les GAMES_KEPT (50) derniers jeux : à chaque jeu enregistré, les plus anciens sont effacés.
+const GAMES_KEPT = 50;
+let savedSinceTrim = 0;
+async function trimGames() {
+  return q(`DELETE FROM games WHERE number NOT IN (SELECT number FROM games ORDER BY played_at DESC, number DESC LIMIT ${GAMES_KEPT})`);
+}
 async function saveGame(g) {
   // un jeu EN LIVE (non terminé) n'est jamais enregistré en base
   if (!g || !g.finished) return null;
+  const r = await saveGameRaw(g);
+  if (r) trimGames().catch(() => {}); // v135 : nettoyage à CHAQUE jeu enregistré → exactement GAMES_KEPT (50) jeux en base
+  return r;
+}
+async function saveGameRaw(g) {
   return q(
     `INSERT INTO games (number, played_on, winner, player_cards, banker_cards,
         player_suits, banker_suits, player_value, banker_value,
@@ -323,12 +358,22 @@ async function savePrediction(p, bValue) {
   );
 }
 
-async function closePrediction(p) {
-  return q(
+// v133 : (1) une prédiction annulée n'est plus enregistrée comme « perdue » ; (2) si la clôture arrive AVANT l'insertion
+// (prédiction résolue dans le tour même de sa création, l'INSERT étant asynchrone), l'UPDATE ne trouvait aucune ligne et la
+// prédiction restait « attente » pour toujours en base (ligne fantôme rechargée comme « non vérifiée » à chaque redémarrage) :
+// on réessaie quelques secondes plus tard.
+async function closePrediction(p, attempt = 0) {
+  const status = p.status === 'gagné' ? 'gagne' : p.status === 'annulé' ? 'annule' : 'perdu';
+  const r = await q(
     `UPDATE predictions SET status=$1, rattrapage=$2, hit_number=$3, closed_at=now()
-     WHERE strategy=$4 AND target=$5 AND suit=$6`,
-    [p.status === 'gagné' ? 'gagne' : 'perdu', p.step, p.hitNumber, p.strategy || 'costume', p.target, p.suit || p.cardsLabel || '-']
+     WHERE strategy=$4 AND target=$5 AND suit=$6 AND status='attente'`,
+    [status, p.step, p.hitNumber, p.strategy || 'costume', p.target, p.suit || p.cardsLabel || '-']
   );
+  if (r && r.rowCount === 0 && attempt < 3) {
+    const t = setTimeout(() => { closePrediction(p, attempt + 1).catch(() => {}); }, 2500);
+    if (t.unref) t.unref();
+  }
+  return r;
 }
 
 // recherche une (ou plusieurs, si diffusée par plusieurs stratégies) prédiction(s)
@@ -583,7 +628,15 @@ async function loadAiAnalyses(limit = 12) {
 }
 
 // ---- réglages --------------------------------------------------------------
+const lastSettings = new Map(); // v133 : dernière valeur envoyée par clé (vidé à chaque connexion)
 async function setSetting(key, value) {
+  const v = String(value);
+  if (lastSettings.get(key) === v) return { rowCount: 0, skipped: true }; // identique à la dernière écriture : rien à envoyer à Supabase
+  const r = await setSettingRaw(key, v);
+  if (r) lastSettings.set(key, v);
+  return r;
+}
+async function setSettingRaw(key, value) {
   return q(
     `INSERT INTO settings (key, value) VALUES ($1,$2)
      ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`,
@@ -594,6 +647,36 @@ async function setSetting(key, value) {
 async function getSetting(key) {
   const r = await q(`SELECT value FROM settings WHERE key=$1`, [key]);
   return r && r.rows[0] ? r.rows[0].value : null;
+}
+
+
+// ---- état complet du site (miroir de data.json) ----------------------------
+// Supabase/PostgreSQL est la source durable : compteurs, panneaux et
+// configurations survivent aux redémarrages (disque Render éphémère).
+let lastSnapshot = null;
+async function saveStoreSnapshot(data) {
+  const clean = { ...(data || {}) };
+  delete clean.databaseUrl; // le lien de la base ne doit jamais être stocké dans la base
+  const json = JSON.stringify(clean);
+  if (json === lastSnapshot) return { rowCount: 0, skipped: true }; // état inchangé depuis le dernier envoi
+  const r = await saveStoreSnapshotRaw(json);
+  if (r) lastSnapshot = json;
+  return r;
+}
+async function saveStoreSnapshotRaw(json) {
+  return q(
+    `INSERT INTO app_state (key, value, updated_at) VALUES ('store', $1::jsonb, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [json]
+  );
+}
+
+async function loadStoreSnapshot() {
+  const r = await q(`SELECT value, updated_at FROM app_state WHERE key = 'store'`);
+  if (!r || !r.rows[0]) return null;
+  let value = r.rows[0].value;
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch (_) { return null; } }
+  return { value, updatedAt: r.rows[0].updated_at };
 }
 
 
@@ -797,9 +880,21 @@ async function gamesInRange(minNumber, maxNumber) {
 }
 
 // prédictions d'une date
+// v133 : cache de 45 s. La Formation relançait cette requête (jusqu'à 1000 lignes) UNE FOIS PAR STRATÉGIE (19 fois) toutes les
+// 60 s, plus les Conseils : 413 000 appels et 311 millions de lignes lues en base. Un seul résultat partagé suffit.
+const predCache = new Map(); // "date|limit" → { at, rows }
 async function predictionsByDate(dateStr, limit = 200) {
   const d = normalizeDate(dateStr);
   if (!d) return [];
+  const key = `${d}|${limit}`;
+  const hit = predCache.get(key);
+  if (hit && Date.now() - hit.at < 45000) return hit.rows.slice();
+  const rows = await predictionsByDateRaw(d, limit);
+  predCache.set(key, { at: Date.now(), rows });
+  if (predCache.size > 20) predCache.delete(predCache.keys().next().value);
+  return rows.slice();
+}
+async function predictionsByDateRaw(d, limit) {
   const r = await q(
     `SELECT target, suit, hand, max_r, status, rattrapage, hit_number, created_at, strategy
        FROM predictions WHERE played_on = $1 ORDER BY target DESC LIMIT $2`, [d, limit]);
@@ -869,6 +964,7 @@ module.exports = {
   saveAiAnalysis, loadAiAnalyses,
   lastGames, gameByNumber, gamesInRange, predictionsByDate, predictionSummary,
   overview, availableDates, readOnlyQuery,
+  saveStoreSnapshot, loadStoreSnapshot,
   saveAppConfig, loadAppConfig, savePreditState, loadPreditState, saveAfterLossState, loadAfterLossState,
   afterLossSendExists, reserveAfterLossSend, releaseAfterLossSend, clearAfterLossSent, listAfterLossSent,
   savePredictionControlState, loadPredictionControlState,

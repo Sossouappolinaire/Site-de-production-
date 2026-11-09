@@ -70,7 +70,13 @@ function parseChannels(value) {
 
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
-  if (patch.channels !== undefined) panel.channels = parseChannels(patch.channels);
+  if (patch.channels !== undefined) {
+    const next = parseChannels(patch.channels);
+    // les identifiants de messages suivis appartiennent aux anciens canaux : on ne doit JAMAIS
+    // les éditer dans un autre canal (c'était une source de désordre).
+    if (JSON.stringify(next) !== JSON.stringify(panel.channels)) panel.tracked = {};
+    panel.channels = next;
+  }
   persist();
   return config();
 }
@@ -196,16 +202,30 @@ function isRealLiveGame(g) {
 // ---------------------------------------------------------------------------
 // Envoi / édition
 // ---------------------------------------------------------------------------
+const realIdCache = new Map(); // saisie du canal (ID ou @nom) -> identifiant réel Telegram
 async function sendNew(g, text) {
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) { panel.lastError = 'Aucun token Telegram configuré'; return null; }
   if (!panel.channels.length) { panel.lastError = 'Aucun canal configuré pour les statistiques'; return null; }
-  const results = await Promise.all(panel.channels.map((id) =>
-    bot.sendMessage(id, text)
-      .then((m) => ({ ok: true, id, messageId: m.message_id }))
-      .catch((e) => ({ ok: false, id, error: e.message }))
-  ));
-  const sentMessages = results.filter((r) => r.ok).map((r) => ({ chatId: r.id, messageId: r.messageId }));
+  // envoi canal par canal, dans l'ordre : un même canal réel saisi deux fois (ID + @nom) ne reçoit qu'un message.
+  const results = [];
+  const reached = new Set();
+  for (const id of panel.channels) {
+    try {
+      // canal déjà reconnu comme identique à un autre (ID + @nom) : on n'envoie même pas
+      if (realIdCache.has(String(id)) && reached.has(realIdCache.get(String(id)))) continue;
+      const m = await bot.sendMessage(id, text);
+      const real = String((m && m.chat && m.chat.id) != null ? m.chat.id : id);
+      realIdCache.set(String(id), real);
+      if (reached.has(real)) { // doublon de configuration : on supprime le message en trop
+        if (m && m.message_id != null) { try { await bot.deleteMessage(real, m.message_id); } catch (_) { /* best-effort */ } }
+        continue;
+      }
+      reached.add(real);
+      results.push({ ok: true, id: (m && m.chat && m.chat.id != null) ? m.chat.id : id, messageId: m && m.message_id });
+    } catch (e) { results.push({ ok: false, id, error: e.message }); }
+  }
+  const sentMessages = results.filter((r) => r.ok && r.messageId != null).map((r) => ({ chatId: r.id, messageId: r.messageId }));
   const errors = results.filter((r) => !r.ok).map((r) => `${r.id} : ${r.error}`);
   if (!sentMessages.length) { panel.lastError = errors[0] || 'Envoi impossible'; return null; }
   panel.sentCount = (panel.sentCount || 0) + 1;
@@ -214,14 +234,61 @@ async function sendNew(g, text) {
   return sentMessages;
 }
 
+// v133 : l'édition rapporte maintenant son résultat. Avant, toute erreur était avalée ET la signature était déjà mise à jour :
+// une édition refusée (limite Telegram « trop de requêtes », réseau, message encore en file du mode lent) n'était JAMAIS
+// retentée et le message restait bloqué sur « ⏰ … » alors que les jeux suivants passaient (#N1139, #N1140 sur la capture).
+//   → { ok: true }                  tous les messages sont à jour (ou ne peuvent plus l'être : supprimés)
+//   → { ok: false, retryAfter: s }  à retenter au prochain passage (retryAfter : attente imposée par Telegram)
 async function editExisting(messages, text) {
   const bot = typeof sender === 'function' ? sender() : null;
-  if (!bot) return;
-  await Promise.all(messages.map((m) =>
-    bot.editMessageText(text, { chat_id: m.chatId, message_id: m.messageId }).catch(() => {})
-  ));
+  if (!bot) return { ok: false, retryAfter: 5 };
+  let ok = true; let retryAfter = 0;
+  await Promise.all(messages.map(async (m) => {
+    try {
+      await bot.editMessageText(text, { chat_id: m.chatId, message_id: m.messageId });
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (/not modified/i.test(msg)) return; // déjà à jour
+      if (/message to edit not found|message can't be edited|MESSAGE_ID_INVALID|chat not found/i.test(msg)) return; // message supprimé : rien à rattraper
+      ok = false;
+      const body = e && e.response && e.response.body;
+      const ra = Number((body && body.parameters && body.parameters.retry_after) || ((msg.match(/retry after (\d+)/i) || [])[1]) || 0);
+      if (ra > retryAfter) retryAfter = ra;
+    }
+  }));
+  return { ok, retryAfter };
 }
 
+const recentSent = new Map(); // numéro -> { messages, at } : jamais vidé par un changement de sabot (anti-doublon v137)
+const RECENT_MS = 5 * 60 * 1000;
+const sending = new Set(); // numéros dont le premier envoi est en cours (anti-doublon)
+
+// v136 : verrou d'envoi PAR JEU, partagé via la base (table sent_dedupe, déjà créée). Un jeu n'est envoyé qu'UNE fois, même si
+// deux instances du site tournent en même temps (redéploiement Render, deux hébergements avec le même token) ou si le suivi
+// en mémoire est perdu : la 2ᵉ instance voit le verrou pris et n'envoie rien (le message est édité par celle qui l'a envoyé).
+const GAME_CLAIM_TTL_MS = 6 * 3600 * 1000;
+function gameClaimKey(n) {
+  const day = new Date().toISOString().slice(0, 10);
+  return `stat|${panel.channels.map(String).sort().join(',')}|${state.shoeSeq || 0}|${day}|${n}`;
+}
+async function claimGame(n) {
+  if (!db.ready || typeof db.exec !== 'function') return true; // sans base : `sending` + `tracked` protègent ce processus
+  try {
+    const r = await db.exec(
+      `INSERT INTO sent_dedupe (key, kind, channel) VALUES ($1, 's', $2)
+       ON CONFLICT (key) DO UPDATE SET created_at = now()
+         WHERE sent_dedupe.created_at < now() - ($3 || ' milliseconds')::interval
+       RETURNING key`,
+      [gameClaimKey(n), 'statistics', String(GAME_CLAIM_TTL_MS)]
+    );
+    return !!(r && r.rowCount);
+  } catch (_) { return true; } // base muette : on n'empêche pas l'envoi
+}
+function releaseGame(n) {
+  if (!db.ready || typeof db.exec !== 'function') return;
+  db.exec('DELETE FROM sent_dedupe WHERE key = $1', [gameClaimKey(n)]).catch(() => {});
+}
+let editPausedUntil = 0;   // jusqu'à cet instant (ms) : aucune édition (limite Telegram)
 async function processGame(g) {
   if (!hasStarted(g)) return; // « un jeu qui n'a pas encore commencé n'est pas envoyé »
   if (!isRealLiveGame(g)) return; // pas la table réellement suivie : on bloque
@@ -229,14 +296,53 @@ async function processGame(g) {
   const entry = panel.tracked[g.number];
   const text = buildLine(g);
   if (!entry) {
-    const sentMessages = await sendNew(g, text);
-    if (sentMessages) panel.tracked[g.number] = { messages: sentMessages, signature: sig, finished: !!g.finished };
+    if (sending.has(g.number)) return; // déjà en cours d'envoi : jamais deux fois
+    // ORDRE STRICT : un jeu plus ancien que le dernier déjà publié n'est jamais envoyé après lui
+    // (il apparaîtrait dans le désordre dans le canal).
+    let top = maxTrackedNumber();
+    // numérotation repartie de très bas sur le jeu EN DIRECT = nouveau sabot non détecté : on repart d'un suivi vide
+    if (top != null && g.number < top && state.live && g.number === state.live.number && (top - g.number) > 30) { panel.tracked = {}; top = null; }
+    if (top != null && g.number < top) { panel.skippedLate = (panel.skippedLate || 0) + 1; return; }
+    // v137 : le suivi peut être vidé en plein jeu (faux « nouveau sabot », redémarrage, perte de mémoire) : si ce numéro a été envoyé
+    // il y a moins de 5 min, on RETROUVE le message d'origine et on l'ÉDITE au lieu d'en renvoyer un second.
+    const prev = recentSent.get(g.number);
+    if (prev && Date.now() - prev.at < RECENT_MS && prev.messages && prev.messages.length) {
+      panel.tracked[g.number] = { messages: prev.messages, signature: '', finished: false, text: undefined };
+      return processGame(g);
+    }
+    sending.add(g.number);
+    try {
+      if (!(await claimGame(g.number))) { // v136 : ce jeu a déjà été envoyé par une autre instance / avant un redémarrage → jamais de 2ᵉ message
+        panel.tracked[g.number] = { messages: [], signature: sig, finished: true, foreign: true };
+        persist();
+        return;
+      }
+      const sentMessages = await sendNew(g, text);
+      if (!sentMessages) releaseGame(g.number); // envoi échoué : on libère pour permettre une nouvelle tentative
+      if (sentMessages) {
+        recentSent.set(g.number, { messages: sentMessages, at: Date.now() });
+        if (recentSent.size > 200) { const first = recentSent.keys().next().value; recentSent.delete(first); }
+        panel.tracked[g.number] = { messages: sentMessages, signature: sig, finished: !!g.finished };
+        if (!g.finished) panel.tracked[g.number].text = text; // v135 : dernière ligne « ⏰ » envoyée (utile si le jeu disparaît du flux)
+        persist(); // mémorisé tout de suite : un redémarrage ne renverra pas ce jeu
+      }
+    } finally { sending.delete(g.number); }
     return;
   }
   if (entry.signature === sig) return; // rien de visible n'a changé depuis la dernière fois
-  entry.signature = sig;
-  entry.finished = !!g.finished;
-  await editExisting(entry.messages, text);
+  if (Date.now() < editPausedUntil) return; // pause imposée par Telegram (limite de requêtes) : on retentera
+  const r = await editExisting(entry.messages, text);
+  if (r.ok) {
+    entry.signature = sig; // la signature n'est retenue QU'APRÈS une édition réussie : sinon on retente au passage suivant
+    entry.finished = !!g.finished;
+    delete entry.fails;
+    delete entry.missingSince; delete entry.dbCheckedAt;
+    if (g.finished) delete entry.text; else entry.text = text;
+    return;
+  }
+  entry.fails = (entry.fails || 0) + 1;
+  if (r.retryAfter) editPausedUntil = Date.now() + Math.min(60, r.retryAfter) * 1000;
+  if (entry.fails >= 12) { entry.signature = sig; entry.finished = !!g.finished; delete entry.fails; } // abandon après 12 essais (message inaccessible)
 }
 
 // ---------------------------------------------------------------------------
@@ -286,9 +392,95 @@ setOnShoeReset(() => {
   // les numéros de jeu repartent à 1 à chaque nouveau sabot : le suivi de
   // l'ancien sabot n'a plus aucun sens (et créerait des collisions avec les
   // nouveaux numéros).
+  const previous = panel.tracked;
   panel.tracked = {};
   persist();
+  return finalizeEntries(previous); // v135 : les messages encore « ⏰ » de l'ancien sabot sont terminés avant l'oubli
 });
+
+// ---------------------------------------------------------------------------
+// v135 : finalisation des messages restés bloqués sur « ⏰ »
+// ---------------------------------------------------------------------------
+// Un message « ⏰ » ne pouvait plus être terminé quand le jeu avait quitté le flux ET que sa version terminée n'était plus en
+// mémoire : redémarrage du service (Render), nouveau sabot, remise à zéro de 00h00 (le suivi était effacé sans finaliser).
+// Désormais : (1) le jeu terminé est relu dans la table `games` de la base (les 50 derniers jeux) ; (2) avant d'effacer le
+// suivi (nouveau sabot, 00h00) les messages encore en cours sont finalisés ; (3) en dernier recours le message n'affiche plus ⏰
+// mais « ⚠️ … résultat non reçu » (corrigé tout seul si le vrai résultat arrive ensuite).
+const STUCK_AFTER_MS = 15000;      // jeu absent du flux depuis ce délai : on va chercher sa version terminée en base
+const GIVE_UP_MS = 180000;         // toujours rien après ce délai : dernier recours (⚠️)
+const DB_RECHECK_MS = 30000;       // délai entre deux recherches en base pour un même jeu
+const finalizing = new Set();
+
+async function gameFromDb(n) {
+  if (!db.ready || typeof db.gameByNumber !== 'function') return null;
+  try {
+    const row = await db.gameByNumber(n);
+    if (!row || !row.raw) return null;
+    const g = typeof row.raw === 'string' ? JSON.parse(row.raw) : row.raw;
+    return g && g.finished && Number(g.number) === Number(n) ? g : null;
+  } catch (_) { return null; }
+}
+
+function lastResortText(entry) {
+  const base = String(entry.text || '').replace(/^⏰\s*/, '');
+  return base ? `⚠️ ${base} — résultat non reçu` : null;
+}
+
+// termine UN message suivi ; renvoie true si le message n'a plus rien à rattraper
+async function finalizeOne(num, entry, { force = false } = {}) {
+  if (!entry || entry.finished || finalizing.has(num)) return false;
+  finalizing.add(num);
+  try {
+    let g = state.games.get(num);
+    if (!(g && g.finished)) g = ((state.history) || []).find((h) => h && h.finished && h.number === num) || null;
+    if (!g) g = await gameFromDb(num);
+    if (g && g.finished) {
+      const r = await editExisting(entry.messages, buildLine(g));
+      if (!r.ok) { if (r.retryAfter) editPausedUntil = Date.now() + Math.min(60, r.retryAfter) * 1000; return false; }
+      entry.signature = signatureOf(g); entry.finished = true;
+      delete entry.fails; delete entry.missingSince; delete entry.dbCheckedAt; delete entry.text;
+      return true;
+    }
+    const lastAge = Date.now() - (entry.missingSince || Date.now());
+    if (!force && lastAge < GIVE_UP_MS) return false;
+    const text = lastResortText(entry);
+    if (!text) { entry.finished = true; return true; }
+    const r = await editExisting(entry.messages, text);
+    if (!r.ok) { if (r.retryAfter) editPausedUntil = Date.now() + Math.min(60, r.retryAfter) * 1000; return false; }
+    // la signature reste celle d'avant : si le vrai résultat arrive plus tard, processGame() corrigera le message
+    entry.finished = true; delete entry.fails; delete entry.missingSince; delete entry.dbCheckedAt; delete entry.text;
+    return true;
+  } finally { finalizing.delete(num); }
+}
+
+// passage régulier (tick) : jeux suivis encore « ⏰ » qui ne sont plus dans le flux
+async function sweepStuck(live, hist) {
+  const now = Date.now();
+  for (const [n, entry] of Object.entries(panel.tracked)) {
+    if (!entry || entry.finished) continue;
+    const num = Number(n);
+    if (live.has(num) || hist.has(num)) { delete entry.missingSince; delete entry.dbCheckedAt; continue; }
+    if (!entry.missingSince) { entry.missingSince = now; continue; }
+    if (now - entry.missingSince < STUCK_AFTER_MS) continue;
+    if (now < editPausedUntil) continue;
+    if (entry.dbCheckedAt && now - entry.dbCheckedAt < DB_RECHECK_MS) continue;
+    entry.dbCheckedAt = now;
+    await finalizeOne(num, entry);
+  }
+}
+
+// avant d'effacer le suivi (nouveau sabot, 00h00) : tous les messages encore en cours sont finalisés (délai maximum 20 s)
+async function finalizeEntries(tracked) {
+  const todo = Object.entries(tracked || {}).filter(([, e]) => e && !e.finished);
+  if (!todo.length) return 0;
+  let done = 0;
+  const work = (async () => {
+    for (const [n, entry] of todo) { if (await finalizeOne(Number(n), entry, { force: true })) done++; }
+  })();
+  await Promise.race([work, new Promise((r) => setTimeout(r, 20000))]);
+  return done;
+}
+const finalizeAll = () => finalizeEntries(panel.tracked);
 
 // ---------------------------------------------------------------------------
 // Boucle de traitement
@@ -298,7 +490,16 @@ async function tick() {
   busy = true;
   try {
     const games = [...state.games.values()].sort((a, b) => a.number - b.number);
+    // v133 : un jeu suivi mais resté sur « ⏰ » dont le tour a quitté le flux avant d'être édité une dernière fois est
+    // terminé à partir de l'historique des tours finis (sinon il restait bloqué en cours pour toujours)
+    const live = new Set(games.map((x) => x.number));
+    const hist = new Map(((state.history) || []).filter((h) => h && h.finished).map((h) => [h.number, h]));
+    for (const [n, entry] of Object.entries(panel.tracked)) {
+      const num = Number(n);
+      if (entry && !entry.finished && !live.has(num) && hist.has(num)) await processGame(hist.get(num));
+    }
     for (const g of games) await processGame(g);
+    await sweepStuck(live, hist); // v135 : messages restés sur « ⏰ » alors que le jeu a quitté le flux
     // purge : les jeux terminés et déjà édités une dernière fois n'ont plus
     // besoin d'être gardés en mémoire indéfiniment (on garde une marge pour
     // les tours qui reviendraient en correction tardive du flux).
@@ -342,12 +543,13 @@ function statusView() {
     lastSentAt: panel.lastSentAt,
     lastScanAt: panel.lastScanAt,
     lastError: panel.lastError,
+    skippedLate: panel.skippedLate || 0,
   };
 }
 
 module.exports = {
   panel, setSender, tick, test, status: statusView, config, configure,
-  restore, restoreFromDb, parseChannels, buildLine, drawingSide,
+  restore, restoreFromDb, parseChannels, buildLine, drawingSide, finalizeAll, finalizeEntries,
 };
 
 // exposé pour l'effacement de minuit (midnight-reset.js)

@@ -24,6 +24,9 @@
 // son réveil, tant qu'on est dans les 30 premières minutes de la journée.
 // Un seul passage par jour (jour mémorisé en base et en fichier, même après redémarrage).
 //
+// v128 : un panneau qui expose wipeDay() (ex. « Trio fin de numéro ») s'efface lui-même entièrement, bilans compris, et envoie l'état vide à Supabase.
+// Si Supabase est coupée à 00h00, les tables de données sont vidées dès la reconnexion (dbPending). Le TOKEN API n'est jamais lu ni modifié ici.
+//
 // Désactivation : MIDNIGHT_RESET=off.
 'use strict';
 
@@ -37,7 +40,7 @@ const CATCHUP_MINUTES = 30;
 const EXPORT_TRIES = 3;
 const EXPORT_RETRY_MS = 15000;
 
-const info = { lastDay: null, lastRunAt: null, lastReport: null, running: false };
+const info = { lastDay: null, lastRunAt: null, lastReport: null, running: false, dbPending: false }; // dbPending : minuit passé pendant que Supabase était coupé → tables de données à vider dès la reconnexion
 let sender = null;
 function setSender(fn) { sender = fn; }
 
@@ -54,18 +57,18 @@ function parts(ms) {
 
 // ── persistance du jour déjà traité ───────────────────────────────────────────
 function persistInfo() {
-  const v = { lastDay: info.lastDay, lastRunAt: info.lastRunAt, lastReport: info.lastReport };
+  const v = { lastDay: info.lastDay, lastRunAt: info.lastRunAt, lastReport: info.lastReport, dbPending: !!info.dbPending };
   try { store.patch({ midnightReset: v }); } catch (_) { /* ignoré */ }
   if (db.ready) db.setSetting('midnight_reset', JSON.stringify(v)).catch(() => {});
 }
 function restore() {
-  try { const s = (store.read() || {}).midnightReset; if (s) Object.assign(info, { lastDay: s.lastDay || null, lastRunAt: s.lastRunAt || null, lastReport: s.lastReport || null }); } catch (_) { /* ignoré */ }
+  try { const s = (store.read() || {}).midnightReset; if (s) Object.assign(info, { lastDay: s.lastDay || null, lastRunAt: s.lastRunAt || null, lastReport: s.lastReport || null, dbPending: !!s.dbPending }); } catch (_) { /* ignoré */ }
 }
 async function restoreFromDb() {
   if (!db.ready) return;
   try {
     const raw = await db.getSetting('midnight_reset');
-    if (raw) { const s = JSON.parse(raw); if (s && s.lastDay && (!info.lastDay || s.lastDay > info.lastDay)) Object.assign(info, { lastDay: s.lastDay, lastRunAt: s.lastRunAt || null, lastReport: s.lastReport || null }); }
+    if (raw) { const s = JSON.parse(raw); if (s && s.lastDay && (!info.lastDay || s.lastDay > info.lastDay)) Object.assign(info, { lastDay: s.lastDay, lastRunAt: s.lastRunAt || null, lastReport: s.lastReport || null, dbPending: !!s.dbPending }); }
   } catch (_) { /* ignoré */ }
 }
 
@@ -120,13 +123,34 @@ function wipePanel(panel) {
 }
 
 const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap', 'vip', 'cards-count',
-  'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'game21-predict', 'statistics'];
+  'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'bet-type', 'game21-predict', 'statistics',
+  'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio', 'miracle-prediction',
+  // v133 : panneaux qui gardaient encore leurs données du jour après 00h00
+  'canal-telegram', 'loss-return', 'loss-relaunch', 'prev-suit', 'end-digit-predict', 'strategy-recap', 'distribution-counter', 'parity-counter']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
+
+const DB_TABLES = [
+  ['games', 'DELETE FROM games'],
+  ['sent_dedupe', 'DELETE FROM sent_dedupe'],
+  ['predictions', 'DELETE FROM predictions'],
+  ['after_loss_sent', 'DELETE FROM after_loss_sent'],
+  ['announcements', 'DELETE FROM announcements'],
+  ['gates', 'DELETE FROM gates'],
+  ['cumulative_analyses', 'DELETE FROM cumulative_analyses'],
+];
+async function wipeDbTables(report) {
+  for (const [label, sql] of DB_TABLES) {
+    try { await db.exec(sql); report.db.push(label); }
+    catch (e) { if (!/does not exist/i.test(e.message)) report.errors.push(`${label} : ${e.message}`); }
+  }
+}
 
 async function wipeData() {
   const report = { memory: [], db: [], errors: [] };
   const { state } = predictor;
   state.wiping = true; // rend muets le rapport PDF et le bilan de fin de sabot (voir bot.js)
   try {
+    // v135 : les messages « Statistiques » encore en cours (⏰) sont terminés AVANT d'effacer jeux et suivi (sinon ils restaient bloqués)
+    try { const st = require('./statistics'); if (st && typeof st.finalizeAll === 'function') await st.finalizeAll(); } catch (e) { report.errors.push(`statistics : ${e.message}`); }
     // mémoire du moteur : jeux, historique, compteurs, prédictions (+ table predictions
     // et hooks de remise à zéro de tous les panneaux via resetShoe)
     predictor.resetShoe('minuit 00h00 — nouveau départ');
@@ -142,26 +166,18 @@ async function wipeData() {
     for (const name of MODULES) {
       try {
         const mod = require(`./${name}`);
-        if (mod && mod.panel) wipePanel(mod.panel);
-        if (mod && typeof mod.persist === 'function') mod.persist();
+        if (mod && typeof mod.wipeDay === 'function') mod.wipeDay(); // v128 : le module efface lui-même TOUT (bilans compris) et envoie l'état vide à Supabase
+        else {
+          if (mod && mod.panel) wipePanel(mod.panel);
+          if (mod && typeof mod.persist === 'function') mod.persist();
+        }
         report.memory.push(name);
       } catch (e) { report.errors.push(`${name} : ${e.message}`); }
     }
 
-    // base de données : uniquement les tables de DONNÉES
-    if (db.ready) {
-      for (const [label, sql] of [
-        ['games', 'DELETE FROM games'],
-        ['predictions', 'DELETE FROM predictions'],
-        ['after_loss_sent', 'DELETE FROM after_loss_sent'],
-        ['announcements', 'DELETE FROM announcements'],
-        ['gates', 'DELETE FROM gates'],
-        ['cumulative_analyses', 'DELETE FROM cumulative_analyses'],
-      ]) {
-        try { await db.exec(sql); report.db.push(label); }
-        catch (e) { if (!/does not exist/i.test(e.message)) report.errors.push(`${label} : ${e.message}`); }
-      }
-    }
+    // base de données (Supabase) : uniquement les tables de DONNÉES. Si la base est coupée à 00h00, l'effacement est fait dès la reconnexion (dbPending).
+    if (db.ready) { await wipeDbTables(report); info.dbPending = false; }
+    else { info.dbPending = true; report.errors.push('Supabase non connectée : tables de données à vider dès la reconnexion'); }
   } finally {
     // le drapeau reste levé un court instant : les hooks de fin de sabot s'exécutent en différé
     setTimeout(() => { state.wiping = false; }, 5000);
@@ -179,6 +195,8 @@ async function run(dayKey, { manual = false } = {}) {
     info.lastRunAt = Date.now();
     info.lastReport = { day: dayKey, manual, export: exportRes, memory: wipe.memory.length, db: wipe.db, errors: wipe.errors.slice(0, 5) };
     persistInfo();
+    // l'état remis à zéro est écrit tout de suite dans Supabase (pas d'attente du délai de 2 s)
+    try { await store.flushMirror(); } catch (_) { /* ignoré */ }
     const bot = typeof sender === 'function' ? sender() : null;
     const adminId = predictor.state.adminId;
     if (bot && adminId) {
@@ -204,14 +222,28 @@ async function run(dayKey, { manual = false } = {}) {
 // appelé chaque seconde (bot.js)
 async function check(now = Date.now()) {
   if (!enabled() || info.running) return;
+  if (info.dbPending && db.ready) { // minuit était passé pendant la coupure de Supabase : on vide maintenant les tables de données (une seule fois)
+    info.running = true;
+    try { const rep = { db: [], errors: [] }; await wipeDbTables(rep); info.dbPending = false; persistInfo(); if (info.lastReport) info.lastReport.db = rep.db; }
+    catch (_) { /* réessayé au passage suivant */ }
+    finally { info.running = false; }
+    return;
+  }
   const p = parts(now);
-  if (p.h !== 0 || p.m >= CATCHUP_MINUTES) return; // hors fenêtre 00h00–00h29
   if (info.lastDay === p.key) return;              // déjà fait aujourd'hui
+  const inWindow = p.h === 0 && p.m < CATCHUP_MINUTES;
+  if (!inWindow) {
+    // Premier démarrage jamais vu : on note simplement le jour, sans rien effacer.
+    if (!info.lastDay) { info.lastDay = p.key; persistInfo(); return; }
+    // Minuit manqué (service arrêté plus de 30 min) : l'état relu depuis Supabase
+    // date de la veille ou avant → remise à zéro dès le réveil, une seule fois.
+    if (info.lastDay > p.key) return;
+  }
   info.lastDay = p.key;                            // marqué AVANT : jamais deux passages le même jour
   persistInfo();
   await run(p.key);
 }
 
-function status() { return { enabled: enabled(), tz: TZ, lastDay: info.lastDay, lastRunAt: info.lastRunAt, lastReport: info.lastReport, running: info.running }; }
+function status() { return { enabled: enabled(), tz: TZ, dbPending: !!info.dbPending, lastDay: info.lastDay, lastRunAt: info.lastRunAt, lastReport: info.lastReport, running: info.running }; }
 
 module.exports = { setSender, restore, restoreFromDb, check, run, status, wipeData, wipePanel, parts };

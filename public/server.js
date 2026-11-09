@@ -23,6 +23,7 @@ const session = require('express-session');
 const { Pool } = require('pg');
 const pgSessionStore = require('connect-pg-simple')(session);
 const hybridStore = require('./session-store');
+const store = require('./store'); // liste des canaux supprimés (ignoredChannels)
 const { databaseUrl } = require('./database-url');
 const config = require('./config');
 const api = require('./api');
@@ -45,16 +46,41 @@ const combined = require('./combined');
 const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
+const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
+const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
+const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
+const parityEgalite = require('./parity-egalite'); // « Palier parité égalité »
+const parityPalier = require('./parity-palier'); // « Palier parité » (v114)
+const endDigitTrio = require('./end-digit-trio'); // « Trio fin de numéro » (v127)
+const distributionFaible = require('./distribution-faible'); // « Distribution faible » (v125)
+const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un canal = une stratégie (v99)
+const strategyRecap = require('./strategy-recap'); // récapitulatif / bilan par canal (était utilisé par /api/recap sans être importé ici)
+const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
+const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
+const gameStability = require('./game-stability');
+const absenceAlert = require('./absence-alert');
+const analyseManque = require('./analyse-manque');
+const channelAdmin = require('./channel-admin');
+const channelLossGate = require('./channel-loss-gate');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
+const betType = require('./bet-type');
+const likeReact = require('./like-react');
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
 const cardsCount = require('./cards-count');
+const drawTwoThree = require('./draw-two-three');
+const victoireVb = require('./victoire-vb');
 const vip = require('./vip');
 const dayCompare = require('./day-compare');
 const deployGen = require('./deploy-generator');
 const mirrorCounter = require('./mirror-counter');
+const parityCounter = require('./parity-counter');
+const distributionCounter = require('./distribution-counter'); // « Compte distribution » (v100)
+const endDigit = require('./end-digit');
+const slowMode = require('./slow-mode');
 const lossNotice = require('./loss-notice');
 const game21 = require('./game21');
 const game21Strategies = require('./game21-strategies');
@@ -96,7 +122,7 @@ app.use(session({
     pruneSessionInterval: 60 * 60, // purge des sessions expirées toutes les heures
   })),
   name: 'baccara.sid',
-  secret: process.env.SESSION_SECRET || 'baccara-bot-changeme-secret',
+  secret: process.env.SESSION_SECRET || require('crypto').randomBytes(32).toString('hex'),
   resave: false,
   saveUninitialized: false,
   rolling: true, // chaque requête prolonge la session de 12h glissantes
@@ -227,7 +253,9 @@ app.use((req, res, next) => {
   });
 });
 
+const appVersion = require('./version');
 app.get('/health', (req, res) => res.send('ok'));
+app.get('/api/version', (req, res) => res.json(appVersion));
 
 // ---------------------------------------------------------------------------
 // Panneau administrateur « Utilisateurs » — réservé à l'administrateur :
@@ -294,7 +322,7 @@ async function overlapSourceChannelHints() {
     const names = [];
     for (const id of ids.slice(0, 3)) {
       if (bot.tokenSet) {
-        const check = await resolveChat(id);
+        const check = await resolveChatCached(id, 600000); // cache 10 min : plus d'appel Telegram à chaque ouverture de page
         names.push(check.ok ? (check.chat.title || String(id)) : String(id));
       } else {
         names.push(String(id));
@@ -330,15 +358,29 @@ async function overlapSourceChannelHints() {
   return hints;
 }
 
+// Noms des canaux affichés dans « Chevauchement » : calculés en arrière-plan (appels Telegram), jamais attendus par /api/state
+const _hintsCache = { at: 0, value: {}, busy: false };
+function overlapHintsCached() {
+  if (!_hintsCache.busy && Date.now() - _hintsCache.at > 60000) {
+    _hintsCache.busy = true;
+    overlapSourceChannelHints().then((v) => { _hintsCache.value = v; }).catch(() => {}).finally(() => { _hintsCache.at = Date.now(); _hintsCache.busy = false; });
+  }
+  return _hintsCache.value;
+}
+
 app.get('/api/state', async (req, res) => {
+  const channelList = configuredChannelList(); // liste unique des canaux (tous les boutons), partagée par toutes les pages
   const aiCreatedKeys = new Set(aiRepair.status().createdStrategyKeys || []);
   res.json({
+    appVersion,
     role: req.session ? req.session.role || null : null,
     b: state.B,
     maxR: state.maxR,
     hand: 'joueur',
     format: state.format,
     formatCount: fmt.FORMAT_COUNT,
+    // 5 formats simples « Il y aura distribution 2/2 » (stratégie « 2/3 → distribution 2/2 ») : aperçus en attente / gagné au 1ᵉʳ rattrapage
+    distFormats: [102, 103, 104, 105, 106].map((id) => ({ id, preview: fmt.formatPreview(id, { cardsLabel: '2/2', gameNumber: 1194, maxR: 3, status: null }), previewWin: fmt.formatPreview(id, { cardsLabel: '2/2', gameNumber: 1194, maxR: 3, status: 'gagné', rattrapage: 1 }) })),
     formats: fmt.formatList(1, fmt.FORMAT_COUNT).text,
     template: state.template || null,
     counters: state.counters,
@@ -394,13 +436,33 @@ app.get('/api/state', async (req, res) => {
     suitStreak: suitStreak.status(),
     dizaineTop: dizaineTop.status(),
     bestWeakTop: bestWeakTop.status(),
+    lossReturn: lossReturnView(),
+    lossRelaunch: lossRelaunchView(),
+    prevSuit: prevSuitView(),
+    miracle: miracleView(),
+    canalTelegram: canalTelegram.status(),
+    channelUniform: channelUniformView(channelList),
+    endDigitPredict: endDigitPredict.status(),
+    parityPalier: parityPalier.status(),
+    endDigitTrio: endDigitTrio.status(),
+    distributionFaible: distributionFaible.status(),
+    parityEgalite: parityEgalite.status(),
+    gameStability: gameStability.status(),
+    absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
+    analyseManque: (() => { const x = analyseManque.status(); return { enabled: x.enabled, threshold: x.threshold, tokenSet: x.tokenSet }; })(),
+    channelLossGate: (() => { const x = channelLossGate.status(); return { enabled: x.enabled, rows: x.rows, today: x.today }; })(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
     suitBreak: suitBreak.status(),
-    copyAnnounce: { ...copyAnnounce.status(), channels: configuredChannelList() },
-    overlap: { ...overlap.status(), channelHints: await overlapSourceChannelHints() },
+    channelList,
+    copyAnnounce: { ...copyAnnounce.status(), channels: channelList },
+    betType: { ...betType.status(), allChannels: channelList },
+    likeReact: { ...likeReact.status(), allChannels: channelList, bestChannels: channelList },
+    overlap: { ...overlap.status(), channelHints: overlapHintsCached() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
+    drawTwoThree: drawTwoThree.status(),
+    victoireVb: victoireVb.status(),
     vip: vip.status(),
     predictions: state.predictions.slice(0, 50).map((p) => ({
       strategy: p.strategy, strategyName: p.strategyName, label: p.label,
@@ -417,6 +479,9 @@ app.get('/api/state', async (req, res) => {
       games: mirrorCounter.state.games,
     },
     lossNotice: lossNotice.getSettings(),
+    parityCounter: parityCounter.status(state.live ? state.live.number : null),
+    distributionCounter: distributionCounter.status(state.live ? state.live.number : null),
+    slowMode: { all: slowMode.status().all, channels: slowMode.status().channels.length, queued: slowMode.status().queue.length },
   });
 });
 
@@ -429,6 +494,8 @@ app.get('/api/games', (req, res) => {
 // Jeu « 21 » (TwentyOne) de 1xbet — jeux en live + analyse des déclencheurs
 // des cartes de valeur (A, K, Q, J) et des cartes de valeur exacte.
 // ---------------------------------------------------------------------------
+// v134 : Jeu 21 désactivé (demande admin) : toutes les routes /api/game21… répondent « désactivé ».
+app.use('/api/game21', (req, res) => res.status(410).json({ error: 'Le Jeu 21 est désactivé.' }));
 app.get('/api/game21', async (req, res) => {
   const limit = Math.min(200, parseInt(req.query.limit, 10) || 30);
   const variant = req.query.variant && req.query.variant !== 'tous' ? String(req.query.variant) : null;
@@ -852,6 +919,165 @@ app.get('/api/strategies', (req, res) => {
 // carte, publié dans un canal Telegram configuré une fois (bouton
 // « Compteur » du tableau de bord). Reset automatique à chaque heure pile.
 // ---------------------------------------------------------------------------
+// « Prédiction fin de numéro » (voir end-digit-predict.js)
+app.get('/api/end-digit-predict', (req, res) => res.json(endDigitPredict.status()));
+app.post('/api/end-digit-predict/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) endDigitPredict.setChannelTitle(id, check.chat.title);
+      }
+    }
+    endDigitPredict.configure(b);
+    res.json({ ok: true, endDigitPredict: endDigitPredict.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/end-digit-predict/test', async (req, res) => { const r = await endDigitPredict.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/end-digit-predict/reset', (req, res) => { endDigitPredict.resetStats(); res.json(endDigitPredict.status()); });
+
+// « Palier parité » (voir parity-palier.js)
+app.get('/api/parity-palier', (req, res) => res.json(parityPalier.status()));
+app.post('/api/parity-palier/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) parityPalier.setChannelTitle(id, check.chat.title);
+      }
+    }
+    parityPalier.configure(b);
+    res.json({ ok: true, parityPalier: parityPalier.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/parity-palier/test', async (req, res) => { const r = await parityPalier.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/parity-palier/reset', (req, res) => { parityPalier.resetStats(); res.json(parityPalier.status()); });
+app.post('/api/parity-palier/unblock', (req, res) => { const n = parityPalier.unblock(); res.json({ ok: true, released: n, parityPalier: parityPalier.status() }); });
+
+// « Distribution faible » (voir distribution-faible.js)
+app.get('/api/distribution-faible', (req, res) => res.json(distributionFaible.status()));
+app.post('/api/distribution-faible/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) distributionFaible.setChannelTitle(id, check.chat.title);
+      }
+    }
+    distributionFaible.configure(b);
+    res.json({ ok: true, distributionFaible: distributionFaible.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/distribution-faible/test', async (req, res) => { const r = await distributionFaible.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/distribution-faible/reset', (req, res) => { distributionFaible.resetStats(); res.json(distributionFaible.status()); });
+app.post('/api/distribution-faible/unblock', (req, res) => { const n = distributionFaible.unblock(); res.json({ ok: true, released: n, distributionFaible: distributionFaible.status() }); });
+
+// « Trio fin de numéro » (voir end-digit-trio.js)
+app.get('/api/end-digit-trio', (req, res) => res.json(endDigitTrio.status()));
+app.post('/api/end-digit-trio/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (botStatus().tokenSet) {
+      for (const field of ['channels', 'followChannels']) {
+        if (b[field] === undefined) continue;
+        for (const id of lossRelaunch.parseChannels(b[field])) {
+          const check = await resolveChat(id);
+          if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+          if (check.chat && check.chat.title) endDigitTrio.setChannelTitle(id, check.chat.title);
+        }
+      }
+    }
+    endDigitTrio.configure(b);
+    res.json({ ok: true, endDigitTrio: endDigitTrio.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/end-digit-trio/test', async (req, res) => { const r = await endDigitTrio.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/end-digit-trio/reset', (req, res) => { endDigitTrio.resetStats(); res.json(endDigitTrio.status()); });
+app.post('/api/end-digit-trio/unblock', (req, res) => { const n = endDigitTrio.unblock(); res.json({ ok: true, released: n, endDigitTrio: endDigitTrio.status() }); });
+
+// « Palier parité égalité » (voir parity-egalite.js)
+app.get('/api/parity-egalite', (req, res) => res.json(parityEgalite.status()));
+app.post('/api/parity-egalite/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of lossRelaunch.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) parityEgalite.setChannelTitle(id, check.chat.title);
+      }
+    }
+    parityEgalite.configure(b);
+    res.json({ ok: true, parityEgalite: parityEgalite.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/parity-egalite/test', async (req, res) => { const r = await parityEgalite.test(); res.status(r.ok ? 200 : 400).json(r); });
+app.post('/api/parity-egalite/reset', (req, res) => { parityEgalite.resetStats(); res.json(parityEgalite.status()); });
+app.post('/api/parity-egalite/unblock', (req, res) => { const n = parityEgalite.unblock(); res.json({ ok: true, released: n, parityEgalite: parityEgalite.status() }); });
+
+// « Analyse fin de numéro » (voir end-digit.js)
+app.get('/api/end-digit', async (req, res) => {
+  try { res.json(await endDigit.analyze(req.query.window)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// « Ralentisseur » (voir slow-mode.js) : canaux dont les prédictions attendent le début du jeu précédent
+function slowModeView() {
+  const st = slowMode.status();
+  const seen = new Set();
+  const channels = (state.channels || []).map((c) => {
+    seen.add(String(c.id).toLowerCase());
+    return { id: String(c.id), name: c.name || c.title || String(c.id), slowed: slowMode.isSlowed(c.id), uses: channelConfigsFor(String(c.id)).map((x) => `${x.group} · ${x.name}`) };
+  });
+  for (const k of st.channels) if (!seen.has(k)) channels.push({ id: k, name: k, slowed: true, uses: channelConfigsFor(k).map((x) => `${x.group} · ${x.name}`) });
+  return { ...st, channelList: channels };
+}
+app.get('/api/slow-mode', (req, res) => res.json(slowModeView()));
+app.post('/api/slow-mode/config', (req, res) => {
+  const b = req.body || {};
+  slowMode.configure({ all: b.all, channels: b.channels });
+  res.json(slowModeView());
+});
+app.post('/api/slow-mode/flush', async (req, res) => {
+  const sent = await slowMode.tick(true);
+  res.json({ sent, ...slowModeView() });
+});
+
+// « Compte distribution » (voir distribution-counter.js)
+const distLive = () => (state.live ? state.live.number : null);
+app.get('/api/distribution-counter', (req, res) => res.json(distributionCounter.status(distLive())));
+app.post('/api/distribution-counter/config', (req, res) => { distributionCounter.configure(req.body || {}); res.json(distributionCounter.status(distLive())); });
+app.post('/api/distribution-counter/test', async (req, res) => {
+  const r = await distributionCounter.test(distLive());
+  res.status(r.ok ? 200 : 400).json({ ...r, distributionCounter: distributionCounter.status(distLive()) });
+});
+app.post('/api/distribution-counter/reset', (req, res) => { distributionCounter.resetCounts(); res.json(distributionCounter.status(distLive())); });
+
+// « Compte parité » (voir parity-counter.js)
+app.get('/api/parity-counter', (req, res) => res.json(parityCounter.status(state.live ? state.live.number : null)));
+app.post('/api/parity-counter/config', (req, res) => {
+  parityCounter.configure(req.body || {});
+  res.json(parityCounter.status(state.live ? state.live.number : null));
+});
+app.post('/api/parity-counter/test', async (req, res) => {
+  const r = await parityCounter.test(state.live ? state.live.number : null);
+  res.status(r.ok ? 200 : 400).json({ ...r, parityCounter: parityCounter.status(state.live ? state.live.number : null) });
+});
+app.post('/api/parity-counter/reset', (req, res) => {
+  parityCounter.resetCounts();
+  res.json(parityCounter.status(state.live ? state.live.number : null));
+});
+
+const sendDedupe = require('./send-dedupe');
+app.get('/api/send-dedupe', (req, res) => res.json(sendDedupe.status()));
+app.post('/api/send-dedupe', (req, res) => res.json(sendDedupe.configure(req.body || {})));
+
 app.get('/api/mirror-counter', (req, res) => {
   res.json({
     channelId: mirrorCounter.getChannel(),
@@ -1498,6 +1724,32 @@ app.post('/api/after-loss/scan', async (req, res) => {
 
 app.post('/api/after-loss/trackers', async (req, res) => {
   try {
+    // Plusieurs canaux cochés à surveiller (liste « Canaux à surveiller ») : une
+    // stratégie suivie par canal, toutes envoyant vers le canal d'envoi indiqué.
+    const sourceChannels = req.body && req.body.sourceChannels;
+    const sourceKeys = req.body && req.body.sourceKeys;
+    if ((Array.isArray(sourceChannels) && sourceChannels.length) || (Array.isArray(sourceKeys) && sourceKeys.length)) {
+      const known = new Map(configuredChannelList().map((c) => [String(c.id), c.title || '']));
+      const sources = (Array.isArray(sourceChannels) ? sourceChannels : []).map((id) => ({ id: String(id), title: known.get(String(id)) || '' }));
+      const dest = afterLoss.parseChannels(req.body.channels);
+      for (const id of dest) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`${id} : ${check.error}`);
+        if (check.chat && check.chat.canPost === false) throw new Error(`${id} : le bot ne peut pas publier dans ce canal`);
+      }
+      const created = afterLoss.addChannelTrackers(sources, req.body.triggers, req.body.repeat, {
+        name: req.body.name, category: req.body.category, channels: req.body.channels,
+        siteChannelId: req.body.siteChannelId, format: req.body.format, streak: req.body.streak,
+        decade: req.body.decade, maxR: req.body.maxR, force: !!req.body.force,
+        strategyKeys: Array.isArray(sourceKeys) ? sourceKeys : [],
+      });
+      // les stratégies suivies ont été activées automatiquement : on persiste comme la route /api/strategies/:key
+      let persisted = false;
+      for (const k of (Array.isArray(sourceKeys) ? sourceKeys : [])) {
+        if (k && k !== 'ia' && strategies.BY_KEY[k]) { if (!persisted) { persist(); persisted = true; } if (db.ready) await db.saveStrategy(k, strategies.BY_KEY[k].name, state.strategies[k]); }
+      }
+      return res.json({ ok: true, trackers: created, afterLoss: afterLoss.status() });
+    }
     const key = req.body && req.body.key;
     const t = afterLoss.addTracker(key, req.body && req.body.triggers, req.body && req.body.repeat, {
       // nom donné à la configuration : elle apparaît ensuite sous ce nom dans
@@ -1656,6 +1908,125 @@ app.post('/api/cards-count/scan', async (req, res) => {
 
 app.post('/api/cards-count/reset', (req, res) => {
   res.json(cardsCount.resetCounting());
+});
+
+// ---------------------------------------------------------------------------
+// « Nul / 2-3 » (voir draw-two-three.js) — prédit ensemble le match nul (X) ou la
+// distribution 2/3 (joueur 2 cartes, banquier 3), avec l'analyse des matchs nuls.
+// ---------------------------------------------------------------------------
+app.get('/api/draw-two-three', (req, res) => res.json(drawTwoThree.status()));
+
+app.post('/api/draw-two-three/config', (req, res) => {
+  drawTwoThree.configure(req.body || {});
+  res.json(drawTwoThree.status());
+});
+
+app.post('/api/draw-two-three/channel', async (req, res) => {
+  const idsList = drawTwoThree.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ ok: false, error: 'Identifiant de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ ok: false, error: check.error });
+  drawTwoThree.configure({ channels: idsList });
+  const notice = await drawTwoThree.test();
+  res.json({ ok: true, channel: check.chat, notice, drawTwoThree: drawTwoThree.status() });
+});
+
+app.delete('/api/draw-two-three/channel', (req, res) => {
+  drawTwoThree.configure({ channels: [] });
+  res.json(drawTwoThree.status());
+});
+
+app.post('/api/draw-two-three/test', async (req, res) => {
+  const r = await drawTwoThree.test();
+  res.status(r.ok ? 200 : 400).json({ ...r, drawTwoThree: drawTwoThree.status() });
+});
+
+app.post('/api/draw-two-three/scan', async (req, res) => {
+  await drawTwoThree.tick();
+  res.json(drawTwoThree.status());
+});
+
+app.post('/api/draw-two-three/apply', (req, res) => {
+  const r = drawTwoThree.applyBySid(String((req.body && req.body.sid) || ''));
+  res.status(r.ok ? 200 : 400).json({ ...r, drawTwoThree: drawTwoThree.status() });
+});
+
+app.post('/api/draw-two-three/send-list', async (req, res) => {
+  const ok = await drawTwoThree.sendListToAdmin();
+  res.status(ok ? 200 : 400).json({ ok, error: ok ? null : (drawTwoThree.status().lastError || 'Envoi impossible'), drawTwoThree: drawTwoThree.status() });
+});
+
+app.post('/api/draw-two-three/reset', (req, res) => {
+  res.json(drawTwoThree.resetStats());
+});
+
+// ---------------------------------------------------------------------------
+// « Victoire V1 / V2 » (voir victoire-vb.js) — prédit ensemble la victoire du joueur (V1) ou du
+// banquier (V2), avec attente de l'autre côté puis relance à N+3, déclencheurs trouvés par l'analyse.
+// ---------------------------------------------------------------------------
+app.get('/api/victoire-vb', (req, res) => res.json(victoireVb.status()));
+
+app.post('/api/victoire-vb/config', (req, res) => {
+  victoireVb.configure(req.body || {});
+  res.json(victoireVb.status());
+});
+
+app.post('/api/victoire-vb/channel', async (req, res) => {
+  const idsList = victoireVb.parseChannels(req.body && req.body.channelId);
+  if (!idsList.length) return res.status(400).json({ ok: false, error: 'Identifiant de canal invalide' });
+  const check = await resolveChat(idsList[0]);
+  if (!check.ok) return res.status(400).json({ ok: false, error: check.error });
+  victoireVb.configure({ channels: idsList });
+  const notice = await victoireVb.test();
+  res.json({ ok: true, channel: check.chat, notice, victoireVb: victoireVb.status() });
+});
+
+app.delete('/api/victoire-vb/channel', (req, res) => {
+  victoireVb.configure({ channels: [] });
+  res.json(victoireVb.status());
+});
+
+app.post('/api/victoire-vb/test', async (req, res) => {
+  const r = await victoireVb.test();
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/scan', async (req, res) => {
+  await victoireVb.analyzeNow();
+  await victoireVb.tick();
+  res.json(victoireVb.status());
+});
+
+app.post('/api/victoire-vb/apply', (req, res) => {
+  const r = victoireVb.applyBySid(String((req.body && req.body.sid) || ''));
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/rule', (req, res) => {
+  const r = victoireVb.setRuleEnabled(String((req.body && req.body.id) || ''), !!(req.body && req.body.enabled));
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.delete('/api/victoire-vb/rule', (req, res) => {
+  const r = victoireVb.removeRule(String((req.body && req.body.id) || (req.query && req.query.id) || ''));
+  res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/send-list', async (req, res) => {
+  const ok = await victoireVb.sendListToAdmin();
+  res.status(ok ? 200 : 400).json({ ok, error: ok ? null : (victoireVb.status().lastError || 'Envoi impossible'), victoireVb: victoireVb.status() });
+});
+
+app.post('/api/victoire-vb/seed', async (req, res) => {
+  try {
+    const r = await victoireVb.seedFromDb(true);
+    await victoireVb.analyzeNow();
+    res.status(r.ok ? 200 : 400).json({ ...r, victoireVb: victoireVb.status() });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/victoire-vb/reset', (req, res) => {
+  res.json(victoireVb.resetStats());
 });
 
 // ---------------------------------------------------------------------------
@@ -1850,6 +2221,302 @@ app.post('/api/dizaine-top/bilan/send', async (req, res) => {
   res.status(r.ok ? 200 : 400).json({ ok: r.ok, sent: r.sent || [], errors: r.errors || [], error: r.error || null, dizaineTop: dizaineTop.status() });
 });
 
+// « Retour après perte » (voir loss-return.js) : suit un canal, mesure quand un costume perdu revient (N+D / miroir / inverse)
+// et envoie le rapport vers un autre canal.
+// vue du bouton + configurations « Relance » proposées comme source (suivi interne, sans lire le canal)
+function lossReturnView() {
+  let relanceOptions = [];
+  try { relanceOptions = (bestWeakTop.status().configs || []).filter((c) => c.mode === 'relance').map((c) => ({ id: c.id, name: c.name || 'Relance', channelNames: c.channelNames || [], maxR: c.maxR })); } catch (_) {}
+  return { ...lossReturn.status(), relanceOptions };
+}
+async function verifyLossReturnChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) lossReturn.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/loss-return', (req, res) => res.json(lossReturnView()));
+app.post('/api/loss-return/configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyLossReturnChannels(lossReturn.parseChannels(b.sources));
+    await verifyLossReturnChannels(lossReturn.parseChannels(b.channels));
+    const c = lossReturn.addConfig(b);
+    res.json({ ok: true, config: c, lossReturn: lossReturnView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/loss-return/configs/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.sources !== undefined) await verifyLossReturnChannels(lossReturn.parseChannels(b.sources));
+    if (b.channels !== undefined) await verifyLossReturnChannels(lossReturn.parseChannels(b.channels));
+    const c = lossReturn.updateConfig(req.params.id, b);
+    res.json({ ok: true, config: c, lossReturn: lossReturnView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/loss-return/configs/:id', (req, res) => { lossReturn.removeConfig(req.params.id); res.json(lossReturnView()); });
+app.post('/api/loss-return/configs/:id/bilan', async (req, res) => {
+  const r = await lossReturn.sendBilan(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/loss-return/configs/:id/test', async (req, res) => {
+  const r = await lossReturn.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+// « Relance après perte » (voir loss-relaunch.js) : suit des canaux ou des configurations Relance ; dès que la main du joueur
+// du dernier rattrapage est complète, une perte prédit le même costume à N + R + D (D=1 = jeu suivant) dans le canal configuré.
+// vue du bouton + configurations « Relance » proposées comme source (suivi interne de la relance, pas de la perte d'origine)
+function lossRelaunchView() {
+  let relanceOptions = [];
+  try { relanceOptions = (bestWeakTop.status().configs || []).filter((c) => c.mode === 'relance').map((c) => ({ id: c.id, name: c.name || 'Relance', channelNames: c.channelNames || [], maxR: c.maxR })); } catch (_) {}
+  return { ...lossRelaunch.status(), relanceOptions };
+}
+async function verifyLossRelaunchChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) lossRelaunch.setChannelTitle(id, check.chat.title);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// « Costume N-1 → +4 » (voir prev-suit.js) : on coche des stratégies / configurations de tout le site ; quand une prédiction
+// « N + costume » est venue au jeu N-1 et n'est pas sortie au jeu N, le même costume est prédit à N+4 dans le canal (ID) choisi.
+// La liste cochable reprend l'« Organisation par canal » : chaque configuration avec les canaux où elle publie.
+// ---------------------------------------------------------------------------
+const PREV_SUIT_SKIP_KINDS = new Set(['game-stability', 'mirror', 'formation-strategy', 'game21', 'cards-category', 'copy-announce', 'loss-return', 'bet-best']);
+// Rattrapage (maxR) réellement réglé sur la source : « Costume N-1 → +4 » ne suit que celles à 3 rattrapages (voir prev-suit.js).
+// null = rattrapage inconnu (source sans réglage de rattrapage) → non suivie.
+function prevSuitMaxR(c) {
+  const num = (v) => (v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+  const byId = (list, id) => (Array.isArray(list) ? list : []).find((x) => x && String(x.id) === String(id));
+  try {
+    switch (c.kind) {
+      case 'strategy': { const def = strategies.LIST.find((d) => d.key === c.id); const st = (state.strategies || {})[c.id] || {}; const v = num(st.maxR); return v !== null ? v : num(def && def.defaults && def.defaults.maxR); }
+      case 'tracker': case 'slot': { const pn = CC_TRACKER_PANELS.find((x) => x[0] === c.panel); const t = pn && byId(pn[2].panel && pn[2].panel.trackers, c.id); return t ? num(t.maxR) : null; }
+      case 'best-weak': { const t = byId(bestWeakTop.panel && bestWeakTop.panel.configs, c.id); return t ? num(t.maxR) : null; }
+      case 'loss-return': { const t = byId(lossReturn.panel && lossReturn.panel.configs, c.id); return t ? num(t.maxR) : null; }
+      case 'loss-relaunch': { const t = byId(lossRelaunch.panel && lossRelaunch.panel.configs, c.id); return t ? num(t.maxR) : null; }
+      case 'bet-type': { const t = byId(betType.panel && betType.panel.trackers, c.id); return t ? num(t.maxR) : null; }
+      case 'module': { const m = CC_SIMPLE_MODULES.find((x) => x[0] === c.id); return m ? num((m[2].panel || {}).maxR) : null; }
+      case 'top-side': { const pn = [['dizaine-top', dizaineTop], ['costume-faible-top', costumeFaibleTop]].find((x) => x[0] === c.panel); const e = pn && pn[1].panel && pn[1].panel[c.id]; const v = e ? num(e.maxR) : null; return v !== null ? v : (pn ? num(pn[1].panel.maxR) : null); }
+      default: return null;
+    }
+  } catch (_) { return null; }
+}
+function prevSuitSources() {
+  const byKey = new Map();
+  let rows = [];
+  try { rows = configuredChannelList(); } catch (_) {}
+  for (const r of rows) {
+    let cfgs = [];
+    try { cfgs = channelConfigsFor(r.id); } catch (_) {}
+    for (const c of cfgs) {
+      if (PREV_SUIT_SKIP_KINDS.has(c.kind)) continue;
+      if (c.kind === 'module' && c.id === 'statistics') continue;
+      const key = [c.kind, c.panel || '', c.id, c.mode || ''].join('|');
+      if (!byKey.has(key)) byKey.set(key, { key, name: c.name || String(c.id), group: c.group || 'Autres', channels: [], maxR: prevSuitMaxR(c) });
+      const e = byKey.get(key);
+      if (!e.channels.includes(String(r.id))) e.channels.push(String(r.id));
+    }
+  }
+  return [...byKey.values()].sort((a, b) => String(a.group).localeCompare(String(b.group), 'fr') || String(a.name).localeCompare(String(b.name), 'fr'));
+}
+prevSuit.setSourceProvider(prevSuitSources);
+function prevSuitView() { return prevSuit.status(); }
+async function verifyPrevSuitChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) prevSuit.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/prev-suit', (req, res) => res.json(prevSuitView()));
+app.post('/api/prev-suit/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) await verifyPrevSuitChannels(lossRelaunch.parseChannels(b.channels));
+    prevSuit.configure(b);
+    res.json({ ok: true, prevSuit: prevSuitView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/prev-suit/test', async (req, res) => {
+  const r = await prevSuit.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/prev-suit/reset', (req, res) => { prevSuit.resetStats(); res.json(prevSuitView()); });
+
+// ---------------------------------------------------------------------------
+// « ✨ Miracle prediction » (voir miracle-prediction.js) : suit les stratégies / configurations existantes (3 modes : cochées,
+// compteur parité + analyse fin de numéro, tout ce qui prédit sur le site) et reprend la prédiction suivante d'une stratégie
+// (réglée sur 3 rattrapages) qui vient de perdre ; consensus de 5 stratégies = envoi sans condition.
+// ---------------------------------------------------------------------------
+// stratégies du moteur qui lisent l'« Analyse fin de numéro » (end-digit.js)
+const MIRACLE_PARITY_STRATEGIES = new Set(['finNumero', 'mama']);
+// modules qui ont leur propre canal d'envoi (absents de « Organisation par canal ») : compteur parité et analyse fin de numéro
+const MIRACLE_EXTRA_MODULES = [
+  ['parity-palier', 'Palier parité', parityPalier, 'Compteur parité'],
+  ['parity-egalite', 'Palier parité égalité', parityEgalite, 'Compteur parité'],
+  ['end-digit-predict', 'Prédiction fin de numéro', endDigitPredict, 'Analyse fin de numéro'],
+  ['end-digit-trio', 'Trio fin de numéro', endDigitTrio, 'Analyse fin de numéro'],
+];
+function miracleSources() {
+  const byKey = new Map();
+  let rows = [];
+  try { rows = configuredChannelList(); } catch (_) {}
+  for (const r of rows) {
+    let cfgs = [];
+    try { cfgs = channelConfigsFor(r.id); } catch (_) {}
+    for (const c of cfgs) {
+      if (PREV_SUIT_SKIP_KINDS.has(c.kind)) continue;
+      if (c.kind === 'module' && c.id === 'statistics') continue;
+      const key = [c.kind, c.panel || '', c.id, c.mode || ''].join('|');
+      if (!byKey.has(key)) byKey.set(key, { key, name: c.name || String(c.id), group: c.group || 'Autres', channels: [], maxR: prevSuitMaxR(c), parity: c.kind === 'strategy' && MIRACLE_PARITY_STRATEGIES.has(c.id) });
+      const e = byKey.get(key);
+      if (!e.channels.includes(String(r.id))) e.channels.push(String(r.id));
+    }
+  }
+  for (const [id, label, mod, group] of MIRACLE_EXTRA_MODULES) {
+    try {
+      const p = mod.panel || {};
+      const channels = (Array.isArray(p.channels) ? p.channels : []).map(String).filter(Boolean);
+      if (!channels.length) continue;
+      const mr = p.maxR !== undefined && p.maxR !== null && p.maxR !== '' && Number.isFinite(Number(p.maxR)) ? Number(p.maxR) : null;
+      byKey.set(`extra|${id}`, { key: `extra|${id}`, name: label, group, channels, maxR: mr, parity: true });
+    } catch (_) {}
+  }
+  return [...byKey.values()].sort((a, b) => String(a.group).localeCompare(String(b.group), 'fr') || String(a.name).localeCompare(String(b.name), 'fr'));
+}
+miracle.setSourceProvider(miracleSources);
+function miracleView() { return miracle.status(); }
+async function verifyMiracleChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) miracle.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/miracle', (req, res) => res.json(miracleView()));
+app.post('/api/miracle/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) await verifyMiracleChannels(lossRelaunch.parseChannels(b.channels));
+    miracle.configure(b);
+    res.json({ ok: true, miracle: miracleView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/miracle/test', async (req, res) => {
+  const r = await miracle.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/miracle/reset', (req, res) => { miracle.resetStats(); res.json(miracleView()); });
+
+// « Canal Telegram » (voir canal-telegram.js) : un canal = une stratégie, nommée comme le canal. Toutes les prédictions publiées dans
+// ce canal, quel que soit leur format ou leur rattrapage annoncé, sont lues de la même façon et vérifiées avec UN rattrapage unique.
+app.get('/api/canal-telegram', (req, res) => res.json(canalTelegram.status()));
+app.post('/api/canal-telegram/strategies', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const raw = String(b.channel == null ? '' : b.channel).trim();
+    if (!raw) throw new Error('Renseigne le canal Telegram (ID ou @nom).');
+    const input = { ...b, channel: raw };
+    if (botStatus().tokenSet) {
+      const check = await resolveChat(raw);
+      if (!check.ok) throw new Error(`Canal ${raw} : ${check.error}`);
+      if (check.chat) { input.chatId = check.chat.id; input.title = check.chat.title; input.username = check.chat.username; }
+    }
+    const s = canalTelegram.addStrategy(input);
+    res.json({ ok: true, strategy: s, canalTelegram: canalTelegram.status() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/canal-telegram/strategies/:id', (req, res) => {
+  try { const s = canalTelegram.updateStrategy(req.params.id, req.body || {}); res.json({ ok: true, strategy: s, canalTelegram: canalTelegram.status() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/canal-telegram/strategies/:id', (req, res) => { canalTelegram.removeStrategy(req.params.id); res.json(canalTelegram.status()); });
+app.post('/api/canal-telegram/strategies/:id/reset', (req, res) => { canalTelegram.resetStats(req.params.id); res.json(canalTelegram.status()); });
+
+// « Canal Telegram » v103 (channel-uniform.js) : liste de TOUS les canaux qui reçoivent des prédictions ; on COCHE (on ne crée plus).
+// Canal coché = suivi + format unique + rattrapage unique + bilan toutes les 2 h.
+function channelUniformView(list) {
+  let channels = list;
+  if (!Array.isArray(channels)) { try { channels = configuredChannelList(); } catch (_) { channels = []; } }
+  const ct = canalTelegram.status();
+  const rc = strategyRecap.status();
+  const same = (a, b) => String(a == null ? '' : a).toLowerCase() === String(b == null ? '' : b).toLowerCase();
+  const rows = channels.map((r) => ({ id: String(r.id), title: r.title || '', sources: Array.isArray(r.sources) ? r.sources : [] }));
+  for (const c of Object.values(channelUniform.data.channels)) if (c.enabled && !rows.some((r) => same(r.id, c.id))) rows.push({ id: String(c.id), title: '', sources: [] });
+  const out = rows.map((r) => {
+    const cfg = channelUniform.get(r.id) || { enabled: false, format: null, maxR: null };
+    const strat = ct.strategies.find((s) => same(s.channel, r.id) || (s.username && same(s.username, r.id)));
+    const obs = channelUniform.observedOf(r.id);
+    return { ...r, enabled: !!cfg.enabled, format: cfg.format, maxR: cfg.maxR, recap: strategyRecap.isEnabled(r.id), recapHours: rc.hours[r.id] || 2, ...channelUniform.modeState(r.id), observed: obs, hetero: obs.formats.length > 1 || obs.rs.length > 1, stratId: strat ? strat.id : null };
+  });
+  return { rows: out, checked: out.filter((r) => r.enabled).length, formatCount: fmt.FORMAT_COUNT };
+}
+// relie la case cochée au suivi (stratégie de canal) et au bilan toutes les 2 h
+function channelUniformSync(id, title) {
+  const cfg = channelUniform.get(id); if (!cfg) return;
+  const same = (a, b) => String(a == null ? '' : a).toLowerCase() === String(b == null ? '' : b).toLowerCase();
+  const strat = canalTelegram.status().strategies.find((s) => same(s.channel, id) || (s.username && same(s.username, id)));
+  if (cfg.enabled) {
+    if (!strat) { try { canalTelegram.addStrategy({ channel: id, title: title || undefined, maxR: cfg.maxR != null ? cfg.maxR : undefined }); } catch (_) { /* doublon : déjà suivi */ } }
+    else canalTelegram.updateStrategy(strat.id, { enabled: true, ...(cfg.maxR != null ? { maxR: cfg.maxR } : {}) });
+    strategyRecap.setChannelEnabled(id, true, 2);
+  } else {
+    if (strat) canalTelegram.updateStrategy(strat.id, { enabled: false });
+    strategyRecap.setChannelEnabled(id, false);
+  }
+}
+const channelUniformReply = () => ({ ok: true, channelUniform: channelUniformView(), canalTelegram: canalTelegram.status() });
+app.get('/api/channel-uniform', (req, res) => res.json(channelUniformView()));
+app.post('/api/channel-uniform/channel', (req, res) => {
+  try {
+    const b = req.body || {}; const id = String(b.id == null ? '' : b.id).trim();
+    if (!id) return res.status(400).json({ error: 'Canal manquant.' });
+    const patch = {}; for (const k of ['enabled', 'format', 'maxR', 'mode']) if (b[k] !== undefined) patch[k] = b[k];
+    channelUniform.setChannel(id, patch);
+    channelUniformSync(id, b.title);
+    res.json(channelUniformReply());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/channel-uniform/apply-all', (req, res) => {
+  try {
+    const b = req.body || {}; const patch = {}; for (const k of ['format', 'maxR', 'mode']) if (b[k] !== undefined && b[k] !== '') patch[k] = b[k];
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Renseigne un format, un rattrapage et/ou un mode.' });
+    for (const c of channelUniform.applyAll(patch)) channelUniformSync(c.id);
+    res.json(channelUniformReply());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/channel-uniform/reset-observed', (req, res) => { channelUniform.resetObserved(req.body && req.body.id); res.json(channelUniformReply()); });
+
+app.get('/api/loss-relaunch', (req, res) => res.json(lossRelaunchView()));
+app.post('/api/loss-relaunch/configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.sources));
+    await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.channels));
+    const c = lossRelaunch.addConfig(b);
+    res.json({ ok: true, config: c, lossRelaunch: lossRelaunchView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/loss-relaunch/configs/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.sources !== undefined) await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.sources));
+    if (b.channels !== undefined) await verifyLossRelaunchChannels(lossRelaunch.parseChannels(b.channels));
+    const c = lossRelaunch.updateConfig(req.params.id, b);
+    res.json({ ok: true, config: c, lossRelaunch: lossRelaunchView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/loss-relaunch/configs/:id', (req, res) => { lossRelaunch.removeConfig(req.params.id); res.json(lossRelaunchView()); });
+app.post('/api/loss-relaunch/configs/:id/test', async (req, res) => {
+  const r = await lossRelaunch.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
 // « Meilleur + plus faible » (voir best-weak-top.js) : un message à deux costumes (meilleur + plus faible) par jeu.
 async function verifyBestWeakChannels(list) {
   for (const id of (list || [])) {
@@ -1859,10 +2526,29 @@ async function verifyBestWeakChannels(list) {
   }
 }
 app.get('/api/best-weak', (req, res) => res.json(bestWeakTop.status()));
+// liste de TOUS les canaux (id + nom) qui reçoivent des prédictions, pour choisir ceux à suivre (mode « suivi »)
+app.get('/api/best-weak/channels', (req, res) => {
+  const multi = new Set(bestWeakTop.hasMultiChannels());
+  const rows = configuredChannelList().map((r) => ({ ...r, multi: multi.has(String(r.id)) }));
+  rows.sort((a, b) => Number(b.multi) - Number(a.multi));
+  res.json({ channels: rows });
+});
+// « Détection auto » : canaux qui ont publié le format à deux costumes (♦️ 100% / N°1438 / ♣️ 92%). Le bot ne les découvre que
+// lorsqu'il y est présent (administrateur) et qu'un message de ce format y est publié ; la liste se remplit toute seule.
+app.get('/api/best-weak/detected', (req, res) => {
+  const st = bestWeakTop.status();
+  res.json({ channels: st.detected || [], scanning: (st.configs || []).filter((c) => c.mode === 'scan').length });
+});
+app.delete('/api/best-weak/detected/:id', (req, res) => {
+  delete bestWeakTop.panel.detected[String(req.params.id)];
+  bestWeakTop.persist();
+  res.json({ channels: bestWeakTop.detectedList() });
+});
 app.post('/api/best-weak/configs', async (req, res) => {
   try {
     const b = req.body || {};
     await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    if (b.relChannels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.relChannels)); // canal de relance (facultatif)
     const c = bestWeakTop.addConfig(b);
     res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1871,12 +2557,112 @@ app.put('/api/best-weak/configs/:id', async (req, res) => {
   try {
     const b = req.body || {};
     if (b.channels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.channels));
+    if (b.relChannels !== undefined) await verifyBestWeakChannels(bestWeakTop.parseChannels(b.relChannels));
     const c = bestWeakTop.updateConfig(req.params.id, b);
     if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
     res.json({ ok: true, config: c, bestWeakTop: bestWeakTop.status() });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.delete('/api/best-weak/configs/:id', (req, res) => { bestWeakTop.removeConfig(req.params.id); res.json(bestWeakTop.status()); });
+// « Stabilité du jeu » (voir game-stability.js) : désactivée par défaut ; le blocage se choisit canal par canal
+app.get('/api/stability', (req, res) => res.json({ ...gameStability.status(), channels: configuredChannelList() }));
+app.post('/api/stability/enabled', (req, res) => {
+  gameStability.setEnabled(!!(req.body && req.body.enabled));
+  res.json({ ...gameStability.status(), channels: configuredChannelList() });
+});
+app.post('/api/stability/channels', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (Array.isArray(b.ids)) gameStability.setBlockChannels(b.ids);
+    else gameStability.toggleChannel(b.id, !!b.enabled);
+    res.json({ ...gameStability.status(), channels: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/stability/threshold', (req, res) => {
+  try {
+    gameStability.setThreshold(req.body && req.body.threshold);
+    res.json({ ...gameStability.status(), channels: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/stability/release', (req, res) => { gameStability.releaseBlock(); res.json(gameStability.status()); });
+
+// « Alerte absence de costume » (voir absence-alert.js) : alerte dans le chat privé de l'admin quand un costume est absent N jeux de suite
+app.get('/api/absence-alert', (req, res) => res.json(absenceAlert.status()));
+app.post('/api/absence-alert/config', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.threshold !== undefined) absenceAlert.setThreshold(b.threshold);
+    if (b.sides && typeof b.sides === 'object') absenceAlert.setSides(b.sides);
+    if (b.repeat !== undefined) absenceAlert.setRepeat(b.repeat);
+    if (b.enabled !== undefined) absenceAlert.setEnabled(b.enabled);
+    res.json(absenceAlert.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// « Analyse manque » (voir analyse-manque.js) : costume absent N jeux de suite → alerte reçue par le bot dont on saisit l'API token, dans son chat privé (vide = bot du site)
+app.get('/api/analyse-manque', (req, res) => res.json(analyseManque.status()));
+app.post('/api/analyse-manque/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.token !== undefined && String(b.token).trim() !== '') await analyseManque.setToken(b.token);
+    if (b.clearToken === true) await analyseManque.setToken('');
+    if (b.chatId !== undefined) analyseManque.setChatId(b.chatId);
+    if (b.threshold !== undefined) analyseManque.setThreshold(b.threshold);
+    if (b.enabled !== undefined) analyseManque.setEnabled(b.enabled);
+    res.json(analyseManque.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/analyse-manque/detect', async (req, res) => {
+  try { const r = await analyseManque.detectChat(); res.json({ chat: r.chat, ...analyseManque.status() }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/analyse-manque/test', async (req, res) => {
+  const r = await analyseManque.testAlert();
+  res.status(r.ok ? 200 : 400).json({ ...r, ...analyseManque.status() });
+});
+app.post('/api/absence-alert/test', async (req, res) => {
+  const r = await absenceAlert.testAlert();
+  res.status(r.ok ? 200 : 400).json({ ...r, ...absenceAlert.status() });
+});
+
+// « Envoi après perte » par canal (voir channel-loss-gate.js) : planning jour par jour, lu dans la feuille « PlanningEnvoi » de l'Excel
+app.get('/api/channel-loss-gate', (req, res) => res.json({ ...channelLossGate.status(), channelList: configuredChannelList() }));
+app.post('/api/channel-loss-gate/config', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.defaultMode !== undefined) channelLossGate.setDefaultMode(b.defaultMode);
+    if (b.enabled !== undefined) channelLossGate.setEnabled(b.enabled);
+    res.json({ ...channelLossGate.status(), channelList: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/channel-loss-gate/plan', (req, res) => { // ajoute ou remplace des lignes { date, channel, mode } (la dernière ligne gagne pour une même date + canal)
+  try {
+    const rows = Array.isArray(req.body && req.body.rows) ? req.body.rows : [];
+    if (!channelLossGate.cleanPlan(rows).length) return res.status(400).json({ error: 'Aucune ligne valide : renseigne une date, un canal et un mode (Libre ou Après perte).' });
+    channelLossGate.addRows(rows);
+    res.json({ ...channelLossGate.status(), channelList: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/channel-loss-gate/plan', (req, res) => {
+  const b = req.body || {};
+  if (b.all === true) channelLossGate.setPlan([]); else channelLossGate.removeRow(b.date, b.channel);
+  res.json({ ...channelLossGate.status(), channelList: configuredChannelList() });
+});
+app.post('/api/channel-loss-gate/release', (req, res) => { channelLossGate.release(req.body && req.body.channel); res.json({ ...channelLossGate.status(), channelList: configuredChannelList() }); });
+app.get('/api/channel-loss-gate/planning.xlsx', (req, res) => { // classeur « planning seul » à remplir
+  try {
+    const buf = require('./data-transfer').planningBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="planning-envoi-apres-perte.xlsx"');
+    res.send(buf);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/channel-loss-gate/import', express.raw({ type: () => true, limit: '5mb' }), (req, res) => { // envoi du classeur rempli (corps brut .xlsx)
+  try {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Fichier .xlsx manquant.' });
+    const r = require('./data-transfer').importPlanningBuffer(req.body);
+    res.json({ ...r, ...channelLossGate.status(), channelList: configuredChannelList() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.post('/api/best-weak/configs/:id/test', async (req, res) => {
   const r = await bestWeakTop.test(req.params.id);
   res.status(r.ok ? 200 : 400).json(r);
@@ -2153,6 +2939,30 @@ app.post('/api/after-loss/trackers/:id/optimize', async (req, res) => {
 });
 
 // --- diagnostic complet des envois de prédictions ---------------------------
+// v66 : la page « Envois » vérifiait chaque canal de chaque stratégie UN PAR UN, avec 4 appels Telegram par canal et sans mémoire :
+// avec beaucoup de canaux elle mettait des dizaines de secondes (ou dépassait le délai) et son contenu restait inutilisable.
+// Les résultats sont gardés 30 s (un canal commun à plusieurs stratégies n'est interrogé qu'une fois) et les vérifications partent en parallèle.
+const _chatCache = new Map();
+function resolveChatCached(id, ttlMs = 30000) {
+  const k = String(id); const hit = _chatCache.get(k);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.p;
+  const p = resolveChat(id).then((r) => { if (!r || !r.ok) _chatCache.delete(k); return r; }, (e) => { _chatCache.delete(k); throw e; });
+  _chatCache.set(k, { at: Date.now(), p });
+  return p;
+}
+// récapitulatif par canal (strategy-recap.js) : état d'un canal / activation depuis « Envois → Organisation par canal »
+app.get('/api/recap/:channel', (req, res) => {
+  const id = String(req.params.channel || '').trim();
+  const st = strategyRecap.status();
+  res.json({ channel: id, enabled: strategyRecap.isEnabled(id), explicit: !!st.enabled[id], viaStrategy: st.viaStrategies.includes(id), tz: st.tz });
+});
+app.post('/api/recap/:channel', (req, res) => {
+  const id = String(req.params.channel || '').trim();
+  if (!id) return res.status(400).json({ error: 'Canal manquant' });
+  strategyRecap.setChannelEnabled(id, !!(req.body && req.body.enabled));
+  const st = strategyRecap.status();
+  res.json({ ok: true, channel: id, enabled: strategyRecap.isEnabled(id), explicit: !!st.enabled[id], viaStrategy: st.viaStrategies.includes(id) });
+});
 app.get('/api/diagnostics/channels', async (req, res) => {
   const bot = botStatus();
   const out = [];
@@ -2171,8 +2981,8 @@ app.get('/api/diagnostics/channels', async (req, res) => {
     };
     for (const mode of ['published', 'shadow']) {
       const ids = strategyChannels(def.key, mode);
-      for (const id of ids) {
-        const check = bot.tokenSet ? await resolveChat(id) : { ok: false, error: 'Aucun token Telegram configuré' };
+      const checks = await Promise.all(ids.map(async (id) => ({ id, check: bot.tokenSet ? await resolveChatCached(id) : { ok: false, error: 'Aucun token Telegram configuré' } })));
+      for (const { id, check } of checks) {
         entry[mode].push(check.ok
           ? { id, title: check.chat.title, type: check.chat.type, canPost: check.chat.canPost, ok: check.chat.canPost !== false }
           : { id, ok: false, error: check.error });
@@ -2189,8 +2999,8 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   // panneau — on expose les deux pour que ce soit visible d'un coup d'œil.
   async function resolveIds(ids) {
     const out2 = [];
-    for (const id of ids) {
-      const check = bot.tokenSet ? await resolveChat(id) : { ok: false, error: 'Aucun token Telegram configuré' };
+    const checks2 = await Promise.all(ids.map(async (id) => ({ id, check: bot.tokenSet ? await resolveChatCached(id) : { ok: false, error: 'Aucun token Telegram configuré' } })));
+    for (const { id, check } of checks2) {
       out2.push(check.ok
         ? { id, title: check.chat.title, type: check.chat.type, canPost: check.chat.canPost, ok: check.chat.canPost !== false }
         : { id, ok: false, error: check.error });
@@ -2257,20 +3067,11 @@ app.get('/api/diagnostics/channels', async (req, res) => {
       categories,
     });
   }
+  panels.push(await singlePanel('draw-two-three', 'Nul / 2-3', drawTwoThree, 'draw-two-three'));
+  panels.push(await singlePanel('victoire-vb', 'Victoire V1 / V2', victoireVb, 'victoire-vb'));
   panels.push(await singlePanel('vip', 'VIP', vip, 'vip'));
   panels.push(await singlePanel('predit', 'Prédit IA', predit, 'predit'));
-  // Jeu 21 a DEUX canaux distincts (exacte / valeur), pas un seul comme les
-  // autres panneaux à canal unique — traité à part pour rester fidèle.
-  {
-    const g21 = game21Predict.status().config || {};
-    panels.push({
-      id: 'game21', label: 'Jeu 21', editBase: 'game21/predict',
-      items: [
-        { id: 'exacte', name: 'Format exact', usesDefault: false, channels: await resolveIds(Array.isArray(g21.exactChannels) ? g21.exactChannels : []) },
-        { id: 'valeur', name: 'Format valeur', usesDefault: false, channels: await resolveIds(Array.isArray(g21.valueChannels) ? g21.valueChannels : []) },
-      ],
-    });
-  }
+  // v134 : panneau « Jeu 21 » retiré de la page Envois (fonction désactivée).
 
   // Formation (relais) : un canal par défaut + un canal éventuel par stratégie suivie
   const frStatus = formationRelay.status();
@@ -2310,12 +3111,108 @@ app.get('/api/diagnostics/channels', async (req, res) => {
   }
   const globalChannels = await resolveIds(Array.isArray(state.activeChannels) ? state.activeChannels : []);
   globalChannels.forEach((c) => addSource(c, 'Canaux actifs globaux / référence'));
+  // boutons qui n'étaient pas dans cette vue (Meilleur + plus faible, Relance, Test, Dizaine, Costume faible, Type de mise, Copie…)
+  try { for (const c of configuredChannelList()) for (const src of c.sources) addSource({ id: c.id, title: c.title }, src); } catch (_) {}
   res.json({
     bot, control: predictionControl.status(),
     globalChannels,
     allChannels: [...channelSources.values()],
     strategies: out, panels,
   });
+});
+
+
+// ---------------------------------------------------------------------------
+// Supprimer un canal PARTOUT (page « Envois ») : il est retiré de chaque réglage où il figure
+// (stratégies public / silencieux, panneaux, configurations suivies, Meilleur + plus faible, Relance,
+// Test, Dizaine, Costume faible, Type de mise, Copie et annonce, Jeu 21, Formation, canaux actifs).
+// Les configurations elles-mêmes restent, mais sans ce canal.
+// ---------------------------------------------------------------------------
+const CHANNEL_LIST_KEY = /(channels|channelinfos?)$/i;
+const CHANNEL_SKIP_KEYS = new Set(['sources', 'detected', 'channelTitles', 'pending', 'recentSent', 'watch', 'history', 'messages', 'blockChannels']);
+function sameChannel(item, id) {
+  const v = item && typeof item === 'object' ? (item.id != null ? item.id : item.chatId) : item;
+  return v != null && String(v).trim().toLowerCase() === String(id).trim().toLowerCase();
+}
+// retire `id` de toutes les listes de canaux de `node` (récursif) ; retourne le nombre de retraits
+function stripChannelDeep(node, id, depth = 0, seen = new Set()) {
+  if (!node || typeof node !== 'object' || depth > 7 || seen.has(node)) return 0;
+  seen.add(node);
+  let n = 0;
+  if (Array.isArray(node)) { for (const x of node) n += stripChannelDeep(x, id, depth + 1, seen); return n; }
+  for (const key of Object.keys(node)) {
+    if (CHANNEL_SKIP_KEYS.has(key)) continue;
+    const v = node[key];
+    if (key === 'channelId' && typeof v !== 'object' && v != null && v !== '' && sameChannel(v, id)) { node[key] = ''; n += 1; }
+    else if (Array.isArray(v) && CHANNEL_LIST_KEY.test(key)) {
+      const kept = v.filter((x) => !sameChannel(x, id));
+      if (kept.length !== v.length) { n += v.length - kept.length; node[key] = kept; }
+    } else if (key === 'categoryChannels' && v && typeof v === 'object') {
+      for (const c of Object.keys(v)) if (Array.isArray(v[c])) { const kept = v[c].filter((x) => !sameChannel(x, id)); n += v[c].length - kept.length; v[c] = kept; }
+    } else if (v && typeof v === 'object') n += stripChannelDeep(v, id, depth + 1, seen);
+  }
+  return n;
+}
+async function removeChannelEverywhere(id) {
+  const removed = [];
+  const note = (label, n) => { if (n > 0) removed.push(label); };
+  for (const def of strategies.LIST) {
+    const cfg = state.strategies[def.key];
+    const n = stripChannelDeep(cfg, id);
+    if (n > 0) { removed.push(def.name); try { if (db.ready) await db.saveStrategy(def.key, def.name, cfg); } catch (_) {} }
+  }
+  const modules = [
+    ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
+    ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics],
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
+    ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+    ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle],
+  ];
+  for (const [label, mod] of modules) {
+    try {
+      const n = stripChannelDeep(mod.panel, id);
+      if (n > 0) {
+        note(label, n);
+        if (typeof mod.persist === 'function') await mod.persist(); else if (typeof mod.configure === 'function') mod.configure({});
+      }
+    } catch (e) { console.error('[channel-remove]', label, e.message); }
+  }
+  if (Array.isArray(state.activeChannels)) {
+    const kept = state.activeChannels.filter((x) => !sameChannel(x, id));
+    if (kept.length !== state.activeChannels.length) { state.activeChannels = kept; note('Canaux actifs', 1); }
+  }
+  // canaux où le bot a été ajouté (liste « Bot ajouté dans ce canal »)
+  if (Array.isArray(state.channels)) {
+    const kept = state.channels.filter((x) => !sameChannel(x, id));
+    if (kept.length !== state.channels.length) { state.channels = kept; note('Bot ajouté dans ce canal', 1); }
+  }
+  // Compteur miroir : canal unique
+  try { if (sameChannel(mirrorCounter.getChannel(), id)) { mirrorCounter.setChannel(''); note('Compteur miroir', 1); } } catch (_) {}
+  // suivi interne de « J'aime » : états / diagnostics / liste détectée de ce canal
+  try {
+    const lp = likeReact.panel;
+    for (const k of Object.keys(lp.states || {})) if (sameChannel(k, id)) delete lp.states[k];
+    for (const k of Object.keys(lp.diag || {})) if (sameChannel(k, id)) delete lp.diag[k];
+    lp.known = (lp.known || []).filter((r) => !sameChannel(r.id, id));
+    likeReact.persist();
+  } catch (_) {}
+  // Mémoire de suppression : un canal qui n'était plus qu'une trace de l'historique des envois ne revient pas dans la liste.
+  try {
+    const cur = new Set(((store.read() || {}).ignoredChannels || []).map(String));
+    cur.add(String(id).trim());
+    store.patch({ ignoredChannels: [...cur] });
+    if (db.ready) db.setSetting('ignored_channels', JSON.stringify([...cur])).catch(() => {});
+  } catch (_) {}
+  try { persist(); } catch (_) {}
+  return removed;
+}
+app.delete('/api/diagnostics/channels/:id', async (req, res) => {
+  try {
+    const id = decodeURIComponent(String(req.params.id || '')).trim();
+    if (!id) return res.status(400).json({ error: 'Identifiant de canal manquant' });
+    const removed = await removeChannelEverywhere(id);
+    res.json({ ok: true, id, removedFrom: removed });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // --- interrupteur global « arrêter / démarrer / planifier » (même logique
@@ -2331,6 +3228,222 @@ app.post('/api/prediction-control', (req, res) => {
     return res.status(400).json({ error: 'Action inconnue (attendu : pause, resume, schedule, clear-schedule).' });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+
+// ---------------------------------------------------------------------------
+// Organisation des configurations PAR CANAL (page « Envois ») : on choisit un canal et on voit toutes les configurations qui
+// y publient (stratégies de base, boutons à configurations suivies, Meilleur + plus faible / Relance / Test, Retour après perte),
+// avec pour chacune : modifier (nom, activée, canaux) + enregistrer, retirer ce canal, supprimer la configuration.
+// Les autres usages (Type de mise, Copie et annonce, Jeu 21, Formation…) restent visibles dans la liste « tous les canaux » et se
+// modifient dans leur propre bouton.
+// ---------------------------------------------------------------------------
+const CC_TRACKER_PANELS = [
+  ['after-loss', 'Prédiction après perte', afterLoss, '#/after-loss'], ['combined', 'Prédiction combinée', combined, '#/combined'],
+  ['suit-streak', 'Répétition costume', suitStreak, '#/suit-streak'], ['suit-break', 'Rupture costume', suitBreak, '#/suit-break'],
+  ['overlap', 'Chevauchement', overlap, '#/overlap'], ['dizaine-top', 'Dizaine', dizaineTop, '#/dizaine-top'],
+  ['costume-faible-top', 'Costume faible', costumeFaibleTop, '#/costume-faible-top'],
+];
+const CC_SIMPLE_MODULES = [
+  ['predit', 'Prédit IA', predit, '#/predit'], ['draw-two-three', 'Nul / 2-3', drawTwoThree, '#/draw-two-three'], ['victoire-vb', 'Victoire V1 / V2', victoireVb, '#/victoire-vb'],
+  ['vip', 'VIP', vip, '#/vip'], ['statistics', 'Statistiques', statistics, '#/statistics'],
+  ['cards-count', 'Comptage 2/2', cardsCount, '#/cards-count'], ['formation', 'Formation', formationRelay, '#/formation'],
+  ['like-react', 'J\'aime', likeReact, '#/like-react'],
+];
+function channelConfigsFor(channelId) {
+  const out = [];
+  const has = (arr) => (Array.isArray(arr) ? arr : []).some((x) => sameChannel(x, channelId));
+  for (const def of strategies.LIST) {
+    for (const mode of ['published', 'shadow']) {
+      const ids = strategyChannels(def.key, mode);
+      if (has(ids)) out.push({ kind: 'strategy', id: def.key, mode, group: 'Stratégies', name: `${def.name} · ${mode === 'shadow' ? 'silencieux' : 'public'}`, enabled: !!(state.strategies[def.key] || {}).enabled, channels: ids.map(String), page: `#/strategy/${def.key}`, canDelete: false });
+    }
+  }
+  for (const [panelId, label, mod, page] of CC_TRACKER_PANELS) {
+    for (const t of ((mod.panel && mod.panel.trackers) || [])) {
+      if (has(t.channels)) out.push({ kind: 'tracker', panel: panelId, id: t.id, group: label, name: t.name || t.id, enabled: typeof t.enabled === 'boolean' ? t.enabled : null, channels: (t.channels || []).map(String), page, canDelete: true });
+    }
+  }
+  for (const c of ((bestWeakTop.panel && bestWeakTop.panel.configs) || [])) {
+    if (has(c.channels)) out.push({ kind: 'best-weak', id: c.id, group: 'Meilleur + plus faible / Relance / Test', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: c.mode === 'relance' ? '#/relance' : c.mode === 'test' ? '#/test' : c.mode === 'bilan' ? '#/bilan' : '#/best-weak', canDelete: true });
+  }
+  for (const c of ((lossReturn.panel && lossReturn.panel.configs) || [])) {
+    if (has(c.channels)) out.push({ kind: 'loss-return', id: c.id, group: 'Retour après perte', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: '#/loss-return', canDelete: true });
+  }
+  for (const c of ((lossRelaunch.panel && lossRelaunch.panel.configs) || [])) {
+    if (has(c.channels)) out.push({ kind: 'loss-relaunch', id: c.id, group: 'Relance après perte', name: c.name || c.id, enabled: c.enabled !== false, channels: (c.channels || []).map(String), page: '#/loss-relaunch', canDelete: true });
+  }
+
+  // ---- Modules à réglage unique : Prédit IA, Nul / 2-3, VIP, Statistiques, Comptage 2/2, Formation (canal général)
+  for (const [mid, label, mod, page] of CC_SIMPLE_MODULES) {
+    const p = mod.panel || {};
+    if (has(p.channels)) out.push({ kind: 'module', id: mid, group: label, name: `${label} · canaux`, fixedName: true, enabled: !!p.enabled, channels: (p.channels || []).map(String), page, canDelete: false });
+  }
+  for (const [cat, list] of Object.entries((cardsCount.panel && cardsCount.panel.categoryChannels) || {})) {
+    if (has(list)) out.push({ kind: 'cards-category', id: cat, group: 'Comptage 2/2', name: `Comptage 2/2 · catégorie ${cat}`, fixedName: true, enabled: null, channels: list.map(String), page: '#/cards-count', canDelete: false });
+  }
+  const formationNames = {}; try { formationRelay.options().forEach((o) => { formationNames[o.key] = o.name; }); } catch (_) {}
+  for (const [key, e] of Object.entries((formationRelay.panel && formationRelay.panel.strategies) || {})) {
+    if (e && has(e.channels)) out.push({ kind: 'formation-strategy', id: key, group: 'Formation', name: `Formation · ${formationNames[key] || key}`, fixedName: true, enabled: !!e.enabled, channels: (e.channels || []).map(String), page: '#/formation', canDelete: false });
+  }
+  const g21 = game21Predict.panel || {};
+  if (has(g21.exactChannels)) out.push({ kind: 'game21', id: 'exact', group: 'Jeu 21', name: 'Prédiction jeu 21 · valeur exacte', fixedName: true, enabled: !!g21.enabled, channels: (g21.exactChannels || []).map(String), page: '#/game21-predict', canDelete: false });
+  if (has(g21.valueChannels)) out.push({ kind: 'game21', id: 'value', group: 'Jeu 21', name: 'Prédiction jeu 21 · valeur', fixedName: true, enabled: !!g21.enabled, channels: (g21.valueChannels || []).map(String), page: '#/game21-predict', canDelete: false });
+  // ---- Listes : Type de mise (configurations + « meilleur ») et Copie et annonce (règles)
+  for (const t of ((betType.panel && betType.panel.trackers) || [])) {
+    if (has(t.destChannels)) out.push({ kind: 'bet-type', id: t.id, group: 'Type de mise', name: t.name || t.id, enabled: t.enabled !== false, channels: (t.destChannels || []).map(String), page: '#/bet-type', canDelete: true });
+  }
+  const btBest = (betType.panel && betType.panel.best) || {};
+  if (has(btBest.channels)) out.push({ kind: 'bet-best', id: 'best', group: 'Type de mise', name: 'Type de mise · canal du meilleur', fixedName: true, enabled: !!btBest.enabled, channels: (btBest.channels || []).map(String), page: '#/bet-type', canDelete: false });
+  for (const r of ((copyAnnounce.panel && copyAnnounce.panel.rules) || [])) {
+    if (has(r.destChannels)) out.push({ kind: 'copy-announce', id: r.id, group: 'Copie et annonce', name: r.name || r.id, enabled: r.enabled !== false, channels: (r.destChannels || []).map(String), page: '#/copy-announce', canDelete: true });
+  }
+  // ---- Meilleur / plus faible de Dizaine et de Costume faible (canaux propres à chaque côté)
+  for (const [panelId, label, mod, page] of [['dizaine-top', 'Dizaine', dizaineTop, '#/dizaine-top'], ['costume-faible-top', 'Costume faible', costumeFaibleTop, '#/costume-faible-top']]) {
+    const p = mod.panel || {};
+    for (const side of ['best', 'weak']) {
+      const e = p[side] || {};
+      if (has(e.channels)) out.push({ kind: 'top-side', panel: panelId, id: side, group: label, name: `${label} · ${side === 'best' ? 'meilleur' : 'plus faible'}`, fixedName: true, enabled: !!e.enabled, channels: (e.channels || []).map(String), page, canDelete: false });
+    }
+    // Costume faible : canal propre à chaque emplacement (slots) d'une configuration suivie
+    for (const t of (p.trackers || [])) {
+      const sc = (t.slots || []).map((x) => x && x.channel).filter((x) => x != null);
+      if (has(sc)) out.push({ kind: 'slot', panel: panelId, id: t.id, group: label, name: `${label} · ${t.name || t.id} · emplacements`, fixedName: true, enabled: null, channels: sc.map(String), page, canDelete: false, readOnly: true });
+    }
+  }
+  // ---- Meilleur + plus faible : canaux de relance (relChannels)
+  for (const c of ((bestWeakTop.panel && bestWeakTop.panel.configs) || [])) {
+    if (has(c.relChannels)) out.push({ kind: 'best-weak-rel', id: c.id, group: 'Meilleur + plus faible / Relance / Test', name: `${c.name || c.id} · relance vers`, fixedName: true, enabled: null, channels: (c.relChannels || []).map(String), page: '#/relance', canDelete: false });
+  }
+  // ---- Stabilité du jeu (canaux bloqués) et Compteur miroir (canal unique)
+  try { const bc = (gameStability.panel && gameStability.panel.blockChannels) || []; if (has(bc)) out.push({ kind: 'game-stability', id: 'block', group: 'Stabilité du jeu', name: 'Stabilité du jeu · canaux bloqués', fixedName: true, enabled: null, channels: bc.map(String), page: '#/game-stability', canDelete: false }); } catch (_) {}
+  try { const mc = mirrorCounter.getChannel(); if (mc && sameChannel(mc, channelId)) out.push({ kind: 'mirror', id: 'mirror', group: 'Compteur miroir', name: 'Compteur miroir · canal', fixedName: true, enabled: null, channels: [String(mc)], page: '#/mirror-counter', canDelete: false }); } catch (_) {}
+  return out;
+}
+app.get('/api/diagnostics/channel-configs/:id', (req, res) => {
+  const id = decodeURIComponent(String(req.params.id || '')).trim();
+  if (!id) return res.status(400).json({ error: 'Identifiant de canal manquant' });
+  res.json({ id, configs: channelConfigsFor(id) });
+});
+const putChannelConfigs = async (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    if (b.name !== undefined) patch.name = String(b.name).trim();
+    if (b.enabled !== undefined) patch.enabled = !!b.enabled;
+    const channels = b.channels !== undefined ? parseChannelList(b.channels) : undefined;
+    if (b.kind === 'strategy') {
+      const def = strategies.BY_KEY[b.id];
+      if (!def) return res.status(404).json({ error: 'Stratégie inconnue' });
+      const p = {};
+      if (patch.enabled !== undefined) p.enabled = patch.enabled;
+      if (channels !== undefined) { if (b.mode === 'shadow') p.shadowChannels = channels; else p.publishedChannels = channels; }
+      const cfg = setStrategyConfig(b.id, p);
+      persist();
+      if (db.ready) await db.saveStrategy(b.id, def.name, cfg);
+    } else if (b.kind === 'tracker') {
+      const row = CC_TRACKER_PANELS.find((x) => x[0] === b.panel);
+      if (!row) return res.status(404).json({ error: 'Panneau inconnu' });
+      const cur = ((row[2].panel && row[2].panel.trackers) || []).find((x) => x.id === b.id);
+      if (cur && typeof cur.enabled === 'boolean' && patch.enabled !== undefined) cur.enabled = patch.enabled; // enregistré par updateTracker juste après
+      delete patch.enabled;
+      const t = row[2].updateTracker(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+      if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'best-weak') {
+      if (channels !== undefined) await verifyBestWeakChannels(channels);
+      const c = bestWeakTop.updateConfig(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+      if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'loss-return') {
+      lossReturn.updateConfig(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+    } else if (b.kind === 'loss-relaunch') {
+      lossRelaunch.updateConfig(b.id, { ...patch, ...(channels !== undefined ? { channels } : {}) });
+    } else if (b.kind === 'module') {
+      const row = CC_SIMPLE_MODULES.find((x) => x[0] === b.id);
+      if (!row) return res.status(404).json({ error: 'Module inconnu' });
+      const p = {};
+      if (patch.enabled !== undefined && patch.enabled !== !!row[2].panel.enabled) p.enabled = patch.enabled; // seulement si ça change (évite de réinitialiser un suivi en cours)
+      if (channels !== undefined) p.channels = channels;
+      row[2].configure(p);
+    } else if (b.kind === 'cards-category') {
+      const cat = String(b.id);
+      if (!['3/2', '3/3', '2/2'].includes(cat)) return res.status(404).json({ error: 'Catégorie inconnue' });
+      if (channels !== undefined) cardsCount.configure({ categoryChannels: { ...(cardsCount.panel.categoryChannels || {}), [cat]: channels } });
+    } else if (b.kind === 'formation-strategy') {
+      const cur = (formationRelay.panel.strategies || {})[b.id];
+      if (!cur) return res.status(404).json({ error: 'Formation introuvable' });
+      const p = {};
+      if (patch.enabled !== undefined && patch.enabled !== !!cur.enabled) p.enabled = patch.enabled;
+      if (channels !== undefined) p.channels = channels;
+      formationRelay.setStrategy(String(b.id), p);
+    } else if (b.kind === 'game21') {
+      const p = {};
+      if (patch.enabled !== undefined) p.enabled = patch.enabled;
+      if (channels !== undefined) p[b.id === 'value' ? 'valueChannels' : 'exactChannels'] = channels;
+      game21Predict.configure(p);
+    } else if (b.kind === 'bet-best') {
+      betType.configureBest({ ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { channels } : {}) });
+    } else if (b.kind === 'bet-type') {
+      const t = betType.updateConfig(b.id, { ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { destChannels: channels } : {}) });
+      if (!t) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'top-side') {
+      const mod = b.panel === 'dizaine-top' ? dizaineTop : b.panel === 'costume-faible-top' ? costumeFaibleTop : null;
+      if (!mod || !['best', 'weak'].includes(String(b.id))) return res.status(404).json({ error: 'Configuration introuvable' });
+      const p = {};
+      if (patch.enabled !== undefined) p[`${b.id}Enabled`] = patch.enabled;
+      if (channels !== undefined) p[`${b.id}Channels`] = channels;
+      mod.configure(p);
+    } else if (b.kind === 'best-weak-rel') {
+      if (channels === undefined) return res.json({ ok: true });
+      const c = bestWeakTop.updateConfig(b.id, { relChannels: channels });
+      if (!c) return res.status(404).json({ error: 'Configuration introuvable' });
+    } else if (b.kind === 'game-stability') {
+      if (channels !== undefined) gameStability.setBlockChannels(channels);
+    } else if (b.kind === 'mirror') {
+      if (channels !== undefined) mirrorCounter.setChannel(channels[0] || '');
+    } else if (b.kind === 'slot') {
+      return res.status(400).json({ error: 'Les emplacements se modifient depuis le bouton Costume faible (lien « Ouvrir »).' });
+    } else if (b.kind === 'copy-announce') {
+      const r = copyAnnounce.updateRule(b.id, { ...(patch.name !== undefined ? { name: patch.name } : {}), ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}), ...(channels !== undefined ? { destChannels: channels } : {}) });
+      if (!r) return res.status(404).json({ error: 'Règle introuvable' });
+    } else return res.status(400).json({ error: 'Type de configuration inconnu' });
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+};
+app.put('/api/diagnostics/channel-configs', putChannelConfigs);
+const deleteChannelConfigs = (req, res) => {
+  try {
+    const { kind, panel: panelId, id } = req.query || {};
+    if (kind === 'strategy') return res.status(400).json({ error: 'Une stratégie intégrée ne se supprime pas : retire-lui ce canal, ou mets-la en pause.' });
+    if (kind === 'tracker') {
+      const row = CC_TRACKER_PANELS.find((x) => x[0] === panelId);
+      if (!row) return res.status(404).json({ error: 'Panneau inconnu' });
+      row[2].removeTracker(String(id));
+    } else if (kind === 'best-weak') bestWeakTop.removeConfig(String(id));
+    else if (kind === 'loss-return') lossReturn.removeConfig(String(id));
+    else if (kind === 'loss-relaunch') lossRelaunch.removeConfig(String(id));
+    else if (kind === 'bet-type') betType.removeConfig(String(id));
+    else if (kind === 'copy-announce') copyAnnounce.removeRule(String(id));
+    else if (['module', 'cards-category', 'formation-strategy', 'game21', 'bet-best'].includes(kind)) return res.status(400).json({ error: 'Cette configuration est unique et ne se supprime pas : retire-lui ce canal, ou mets-la en pause.' });
+    else return res.status(400).json({ error: 'Type de configuration inconnu' });
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+};
+app.delete('/api/diagnostics/channel-configs', deleteChannelConfigs);
+// commande Telegram /envois (channel-admin.js) : mêmes fonctions que la page « Envois → Organisation par canal »
+function invokeHandler(handler, req) {
+  return new Promise((resolve) => {
+    let status = 200;
+    const res = { status(c) { status = c; return res; }, json(b) { resolve({ status, body: b }); return res; } };
+    Promise.resolve(handler(req, res)).catch((e) => resolve({ status: 500, body: { error: e.message } }));
+  });
+}
+channelAdmin.setProvider({
+  channels: () => configuredChannelList(),
+  configs: (id) => channelConfigsFor(String(id)),
+  update: (body) => invokeHandler(putChannelConfigs, { body }),
+  remove: (query) => invokeHandler(deleteChannelConfigs, { query }),
+  resolve: (raw) => resolveChat(raw),
+});
+function parseChannelList(v) { return lossReturn.parseChannels(v); }
 
 // édition rapide du canal d'une configuration suivie (tracker) DEPUIS la page
 // « Envois » — mêmes règles que les routes /api/<panel>/trackers/:id déjà
@@ -2389,7 +3502,10 @@ app.put('/api/diagnostics/panels/formation/trackers/:id/channel', (req, res) => 
 function configuredChannelList() {
   const rows = new Map();
   const titles = {};
-  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, overlap, copyAnnounce]) {
+  let discovered = [];
+  try { discovered = likeReact.discoverChannels(); } catch (_) {}
+  for (const r of discovered) if (r.title) titles[r.id] = r.title;
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, lossReturn, lossRelaunch, overlap, copyAnnounce, betType]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {
@@ -2406,18 +3522,38 @@ function configuredChannelList() {
       }
     }
   } catch (_) {}
-  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit]];
+  const panelsList = [['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak], ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Type de mise', betType],
+    // sources qui manquaient : leurs canaux n'apparaissaient pas dans « Type de mise »
+    ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics]];
   for (const [label, mod] of panelsList) {
     try {
       const st = mod.status() || {};
       (Array.isArray(st.channels) ? st.channels : []).forEach((id) => add(id, label));
+      (Array.isArray(st.bestChannels) ? st.bestChannels : []).forEach((id) => add(id, `${label} · meilleur`));
+      (Array.isArray(st.weakChannels) ? st.weakChannels : []).forEach((id) => add(id, `${label} · faible`));
       (Array.isArray(st.trackers) ? st.trackers : []).forEach((t) => (Array.isArray(t.channels) ? t.channels : []).forEach((id) => add(id, `${label} · ${t.name || t.key}`)));
     } catch (_) {}
   }
+  // Recherche profonde dans le réglage de TOUS les boutons : toute liste « …channels » ou « channelId » est importée
+  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+    ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
+    ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
+    ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['VIP', vip], ['Prédit IA', predit],
+    ['Statistiques', statistics], ['Stabilité du jeu', gameStability]]) {
+    try { likeReact.collectFrom(mod.panel, label, add); } catch (_) {}
+  }
+  try { const mc = mirrorCounter.getChannel(); if (mc) add(mc, 'Compteur miroir'); } catch (_) {}
+  // Copie et annonce : canaux de destination des règles
+  try { for (const r of (copyAnnounce.status().rules || [])) (r.destChannels || []).forEach((id) => add(id, `Copie et annonce · ${r.name || ''}`.trim())); } catch (_) {}
+  // Jeu 21 : canaux des prédictions (exacte / valeur)
+  try { const g = game21Predict.panel || {}; [...(g.exactChannels || []), ...(g.valueChannels || [])].forEach((id) => add(id, 'Jeu 21')); } catch (_) {}
+  // Canaux où des prédictions ont réellement été publiées, même s'ils ne sont plus saisis dans un réglage
+  try { for (const r of discovered) r.sources.forEach((s) => add(r.id, s)); } catch (_) {}
   try {
     const fr = formationRelay.status() || {};
     (Array.isArray(fr.channels) ? fr.channels : []).forEach((id) => add(id, 'Formation'));
   } catch (_) {}
+  try { for (const c of (bestWeakTop.status().configs || [])) (c.channels || []).forEach((id) => add(id, `Meilleur + plus faible · ${c.name || c.strategyLabel}`)); } catch (_) {}
   (Array.isArray(state.activeChannels) ? state.activeChannels : []).forEach((id) => add(id, 'Canaux actifs'));
   return [...rows.values()];
 }
@@ -2479,6 +3615,106 @@ app.post('/api/copy-announce/scan', async (req, res) => {
 
 
 // ---------------------------------------------------------------------------
+// « Type de mise » (voir bet-type.js) : configurations (4 types) créées à
+// partir des canaux déjà connus + « Meilleur type de mise ».
+// ---------------------------------------------------------------------------
+async function checkBetDest(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`${id} : ${check.error}`);
+    if (check.chat && check.chat.canPost === false) throw new Error(`${id} : le bot ne peut pas publier dans ce canal`);
+    if (check.chat && check.chat.title) betType.setChannelTitle(id, check.chat.title);
+  }
+}
+const betTypeSnapshot = () => ({ ...betType.status(), allChannels: configuredChannelList() });
+
+// « J'aime » (voir like-react.js) : canaux cochés dont les prédictions Type de
+// mise reçoivent une réaction automatique selon leur type (1 à 4).
+likeReact.setChannelSource(configuredChannelList);
+const bestTestChannelList = () => {
+  const ids = new Set((bestWeakTop.status().configs || [])
+    .filter((c) => c.mode === 'test' && c.enabled !== false)
+    .flatMap((c) => c.channels || []).map(String));
+  return configuredChannelList().filter((channel) => ids.has(String(channel.id)));
+};
+const likeReactSnapshot = () => { const list = configuredChannelList(); return { ...likeReact.status(), allChannels: list, bestChannels: list }; };
+app.get('/api/like-react', (req, res) => { likeReact.scan(); res.json(likeReactSnapshot()); });
+app.post('/api/like-react/config', (req, res) => {
+  try {
+    likeReact.configure(req.body || {});
+    likeReact.scan();
+    res.json({ ok: true, likeReact: likeReactSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/like-react/test', async (req, res) => {
+  const chatId = (req.body || {}).chatId;
+  if (chatId === undefined || chatId === null || chatId === '') return res.status(400).json({ ok: false, error: 'Canal manquant.' });
+  res.json(await likeReact.testReaction(chatId));
+});
+app.post('/api/like-react/scan', (req, res) => { likeReact.scan(); res.json({ ok: true, likeReact: likeReactSnapshot() }); });
+
+app.get('/api/bet-type', (req, res) => res.json(betTypeSnapshot()));
+
+app.post('/api/bet-type/config', (req, res) => {
+  betType.configure(req.body || {});
+  res.json(betTypeSnapshot());
+});
+
+app.post('/api/bet-type/configs', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (botStatus().tokenSet) await checkBetDest([...betType.parseChannels(body.destChannels), ...betType.parseChannels(body.bestChannels)]);
+    const config = betType.addConfig(body);
+    res.json({ ok: true, config, betType: betTypeSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put('/api/bet-type/configs/:id', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if ((body.destChannels !== undefined || body.bestChannels !== undefined) && botStatus().tokenSet) await checkBetDest([...betType.parseChannels(body.destChannels), ...betType.parseChannels(body.bestChannels)]);
+    const config = betType.updateConfig(req.params.id, body);
+    if (!config) return res.status(404).json({ error: 'Configuration introuvable' });
+    res.json({ ok: true, config, betType: betTypeSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/bet-type/configs/:id', (req, res) => {
+  betType.removeConfig(req.params.id);
+  res.json(betTypeSnapshot());
+});
+
+app.post('/api/bet-type/configs/:id/test', async (req, res) => {
+  const r = await betType.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/bet-type/best', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.channels !== undefined && botStatus().tokenSet) await checkBetDest(betType.parseChannels(body.channels));
+    betType.configureBest(body);
+    res.json({ ok: true, betType: betTypeSnapshot() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/bet-type/best/test', async (req, res) => {
+  const r = await betType.testBest();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
+app.post('/api/bet-type/bilan', async (req, res) => {
+  const ok = await betType.sendBilan();
+  res.status(ok ? 200 : 400).json({ ok, error: ok ? undefined : 'Aucun bilan envoyé (aucun résultat, ou aucun canal configuré)' });
+});
+
+app.post('/api/bet-type/scan', async (req, res) => {
+  await betType.tick();
+  res.json(betTypeSnapshot());
+});
+
+
+// ---------------------------------------------------------------------------
 // Démarrage : on connecte la base et on sème le compte admin AVANT d'ouvrir
 // le port. Sans ça, une tentative de connexion arrivant pendant le réveil du
 // service (Render gratuit se met en veille) tombe sur "Base de données non
@@ -2497,7 +3733,7 @@ app.post('/api/copy-announce/scan', async (req, res) => {
 
   app.listen(config.PORT, '0.0.0.0', () => {
     console.log('Tableau de bord sur le port ' + config.PORT);
-    game21.startLoop(6000);
+    // v134 : Jeu 21 désactivé — la lecture du flux 21 de 1xbet n'est plus lancée.
     startLoop().then(() => {
       if (aiAuto.auto.enabled) aiAuto.start(persist);
       console.log('🤖 Analyseur IA temps réel démarré (clé configurée : ' + ((ai.keyLooksValid() || ai.geminiConfigured() || ai.groqConfigured() || ai.openrouterConfigured()) ? 'oui' : 'non configurée') + ')');

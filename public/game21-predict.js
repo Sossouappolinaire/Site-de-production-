@@ -25,8 +25,11 @@ const VARIANTS = ['classique', 'simple'];
 const VALUE_RANKS = ['A', 'K', 'Q', 'J'];
 const MAX_PREDICTIONS = 200;
 
+// v134 : Jeu 21 DÉSACTIVÉ pour de bon (demande admin) : aucune lecture, aucune prédiction, aucun envoi.
+const FORCED_OFF = true;
+
 const panel = {
-  enabled: true,
+  enabled: false,
   minRate: 70,          // pourcentage accordé (demande admin : 70 %)
   minSample: 3,         // observations minimum d'un déclencheur
   useStrategies: true,  // utiliser aussi les stratégies IA du 21 activées
@@ -71,6 +74,7 @@ function parseChannels(value) {
 }
 
 function configure(patch = {}) {
+  if (FORCED_OFF) { panel.enabled = false; panel.exactChannels = []; panel.valueChannels = []; return config(); } // rien n'est modifié ni sauvegardé
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.useStrategies !== undefined) panel.useStrategies = !!patch.useStrategies;
   if (patch.minRate !== undefined) {
@@ -306,8 +310,8 @@ async function verify() {
 // Boucle
 // ---------------------------------------------------------------------------
 async function tick() {
+  if (FORCED_OFF || !panel.enabled) return status();
   panel.lastScanAt = Date.now();
-  if (!panel.enabled) return status();
   try {
     if (!game21.state.updatedAt) await game21.refresh();
     await verify();
@@ -335,6 +339,7 @@ async function tick() {
 
 // envoi de test dans les deux canaux configurés
 async function test() {
+  if (FORCED_OFF) return { ok: false, error: 'Le Jeu 21 est désactivé.' };
   const bot = typeof sender === 'function' ? sender() : null;
   if (!bot) return { ok: false, error: 'Aucun token Telegram configuré' };
   const results = [];
