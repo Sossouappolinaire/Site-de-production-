@@ -337,6 +337,7 @@
         <a href="#/relance" data-nav="relance">🔄 Relance</a>
         <a href="#/stability" data-nav="stability">🛡️ Stabilité</a>
         <a href="#/absence-alert" data-nav="absence-alert">🕳️ Alerte absence</a>
+        <a href="#/analyse-manque" data-nav="analyse-manque">🔍 Analyse manque</a>
         <a href="#/loss-gate" data-nav="loss-gate">🚦 Envoi après perte</a>
         <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
@@ -612,6 +613,7 @@
         ${card('#/stability', '🛡️', 'Stabilité du jeu', (snapshot.gameStability || {}).enabled ? `Activée · jeu ${((snapshot.gameStability || {}).state === 'unstable') ? 'instable' : ((snapshot.gameStability || {}).state === 'stable' ? 'stable' : 'en analyse')}` : 'Désactivée · à activer')}
         ${card('#/announcements', '📣', 'Annonces', "Prédiction dans l'ombre")}
         ${card('#/absence-alert', '🕳️', 'Alerte absence', (snapshot.absenceAlert || {}).enabled ? `Activée · seuil ${(snapshot.absenceAlert || {}).threshold} jeux` : 'Désactivée · à activer')}
+        ${card('#/analyse-manque', '🔍', 'Analyse manque', (snapshot.analyseManque || {}).enabled ? `Activée · alerte à ${(snapshot.analyseManque || {}).threshold} jeux manqués` : ('Désactivée · à activer'))}
         ${card('#/loss-gate', '🚦', 'Envoi après perte', (snapshot.channelLossGate || {}).enabled ? `Activé · ${(snapshot.channelLossGate || {}).rows || 0} ligne(s) de planning` : 'Désactivé · planning dans l\'Excel')}
       </div>
 
@@ -2324,6 +2326,43 @@ Faites-en bon usage !
       catch (e) { toast(e.message, 'error'); }
     }
 
+    // « Analyse manque » (voir analyse-manque.js) : costume absent N jeux de suite → alerte et réapparition par un bot dédié.
+    async function analyseManquePage() {
+      setNav('analyse-manque');
+      let d;
+      try { d = await api('/api/analyse-manque'); } catch (e) { toast(e.message, 'error'); return; }
+      const cards = (d.suits || []).map(x => `<div class="card" style="min-width:90px;text-align:center;padding:10px"><div style="font-size:26px">${esc(x.suit)}</div><b class="${x.open ? 'bad' : ''}">${esc(x.count)} / ${esc(d.threshold)}</b><br><small>${x.open ? `🔴 disparu depuis N°${esc(x.open.since)}` : (x.count ? `manque depuis N°${esc(x.since)}` : 'vient de sortir')}</small></div>`).join('');
+      const recent = (d.recent || []).length ? d.recent.map(g => `N${esc(g.number)}: ${(g.suits || []).map(esc).join(' ')}`).join(' &nbsp;|&nbsp; ') : '<span class="small">Pas encore de jeu lu.</span>';
+      const log = (d.log || []).length ? d.log.map(x => `<li>${x.kind === 'retour' ? '✅ Réapparition' : '🚨 Alerte'} ${(x.suits || []).map(esc).join(' ')} · jeu N°${esc(x.number)} ${x.sent === false ? '· ⚠️ non envoyé' : ''}</li>`).join('') : '<li class="small">Aucun message pour le moment.</li>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Token du site · désactivée par défaut</span><h2 style="margin-top:7px">🔍 Analyse manque</h2>
+        <p class="small">Le bot suit la <b>main du joueur</b>. Quand un costume manque <b>${esc(d.threshold)}</b> jeux de suite, il envoie « 🚨 ALERTE JOUEUR » (les derniers jeux, la carte disparue, le jeu où la disparition est signalée) puis se tait ; quand le costume revient, il envoie « ✅ RÉAPPARITION JOUEUR » avec le nombre de jeux manqués. Les compteurs tournent toujours ; seuls les messages exigent l’activation.</p>
+        <div class="toolbar"><button class="button ${d.enabled ? 'danger' : 'primary'}" onclick="saveAnalyseManque(${d.enabled ? 'false' : 'true'})">${d.enabled ? 'Désactiver la fonction' : 'Activer la fonction'}</button><button class="button ghost" onclick="analyseManquePage()">Actualiser</button><button class="button ghost" onclick="testAnalyseManque()">Envoyer un test</button></div></div>
+        ${d.lastError ? `<div class="notice error">${esc(d.lastError)}</div>` : ''}
+        <section class="section"><div class="card"><span class="eyebrow">${d.enabled ? '🟢 Fonction activée' : '⚪ Fonction désactivée (aucun message envoyé)'}</span>
+          <div class="three-col" style="margin-top:10px">
+            <div class="field"><label>Token utilisé</label><div class="small">${d.tokenSet ? '✅ Le token du site (bot principal)' : '⚠️ Aucun token configuré sur le site'}</div><small>Le même que celui de tout le site : rien à renseigner ici.</small></div>
+            <div class="field"><label>ID du chat ou du canal destinataire</label><input id="amChat" type="text" value="${esc(d.chatId || '')}" placeholder="vide = ton chat privé (${esc(d.target || 'ADMIN_ID')})"><small>Vide : message dans ton chat privé. Canal : -1001234567890 ou @nom (bot administrateur du canal).</small></div>
+            <div class="field"><label>Nombre de jeux manqués avant l’alerte</label><input id="amThreshold" type="number" min="2" max="50" value="${esc(d.threshold)}"></div></div>
+          <div class="toolbar" style="margin-top:10px"><button class="button primary" onclick="saveAnalyseManque()">Enregistrer</button></div></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">En ce moment${d.lastGame != null ? ` · dernier jeu N°${esc(d.lastGame)}` : ''}</span><h2 style="margin-top:7px">Main du joueur</h2></div></div>
+          <div class="card" style="margin-bottom:10px"><div style="display:flex;gap:10px;flex-wrap:wrap">${cards}</div><p class="small" style="margin-top:10px">${recent}</p></div></section>
+        <section class="section"><div class="section-head"><div><span class="eyebrow">Historique récent</span><h2 style="margin-top:7px">Derniers messages</h2></div></div><div class="card"><ul style="margin:0;padding-left:18px">${log}</ul></div></section>`;
+    }
+    async function saveAnalyseManque(enabled) {
+      const body = { chatId: (($('#amChat') || {}).value || '').trim(), threshold: Number(($('#amThreshold') || {}).value) };
+      if (enabled !== undefined) body.enabled = enabled;
+      try { await api('/api/analyse-manque/config', 'POST', body); await refresh(); await analyseManquePage(); toast(enabled === true ? 'Analyse manque activée.' : enabled === false ? 'Analyse manque désactivée.' : 'Réglages enregistrés.'); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function testAnalyseManque() {
+      try { await saveAnalyseManqueQuiet(); await api('/api/analyse-manque/test', 'POST', {}); toast('Message de test envoyé.'); await analyseManquePage(); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveAnalyseManqueQuiet() {
+      const body = { chatId: (($('#amChat') || {}).value || '').trim(), threshold: Number(($('#amThreshold') || {}).value) };
+      await api('/api/analyse-manque/config', 'POST', body);
+    }
+
     // « Envoi après perte » par canal (voir channel-loss-gate.js) : planning jour par jour lu dans la feuille « PlanningEnvoi » de l'Excel.
     async function lossGatePage() {
       setNav('loss-gate');
@@ -2716,6 +2755,10 @@ Faites-en bon usage !
         what: 'Compte pour chacun des 4 costumes le nombre de jeux consécutifs où il n’est pas sorti et t’envoie un message dans ton chat privé quand un costume atteint le seuil (15 jeux par défaut).',
         steps: ['Ouvre « Alerte absence », règle le seuil et les côtés surveillés (joueur, banquier), puis active la fonction.', 'Utilise « Envoyer un test » pour vérifier que le message arrive dans ton chat privé.'],
         tips: ['Une seule alerte par série d’absence, sauf si tu coches « répétition » (un message à chaque jeu supplémentaire).', 'Le compteur repart à 0 dès que le costume sort, et à chaque nouveau sabot.'] },
+      { g: 'ops', icon: '🔍', title: 'Analyse manque', hash: '#/analyse-manque',
+        what: 'Surveille la main du joueur : quand un costume manque 4 jeux de suite (réglable), un message « 🚨 ALERTE JOUEUR » indique les 4 derniers jeux et le costume disparu ; quand il revient, un message « ✅ RÉAPPARITION JOUEUR » donne le nombre de jeux manqués. Les messages partent avec le même token que le reste du site.',
+        steps: ['Ouvre « Analyse manque », renseigne l’ID du chat ou du canal destinataire (vide = ton chat privé) ; le token est celui du site.', 'Clique « Envoyer un test », puis active la fonction.'],
+        tips: ['Une seule alerte par disparition : le bot ne dit plus rien jusqu’à la réapparition.', 'Pour un canal, le bot du site doit en être administrateur.'] },
       { g: 'ops', icon: '🚦', title: 'Envoi après perte', hash: '#/loss-gate',
         what: 'Planifie, jour par jour et canal par canal, si les prédictions partent librement ou seulement après une perte dans le canal. Le planning se remplit sur la page ou dans la feuille « PlanningEnvoi » de l’Excel (Date | Canal | Mode).',
         steps: ['Ouvre « Envoi après perte », ajoute des lignes (date, canal, Libre ou Après perte) ou importe le fichier Excel.', 'Active la fonction. Désactivée, le planning est ignoré et tout part librement.'],
@@ -4381,7 +4424,7 @@ Faites-en bon usage !
       const pp = snapshot.parityPalier || {};
       const fc = String(snapshot.formatCount || 107);
       const rowHtml = (pp.rows || []).map((r) => `<tr><td><b>${esc(r.label)}</b></td><td>${r.total ? r.cells.map((c) => `${esc(c.suit)}${c.pct}%`).join(' · ') : '—'}</td><td>${r.pick ? `<span class="tag good">${esc(r.pick)} prédit</span>` : `<span class="tag">— ${esc(r.reason)}</span>`}</td></tr>`).join('');
-      const recent = (pp.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>Faible %</th><th>État</th></tr></thead><tbody>${pp.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${e.pct ?? '—'} %</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '🚫'}</td></tr>`).join('')}</tbody></table>` : '';
+      const recent = (pp.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>Faible %</th><th>État</th></tr></thead><tbody>${pp.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}${e.from ? ` <span class="small muted">(inverse de ${esc(e.from)}, déjà venu de suite)</span>` : ''}</td><td>${e.pct ?? '—'} %</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '🚫'}</td></tr>`).join('')}</tbody></table>` : '';
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">🔢 Palier parité</h2>
         <p class="small">La stratégie lit le <b>palier du Compte parité</b> (une ligne par fin de numéro : « #531 ➔ (♦️31%) (♠️25%) (♣️25%) (❤️19%) ») et prédit le costume au <b>plus faible pourcentage</b> de la ligne, dans la main du <b>joueur</b>. <b>Par dizaine</b> : le palier de la dizaine <b>passée</b> est figé dès que le joueur a fini de tirer au jeu finissant par 9, puis sert à prédire <b>toute la dizaine suivante</b> (palier #510-#519 → jeux 520 à 529 ; la ligne #511 prédit le jeu 521). <b>Deux modes</b> : « Une à la fois » (la suivante part après la vérification de la précédente) ou « Liste » (chaque numéro part quand le jeu en direct est à 2 jeux de ce numéro, sans attendre les résultats). Avant toute prédiction, si le jeu en direct est <b>supérieur</b> au numéro à prédire, elle est ignorée. Le bot <b>n'attend pas le banquier</b> : dès que la main du joueur est terminée, le résultat et la prédiction suivante partent. <b>Égalités</b> : le costume du <b>4ᵉ rang (le faible)</b> est prédit s’il est <b>seul en bas</b> et que l’égalité éventuelle est <b>en haut</b> (1ᵉʳ = 2ᵉ, ou 1ᵉʳ = 2ᵉ = 3ᵉ) ; si le 3ᵉ et le 4ᵉ sont à égalité, ou si l’égalité est seulement au milieu → <b>aucune prédiction</b> pour cette fin de numéro, on passe à la suivante. En mode « Une à la fois », la suivante n’est lancée qu’<b>après vérification</b> de la précédente. Le costume est prédit au prochain jeu qui finit par ce chiffre, avec <b>3 rattrapages</b> (N, N+1, N+2, N+3).</p>
         <p class="small"><b>Enchaînement (mode « Une à la fois »)</b> : une prédiction à la fois. Costume venu au jeu N → la suivante vise N+1 ; venu à +1 → N+2 ; venu à +2 → N+3 ; jamais venu (3 rattrapages) → N+4. Le palier repart de zéro avec le reset du Compte parité.</p></div></div>
@@ -4394,11 +4437,13 @@ Faites-en bon usage !
             <div class="field"><label>Mode Liste : envoi quand le jeu en direct est à … jeux du numéro</label><input id="ppSendAt" type="number" min="1" max="10" value="${pp.sendAt ?? 2}"></div>
             <div class="field"><label>Mode « Une à la fois » : avance (jeux d'écart minimum avec le jeu en direct)</label><input id="ppLead" type="number" min="1" max="20" value="${pp.lead ?? 1}"></div>
             <div class="field"><label>Costumes comptés minimum dans la ligne</label><input id="ppMinN" type="number" min="1" max="5000" value="${pp.minN ?? 1}"></div>
+            <div class="field"><label>Costume déjà venu … fois de suite → prédire son inverse (0 = désactivé, 2 ou 3)</label><input id="ppConsec" type="number" min="0" max="9" value="${pp.consec ?? 0}"></div>
             <div class="field"><label>&nbsp;</label><label class="check"><input id="ppEnabled" type="checkbox" ${pp.enabled ? 'checked' : ''}> Activer l'envoi</label></div>
           </div>
           <div class="toolbar"><button class="button small primary" onclick="saveParityPalier()">Enregistrer</button><button class="button small ghost" onclick="testParityPalier()">Envoyer un test</button><button class="button small danger" onclick="resetParityPalier()">Remettre à zéro</button><button class="button small ghost" onclick="refresh().then(parityPalierPage)">Actualiser</button></div>
           ${pp.lastError ? `<p class="small" style="color:#f87171">${esc(pp.lastError)}</p>` : ''}
           <p class="small" style="margin-top:10px">Envoyées : <b>${pp.sentCount || 0}</b> • gagnées <b>${pp.won || 0}</b> / perdues <b>${pp.lost || 0}</b> (${pp.rate || 0} %) • en cours ${pp.waiting || 0}${(pp.steps || []).length ? ' • par rattrapage : ' + pp.steps.map((x) => `R${x.step} : ${x.n}`).join(' · ') : ''}</p>
+          ${pp.consec ? `<p class="small">🔁 Costume déjà venu <b>${pp.consec}</b> fois de suite → son inverse (❤️↔♣️, ♦️↔♠️) : <b>${pp.swapped || 0}</b> prédiction(s) changée(s). Le bot attend la fin de la main du joueur des ${pp.consec} jeux précédents avant d'envoyer.</p>` : ''}
           <p class="small muted">Prochain jeu visé : <b>${pp.nextTarget ? '№' + pp.nextTarget : '—'}</b>${pp.waiting ? ' (une prédiction est en cours, la suivante attend son résultat)' : ''}.</p>
         </div>
         <div class="card"><h3>${pp.frozenSource != null ? `Palier figé #${pp.frozenSource}–#${pp.frozenSource + 9} → prédit les jeux ${pp.frozenSource + 10} à ${pp.frozenSource + 19}` : 'Palier figé : pas encore (attend la fin de la main du joueur au prochain jeu finissant par 9)'}</h3>
@@ -4409,7 +4454,7 @@ Faites-en bon usage !
     }
     async function saveParityPalier() {
       try {
-        await api('/api/parity-palier/config', 'POST', { enabled: $('#ppEnabled')?.checked, channels: val('ppChannel'), maxR: val('ppMaxR'), format: val('ppFormat'), lead: val('ppLead'), minN: val('ppMinN'), mode: val('ppMode'), sendAt: val('ppSendAt') });
+        await api('/api/parity-palier/config', 'POST', { enabled: $('#ppEnabled')?.checked, channels: val('ppChannel'), maxR: val('ppMaxR'), format: val('ppFormat'), lead: val('ppLead'), minN: val('ppMinN'), mode: val('ppMode'), sendAt: val('ppSendAt'), consec: val('ppConsec') });
         await refresh(); parityPalierPage(); toast('« Palier parité » enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -4539,7 +4584,7 @@ Faites-en bon usage !
       const fc = String(snapshot.formatCount || 107);
       const rowHtml = (pe.rows || []).map((r) => `<tr><td><b>${esc(r.label)}</b></td><td>${r.total ? r.cells.map((c) => `${esc(c.suit)}${c.pct}%`).join(' · ') : '—'}</td><td>${r.pick ? `<span class="tag good">${esc(r.pick)} prédit → №${r.target}</span>` : `<span class="tag">— ${esc(r.reason)}</span>`}</td></tr>`).join('');
       const upcoming = (pe.upcoming || []).length ? `<p class="small muted">À venir : ${pe.upcoming.map((u) => `№${u.target} ${esc(u.suit)}`).join(' · ')}</p>` : '';
-      const recent = (pe.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>2e taux</th><th>État</th></tr></thead><tbody>${pe.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>${e.pct ?? '—'} %</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '🚫'}</td></tr>`).join('')}</tbody></table>` : '';
+      const recent = (pe.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Jeu</th><th>Costume</th><th>2e taux</th><th>État</th></tr></thead><tbody>${pe.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}${e.from ? ` <span class="small muted">(inverse de ${esc(e.from)}, déjà venu de suite)</span>` : ''}</td><td>${e.pct ?? '—'} %</td><td>${e.status === 'gagné' ? '✅ R' + e.step : e.status === 'perdu' ? '❌' : e.status === 'en attente' ? '⏳ ' + (e.step || 0) + '/' + e.maxR : '🚫'}</td></tr>`).join('')}</tbody></table>` : '';
       $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Stratégie</span><h2 style="margin-top:7px">⚖️ Palier parité égalité</h2>
         <p class="small">Même palier que « Palier parité » (une ligne par fin de numéro, main du <b>joueur</b>), mais cette stratégie ne prédit que les lignes où <b>deux costumes ou plus sont à égalité au taux le plus faible</b>. Elle ne prédit pas l'un des deux costumes à égalité : elle prédit le costume du <b>deuxième taux</b> parmi les 4 (si ce deuxième taux est lui aussi partagé, pas de prédiction). La ligne « fin d » du palier de la dizaine passée vise le jeu de même fin dans la dizaine suivante, <b>+0 ou +3</b> selon le réglage (palier #510-#519, ligne #511 : +0 → jeu 521, +3 → jeu 524). Elle part quand le jeu en direct est à <b>2 jeux</b> (réglable) du jeu visé : jeu visé 10 → envoyée au jeu 8.</p></div></div>
         <div class="card" style="margin-bottom:16px">
@@ -4550,11 +4595,13 @@ Faites-en bon usage !
             <div class="field"><label>Rattrapages</label><input id="peMaxR" type="number" min="0" max="9" value="${pe.maxR ?? 3}"></div>
             <div class="field"><label>Format (1 → ${esc(fc)})</label><input id="peFormat" type="number" min="1" max="${esc(fc)}" value="${pe.format ?? 1}"></div>
             <div class="field"><label>Costumes comptés minimum dans la ligne</label><input id="peMinN" type="number" min="1" max="5000" value="${pe.minN ?? 1}"></div>
+            <div class="field"><label>Costume déjà venu … fois de suite → prédire son inverse (0 = désactivé, 2 ou 3)</label><input id="peConsec" type="number" min="0" max="9" value="${pe.consec ?? 0}"></div>
             <div class="field"><label>&nbsp;</label><label class="check"><input id="peEnabled" type="checkbox" ${pe.enabled ? 'checked' : ''}> Activer l'envoi</label></div>
           </div>
           <div class="toolbar"><button class="button small primary" onclick="saveParityEgalite()">Enregistrer</button><button class="button small ghost" onclick="testParityEgalite()">Envoyer un test</button><button class="button small danger" onclick="resetParityEgalite()">Remettre à zéro</button><button class="button small ghost" onclick="refresh().then(parityEgalitePage)">Actualiser</button></div>
           ${pe.lastError ? `<p class="small" style="color:#f87171">${esc(pe.lastError)}</p>` : ''}
           <p class="small" style="margin-top:10px">Envoyées : <b>${pe.sentCount || 0}</b> • gagnées <b>${pe.won || 0}</b> / perdues <b>${pe.lost || 0}</b> (${pe.rate || 0} %) • en cours ${pe.waiting || 0}${(pe.steps || []).length ? ' • par rattrapage : ' + pe.steps.map((x) => `R${x.step} : ${x.n}`).join(' · ') : ''}</p>
+          ${pe.consec ? `<p class="small">🔁 Costume déjà venu <b>${pe.consec}</b> fois de suite → son inverse (❤️↔♣️, ♦️↔♠️) : <b>${pe.swapped || 0}</b> prédiction(s) changée(s). Le bot attend la fin de la main du joueur des ${pe.consec} jeux précédents avant d'envoyer.</p>` : ''}
           ${upcoming}
         </div>
         <div class="card"><h3>${pe.frozenSource != null ? `Palier figé #${pe.frozenSource}–#${pe.frozenSource + 9} → prédit les jeux ${pe.frozenSource + 10 + (pe.offset || 0)} à ${pe.frozenSource + 19 + (pe.offset || 0)}` : 'Palier figé : pas encore (attend la fin de la main du joueur au prochain jeu finissant par 9)'}</h3>
@@ -4565,7 +4612,7 @@ Faites-en bon usage !
     }
     async function saveParityEgalite() {
       try {
-        await api('/api/parity-egalite/config', 'POST', { enabled: $('#peEnabled')?.checked, channels: val('peChannel'), maxR: val('peMaxR'), format: val('peFormat'), minN: val('peMinN'), sendAt: val('peSendAt'), offset: val('peOffset') });
+        await api('/api/parity-egalite/config', 'POST', { enabled: $('#peEnabled')?.checked, channels: val('peChannel'), maxR: val('peMaxR'), format: val('peFormat'), minN: val('peMinN'), sendAt: val('peSendAt'), offset: val('peOffset'), consec: val('peConsec') });
         await refresh(); parityEgalitePage(); toast('« Palier parité égalité » enregistré.');
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -6770,6 +6817,7 @@ Faites-en bon usage !
         else if (h === '#/distribution-faible') distributionFaiblePage();
         else if (h === '#/slow-mode') slowModePage();
         else if (h === '#/absence-alert') absenceAlertPage();
+        else if (h === '#/analyse-manque') analyseManquePage();
         else if (h === '#/loss-gate') lossGatePage();
         else if (h === '#/draw-two-three') drawTwoThreePage();
         else if (h === '#/victoire-vb') victoireVbPage();
