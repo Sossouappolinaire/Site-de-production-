@@ -315,8 +315,6 @@
         <a href="#/ai-strategies" data-nav="ai">Stratégies IA</a>
         <a href="#/ai-repair" data-nav="ai-repair">🛠 Réparation IA</a>
         <a href="#/ai-created" data-nav="ai-created">Créé par moi avec IA</a>
-        <a href="#/game21-strategies" data-nav="game21">Stratégies IA du 21</a>
-        <a href="#/game21-predict" data-nav="game21">Prédiction IA jeu 21</a>
         <a href="#/predit" data-nav="predit">Prédit</a>
         <a href="#/after-loss" data-nav="after-loss">Après perte</a>
         <a href="#/suit-streak" data-nav="suit-streak">Répétition costume</a>
@@ -339,7 +337,6 @@
         <a href="#/absence-alert" data-nav="absence-alert">🕳️ Alerte absence</a>
         <a href="#/analyse-manque" data-nav="analyse-manque">🔍 Analyse manque</a>
         <a href="#/loss-gate" data-nav="loss-gate">🚦 Envoi après perte</a>
-        <a href="#/like-react" data-nav="like-react">J'aime</a>
         <a href="#/statistics" data-nav="statistics">Statistiques</a>
         <a href="#/parity-counter" data-nav="parity-counter">🔢 Compte parité</a>
         <a href="#/distribution-counter" data-nav="distribution-counter">🃏 Compte distribution</a>
@@ -660,7 +657,6 @@
         ${card('#/statistics', '📊', 'Statistiques', `${snapshot.statistics?.trackedCount || 0} jeu(x) suivi(s)`)}
         ${card('#/cards-count', '🧮', 'Comptage 2/2', `Lot ${(snapshot.cardsCount?.block?.start) || '—'} → ${(snapshot.cardsCount?.block?.end) || '—'} • ${(snapshot.cardsCount?.sentCount) || 0} prédiction(s)`)}
         ${card('#/draw-two-three', '⚖️', 'Nul / 2-3', `${(snapshot.drawTwoThree?.sentCount) || 0} prédiction(s) • ${(snapshot.drawTwoThree?.won) || 0} gagnée(s) • ${(snapshot.drawTwoThree?.lost) || 0} perdue(s)`)}
-        ${card('#/like-react', '👍', 'J\'aime', `${(snapshot.likeReact?.channels || []).length} canal(aux) coché(s)`)}
         ${card('#/vip', '👑', 'VIP', `${(snapshot.vip?.trackers || []).every((t) => t.selected) && (snapshot.vip?.trackers || []).length ? 'Formation active' : 'Formation inactive'} • ${(snapshot.vip?.sentCount) || 0} relais`)}
         ${card('#/formation', '🎓', 'Formation', 'Une formation par stratégie, envoyée dans son canal')}
       </div>
@@ -673,14 +669,6 @@
         ${card('#/predit', '🔮', 'Prédit IA', `${(snapshot.predit?.activeCount || 0)} stratégie(s) certifiée(s)`)}
         ${card('#/ai-ask', '💬', 'Question IA', 'Demander une explication au bot')}
         ${card('#/ai-repair', '🛠', 'Réparation IA', "L'IA identifie les problèmes et les corrige")}
-      </div>
-
-      <div class="home-section-label">Jeu 21</div>
-      <div class="home-grid">
-        ${card('#/game21', '🃏', 'Game 21', 'Les jeux 21 de 1xbet en direct')}
-        ${card('#/game21-ai', '🤖', 'Analyse IA du 21', 'Déclencheurs A, K, Q, J et cartes exactes')}
-        ${card('#/game21-strategies', '🧠', 'Stratégies IA du 21', 'Créer des stratégies à partir des déclencheurs')}
-        ${card('#/game21-predict', '🎯', 'Prédiction IA jeu 21', '21 classique et 21 séparés · carte exacte et carte de valeur')}
       </div>
 
       <div class="home-section-label">Système</div>
@@ -2554,7 +2542,6 @@ Faites-en bon usage !
       { id: 'ops', title: 'Opérations' },
       { id: 'auto', title: 'Prédictions automatiques (déclencheurs)' },
       { id: 'ai', title: 'Intelligence artificielle' },
-      { id: 'g21', title: 'Jeu 21' },
       { id: 'sys', title: 'Système' },
       { id: 'gloss', title: 'Mots à connaître' },
     ];
@@ -2737,14 +2724,6 @@ Faites-en bon usage !
       { g: 'auto', icon: '🎲', title: 'Type de mise', hash: '#/bet-type',
         what: 'Associe des canaux qui envoient des prédictions à un type de mise (1 à 4) et envoie dans le canal choisi. « Meilleur type de mise » envoie les prédictions de la configuration au meilleur taux de réussite.',
         steps: ['Clique sur « Créer ».', 'Choisis un ou plusieurs canaux qui envoient des prédictions.', 'Choisis le type (1 à 4) et le canal où envoyer, puis enregistre.'] },
-      { g: 'auto', icon: '👍', title: 'J’aime', hash: '#/like-react',
-        what: 'Met automatiquement des réactions sur les prédictions des canaux suivis, selon 4 types de règles. Type 3 : ❤ après 2 pertes consécutives. Type 4 : 🍾 après 1 perte.',
-        steps: [
-          'Ouvre « J’aime » et active-le.',
-          'Coche les canaux à suivre (4 au maximum) ou ajoute-en un avec son identifiant -100… ou @nom.',
-          'Le bot doit être administrateur du canal, avec les réactions autorisées. Le bouton « Tester les 4 emojis » vérifie les droits.',
-        ],
-        tips: ['Seules les prédictions envoyées par le site dans le canal sont suivies, à partir du moment où le canal est coché.'] },
       { g: 'auto', icon: '📣', title: 'Copie et annonce', hash: '#/copy-announce',
         what: 'Copie les prédictions d’une source vers un autre canal, envoie des annonces planifiées, ou les deux.',
         steps: ['Clique sur « Ajouter ».', 'Choisis la source (stratégie, stratégie enregistrée ou canal déjà configuré) et le canal de destination.', 'Active la copie, les annonces planifiées (toutes les 30 min, 1 h, 3 h… ou à heures pile), ou les deux.'] },
@@ -2828,20 +2807,6 @@ Faites-en bon usage !
       { g: 'ai', icon: '🛠', title: 'Réparation IA', hash: '#/ai-repair',
         what: 'L’IA identifie les problèmes du site et les corrige.',
         steps: ['Ouvre « Réparation IA » et lance l’analyse.', 'Lis les problèmes trouvés avant d’accepter les corrections.'] },
-      // ----- Jeu 21 -----
-      { g: 'g21', icon: '🃏', title: 'Game 21', hash: '#/game21',
-        what: 'Les tours du jeu 21 de 1xbet en direct : cartes du joueur et du croupier, costumes et total de chaque main. Actualisé toutes les 6 secondes.',
-        steps: ['Ouvre « Game 21 » : rien à configurer, c’est un affichage en direct.'] },
-      { g: 'g21', icon: '🤖', title: 'Analyse IA du 21', hash: '#/game21-ai',
-        what: 'L’IA cherche les déclencheurs : une carte vue dans un tour qui annonce, au tour suivant, une carte de valeur (A, K, Q, J) ou une carte exacte avec son costume.',
-        steps: ['Ouvre « Analyse IA du 21 », choisis la variante (21 classique ou 21 séparés) et lance l’analyse.'] },
-      { g: 'g21', icon: '🧠', title: 'Stratégies IA du 21', hash: '#/game21-strategies',
-        what: 'L’IA crée des stratégies à partir des déclencheurs réellement observés, écrites en clair : « quand tu vois telle carte, attends telle carte au tour suivant ».',
-        steps: ['Ouvre « Stratégies IA du 21 » et crée une stratégie à partir d’un déclencheur.'],
-        tips: ['Toute nouvelle stratégie est créée désactivée.'] },
-      { g: 'g21', icon: '🎯', title: 'Prédiction IA jeu 21', hash: '#/game21-predict',
-        what: 'Utilise les déclencheurs IA du jeu 21 et les stratégies activées. Le 21 classique et le 21 séparé sont prédits séparément, sur deux cibles : la carte exacte et la carte de valeur.',
-        steps: ['Ouvre « Prédiction IA jeu 21 », active les stratégies voulues et renseigne le canal d’envoi.'] },
       // ----- Système -----
       { g: 'sys', icon: '⚙️', title: 'Configuration', hash: '#/settings',
         what: 'Réglages du bot, de la base de données et des paramètres généraux.',
@@ -6353,6 +6318,7 @@ Faites-en bon usage !
     function likeReactPage() {
       setNav('like-react');
       const p = snapshot.likeReact || {};
+      if (p.disabled) { $('#app').innerHTML = '<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Désactivé</span><h2 style="margin-top:7px">J\'aime</h2><p class="small">Ce bouton est désactivé : aucune réaction n\'est envoyée.</p></div></div>'; return; }
       const emojis = p.emojis || { 1: '👍', 2: '🔥', 3: '\u2764', 4: '🍾' };
       const checked = (p.channels || []).map(String);
       const all = (p.bestChannels || []).slice();
