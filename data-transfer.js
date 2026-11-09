@@ -178,6 +178,7 @@ const PANELS = {
   distributionFaible: { mod: './distribution-faible' },   // « Distribution faible » (stratégie)
   slowMode: { mod: './slow-mode' },                   // « Ralentisseur »
   absenceAlert: { mod: './absence-alert' },           // « Alerte absence de costume »
+  analyseManque: { mod: './analyse-manque' },         // « Analyse manque » (le jeton n'est jamais exporté)
   channelLossGate: { mod: './channel-loss-gate' },    // « Envoi après perte » par canal (le planning se lit aussi dans la feuille PlanningEnvoi)
   betType: { mod: './bet-type' },                  // « Type de mise »
   likeReact: { mod: './like-react' },              // « J'aime » (réactions automatiques)

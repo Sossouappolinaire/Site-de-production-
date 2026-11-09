@@ -166,7 +166,7 @@ const pct = (count, total) => (total ? ((count / total) * 100).toFixed(1) : '0.0
 // Ordre d'affichage des costumes sur chaque ligne : ❤️ ♦️ ♠️ ♣️ (emojis : rouge pour cœur/carreau, noir pour pique/trèfle)
 const SUIT_ORDER = ['❤️', '♦️', '♠️', '♣️'];
 const SUIT_PLAIN = { '❤️': '❤️', '♦️': '♦️', '♠️': '♠️', '♣️': '♣️' }; // emojis colorés (VS16)
-// pourcentages des costumes d'une case (parité, chiffre) ; 👑 sur le costume strictement dominant
+// pourcentages des costumes d'une case (parité, chiffre) 
 function suitCells(cell) {
   const c = cell || suitZeros();
   const total = SUIT_ORDER.reduce((n, x) => n + (c[x] || 0), 0);
@@ -185,18 +185,13 @@ const SUB_RULE = '┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈';
 function suitLine(label, cell) {
   const cells = suitCells(cell);
   const total = cells.reduce((n, r) => n + r.count, 0);
-  if (!total) return `${label} ➔ aucun jeu`;
+  if (!total) return `${label}  —`;
   const sorted = cells.map((r, i) => ({ ...r, i })).sort((x, y) => y.count - x.count || x.i - y.i); // égalité : ordre ❤️ ♦️ ♠️ ♣️
-  const shown = sorted.filter((r) => r.count > 0); // v131 : les costumes à 0 % ne sont plus affichés (message plus court, plus lisible)
-  const lead = shown.length > 0 && shown.filter((r) => r.count === shown[0].count).length === 1; // un seul costume en tête → 👑
-  return `${label} ➔ ` + shown.map((r, k) => `${k === 0 && lead ? '👑 ' : ''}${r.suit} ${pctInt(r.count, total)} %`).join('  ·  ');
+  const shown = sorted.filter((r) => r.count > 0); // les costumes à 0 % ne sont pas affichés
+  return `${label}  ` + shown.map((r) => `${r.suit}${pctInt(r.count, total)}%`).join(' ');
 }
-// Liste unique de 10 lignes (une par fin de numéro 0 à 9), sans titre : les costumes des jeux à point pair ET impair sont
-// réunis pour chaque chiffre. Le nombre de jeux pair / impair reste affiché dans le résumé.
-// v122 : chaque ligne dit si le numéro est DÉJÀ PASSÉ ou PAS ENCORE PASSÉ dans la dizaine du dernier jeu terminé :
-//   ✅ #840 ➔ …   numéro déjà passé (jeu terminé)
-//   ✅ #845 ➔ … ◀ dernier jeu terminé
-//   ⏳ #846 ➔ …   numéro pas encore passé (les pourcentages sont ceux des dizaines précédentes depuis le reset)
+// v133 : liste compacte, une ligne par fin de numéro de la dizaine du dernier jeu — « ✅ #840  ❤️45% ♣️30% ♦️15% ♠️10% »
+//   ✅ numéro déjà passé · ⏳ pas encore passé (pourcentages des dizaines précédentes) · ◀ dernier jeu terminé
 function listBlock(pairSuits, impairSuits, gameNumber, digits = ALL) {
   const g = Number(gameNumber);
   const known = gameNumber != null && gameNumber !== '' && Number.isInteger(g) && g >= 0;
@@ -208,8 +203,7 @@ function listBlock(pairSuits, impairSuits, gameNumber, digits = ALL) {
     const merged = suitZeros();
     for (const x of SUIT_ORDER) merged[x] = (p[x] || 0) + (i[x] || 0);
     if (base == null) { lines.push(suitLine(DIGITS[d], merged)); continue; }
-    const passed = d <= cur;
-    lines.push(`${passed ? '✅' : '⏳'} ${suitLine(`#${base + d}`, merged)}${d === cur ? '   ◀ dernier jeu' : ''}`);
+    lines.push(`${d <= cur ? '✅' : '⏳'} ${suitLine(`#${base + d}`, merged)}${d === cur ? ' ◀' : ''}`);
   }
   return lines.join('\n');
 }
@@ -250,7 +244,7 @@ const hhmm = (d) => `${pad2(d.getHours())}h${pad2(d.getMinutes())}`;
 const plural = (n, w) => `${n} ${w}${n > 1 ? 'x' : ''}`;
 const RULE = '━━━━━━━━━━━━━━━';
 
-// v130 : message clair et aéré — un titre par bloc, une information par ligne, jamais de mots ou de phrases collés
+// v133 : message court — titre, dernier jeu, une ligne par fin de numéro, parité, reset
 function buildMessage(side, gameNumber, opts = {}) {
   const s = SIDES[side]; const counts = state[side];
   const pairTotal = counts.pair.reduce((n, x) => n + x, 0);
@@ -261,27 +255,13 @@ function buildMessage(side, gameNumber, opts = {}) {
   const both = pairTotal + impairTotal;
   const pairPct = pctInt(pairTotal, both); const impairPct = both ? 100 - pairPct : 0;
   return [
-    ...(bilan ? [`🕐 BILAN DE L'HEURE — ${hhmm(new Date())}`, TITLE_RULE, ''] : []),
-    `${s.icon} ${s.name.toUpperCase()} — COMPTE PARITÉ`,
-    TITLE_RULE,
-    ...(known ? [`🎮 Dernier jeu terminé : #${g}`] : []),
-    '',
-    '📊 COSTUMES PAR FIN DE NUMÉRO',
-    'Du plus fréquent au moins fréquent · 👑 = costume en tête',
-    SUB_RULE,
+    bilan ? `🕐 BILAN DE L'HEURE · ${hhmm(new Date())}` : `🎯 COMPTE PARITÉ`,
+    `${s.icon} ${s.name.toUpperCase()}${known && !bilan ? ` · Jeu #${g}` : ''}`,
+    RULE,
     listBlock(counts.suits && counts.suits.pair, counts.suits && counts.suits.impair, gameNumber),
-    ...(known ? [SUB_RULE, '✅ déjà passé  ·  ⏳ pas encore passé  ·  ◀ dernier jeu'] : []),
-    '',
-    TITLE_RULE,
-    '📋 RÉSUMÉ STATISTIQUE',
-    TITLE_RULE,
-    `${s.icon} ${s.name}`,
-    `➖ Pair    ${bar(pairPct)} ${pairTotal} jeux (${pairPct} %)`,
-    `➕ Impair  ${bar(impairPct)} ${impairTotal} jeux (${impairPct} %)`,
-    `📊 Total compté depuis le dernier reset : ${state.games} jeux`,
-    ...(bilan ? ['', details.detailsText(counts.pair, counts.impair, `${s.icon} ${s.name}`)] : []),
-    '',
-    ...(bilan ? ['🔄 Compteur remis à zéro'] : [`⏭ Prochain reset : dans ${formatCountdown(msUntilNextReset())}`, `⏱ Intervalle : ${state.intervalMin} min`]),
+    RULE,
+    `➖ Pair ${pairPct} %  ·  ➕ Impair ${impairPct} %  ·  ${state.games} jeux`,
+    bilan ? '🔄 Compteur remis à zéro' : `⏭ Reset dans ${formatCountdown(msUntilNextReset())}`,
   ].join('\n');
 }
 
@@ -302,41 +282,23 @@ function proposalOf(side) {
 function buildProposalMessage(side) {
   const s = SIDES[side];
   const rows = proposalOf(side);
-  const bases = Object.keys(state.dz[side] || {}).map(Number).sort((a, b) => a - b);
+  const bases = Object.keys(state.dz[side] || {}).length;
   const since = new Date(state.sinceAt || Date.now());
-  const head = [
-    `🕐 BILAN DES DIZAINES — ${hhmm(new Date())}`,
-    TITLE_RULE,
-    `${s.icon} ${s.name.toUpperCase()} — COMPTE PARITÉ`,
-    '',
-    `⏱ Période : de ${hhmm(since)} à ${hhmm(new Date())}`,
-    `🎮 Jeux comptés : ${state.games}`,
-    `🔟 Dizaines vues : ${bases.length}`,
-    ...(bases.length ? ['', ...bases.map((b) => `   ▸ #${b} à #${b + 9}`)] : []),
-    '',
-    TITLE_RULE,
-    '💡 COSTUME PROPOSÉ PAR FIN DE NUMÉRO',
-    TITLE_RULE,
-    'Costume au taux le plus élevé de chaque fin de numéro,',
-    'calculé sur toutes les dizaines de l\u2019heure.',
-  ];
-  const block = (r, withDetail) => {
-    const lines = ['', SUB_RULE];
-    if (!r.total) { lines.push(`${DIGITS[r.digit]} Fin ${r.digit} — aucun jeu`); return lines; }
-    const head1 = r.top.length > 1 ? `${DIGITS[r.digit]} Fin ${r.digit}  ➜  ⚖️ ${r.top.join(' ')} à égalité` : `${DIGITS[r.digit]} Fin ${r.digit}  ➜  ✅ ${r.top[0]}`;
-    lines.push(head1);
-    lines.push(`   ${bar(r.pct)} ${r.pct} %`);
-    if (withDetail) {
-      const seen = bases.map((b) => { const row = (state.dz[side][b] || [])[r.digit]; return row && row.length ? `#${b + r.digit} ${row.join('')}` : null; }).filter(Boolean);
-      if (seen.length) lines.push(`   👁 Vu : ${seen.join('  ·  ')}`);
-    }
-    lines.push(`   📊 ${r.ranked.filter((c) => c.count > 0).map((c) => `${c.suit} ${c.pct} %`).join('  ·  ')}`);
-    return lines;
+  const line = (r) => {
+    if (!r.total) return `${DIGITS[r.digit]} ➜ —`;
+    return r.top.length > 1 ? `${DIGITS[r.digit]} ➜ ⚖️ ${r.top.join(' ')} ${r.pct}%` : `${DIGITS[r.digit]} ➜ ✅ ${r.top[0]} ${r.pct}%`;
   };
-  const tail = ['', TITLE_RULE, '✅ = costume proposé  ·  ⚖️ = égalité  ·  👁 = costumes vus', 'Barre = taux du costume proposé'];
-  let text = [...head, ...rows.flatMap((r) => block(r, true)), ...tail].join('\n');
-  if (text.length > 3900) text = [...head, ...rows.flatMap((r) => block(r, false)), ...tail].join('\n'); // trop long pour Telegram : on retire le détail par dizaine
-  return text;
+  return [
+    `💡 BILAN DES DIZAINES · ${hhmm(new Date())}`,
+    `${s.icon} ${s.name.toUpperCase()}`,
+    RULE,
+    `⏱ ${hhmm(since)} → ${hhmm(new Date())}  ·  ${state.games} jeux  ·  ${bases} dizaine${bases > 1 ? 's' : ''}`,
+    '',
+    '🎯 Costume proposé par fin de numéro',
+    ...rows.map(line),
+    RULE,
+    '✅ costume en tête  ·  ⚖️ égalité',
+  ].join('\n');
 }
 
 // publie le compteur À CHAQUE FIN DE JEU (v122) : un message par côté choisi (joueur, banquier ou les deux), quel que soit le gagnant
@@ -366,42 +328,26 @@ function topSuitsOf(side) {
     return SUIT_ORDER.filter((x) => merged[x] === max).join('');
   });
 }
+// v133 : fin de dizaine SIMPLE — pour chaque fin de numéro (0 à 9), les costumes passés dizaine après dizaine,
+// depuis la remise à zéro (heure pile) jusqu'à la dizaine qui vient de finir : « 0️⃣  ♦️ ➜ ♠️♣️ ➜ ❤️ »
 function buildDizaineMessage(side, gameNumber) {
-  const s = SIDES[side]; const now = topSuitsOf(side); const prev = state.prevTop[side];
+  const s = SIDES[side];
   const g = Number(gameNumber);
   const base = Number.isInteger(g) && g >= 0 ? Math.floor(g / 10) * 10 : null;
-  const D = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
-  const cell = (d) => `${D[d]} ${now[d]}${now[d] === '—' ? '' : (prev && prev[d] !== now[d] ? ' 🔰' : ' ✅')}`;
-  const lines = [];
-  for (let d = 0; d < 10; d += 2) lines.push(`${cell(d)}   ⚖️   ${cell(d + 1)}`);
-  // v131 : bloc CHANGEMENTS lisible — pour chaque fin de numéro qui a varié : avant ➜ maintenant + la nature du changement
-  //   🆕 premier costume (rien à la dizaine précédente) · ➕ costume(s) ajouté(s) · ➖ costume(s) retiré(s) · 🔁 costume remplacé ; les fins identiques sont listées à part
-  const D2 = D;
-  const suitsIn = (t) => SUIT_ORDER.filter((x) => String(t || '').includes(x));
-  const changes = []; const same = [];
-  if (prev) {
-    for (const d of ALL) {
-      if (now[d] === '—' && prev[d] === '—') continue;
-      if (now[d] === prev[d]) { same.push(D2[d]); continue; }
-      if (now[d] === '—') continue; // plus aucun jeu pour cette fin : rien à comparer
-      const before = suitsIn(prev[d]); const after = suitsIn(now[d]);
-      if (prev[d] === '—' || !before.length) { changes.push(`${D2[d]} Fin ${d} : 🆕 ${now[d]}  (premier costume)`); continue; }
-      const added = after.filter((x) => !before.includes(x)); const removed = before.filter((x) => !after.includes(x));
-      const kind = added.length && removed.length ? `🔁 remplacé : ${removed.join('')} ➜ ${added.join('')}` : added.length ? `➕ ajouté : ${added.join('')}` : `➖ retiré : ${removed.join('')}`;
-      changes.push(`${D2[d]} Fin ${d} : ${prev[d]} ➜ ${now[d]}`, `      ${kind}`);
-    }
-  }
+  const dz = state.dz[side] || {};
+  const bases = Object.keys(dz).map(Number).filter((b) => base == null || b <= base).sort((a, b) => a - b).slice(-12); // 12 dizaines au plus (message Telegram limité)
+  const lines = ALL.map((d) => {
+    const seen = bases.map((b) => { const row = (dz[b] || [])[d]; return row && row.length ? SUIT_ORDER.filter((x) => row.includes(x)).join('') : '·'; });
+    return `${DIGITS[d]}  ${seen.length ? seen.join(' ➜ ') : '—'}`;
+  });
   return [
-    `${s.icon} ${s.name.toUpperCase()} — COMPTE PARITÉ`,
-    TITLE_RULE,
-    `🔟 FIN DE DIZAINE${base != null ? ` · #${base} à #${base + 9}` : ''}`,
-    'Costume au taux le plus élevé de chaque fin de numéro',
-    SUB_RULE,
+    `🔟 FIN DE DIZAINE${base != null ? ` · #${base}-#${base + 9}` : ''}`,
+    `${s.icon} ${s.name.toUpperCase()} · depuis ${hhmm(new Date(state.sinceAt || Date.now()))}`,
+    RULE,
     ...lines,
-    ...(prev ? [SUB_RULE, `🔄 CHANGEMENTS${base != null ? ` · #${base}-#${base + 9}` : ''}`, 'Dizaine précédente ➜ cette dizaine', '', ...(changes.length ? changes : ['Aucun changement : tous les costumes sont identiques ✅']), ...(same.length && changes.length ? ['', `✅ Inchangées : ${same.join(' ')}`] : [])] : []),
-    SUB_RULE,
-    '✅ même costume que la dizaine précédente',
-    '🔰 variation par rapport à la dizaine précédente',
+    RULE,
+    `🔢 ${bases.length} dizaine${bases.length > 1 ? 's' : ''} : ${bases.map((b) => `#${b}`).join(' · ')}`,
+    '➜ du plus ancien au plus récent  ·  · = pas vu',
   ].join('\n');
 }
 async function dizaineRecap(gameNumber) {

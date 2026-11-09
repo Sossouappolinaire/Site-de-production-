@@ -128,6 +128,7 @@ const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap
 
 const DB_TABLES = [
   ['games', 'DELETE FROM games'],
+  ['sent_dedupe', 'DELETE FROM sent_dedupe'],
   ['predictions', 'DELETE FROM predictions'],
   ['after_loss_sent', 'DELETE FROM after_loss_sent'],
   ['announcements', 'DELETE FROM announcements'],

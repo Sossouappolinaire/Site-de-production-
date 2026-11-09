@@ -60,6 +60,7 @@ const channelUniform = require('./channel-uniform'); // « Canal Telegram » v10
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const gameStability = require('./game-stability');
 const absenceAlert = require('./absence-alert');
+const analyseManque = require('./analyse-manque');
 const channelAdmin = require('./channel-admin');
 const channelLossGate = require('./channel-loss-gate');
 const costumeFaibleTop = require('./costume-faible-top');
@@ -448,6 +449,7 @@ app.get('/api/state', async (req, res) => {
     parityEgalite: parityEgalite.status(),
     gameStability: gameStability.status(),
     absenceAlert: (() => { const x = absenceAlert.status(); return { enabled: x.enabled, threshold: x.threshold }; })(),
+    analyseManque: (() => { const x = analyseManque.status(); return { enabled: x.enabled, threshold: x.threshold, tokenSet: x.tokenSet }; })(),
     channelLossGate: (() => { const x = channelLossGate.status(); return { enabled: x.enabled, rows: x.rows, today: x.today }; })(),
     costumeFaibleTop: costumeFaibleTop.status(),
     control: predictionControl.status(),
@@ -2593,6 +2595,21 @@ app.post('/api/absence-alert/config', (req, res) => {
     if (b.enabled !== undefined) absenceAlert.setEnabled(b.enabled);
     res.json(absenceAlert.status());
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// « Analyse manque » (voir analyse-manque.js) : costume absent N jeux de suite → alerte avec le token du site (+ ID du chat, sinon chat privé admin)
+app.get('/api/analyse-manque', (req, res) => res.json(analyseManque.status()));
+app.post('/api/analyse-manque/config', (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.chatId !== undefined) analyseManque.setChatId(b.chatId);
+    if (b.threshold !== undefined) analyseManque.setThreshold(b.threshold);
+    if (b.enabled !== undefined) analyseManque.setEnabled(b.enabled);
+    res.json(analyseManque.status());
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/analyse-manque/test', async (req, res) => {
+  const r = await analyseManque.testAlert();
+  res.status(r.ok ? 200 : 400).json({ ...r, ...analyseManque.status() });
 });
 app.post('/api/absence-alert/test', async (req, res) => {
   const r = await absenceAlert.testAlert();

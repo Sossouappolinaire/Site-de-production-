@@ -39,6 +39,7 @@ const channelUniform = require('./channel-uniform'); // « Canal Telegram » v10
 const gameStability = require('./game-stability'); // « Stabilité du jeu » (désactivée par défaut)
 const channelAdmin = require('./channel-admin'); // commande /envois (chat privé de l'admin)
 const absenceAlert = require('./absence-alert'); // « Alerte absence de costume » (chat privé de l'admin)
+const analyseManque = require('./analyse-manque'); // « Analyse manque » (bot dédié : costume manquant 4 jeux de suite / réapparition)
 const channelLossGate = require('./channel-loss-gate'); // « Envoi après perte » par canal, planifié dans l'Excel
 const costumeFaibleTop = require('./costume-faible-top');
 const suitBreak = require('./suit-break');
@@ -2448,6 +2449,7 @@ async function applyDbConfigs() {
   await parityEgalite.restoreFromDb();
   await gameStability.restoreFromDb();
   await absenceAlert.restoreFromDb();
+  await analyseManque.restoreFromDb();
   await channelLossGate.restoreFromDb();
   await costumeFaibleTop.restoreFromDb();
   await midnightReset.restoreFromDb();
@@ -2552,6 +2554,9 @@ async function startLoop() {
   absenceAlert.restore();
   absenceAlert.setSender(senderFor);
   absenceAlert.setAdminId(() => state.adminId);
+  analyseManque.restore();
+  analyseManque.setSender(senderFor);
+  analyseManque.setAdminId(() => state.adminId);
   channelLossGate.restore();
   costumeFaibleTop.restore();
   midnightReset.restore();
@@ -2654,6 +2659,7 @@ async function startLoop() {
     parityCounter.onFinished(round).catch((e) => console.error('Compte parité :', e.message));
     distributionCounter.onFinished(round).catch((e) => console.error('Compte distribution :', e.message));
     absenceAlert.onFinished(round).catch((e) => console.error('Alerte absence :', e.message));
+    analyseManque.onFinished(round).catch((e) => console.error('Analyse manque :', e.message));
   });
   // rapport PDF des déclencheurs fiables (≥75%) des 7 stratégies, envoyé à
   // l'admin à chaque nouveau sabot — voir sendShoeReport ci-dessus.

@@ -237,6 +237,7 @@ async function connect(newUrl) {
   if (!url) { try { url = (await require('./db-link').ensureDatabaseUrl(1)) || ''; } catch (_) { url = ''; } }
   ready = false;
   lastError = null;
+  lastSettings.clear(); lastSnapshot = null; // nouvelle connexion : tout est renvoyé une fois
   if (pool) { try { await pool.end(); } catch (_) {} pool = null; }
   if (!url) { lastError = 'Aucun lien de base de données configuré'; return status(); }
   if (!Pool) { lastError = "Module 'pg' absent — lance npm install"; return status(); }
@@ -244,8 +245,15 @@ async function connect(newUrl) {
     pool = new Pool({
       connectionString: url,
       ssl: /localhost|127\.0\.0\.1/.test(url) ? false : { rejectUnauthorized: false },
-      max: 4,
+      max: 6,
+      connectionTimeoutMillis: 10000,   // v133 : une connexion qui ne s'ouvre pas en 10 s échoue au lieu de bloquer le bot
+      idleTimeoutMillis: 30000,
+      statement_timeout: 30000,         // une requête bloquée est coupée côté Supabase
+      query_timeout: 35000,
+      keepAlive: true,
     });
+    // sans ce récepteur, une connexion coupée par Supabase (inactivité, redémarrage) lève une erreur non gérée
+    pool.on('error', (e) => { lastError = e.message; });
     await pool.query(SCHEMA);
     ready = true;
   } catch (e) {
@@ -599,7 +607,15 @@ async function loadAiAnalyses(limit = 12) {
 }
 
 // ---- réglages --------------------------------------------------------------
+const lastSettings = new Map(); // v133 : dernière valeur envoyée par clé (vidé à chaque connexion)
 async function setSetting(key, value) {
+  const v = String(value);
+  if (lastSettings.get(key) === v) return { rowCount: 0, skipped: true }; // identique à la dernière écriture : rien à envoyer à Supabase
+  const r = await setSettingRaw(key, v);
+  if (r) lastSettings.set(key, v);
+  return r;
+}
+async function setSettingRaw(key, value) {
   return q(
     `INSERT INTO settings (key, value) VALUES ($1,$2)
      ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`,
@@ -616,13 +632,21 @@ async function getSetting(key) {
 // ---- état complet du site (miroir de data.json) ----------------------------
 // Supabase/PostgreSQL est la source durable : compteurs, panneaux et
 // configurations survivent aux redémarrages (disque Render éphémère).
+let lastSnapshot = null;
 async function saveStoreSnapshot(data) {
   const clean = { ...(data || {}) };
   delete clean.databaseUrl; // le lien de la base ne doit jamais être stocké dans la base
+  const json = JSON.stringify(clean);
+  if (json === lastSnapshot) return { rowCount: 0, skipped: true }; // état inchangé depuis le dernier envoi
+  const r = await saveStoreSnapshotRaw(json);
+  if (r) lastSnapshot = json;
+  return r;
+}
+async function saveStoreSnapshotRaw(json) {
   return q(
     `INSERT INTO app_state (key, value, updated_at) VALUES ('store', $1::jsonb, now())
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-    [JSON.stringify(clean)]
+    [json]
   );
 }
 

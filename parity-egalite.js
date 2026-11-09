@@ -19,6 +19,10 @@
 //     main est terminée au dernier rattrapage ; le message est édité ;
 //   • pas d'enchaînement : plusieurs prédictions peuvent être en cours en même temps ;
 //   • un jeu déjà commencé n'est jamais prédit. Main du joueur uniquement.
+//   • v132 — RÉGLAGE « Costume déjà venu N fois de suite → son inverse » (0 = désactivé) : avant l'envoi, si le costume à prédire est venu dans
+//     la main du joueur à chacun des N jeux juste avant le jeu visé (ex. réglage 2 : ❤️ aux jeux 10 et 11, prédiction ❤️ au jeu 12) → on
+//     prédit l'INVERSE à la place (❤️ → ♣️, ♦️ → ♠️, et réciproquement). Tant que ces jeux ne sont pas tous connus, la prédiction attend
+//     (voir suit-consecutive.js).
 'use strict';
 const strategyRecap = require('./strategy-recap');
 
@@ -28,18 +32,19 @@ const fmt = require('./formats');
 const config = require('./config');
 const loss = require('./loss-return'); // liste d'ID de canaux (parseChannels)
 const parityCounter = require('./parity-counter');
+const consecutive = require('./suit-consecutive'); // v132 : costume venu N fois de suite → inverse
 const { state, hasSuit, setOnShoeReset } = require('./predictor');
 
 const DB_KEY = 'parity_egalite_state';
 const STORE_KEY = 'parityEgalite';
 const CFG_ID = 'parity-egalite';
 const NAME = 'Palier parité égalité';
-const DEFAULT_MAXR = 3, DEFAULT_MINN = 1, DEFAULT_SENDAT = 2, DEFAULT_OFFSET = 0, QUEUE_MAX = 60;
+const DEFAULT_MAXR = 3, DEFAULT_MINN = 1, DEFAULT_SENDAT = 2, DEFAULT_OFFSET = 0, DEFAULT_CONSEC = 0, QUEUE_MAX = 60;
 const OFFSETS = [0, 3];
 const SENT_RESOLVED_MAX = 100;
 
 const panel = {
-  enabled: false, channels: [], format: config.DEFAULT_FORMAT, maxR: DEFAULT_MAXR, minN: DEFAULT_MINN, sendAt: DEFAULT_SENDAT, offset: DEFAULT_OFFSET,
+  enabled: false, channels: [], format: config.DEFAULT_FORMAT, maxR: DEFAULT_MAXR, minN: DEFAULT_MINN, sendAt: DEFAULT_SENDAT, offset: DEFAULT_OFFSET, consec: DEFAULT_CONSEC,
   frozen: null,        // palier figé { source: 510, rows: [{ digit, total, cells }] }
   queue: [],           // lignes retenues au gel du palier : { source, digit, suit, pct, done }
   pendingMessages: [], // prédictions envoyées (en attente puis résolues)
@@ -60,7 +65,7 @@ const playerFinal = (g) => !!g && (g.finished ? g.complete !== false : (Number(g
 const hasPlayerCards = (g) => !!g && Array.isArray(g.player) && g.player.length > 0;
 const maxPlayerFinalNumber = () => { let m = 0; for (const g of state.games.values()) if (playerFinal(g) && g.number > m) m = g.number; return m; };
 const pct = (a, b) => (b > 0 ? Math.round((a * 100) / b) : 0);
-const emptyStats = () => ({ sent: 0, won: 0, lost: 0, byStep: {} });
+const emptyStats = () => ({ sent: 0, won: 0, lost: 0, swapped: 0, byStep: {} });
 const statsOf = () => { panel.stats = panel.stats && typeof panel.stats === 'object' ? { ...emptyStats(), ...panel.stats } : emptyStats(); return panel.stats; };
 
 // ── choix du costume d'une ligne du palier ──────────────────────────────────
@@ -135,7 +140,7 @@ const inflight = new Set();
 // v123 : un numéro de jeu revient chaque jour (le sabot repart à #1 à 00h00) : un doublon n'existe que dans le sabot en cours
 const DUP_WINDOW_MS = 2 * 3600 * 1000;
 const isDuplicate = (target, suit) => panel.pendingMessages.some((s) => s.target === target && s.suit === suit && (s.status === 'en attente' || Date.now() - (Number(s.createdAt) || 0) < DUP_WINDOW_MS));
-async function launch(target, digit, suit, lowPct) {
+async function launch(target, digit, suit, lowPct, meta) {
   if (!panel.channels.length) return false;
   if (!canTarget(target)) return false;
   const key = `${target}:${suit}`;
@@ -143,10 +148,11 @@ async function launch(target, digit, suit, lowPct) {
   inflight.add(key);
   try {
     const entry = { id: `pe-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, cfgId: CFG_ID, suit, target, digit, pct: lowPct, maxR: panel.maxR, format: panel.format, step: 0, status: 'en attente', messages: [], createdAt: Date.now(), resolvedAt: null };
+    if (meta && meta.swapped) { entry.from = meta.from; entry.swapped = true; entry.streak = panel.consec; } // v132 : costume remplacé par son inverse
     entry.messages = await sendToChannels(renderFor(entry, null));
     if (!entry.messages.length) return false;
     panel.pendingMessages.push(entry);
-    const st = statsOf(); st.sent += 1; panel.sentCount += 1; panel.lastSentAt = Date.now(); panel.lastError = null;
+    const st = statsOf(); st.sent += 1; if (entry.swapped) st.swapped = (st.swapped || 0) + 1; panel.sentCount += 1; panel.lastSentAt = Date.now(); panel.lastError = null;
     return true;
   } finally { inflight.delete(key); }
 }
@@ -232,10 +238,13 @@ async function tick() {
           const target = targetOf(q);
           if (known > target) { q.done = true; changed = true; continue; } // jeu déjà commencé : plus à prédire
           if (known < target - panel.sendAt) continue;                       // trop tôt
-          const sentOk = await launch(target, q.digit, q.suit, q.pct);
+          // v132 : réglage « costume venu N fois de suite → inverse » ; les jeux précédents pas tous connus → on attend (réessai au passage suivant)
+          const dec = consecutive.decide(target, q.suit, panel.consec);
+          if (dec.wait) continue;
+          const sentOk = await launch(target, q.digit, dec.suit, q.pct, dec);
           q.tries = (Number(q.tries) || 0) + 1;
           // v124 : une prédiction qui n'a pas pu partir (envoi refusé / délai dépassé) est retentée au passage suivant, jusqu'au début du jeu visé
-          if (sentOk || isDuplicate(target, q.suit) || q.tries >= 30) q.done = true;
+          if (sentOk || isDuplicate(target, dec.suit) || q.tries >= 30) q.done = true;
           changed = true;
         }
       }
@@ -249,7 +258,7 @@ async function tick() {
 }
 
 // ── réglages ────────────────────────────────────────────────────────────────
-function config_() { return { enabled: panel.enabled, channels: [...panel.channels], format: panel.format, maxR: panel.maxR, minN: panel.minN, sendAt: panel.sendAt, offset: panel.offset }; }
+function config_() { return { enabled: panel.enabled, channels: [...panel.channels], format: panel.format, maxR: panel.maxR, minN: panel.minN, sendAt: panel.sendAt, offset: panel.offset, consec: panel.consec }; }
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.channels !== undefined) panel.channels = loss.parseChannels(patch.channels);
@@ -258,6 +267,7 @@ function configure(patch = {}) {
   if (patch.minN !== undefined) panel.minN = clampInt(patch.minN, 1, 5000, DEFAULT_MINN);
   if (patch.sendAt !== undefined) panel.sendAt = clampInt(patch.sendAt, 1, 10, DEFAULT_SENDAT);
   if (patch.offset !== undefined) panel.offset = clampOffset(patch.offset);
+  if (patch.consec !== undefined) panel.consec = consecutive.clampNeed(patch.consec, DEFAULT_CONSEC);
   persist();
   return config_();
 }
@@ -294,10 +304,10 @@ function status() {
   const upcoming = panel.queue.filter((q) => !q.done).slice(0, 10).map((q) => ({ target: targetOf(q), digit: q.digit, suit: q.suit, pct: q.pct })).sort((a, b) => a.target - b.target);
   return {
     ...config_(), rows, frozenSource: fz ? fz.source : null, upcoming,
-    sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, duplicatesBlocked: panel.duplicatesBlocked, won: st.won, lost: st.lost, resolved, rate: pct(st.won, resolved),
+    sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, duplicatesBlocked: panel.duplicatesBlocked, won: st.won, lost: st.lost, swapped: st.swapped || 0, resolved, rate: pct(st.won, resolved),
     steps: Object.entries(st.byStep || {}).map(([k, n]) => ({ step: Number(k), n: Number(n) })).sort((a, b) => a.step - b.step),
     waiting: waiting.length,
-    recent: panel.pendingMessages.slice(-12).reverse().map((s) => ({ target: s.target, digit: s.digit, suit: s.suit, pct: s.pct, status: s.status, step: s.step, maxR: s.maxR })),
+    recent: panel.pendingMessages.slice(-12).reverse().map((s) => ({ target: s.target, digit: s.digit, suit: s.suit, from: s.from || null, pct: s.pct, status: s.status, step: s.step, maxR: s.maxR })),
     channelNames: panel.channels.map((id) => panel.channelTitles[String(id)] || String(id)), lastError: panel.lastError,
   };
 }
@@ -313,7 +323,7 @@ function applySaved(saved) {
   const c = saved.config || {};
   panel.enabled = c.enabled === true; panel.channels = loss.parseChannels(c.channels);
   panel.format = fmt.clampFormat(c.format || config.DEFAULT_FORMAT); panel.maxR = clampInt(c.maxR, 0, 9, DEFAULT_MAXR);
-  panel.minN = clampInt(c.minN, 1, 5000, DEFAULT_MINN); panel.sendAt = clampInt(c.sendAt, 1, 10, DEFAULT_SENDAT); panel.offset = clampOffset(c.offset);
+  panel.minN = clampInt(c.minN, 1, 5000, DEFAULT_MINN); panel.sendAt = clampInt(c.sendAt, 1, 10, DEFAULT_SENDAT); panel.offset = clampOffset(c.offset); panel.consec = consecutive.clampNeed(c.consec, DEFAULT_CONSEC);
   panel.frozen = saved.frozen && Array.isArray(saved.frozen.rows) && saved.frozen.rows.length === 10 ? saved.frozen : null;
   panel.queue = Array.isArray(saved.queue) ? saved.queue.filter((q) => q && Number.isInteger(q.source) && Number.isInteger(q.digit) && q.suit).slice(-QUEUE_MAX) : [];
   panel.pendingMessages = Array.isArray(saved.pendingMessages) ? saved.pendingMessages.filter((s) => s && s.id).slice(-(SENT_RESOLVED_MAX + 50)) : [];
