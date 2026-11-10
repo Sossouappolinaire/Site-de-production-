@@ -4,6 +4,8 @@
 // « 🚨 ALERTE JOUEUR » part ; quand il revient, un message « ✅ RÉAPPARITION JOUEUR » indique combien de jeux il a manqué.
 //   🚨 ALERTE JOUEUR - Jeu N°314 🚨 / N311: ♠️ ♦️ | N312: … / Carte(s) disparue(s): ♥️ / 🔴 Disparition commencée au Jeu N°314
 //   ✅ RÉAPPARITION JOUEUR ✅ / ♥️ : Disparue au N°314 -> Revenue au N°316 (manqué 5 jeux) / Jeu actuel: N°316 -> ♥️ ♣️
+// v138 : à chaque RÉAPPARITION, le bot regarde aussi la RÉPARTITION des cartes du jeu où le costume revient et signale un 2/3
+// (joueur 2 cartes, banquier 3 cartes) ou un NUL (égalité) dans le message de réapparition. Rien d'autre n'est analysé pour ce signal.
 // Les messages sont reçus par le bot dont on saisit l'API token sur la page, dans SON CHAT PRIVÉ (la personne qui a écrit /start à ce bot,
 // administrateur du site ou non — détecté automatiquement). Token laissé vide = bot principal du site. Un ID de chat / canal peut
 // aussi être imposé. Désactivé par défaut. Un nouveau sabot remet tout à zéro.
@@ -81,6 +83,17 @@ function playerSuits(r) {
   return SUITS.filter((s) => set.has(s));
 }
 const numberOf = (r) => Number(r && (r.number != null ? r.number : r.n));
+// répartition des cartes d'un jeu terminé : '2/3' (joueur 2 cartes, banquier 3 cartes), 'nul' (égalité) ou null (rien à signaler)
+const cardCount = (v) => (Array.isArray(v) ? v.length : (Number.isFinite(Number(v)) ? Number(v) : 0));
+function distributionOf(r) {
+  if (!r) return null;
+  const p = cardCount(r.playerCards); const b = cardCount(r.bankerCards);
+  const pv = r.playerValue; const bv = r.bankerValue;
+  const tie = r.winner === 'Égalité' || (pv != null && bv != null && pv === bv);
+  if (tie) return { kind: 'nul', p, b };
+  if (p === 2 && b === 3) return { kind: '2/3', p, b };
+  return null;
+}
 const emptyCounters = () => Object.fromEntries(SUITS.map((s) => [s, { count: 0, since: null }]));
 
 function fullReset() {
@@ -177,17 +190,26 @@ async function send(text) {
 const LINE = '━━━━━━━━━━━━━━━';
 const plural = (n, w) => `${n} ${w}${n > 1 ? 'x' : ''}`;
 function buildAlert(number, suits) {
+  // pour chaque costume : début réel de la disparition (le 1er jeu où il manque), pas le jeu où le seuil est atteint
+  const lines = suits.map((s) => { const c = counters[s] || {}; const since = c.since != null ? c.since : number; const n = c.count || panel.threshold;
+    return `❌ <b>Carte disparue :</b>  ${s}\n🔴 Disparition commencée au <b>Jeu N°${since}</b>\n📊 Absente <b>${n} fois</b> de suite : du <b>N°${since}</b> au <b>N°${number}</b>`; }).join('\n\n');
   const rows = recent.slice(-panel.threshold).map((g) => `▫️ N°${g.number}  ➜  ${g.suits.join(' ')}`).join('\n');
   return `🚨 <b>ALERTE JOUEUR</b> 🚨\n${LINE}\n🎯 <b>Jeu N°${number}</b>\n${LINE}\n\n` +
     `🎴 <b>Derniers jeux</b> (main du joueur)\n${rows}\n\n` +
-    `❌ <b>Carte disparue :</b>  ${suits.join(' ')}\n` +
-    `🔴 Disparition commencée au <b>Jeu N°${number}</b>\n\n` +
+    `${lines}\n\n` +
     `🔕 <i>Plus aucun message jusqu'à la réapparition.</i>`;
 }
-function buildReturn(number, returned, nowSuits) {
-  const blocks = returned.map((r) => `${r.suit} <b>est de retour !</b>\n   ├ Disparue au N°${r.alertGame}\n   ├ Revenue au N°${number}\n   └ Manqué <b>${plural(r.missed, 'jeu')}</b>`).join('\n\n');
+function buildReturn(number, returned, nowSuits, dist) {
+  const blocks = returned.map((r) => `${r.suit} <b>est de retour !</b>\n   ├ Disparue au N°${r.since}\n   ├ Absente du N°${r.since} au N°${r.lastAbsent} (${r.missed} fois)\n   ├ Revenue au N°${number}\n   └ Manqué <b>${plural(r.missed, 'jeu')}</b>`).join('\n\n');
   return `✅ <b>RÉAPPARITION JOUEUR</b> ✅\n${LINE}\n🎯 <b>Jeu N°${number}</b>\n${LINE}\n\n${blocks}\n\n` +
-    `🎴 <b>Jeu actuel</b> N°${number}  ➜  ${nowSuits.join(' ')}`;
+    `🎴 <b>Jeu actuel</b> N°${number}  ➜  ${nowSuits.join(' ')}` + buildDistribution(dist);
+}
+// ligne ajoutée au message de réapparition quand le jeu est un 2/3 ou un nul
+function buildDistribution(dist) {
+  if (!dist) return '';
+  if (dist.kind === '2/3') return `\n\n🃏 <b>RÉPARTITION 2/3</b> — joueur 2 cartes · banquier 3 cartes`;
+  const sc = (dist.p === 2 || dist.p === 3) && (dist.b === 2 || dist.b === 3) ? ` (joueur ${dist.p} cartes · banquier ${dist.b} cartes)` : '';
+  return `\n\n🤝 <b>MATCH NUL</b>${sc}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +224,7 @@ async function onFinished(round) {
     if (lastNumber != null && number <= lastNumber) { fullReset(); persist(); } // numérotation repartie de 1 : nouveau sabot
     const now = playerSuits(round);
     if (!now.length) return; // cartes illisibles : jeu ignoré
+    const prevNumber = lastNumber;
     lastNumber = number;
     recent.push({ number, suits: now });
     if (recent.length > MAX_RECENT) recent = recent.slice(-MAX_RECENT);
@@ -211,7 +234,7 @@ async function onFinished(round) {
       const c = counters[suit];
       if (now.includes(suit)) {
         const open = panel.open[suit];
-        if (open) returned.push({ suit, alertGame: open.alertGame, missed: number - open.since });
+        if (open) returned.push({ suit, alertGame: open.alertGame, since: open.since, lastAbsent: prevNumber != null ? prevNumber : number - 1, missed: c.count });
         delete panel.open[suit]; delete silent[suit];
         c.count = 0; c.since = null;
         continue;
@@ -220,9 +243,10 @@ async function onFinished(round) {
       if (c.since == null) c.since = number;
       if (c.count >= panel.threshold && !panel.open[suit] && !silent[suit]) { panel.open[suit] = { alertGame: number, since: c.since }; fresh.push(suit); }
     }
+    const dist = returned.length ? distributionOf(round) : null; // répartition regardée uniquement au niveau d'une réapparition
     let changed = returned.length > 0 || fresh.length > 0;
     if (panel.enabled) {
-      if (returned.length) { const ok = await send(buildReturn(number, returned, now)); panel.log.push({ at: Date.now(), kind: 'retour', suits: returned.map((r) => r.suit), number, sent: ok }); }
+      if (returned.length) { const ok = await send(buildReturn(number, returned, now, dist)); panel.log.push({ at: Date.now(), kind: 'retour', suits: returned.map((r) => r.suit), number, sent: ok, dist: dist ? dist.kind : null }); }
       if (fresh.length) { const ok = await send(buildAlert(number, fresh)); panel.log.push({ at: Date.now(), kind: 'alerte', suits: fresh, number, sent: ok }); }
     }
     if (changed) { panel.log = panel.log.slice(-MAX_LOG); persist(); }
@@ -258,7 +282,7 @@ function setThreshold(v) {
 function setEnabled(on) { panel.enabled = !!on; persist(); return panel.enabled; }
 
 async function testAlert() {
-  const ok = await send(`🧪 <b>Test — Analyse manque</b>\nAlerte quand un costume manque ${panel.threshold} jeux de suite (main du joueur).`);
+  const ok = await send(`🧪 <b>Test — Analyse manque</b>\nAlerte quand un costume manque ${panel.threshold} jeux de suite (main du joueur) ; à la réapparition, signale aussi un 2/3 ou un nul.`);
   return { ok, error: ok ? null : panel.lastError };
 }
 
@@ -279,5 +303,5 @@ function status() {
 
 module.exports = {
   panel, config, configure, restore, restoreFromDb, persist, onFinished, status,
-  setSender, setAdminId, setToken, setChatId, setThreshold, setEnabled, detectChat, testAlert, buildAlert, buildReturn,
+  setSender, setAdminId, setToken, setChatId, setThreshold, setEnabled, detectChat, testAlert, buildAlert, buildReturn, distributionOf,
 };

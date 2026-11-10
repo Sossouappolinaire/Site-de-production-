@@ -220,4 +220,7 @@ function status() {
   return { tz: TZ, enabled: { ...data.enabled }, viaStrategies: [...strategyEnabledChannels()], hours: { ...Object.fromEntries(strategyChannelHours()), ...(data.hours || {}) }, counts: data.counts, pendingFinals: data.finals.length };
 }
 
-module.exports = { setContext, restore, restoreFromDb, noteEntry, noteResult, isEnabled, setChannelEnabled, onBilan, tick, recapText, status };
+// v133 : remise à zéro de 00h00 — compteurs et envois du jour effacés, réglages (canaux activés, heures) conservés
+function wipeDay() { data.counts = {}; data.sent = {}; data.finals = []; persistNow(); }
+
+module.exports = { wipeDay, setContext, restore, restoreFromDb, noteEntry, noteResult, isEnabled, setChannelEnabled, onBilan, tick, recapText, status };

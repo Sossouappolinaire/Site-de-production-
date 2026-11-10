@@ -437,7 +437,10 @@ function status(gameNumber) {
   };
 }
 
-module.exports = {
+// v133 : remise à zéro de 00h00 — compteur remis à zéro (configuration conservée)
+function wipeDay() { resetCounts(); persist(); }
+
+module.exports = { wipeDay,
   state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb,
   palier, bump, publish, onFinished, buildMessage, buildProposalMessage, proposalOf, buildDizaineMessage, dizaineRecap, topSuitsOf, sendBilan, resetCounts, scheduleReset, test, status,
 };

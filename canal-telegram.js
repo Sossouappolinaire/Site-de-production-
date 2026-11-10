@@ -276,7 +276,14 @@ async function restoreFromDb() {
   try { const raw = await db.getSetting(DB_KEY); if (raw) applySaved(JSON.parse(raw)); else persist(); } catch (_) { persist(); }
 }
 
-module.exports = {
+// v133 : remise à zéro de 00h00 — données du jour effacées (suivis, vus, compteurs, bilans par stratégie), configuration conservée
+function wipeDay() {
+  panel.watches = []; panel.seen = []; panel.lateSkipped = 0; panel.ignoredPosts = 0; panel.lastPostAt = null; panel.lastError = null;
+  for (const s of panel.strategies || []) s.stats = emptyStats();
+  persist();
+}
+
+module.exports = { wipeDay,
   panel, restore, restoreFromDb, persist, parseUniversal, onChannelPost, onOwnPost, tick, status,
   addStrategy, updateStrategy, removeStrategy, resetStats, setChannelTitle,
 };

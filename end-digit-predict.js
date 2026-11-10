@@ -255,4 +255,11 @@ async function restoreFromDb() {
   try { const raw = await db.getSetting(DB_KEY); if (raw) applySaved(JSON.parse(raw)); else persist(); } catch (_) { persist(); }
 }
 
-module.exports = { panel, setSender, restore, restoreFromDb, persist, tick, status, test, config: config_, configure, resetStats, setChannelTitle, modeOf };
+// v133 : remise à zéro de 00h00 — données du jour effacées, configuration conservée
+function wipeDay() {
+  panel.last = {}; panel.digitStats = {}; panel.watches = []; panel.pendingMessages = []; panel.done = []; panel.stats = null;
+  panel.sentCount = 0; panel.lastSentAt = null; panel.duplicatesBlocked = 0; panel.lastError = null;
+  persist();
+}
+
+module.exports = { wipeDay, panel, setSender, restore, restoreFromDb, persist, tick, status, test, config: config_, configure, resetStats, setChannelTitle, modeOf };

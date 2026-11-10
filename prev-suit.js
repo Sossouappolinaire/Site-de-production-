@@ -290,6 +290,13 @@ async function restoreFromDb() {
   try { const raw = await db.getSetting(DB_KEY); if (raw) applySaved(JSON.parse(raw)); else persist(); } catch (_) { persist(); }
 }
 
-module.exports = {
+// v133 : remise à zéro de 00h00 — données du jour effacées, configuration conservée
+function wipeDay() {
+  panel.watches = []; panel.pendingMessages = []; panel.seen = []; panel.stats = null; panel.sentCount = 0; panel.lastSentAt = null;
+  panel.lateSkipped = 0; panel.duplicatesBlocked = 0; panel.lastError = null;
+  persist();
+}
+
+module.exports = { wipeDay,
   panel, setSender, setSourceProvider, restore, restoreFromDb, persist, onOwnPost, tick, status, test, configure, resetStats, setChannelTitle, readPost,
 };

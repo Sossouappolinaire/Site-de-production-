@@ -235,4 +235,7 @@ function summary(side = 'player') {
   return { games: state.games, all: t.all, counts, rows, lastGameNumber: state.lastGameNumber, sinceAt: state.sinceAt };
 }
 
-module.exports = { summary, state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb, bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status, distributionOf };
+// v133 : remise à zéro de 00h00 — compteur remis à zéro (configuration conservée)
+function wipeDay() { resetCounts(); persist(); }
+
+module.exports = { wipeDay, summary, state, setSender, setChannel, getChannel, config, configure, persist, restore, restoreFromDb, bump, publish, onFinished, buildMessage, sendBilan, resetCounts, scheduleReset, test, status, distributionOf };

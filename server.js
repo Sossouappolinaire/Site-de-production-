@@ -235,6 +235,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ---------------------------------------------------------------------------
 const USER_WRITE_ALLOWLIST = new Set([
   '/api/ai/ask', // Question IA
+  '/api/analyse-manque/config', '/api/analyse-manque/detect', '/api/analyse-manque/test', // Analyse manque : API token, chat privé et test ouverts à tout compte connecté (pas besoin d'être administrateur)
 ]);
 // écrire dans le fil d'un canal du site (n'importe quel compte connecté,
 // pas seulement l'administrateur) : l'IA répond automatiquement — voir la

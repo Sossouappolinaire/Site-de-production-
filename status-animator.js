@@ -35,7 +35,8 @@ const PENDING_TTL_MS = 120000;
 const MAX_ITEMS = 60;
 
 function num(v, d) { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : d; }
-function enabled() { return !/^(off|0|false)$/i.test(String(process.env.STATUS_ANIM || '')); }
+// v137 : animation du statut SUPPRIMÉE (demande admin) — le message de prédiction reste fixe jusqu'à la vérification. Réactivable avec STATUS_ANIM=on.
+function enabled() { return /^(on|1|true)$/i.test(String(process.env.STATUS_ANIM || '')); }
 const frameMs = () => num(process.env.STATUS_ANIM_FRAME_MS, 3500);
 const maxMs = () => num(process.env.STATUS_ANIM_MAX_MS, 30 * 60 * 1000);
 

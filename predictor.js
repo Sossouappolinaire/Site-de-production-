@@ -1082,6 +1082,8 @@ function setOnFinished(fn) { onFinishedHook = fn; }
 // pour le rapport PDF, after-loss.js pour remettre à zéro ses compteurs —
 // voir plus bas) ; un seul callback à la fois écrasait le précédent, donc
 // on garde désormais une LISTE d'écouteurs plutôt qu'un unique callback.
+// v133 : nombre de jeux gardés par le site (mémoire + base) — au-delà, les plus anciens sont effacés ; tout est vidé à 00h00 (heure d'Abidjan)
+const GAMES_KEPT = 50;
 const onShoeResetHooks = [];
 function setOnShoeReset(fn) { if (typeof fn === 'function') onShoeResetHooks.push(fn); }
 
@@ -1201,8 +1203,12 @@ function registerGames(games) {
   // flux renvoie à nouveau sont simplement mémorisés, sans redéclencher les
   // stratégies (sinon des prédictions déjà envoyées avant minuit repartiraient).
   const baseline = state.baselineNext === true && ordered.length > 0;
+  // v133 : le site ne garde que les GAMES_KEPT (50) derniers jeux. Un tour inconnu bien plus ancien que cette fenêtre (renvoyé par le
+  // flux alors qu'on l'a déjà élagué) est ignoré : sinon il serait pris pour un nouveau jeu terminé et rejouerait les stratégies.
+  const floorNumber = Math.max(0, maxFinishedNumber() - GAMES_KEPT);
   for (const g of ordered) {
     const prev = state.games.get(g.number);
+    if (!prev && floorNumber > 0 && g.number <= floorNumber && !baseline) continue;
     // CORRECTIF « vérifications ratées » : le flux 1xbet renvoie parfois un
     // tour DÉJÀ connu dans une version appauvrie (cartes vidées, tour repassé
     // « en cours »). Écraser la bonne version faisait perdre les cartes du
@@ -1215,9 +1221,9 @@ function registerGames(games) {
     if (g.finished && (!prev || !prev.finished) && !baseline) onFinished(g);
   }
   if (baseline) state.baselineNext = false;
-  if (state.games.size > 600) {
+  if (state.games.size > GAMES_KEPT) {
     const keys = [...state.games.keys()].sort((a, b) => a - b);
-    for (const k of keys.slice(0, state.games.size - 600)) state.games.delete(k);
+    for (const k of keys.slice(0, state.games.size - GAMES_KEPT)) state.games.delete(k);
   }
   // sécurité : le dernier tour terminé est TOUJOURS le plus grand numéro terminé
   const maxDone = maxFinishedNumber();
@@ -1312,7 +1318,7 @@ function aiSuitOverride(key, hit) {
 function onFinished(round) {
   state.lastFinished = round;
   state.history.unshift(round);
-  state.history = state.history.slice(0, 200);
+  state.history = state.history.slice(0, GAMES_KEPT);
   bumpCounters(round);
   state.freshFinished.push(round);
   if (state.freshFinished.length > 20) state.freshFinished = state.freshFinished.slice(-20);

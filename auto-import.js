@@ -11,8 +11,9 @@
 //     simple redémarrage n'écrase pas les réglages modifiés depuis le site ;
 //     un NOUVEAU fichier (ou une base vide/réinitialisée) est réimporté ;
 //   • toute erreur est journalisée mais ne bloque jamais le démarrage ;
-//   • variable d'environnement AUTO_IMPORT=off pour désactiver, ou
-//     AUTO_IMPORT=force pour réimporter à chaque démarrage.
+//   • v133 : DÉSACTIVÉ PAR DÉFAUT — au démarrage le site se restaure uniquement depuis la base de données Supabase
+//     (la base fait foi). Un ancien classeur oublié dans config-import/ n'écrase plus jamais les réglages. Pour importer
+//     un classeur à un démarrage précis : AUTO_IMPORT=on (une fois par version du fichier) ou AUTO_IMPORT=force.
 'use strict';
 
 const fs = require('fs');
@@ -45,7 +46,7 @@ async function rememberHash(db, hash) {
 // deps : { dataTransfer, db, persist, saveConfigsToDb }
 async function run(deps) {
   const mode = String(process.env.AUTO_IMPORT || '').toLowerCase();
-  if (mode === 'off' || mode === '0' || mode === 'false') return { skipped: 'désactivé (AUTO_IMPORT=off)' };
+  if (mode !== 'on' && mode !== 'force' && mode !== '1' && mode !== 'true') return { skipped: 'désactivé : la base de données fait foi (AUTO_IMPORT=on pour importer un classeur)' };
   const file = newestFile();
   if (!file) return { skipped: 'aucun fichier .xlsx dans config-import/' };
   try {

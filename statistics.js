@@ -259,7 +259,35 @@ async function editExisting(messages, text) {
   return { ok, retryAfter };
 }
 
+const recentSent = new Map(); // numéro -> { messages, at } : jamais vidé par un changement de sabot (anti-doublon v137)
+const RECENT_MS = 5 * 60 * 1000;
 const sending = new Set(); // numéros dont le premier envoi est en cours (anti-doublon)
+
+// v136 : verrou d'envoi PAR JEU, partagé via la base (table sent_dedupe, déjà créée). Un jeu n'est envoyé qu'UNE fois, même si
+// deux instances du site tournent en même temps (redéploiement Render, deux hébergements avec le même token) ou si le suivi
+// en mémoire est perdu : la 2ᵉ instance voit le verrou pris et n'envoie rien (le message est édité par celle qui l'a envoyé).
+const GAME_CLAIM_TTL_MS = 6 * 3600 * 1000;
+function gameClaimKey(n) {
+  const day = new Date().toISOString().slice(0, 10);
+  return `stat|${panel.channels.map(String).sort().join(',')}|${state.shoeSeq || 0}|${day}|${n}`;
+}
+async function claimGame(n) {
+  if (!db.ready || typeof db.exec !== 'function') return true; // sans base : `sending` + `tracked` protègent ce processus
+  try {
+    const r = await db.exec(
+      `INSERT INTO sent_dedupe (key, kind, channel) VALUES ($1, 's', $2)
+       ON CONFLICT (key) DO UPDATE SET created_at = now()
+         WHERE sent_dedupe.created_at < now() - ($3 || ' milliseconds')::interval
+       RETURNING key`,
+      [gameClaimKey(n), 'statistics', String(GAME_CLAIM_TTL_MS)]
+    );
+    return !!(r && r.rowCount);
+  } catch (_) { return true; } // base muette : on n'empêche pas l'envoi
+}
+function releaseGame(n) {
+  if (!db.ready || typeof db.exec !== 'function') return;
+  db.exec('DELETE FROM sent_dedupe WHERE key = $1', [gameClaimKey(n)]).catch(() => {});
+}
 let editPausedUntil = 0;   // jusqu'à cet instant (ms) : aucune édition (limite Telegram)
 async function processGame(g) {
   if (!hasStarted(g)) return; // « un jeu qui n'a pas encore commencé n'est pas envoyé »
@@ -275,10 +303,25 @@ async function processGame(g) {
     // numérotation repartie de très bas sur le jeu EN DIRECT = nouveau sabot non détecté : on repart d'un suivi vide
     if (top != null && g.number < top && state.live && g.number === state.live.number && (top - g.number) > 30) { panel.tracked = {}; top = null; }
     if (top != null && g.number < top) { panel.skippedLate = (panel.skippedLate || 0) + 1; return; }
+    // v137 : le suivi peut être vidé en plein jeu (faux « nouveau sabot », redémarrage, perte de mémoire) : si ce numéro a été envoyé
+    // il y a moins de 5 min, on RETROUVE le message d'origine et on l'ÉDITE au lieu d'en renvoyer un second.
+    const prev = recentSent.get(g.number);
+    if (prev && Date.now() - prev.at < RECENT_MS && prev.messages && prev.messages.length) {
+      panel.tracked[g.number] = { messages: prev.messages, signature: '', finished: false, text: undefined };
+      return processGame(g);
+    }
     sending.add(g.number);
     try {
+      if (!(await claimGame(g.number))) { // v136 : ce jeu a déjà été envoyé par une autre instance / avant un redémarrage → jamais de 2ᵉ message
+        panel.tracked[g.number] = { messages: [], signature: sig, finished: true, foreign: true };
+        persist();
+        return;
+      }
       const sentMessages = await sendNew(g, text);
+      if (!sentMessages) releaseGame(g.number); // envoi échoué : on libère pour permettre une nouvelle tentative
       if (sentMessages) {
+        recentSent.set(g.number, { messages: sentMessages, at: Date.now() });
+        if (recentSent.size > 200) { const first = recentSent.keys().next().value; recentSent.delete(first); }
         panel.tracked[g.number] = { messages: sentMessages, signature: sig, finished: !!g.finished };
         if (!g.finished) panel.tracked[g.number].text = text; // v135 : dernière ligne « ⏰ » envoyée (utile si le jeu disparaît du flux)
         persist(); // mémorisé tout de suite : un redémarrage ne renverra pas ce jeu
