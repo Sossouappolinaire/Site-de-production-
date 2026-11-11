@@ -2608,6 +2608,7 @@ app.post('/api/analyse-manque/config', async (req, res) => {
     if (b.clearToken === true) await analyseManque.setToken('');
     if (b.chatId !== undefined) analyseManque.setChatId(b.chatId);
     if (b.threshold !== undefined) analyseManque.setThreshold(b.threshold);
+    if (b.signalNul !== undefined || b.signal23 !== undefined) analyseManque.setSignals({ signalNul: b.signalNul, signal23: b.signal23 });
     if (b.enabled !== undefined) analyseManque.setEnabled(b.enabled);
     res.json(analyseManque.status());
   } catch (e) { res.status(400).json({ error: e.message }); }
