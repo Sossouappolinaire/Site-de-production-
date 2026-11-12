@@ -1,10 +1,11 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v138',
-  name: 'analyse-manque-2-3-nul',
+  version: 'v139',
+  name: 'analyse-manque-id-utilisateurs',
   date: '2026-11-09',
   features: [
+    'v139 — « Analyse manque » : toute personne qui tape /start sur le bot de l’API token configuré dans la page reçoit un message de bienvenue et est inscrite automatiquement ; les alertes, réapparitions, 2/3, nuls et bilans de l’heure partent dans le chat privé de TOUTES les personnes connectées (/stop pour se désinscrire, liste affichée sur la page, ID supplémentaires facultatifs ; en cas d’échec la page dit quel ID et pourquoi) (analyse-manque.js, server.js, public/index.html)',
     'v138 — « Analyse manque » : le 2/3 et le match nul sont suivis comme des costumes — message séparé « 🃏 APPARITION 2/3 » / « 🤝 APPARITION MATCH NUL » avec « absent du N°1299 au N°1309, apparu au N°1310 » (réglable : 2 cases sur la page), et « 📊 BILAN DE L’HEURE » toutes les heures (costumes disparus/réapparus avec leur nombre de fois, 2/3, nuls, trois blocs séparés) ; l’ancienne ligne « répartition » dans la réapparition est retirée (pas de mélange) ; correctif de l’alerte (la disparition est datée du 1er jeu où le costume manque, ex. N°900 et non N°903, avec « absente 4 fois : du N°900 au N°903 », format d’origine conservé) ; la réapparition donne « absente du N°900 au N°904 (5 fois) · revenue au N°905 » ; à chaque RÉAPPARITION d’un costume, le message « ✅ RÉAPPARITION JOUEUR » signale aussi la répartition des cartes du jeu : 🃏 2/3 (joueur 2 cartes, banquier 3 cartes) ou 🤝 match nul (rien si le jeu est autre) ; l’API token, « Détecter mon chat », le test et l’activation sont maintenant ouverts à tout compte connecté (plus besoin d’être administrateur), les alertes arrivent dans le chat privé du bot (analyse-manque.js, server.js, public/index.html)',
     'v137 — Prédictions : plus d\u2019animation du statut (le message reste fixe jusqu\u2019à la vérification). Statistiques : si le suivi est vidé en plein jeu, le message d\u2019origine est retrouvé et ÉDITÉ au lieu d\u2019être renvoyé (statistics.js, status-animator.js)',
     'v136 — « Statistiques » : un jeu n\u2019est envoyé qu\u2019UNE seule fois dans le canal (verrou par jeu dans la base, partagé entre instances et redémarrages) : plus de message en double quand le joueur ou le banquier tire sa carte (statistics.js)',

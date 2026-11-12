@@ -7,7 +7,7 @@
 // v138 : le 2/3 (joueur 2 cartes, banquier 3 cartes) et le NUL (égalité) sont suivis comme des costumes : à chaque apparition, un message
 // SÉPARÉ « APPARITION 2/3 » / « APPARITION MATCH NUL » (absent du N°… au N°…), et un « BILAN DE L'HEURE » chaque heure (costumes, 2/3, nuls).
 // Les messages sont reçus par le bot dont on saisit l'API token sur la page, dans SON CHAT PRIVÉ (la personne qui a écrit /start à ce bot,
-// administrateur du site ou non — détecté automatiquement). Token laissé vide = bot principal du site. Un ID de chat / canal peut
+// administrateur du site ou non — détecté automatiquement) ET dans le chat privé de TOUTES les personnes qui tapent /start sur ce bot (inscription automatique + message de bienvenue, /stop pour quitter ; ID supplémentaires facultatifs) (v139). Token laissé vide = bot principal du site. Un ID de chat / canal peut
 // aussi être imposé. Désactivé par défaut. Un nouveau sabot remet tout à zéro.
 'use strict';
 
@@ -26,6 +26,9 @@ const panel = {
   botName: '',
   chatId: '',     // ID imposé (facultatif)
   privateChatId: '', // chat privé détecté après /start
+  userIds: [],    // ID supplémentaires saisis à la main (facultatif)
+  subscribers: [], // { id, name, at } : personnes qui ont tapé /start sur le bot de l'API token (inscrites automatiquement, v139)
+  updateOffset: 0, // curseur getUpdates
   threshold: DEFAULT_THRESHOLD,
   log: [],        // { at, kind: 'alerte'|'retour', suits, number, sent }
   open: {},       // suit → { alertGame, since } (alertes envoyées, en attente de réapparition)
@@ -40,11 +43,20 @@ let lastNumber = null;
 let sp = null;         // { nul, t23 } → { count, since } : jeux depuis la dernière apparition
 const silent = {};     // suit → true : déjà au seuil au démarrage, jamais signalé (pas de message de retour)
 
+const ID_RE = /^(-?\d{5,20}|@[A-Za-z][A-Za-z0-9_]{3,})$/;
+// liste d'ID (tableau ou texte séparé par virgules / espaces / retours à la ligne), sans doublon
+function parseIds(v) {
+  const list = Array.isArray(v) ? v : String(v == null ? '' : v).split(/[\s,;]+/);
+  const out = [];
+  for (const x of list) { const id = String(x == null ? '' : x).trim(); if (id && ID_RE.test(id) && !out.includes(id)) out.push(id); }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Persistance (data.json + base)
 // ---------------------------------------------------------------------------
 function persist() {
-  const saved = { enabled: panel.enabled, token: panel.token, botName: panel.botName, chatId: panel.chatId, privateChatId: panel.privateChatId, threshold: panel.threshold, open: panel.open, signalNul: panel.signalNul, signal23: panel.signal23, hour: panel.hour, log: panel.log.slice(-MAX_LOG) };
+  const saved = { enabled: panel.enabled, token: panel.token, botName: panel.botName, chatId: panel.chatId, privateChatId: panel.privateChatId, userIds: panel.userIds, subscribers: panel.subscribers, updateOffset: panel.updateOffset, threshold: panel.threshold, open: panel.open, signalNul: panel.signalNul, signal23: panel.signal23, hour: panel.hour, log: panel.log.slice(-MAX_LOG) };
   try { store.patch({ analyseManque: saved }); } catch (_) {}
   if (db.ready) db.setSetting('analyse_manque_state', JSON.stringify(saved)).catch((e) => { panel.lastError = e.message; });
 }
@@ -55,6 +67,9 @@ function applySaved(s) {
   panel.botName = typeof s.botName === 'string' ? s.botName : '';
   panel.chatId = s.chatId != null ? String(s.chatId).trim() : '';
   panel.privateChatId = s.privateChatId != null ? String(s.privateChatId).trim() : '';
+  panel.userIds = parseIds(s.userIds);
+  panel.subscribers = (Array.isArray(s.subscribers) ? s.subscribers : []).filter((x) => x && x.id != null).map((x) => ({ id: String(x.id), name: String(x.name || x.id), at: x.at || 0 }));
+  panel.updateOffset = Number(s.updateOffset) || 0;
   const th = Math.round(Number(s.threshold));
   panel.threshold = Number.isFinite(th) && th >= 2 && th <= 50 ? th : DEFAULT_THRESHOLD;
   panel.open = s.open && typeof s.open === 'object' ? s.open : {};
@@ -161,42 +176,85 @@ async function tg(method, body, token) {
   } finally { clearTimeout(timer); }
 }
 
-// chat privé du bot : la dernière personne qui lui a écrit (/start), qu'elle soit administrateur du site ou non
+// inscription automatique : toute personne qui tape /start sur le bot de l'API token reçoit un message de bienvenue
+// et les alertes dans son chat privé ; /stop la désinscrit (ou blocage du bot).
+const WELCOME = (name) => `👋 <b>Bienvenue${name ? ' ' + String(name).replace(/[<>&]/g, '') : ''} !</b>\n${LINE_W}\n✅ Tu es connecté à <b>🔍 Analyse manque</b>.\n\nTu recevras ici, dans ce chat privé :\n🚨 les <b>alertes</b> quand un costume manque ${panel.threshold} jeux de suite\n✅ les <b>réapparitions</b>\n🃏 les apparitions <b>2/3</b> et 🤝 <b>match nul</b>\n📊 le <b>bilan de l'heure</b>\n\nEnvoie /stop pour ne plus recevoir les messages.`;
+const LINE_W = '━━━━━━━━━━━━━━━';
+let polling = false;
+const nameOf = (c) => [c.first_name, c.last_name].filter(Boolean).join(' ') || c.username || String(c.id);
+async function pollStarts() {
+  if (polling || !panel.token) return [];
+  polling = true; const added = [];
+  try {
+    const ups = await tg('getUpdates', { offset: panel.updateOffset || undefined, limit: 100, timeout: 0, allowed_updates: ['message', 'my_chat_member'] });
+    let changed = false;
+    for (const u of (Array.isArray(ups) ? ups : [])) {
+      panel.updateOffset = u.update_id + 1; changed = true;
+      const m = u.message; const mc = u.my_chat_member;
+      if (m && m.chat && m.chat.type === 'private') {
+        const id = String(m.chat.id); const txt = String(m.text || '').trim().toLowerCase();
+        if (/^\/stop\b/.test(txt)) { panel.subscribers = panel.subscribers.filter((x) => x.id !== id); try { await tg('sendMessage', { chat_id: id, text: '🔕 Tu ne recevras plus les messages d\'Analyse manque. Envoie /start pour te reconnecter.' }); } catch (_) {} continue; }
+        const known = panel.subscribers.some((x) => x.id === id);
+        if (!known) { panel.subscribers.push({ id, name: nameOf(m.chat), at: Date.now() }); added.push(id); }
+        if (!known || /^\/start\b/.test(txt)) { try { await tg('sendMessage', { chat_id: id, text: WELCOME(m.chat.first_name), parse_mode: 'HTML' }); } catch (e) { panel.lastError = e.message; } }
+      } else if (mc && mc.chat && mc.chat.type === 'private' && mc.new_chat_member && /kicked|left/.test(mc.new_chat_member.status)) {
+        panel.subscribers = panel.subscribers.filter((x) => x.id !== String(mc.chat.id)); // a bloqué le bot
+      }
+    }
+    if (changed) persist();
+    if (!/409|webhook/i.test(String(panel.lastError || ''))) { /* ok */ }
+  } catch (e) {
+    panel.lastError = /409|webhook/i.test(e.message) ? `Lecture des /start impossible : ${e.message} (ce bot est déjà lu ailleurs ou a un webhook — utilise un bot réservé à Analyse manque).` : e.message;
+  } finally { polling = false; }
+  return added;
+}
+const startTimer = setInterval(() => { if (panel.token) pollStarts(); }, 5000);
+if (startTimer.unref) startTimer.unref();
+
+// bouton « Détecter / actualiser » : lit les /start en attente et renvoie les personnes connectées
 async function detectChat() {
-  const ups = await tg('getUpdates', { limit: 100, allowed_updates: ['message', 'channel_post', 'my_chat_member'] });
-  const chats = [];
-  for (const u of (Array.isArray(ups) ? ups : []).reverse()) {
-    const c = (u.message && u.message.chat) || (u.channel_post && u.channel_post.chat) || (u.my_chat_member && u.my_chat_member.chat);
-    if (c && c.id != null && !chats.some((x) => x.id === c.id)) chats.push({ id: c.id, title: c.title || [c.first_name, c.last_name].filter(Boolean).join(' ') || c.username || String(c.id), type: c.type });
-  }
-  if (!chats.length) throw new Error('Aucun chat trouvé : ouvre le bot dans Telegram, écris-lui /start, puis clique « Détecter ».');
-  const priv = chats.find((c) => c.type === 'private') || chats[0];
-  panel.privateChatId = String(priv.id);
-  persist();
-  return { chat: priv, chats };
+  await pollStarts();
+  if (!panel.subscribers.length) throw new Error('Personne connecté pour le moment : ouvre le bot dans Telegram et tape /start.');
+  const last = panel.subscribers[panel.subscribers.length - 1];
+  panel.privateChatId = last.id; persist();
+  return { chat: { id: last.id, title: last.name }, chats: panel.subscribers };
+}
+
+// destinataires : chat principal (ID imposé, sinon chat privé détecté / administrateur) + tous les ID utilisateurs saisis
+function recipients() {
+  const base = panel.chatId || (panel.token ? panel.privateChatId : (adminIdFn ? adminIdFn() : '')) || '';
+  const out = [];
+  for (const id of [base, ...panel.subscribers.map((x) => x.id), ...panel.userIds]) { const x = String(id == null ? '' : id).trim(); if (x && !out.includes(x)) out.push(x); }
+  return out;
 }
 
 async function send(text) {
   try {
-    if (panel.token) { // bot saisi sur la page → chat privé (ou ID imposé)
-      let to = panel.chatId || panel.privateChatId;
-      if (!to) { try { await detectChat(); to = panel.privateChatId; } catch (e) { panel.lastError = e.message; return false; } }
-      try { await tg('sendMessage', { chat_id: to, text, parse_mode: 'HTML' }); }
-      catch (e) {
-        if (!panel.chatId && /chat not found|blocked|deactivated/i.test(e.message)) { panel.privateChatId = ''; persist(); }
-        throw e;
-      }
-      panel.lastError = null; return true;
+    let bot = null; let raw = null;
+    if (panel.token) { // bot saisi sur la page
+      if (!panel.chatId && !panel.privateChatId && !panel.userIds.length && !panel.subscribers.length) { try { await detectChat(); } catch (e) { panel.lastError = e.message; return false; } }
+    } else { // aucun token saisi : bot principal du site
+      bot = siteBot();
+      if (!bot) { panel.lastError = 'API token non renseigné (et aucun token configuré sur le site).'; return false; }
+      raw = bot.sendMessageUnguarded || bot.sendMessage.bind(bot);
     }
-    // aucun token saisi : bot principal du site, vers le chat imposé ou l'administrateur
-    const bot = siteBot();
-    if (!bot) { panel.lastError = 'API token non renseigné (et aucun token configuré sur le site).'; return false; }
-    const to = panel.chatId || (adminIdFn ? adminIdFn() : '') || '';
-    if (!to) { panel.lastError = 'Aucun destinataire : saisis l\'API token d\'un bot puis écris-lui /start.'; return false; }
-    const raw = bot.sendMessageUnguarded || bot.sendMessage.bind(bot);
-    await raw(to, text, { parse_mode: 'HTML' });
-    panel.lastError = null;
-    return true;
+    const to = recipients();
+    if (!to.length) { panel.lastError = 'Aucun destinataire : saisis l\'API token d\'un bot puis écris-lui /start, ou ajoute des ID utilisateurs.'; return false; }
+    let okCount = 0; const errors = [];
+    for (const id of to) {
+      try {
+        if (panel.token) await tg('sendMessage', { chat_id: id, text, parse_mode: 'HTML' });
+        else await raw(id, text, { parse_mode: 'HTML' });
+        okCount += 1;
+      } catch (e) {
+        const hint = /chat not found|blocked|deactivated|can't initiate/i.test(e.message) ? ' (cette personne doit d\'abord écrire /start au bot)' : '';
+        errors.push(`${id} : ${e.message}${hint}`);
+        if (/blocked|deactivated|chat not found/i.test(e.message)) panel.subscribers = panel.subscribers.filter((x) => x.id !== id);
+        if (id === panel.privateChatId && !panel.chatId && /chat not found|blocked|deactivated/i.test(e.message)) { panel.privateChatId = ''; persist(); }
+      }
+    }
+    panel.lastError = errors.length ? `Non reçu par ${errors.length}/${to.length} : ${errors.join(' ; ')}` : null;
+    return okCount > 0;
   } catch (e) { panel.lastError = e.message; return false; }
 }
 
@@ -340,10 +398,10 @@ if (typeof predictor.setOnShoeReset === 'function') predictor.setOnShoeReset(() 
 // ---------------------------------------------------------------------------
 async function setToken(v) {
   const tk = String(v == null ? '' : v).trim();
-  if (!tk) { panel.token = ''; panel.botName = ''; panel.privateChatId = ''; persist(); return ''; }
+  if (!tk) { panel.token = ''; panel.botName = ''; panel.privateChatId = ''; panel.subscribers = []; panel.updateOffset = 0; persist(); return ''; }
   if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(tk)) throw new Error('API token invalide : format attendu 123456789:AAxxxxxxxx… (donné par @BotFather).');
   const me = await tg('getMe', {}, tk).catch((e) => { throw new Error(`Token refusé par Telegram : ${e.message}`); });
-  if (tk !== panel.token) panel.privateChatId = ''; // autre bot : l'ancien chat privé ne vaut plus
+  if (tk !== panel.token) { panel.privateChatId = ''; panel.subscribers = []; panel.updateOffset = 0; } // autre bot : les anciens inscrits ne valent plus
   panel.token = tk; panel.botName = me && me.username ? `@${me.username}` : '';
   panel.lastError = null;
   persist();
@@ -353,6 +411,12 @@ function setChatId(v) {
   const s = String(v == null ? '' : v).trim();
   if (s && !/^(-?\d{5,20}|@[A-Za-z][A-Za-z0-9_]{3,})$/.test(s)) throw new Error('ID invalide : un nombre (ex. 123456789 ou -1001234567890) ou @nom_du_canal.');
   panel.chatId = s; persist(); return panel.chatId;
+}
+function setUserIds(v) {
+  const raw = Array.isArray(v) ? v : String(v == null ? '' : v).split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+  const bad = raw.find((x) => !ID_RE.test(x));
+  if (bad) throw new Error(`ID utilisateur invalide « ${bad} » : un nombre (123456789) ou @nom_du_canal, séparés par des virgules.`);
+  panel.userIds = parseIds(raw); persist(); return panel.userIds;
 }
 function setThreshold(v) {
   const n = Math.round(Number(v));
@@ -377,7 +441,7 @@ function status() {
   const tk = panel.token;
   const dest = panel.chatId || (tk ? panel.privateChatId : (adminIdFn ? adminIdFn() : '')) || '';
   return {
-    enabled: panel.enabled, threshold: panel.threshold, chatId: panel.chatId, privateChatId: panel.privateChatId, target: String(dest),
+    enabled: panel.enabled, threshold: panel.threshold, chatId: panel.chatId, privateChatId: panel.privateChatId, userIds: panel.userIds.slice(), subscribers: panel.subscribers.map((x) => ({ id: x.id, name: x.name })), targets: recipients(), target: String(dest),
     ownToken: !!tk, tokenSet: !!tk || !!siteBot(), botName: panel.botName,
     tokenHint: tk ? `${tk.split(':')[0]}:••••${tk.slice(-4)}` : '',
     lastGame: lastNumber, signalNul: panel.signalNul, signal23: panel.signal23,
@@ -391,5 +455,5 @@ function status() {
 
 module.exports = {
   panel, config, configure, restore, restoreFromDb, persist, onFinished, status,
-  setSender, setAdminId, setToken, setChatId, setThreshold, setEnabled, setSignals, detectChat, testAlert, buildAlert, buildReturn, buildSpecial, buildBilan, distributionOf, flushHourIfDue,
+  setSender, setAdminId, setToken, setChatId, setUserIds, pollStarts, setThreshold, setEnabled, setSignals, detectChat, testAlert, buildAlert, buildReturn, buildSpecial, buildBilan, distributionOf, flushHourIfDue,
 };
