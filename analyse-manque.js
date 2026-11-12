@@ -156,6 +156,8 @@ function seedFromHistory(history) {
 // ---------------------------------------------------------------------------
 let sender = null;
 let adminIdFn = null;
+let siteUrlFn = null; // () => URL publique du site (PUBLIC_URL, sinon adresse vue dans les requêtes)
+function setSiteUrl(fn) { siteUrlFn = typeof fn === 'function' ? fn : null; }
 function setSender(fn) { sender = typeof fn === 'function' ? fn : null; }
 function setAdminId(fn) { adminIdFn = typeof fn === 'function' ? fn : null; }
 const siteBot = () => (sender ? sender() : null);
@@ -181,6 +183,19 @@ async function tg(method, body, token) {
 const WELCOME = (name) => `👋 <b>Bienvenue${name ? ' ' + String(name).replace(/[<>&]/g, '') : ''} !</b>\n${LINE_W}\n✅ Tu es connecté à <b>🔍 Analyse manque</b>.\n\nTu recevras ici, dans ce chat privé :\n🚨 les <b>alertes</b> quand un costume manque ${panel.threshold} jeux de suite\n✅ les <b>réapparitions</b>\n🃏 les apparitions <b>2/3</b> et 🤝 <b>match nul</b>\n📊 le <b>bilan de l'heure</b>\n\nEnvoie /stop pour ne plus recevoir les messages.`;
 const LINE_W = '━━━━━━━━━━━━━━━';
 let polling = false;
+// /site (ou /lien) : réservé à l'administrateur du site → envoie automatiquement le lien du site à toutes les personnes connectées
+async function siteCommand(fromId) {
+  const reply = (t) => tg('sendMessage', { chat_id: fromId, text: t, parse_mode: 'HTML' }).catch(() => {});
+  const admin = String((adminIdFn && adminIdFn()) || '').trim();
+  if (!admin || String(fromId) !== admin) { await reply('⛔ Cette commande est réservée aux administrateurs du site.'); return; }
+  const url = String((siteUrlFn && siteUrlFn()) || '').trim();
+  if (!url) { await reply('⚠️ Adresse du site inconnue : renseigne PUBLIC_URL sur le serveur, ou ouvre une fois le site dans ton navigateur, puis renvoie /site.'); return; }
+  const text = `🌐 <b>Lien du site</b>\n${LINE_W}\n👉 ${url}\n\nOuvre ce lien pour accéder au site.`;
+  const to = recipients().filter((id) => id !== String(fromId));
+  let ok = 0; const bad = [];
+  for (const id of to) { try { await tg('sendMessage', { chat_id: id, text, parse_mode: 'HTML' }); ok += 1; } catch (e) { bad.push(id); } }
+  await reply(`✅ Lien du site envoyé à <b>${ok}</b> personne(s) connectée(s).${bad.length ? `\n⚠️ Échec pour : ${bad.join(', ')}` : ''}\n${url}`);
+}
 const nameOf = (c) => [c.first_name, c.last_name].filter(Boolean).join(' ') || c.username || String(c.id);
 async function pollStarts() {
   if (polling || !panel.token) return [];
@@ -194,6 +209,8 @@ async function pollStarts() {
       if (m && m.chat && m.chat.type === 'private') {
         const id = String(m.chat.id); const txt = String(m.text || '').trim().toLowerCase();
         if (/^\/stop\b/.test(txt)) { panel.subscribers = panel.subscribers.filter((x) => x.id !== id); try { await tg('sendMessage', { chat_id: id, text: '🔕 Tu ne recevras plus les messages d\'Analyse manque. Envoie /start pour te reconnecter.' }); } catch (_) {} continue; }
+        const cmd = txt.match(/^\/(site|lien)(@\w+)?(\s|$)/);
+        if (cmd) { await siteCommand(id); continue; } // commande réservée aux administrateurs du site
         const known = panel.subscribers.some((x) => x.id === id);
         if (!known) { panel.subscribers.push({ id, name: nameOf(m.chat), at: Date.now() }); added.push(id); }
         if (!known || /^\/start\b/.test(txt)) { try { await tg('sendMessage', { chat_id: id, text: WELCOME(m.chat.first_name), parse_mode: 'HTML' }); } catch (e) { panel.lastError = e.message; } }
@@ -455,5 +472,5 @@ function status() {
 
 module.exports = {
   panel, config, configure, restore, restoreFromDb, persist, onFinished, status,
-  setSender, setAdminId, setToken, setChatId, setUserIds, pollStarts, setThreshold, setEnabled, setSignals, detectChat, testAlert, buildAlert, buildReturn, buildSpecial, buildBilan, distributionOf, flushHourIfDue,
+  setSender, setAdminId, setSiteUrl, setToken, setChatId, setUserIds, pollStarts, setThreshold, setEnabled, setSignals, detectChat, testAlert, buildAlert, buildReturn, buildSpecial, buildBilan, distributionOf, flushHourIfDue,
 };

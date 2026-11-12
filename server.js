@@ -98,6 +98,16 @@ const { startLoop, startBot, botStatus, disconnectBot, activate, deactivate, per
 const app = express();
 app.set('trust proxy', 1); // Render est derrière un proxy HTTPS : nécessaire pour les cookies "secure"
 app.use(express.json());
+// « Analyse manque » /site : URL publique du site (PUBLIC_URL, sinon l'adresse vue dans les requêtes)
+let seenSiteUrl = '';
+analyseManque.setSiteUrl(() => config.PUBLIC_URL || String(process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '') || seenSiteUrl); // Render fournit RENDER_EXTERNAL_URL tout seul
+app.use((req, res, next) => {
+  if (!config.PUBLIC_URL && !process.env.RENDER_EXTERNAL_URL) {
+    const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+    if (host && !/^(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(host)) seenSiteUrl = `${req.protocol}://${host}`;
+  }
+  next();
+});
 
 // ---------------------------------------------------------------------------
 // Sessions stockées en base Postgres (table "user_sessions", créée toute
