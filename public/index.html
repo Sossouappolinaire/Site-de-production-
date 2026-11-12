@@ -321,6 +321,7 @@
         <a href="#/suit-break" data-nav="suit-break">Rupture costume</a>
         <a href="#/loss-return" data-nav="loss-return">📉 Retour après perte</a>
         <a href="#/loss-relaunch" data-nav="loss-relaunch">🔁 Relance après perte</a>
+        <a href="#/confirmation" data-nav="confirmation">✅ Confirmation</a>
         <a href="#/prev-suit" data-nav="prev-suit">⏮️ Costume N-1 → +4</a>
         <a href="#/miracle" data-nav="miracle">✨ Miracle prediction</a>
         <a href="#/canal-telegram" data-nav="canal-telegram">📲 Canal Telegram</a>
@@ -644,6 +645,7 @@
       <div class="home-grid">
         ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
         ${card('#/loss-relaunch', '🔁', 'Relance après perte', `${((snapshot.lossRelaunch || {}).configs || []).length} configuration(s) · une prédiction perdue → même costume à +N`)}
+        ${card('#/confirmation', '✅', 'Confirmation', `${((snapshot.confirmation || {}).configs || []).length} configuration(s) · perte ou ✅ au rattrapage 4 → prochaine prédiction du canal`)}
         ${card('#/prev-suit', '⏮️', 'Costume N-1 → +4', `${Object.keys((snapshot.prevSuit || {}).selected || {}).length} source(s) cochée(s) • ${(snapshot.prevSuit || {}).sentCount || 0} prédiction(s) • ${(snapshot.prevSuit || {}).enabled ? 'actif' : 'inactif'}`)}
         ${card('#/miracle', '✨', 'Miracle prediction', `${(snapshot.miracle || {}).inScopeCount || 0} stratégie(s) suivie(s) • ${(snapshot.miracle || {}).sentCount || 0} prédiction(s) • ${(snapshot.miracle || {}).enabled ? 'actif' : 'inactif'}`)}
       </div>
@@ -2704,6 +2706,15 @@ Faites-en bon usage !
           'Si le canal coché est celui d’une « Relance » (deux costumes + relance), le bot suit la relance de ce canal (jeu relancé, rattrapages de la relance) et non la perte du message d’origine.',
         ],
         tips: ['Une configuration n’envoie jamais deux prédictions pour le même numéro de jeu, ni pour un jeu déjà joué. Le champ « Rattrapages du canal suivi » sert à savoir quand la prédiction suivie est perdue ; vide, il reprend le nombre de rattrapages de la relance.'] },
+      { g: 'auto', icon: '✅', title: 'Confirmation', hash: '#/confirmation',
+        what: 'Suit des canaux qui ont 3 ou 4 rattrapages : quand une de leurs prédictions est perdue, ou gagnée au rattrapage 4, le bot envoie la prochaine prédiction de ce canal dans un autre canal.',
+        steps: [
+          'Clique sur « Créer » : la liste des canaux qui ont 3 ou 4 rattrapages s’affiche. Coche un ou plusieurs canaux.',
+          'Choisis le canal d’envoi et le format de prédiction. Le rattrapage déclencheur est 4 par défaut (la perte déclenche toujours).',
+          'Dès qu’une prédiction d’un canal coché est perdue ou gagnée au rattrapage 4, la première prédiction suivante de ce canal (pas encore jouée) est envoyée dans le canal d’envoi, avec les rattrapages du canal suivi.',
+          'Le message envoyé est vérifié et édité en ✅ ou ❌ ; les gagnés / perdus et le taux s’affichent sur la fiche.',
+        ],
+        tips: ['Un déclencheur = une prédiction envoyée. Jamais deux messages pour le même jeu et le même costume, ni pour un jeu déjà joué : dans ce cas le bot attend la publication suivante du canal.'] },
       { g: 'auto', icon: '🧩', title: 'Prédiction combinée', hash: '#/combined',
         what: 'Réagit après N résultats consécutifs d’une stratégie (rattrapage 1, 2, 3 ou perdue). Par défaut, elle relaie alors la prochaine prédiction de cette stratégie. Toujours vérifié sur la main du joueur.',
         steps: [
@@ -3233,6 +3244,84 @@ Faites-en bon usage !
     async function removeLossRelaunch(id) {
       if (!confirm('Supprimer cette configuration ?')) return;
       try { await api(`/api/loss-relaunch/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); lossRelaunchPage(); toast('Configuration supprimée.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    // ✅ « Confirmation » : « Créer » liste les canaux qui ont 3 ou 4 rattrapages ; on en coche un ou plusieurs ; une perte ou un ✅ au rattrapage 4
+    // dans un canal coché → le bot envoie la PROCHAINE prédiction de ce canal dans l'autre canal (voir confirmation.js)
+    async function confirmationPage() {
+      setNav('confirmation');
+      try { await refresh(); } catch (_) {}
+      const p = snapshot.confirmation || {};
+      const list = p.configs || [];
+      const statusLabel = (s) => (s.status === 'gagné' ? `✅${s.step}️⃣` : s.status === 'perdu' ? '❌' : s.status === 'annulé' ? 'annulée' : '⏳');
+      const cards = list.length ? list.map(c => `<div class="card" style="margin-bottom:12px"><div class="section-head"><div>
+          <span class="eyebrow">✅ Confirmation${c.enabled ? '' : ' · en pause'}</span>
+          <h3 style="margin-top:6px">${c.name ? esc(c.name) + ' · ' : ''}${esc((c.sourceNames || []).join(', '))} → ${esc((c.channelNames || []).join(', '))}</h3>
+          <p class="small">Déclencheur : <b>perte</b> ou <b>✅ au rattrapage ${esc(c.triggerStep)}</b> dans le canal suivi → sa <b>prochaine prédiction</b> part dans le canal d’envoi · format ${esc(c.format)} · ${esc(c.following || 0)} prédiction(s) suivie(s) · ${esc(c.waiting || 0)} envoyée(s) en attente de résultat · ${esc(c.triggers || 0)} déclencheur(s)</p>
+          ${(c.armed || []).length ? `<p class="small" style="margin:6px 0">⏳ ${c.armed.map(a => `en attente de la prochaine prédiction de ${esc(a.name)} <small>(déclencheur : ${esc(a.reason)} après N°${esc(a.fromTarget)})</small>`).join('<br>⏳ ')}</p>` : ''}
+          <p class="small" style="margin:6px 0">📊 ${esc(c.sentCount || 0)} envoyée(s) · ${esc((c.stats || {}).won || 0)} gagnée(s) · ${esc((c.stats || {}).lost || 0)} perdue(s)${c.resolved ? ` · taux <b>${esc(c.rate)}%</b>` : ''}${(c.steps || []).length ? '<br>🎯 ' + c.steps.map(x => `✅${esc(x.step)}️⃣ : ${esc(x.n)}`).join(' · ') : ''}${(c.suits || []).length ? '<br>' + c.suits.map(x => `${esc(x.suit)} ${esc(x.won)}✅ ${esc(x.lost)}❌`).join(' · ') : ''}${(c.reasons || []).length ? '<br>🔔 ' + c.reasons.map(x => `après ${esc(x.reason)} : ${esc(x.n)}`).join(' · ') : ''}</p>
+          ${(c.recent || []).length ? `<p class="small" style="margin:6px 0">🕘 ${c.recent.map(s => `${esc(s.suit)} N°${esc(s.target)} ${statusLabel(s)}${s.reason ? ` <small>(après ${esc(s.reason)})</small>` : ''}`).join('<br>🕘 ')}</p>` : '<p class="small">Aucune prédiction envoyée pour l’instant : elle part dès qu’un canal suivi a une perte ou un ✅ au rattrapage ' + esc(c.triggerStep) + '.</p>'}
+          ${(c.lateSkipped || 0) ? `<p class="small">⏱️ ${esc(c.lateSkipped)} prédiction(s) non envoyée(s) : le jeu visé était déjà joué.</p>` : ''}</div></div>
+          <div class="toolbar"><button class="button small ghost" onclick="toggleConfirmation('${esc(c.id)}', ${c.enabled ? 'false' : 'true'})">${c.enabled ? 'Mettre en pause' : 'Activer'}</button>
+          <button class="button small ghost" onclick="confirmationModal('${esc(c.id)}')">Modifier</button>
+          <button class="button small ghost" onclick="testConfirmation('${esc(c.id)}')">Envoyer un test</button>
+          <button class="button small ghost" onclick="resetConfirmation('${esc(c.id)}')">Remettre les stats à zéro</button>
+          <button class="button small danger" onclick="removeConfirmation('${esc(c.id)}')">Supprimer</button></div></div>`).join('') : '<div class="empty">Aucune configuration. Clique sur « Créer ».</div>';
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Analyse des pertes</span><h2 style="margin-top:7px">✅ Confirmation</h2>
+        <p class="small">Clique sur « Créer » : la liste des canaux qui ont 3 ou 4 rattrapages s’affiche. Coche un ou plusieurs canaux, choisis l’autre canal où envoyer les prédictions. Quand une prédiction d’un canal coché est <b>perdue</b> ou <b>gagnée au rattrapage 4</b>, le bot envoie la <b>prochaine prédiction de ce canal</b> dans l’autre canal ; le message est ensuite vérifié et mis à jour ✅/❌.</p></div>
+        <div class="toolbar"><button class="button primary" onclick="confirmationModal()">Créer</button><button class="button ghost" onclick="confirmationPage()">Actualiser</button></div></div>
+        ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
+        <section class="section">${cards}</section>`;
+    }
+    function confirmationModal(id) {
+      const p = snapshot.confirmation || {};
+      const c = id ? (p.configs || []).find(x => x.id === id) : null;
+      const chosen = new Set(c ? (c.sources || []).map(String) : []);
+      const rows = p.channelRows || [];
+      const known = new Set(rows.map(r => String(r.id)));
+      const anyMatch = rows.some(r => r.matches);
+      const shown = (r) => r.matches || chosen.has(String(r.id)) || !anyMatch;
+      const boxes = rows.map(r => {
+        const saved = c && c.srcMaxRBy && c.srcMaxRBy[String(r.id)] !== undefined ? c.srcMaxRBy[String(r.id)] : (r.rattrapage !== null && r.rattrapage !== undefined ? r.rattrapage : '');
+        return `<label class="check cfRow${shown(r) ? '' : ' cfOther'}" style="display:${shown(r) ? 'block' : 'none'};margin:6px 0"><input type="checkbox" class="cfSrc" value="${esc(r.id)}" ${chosen.has(String(r.id)) ? 'checked' : ''}> ${esc(r.title || r.id)} <small>${esc(r.id)}${r.rattrapage !== null && r.rattrapage !== undefined ? ' · <b>' + esc(r.rattrapage) + ' rattrapage(s)</b> (' + esc(r.rattrapageFrom) + ')' : ' · rattrapage inconnu'}${(r.sources || []).length ? ' · publie : ' + esc((r.sources || []).join(', ')) : ''}</small> <input type="number" class="cfSrcR" data-ch="${esc(r.id)}" min="0" max="9" placeholder="ratt." title="Rattrapages de ce canal (0 → 9) : sert à savoir quand sa prédiction est perdue" value="${esc(saved)}" style="width:62px;margin-left:6px"></label>`;
+      }).join('');
+      const extra = [...chosen].filter(x => !known.has(x)).join(', ');
+      const chans = rows.map(r => `<option value="${esc(r.id)}">${esc(r.title || '')}</option>`).join('');
+      const nFmt = (snapshot.bestWeakTop || {}).formatCount || snapshot.formatCount || 101;
+      openModal(`<div class="modal-head"><div><span class="eyebrow">✅ Confirmation</span><h3 style="margin-top:8px">${c ? 'Modifier' : 'Nouvelle confirmation'}</h3></div></div>
+        <div class="field"><label>Nom (facultatif)</label><input id="cfName" value="${esc(c ? c.name : '')}"></div>
+        <div class="field"><label>Canaux à suivre : coche un ou plusieurs ${anyMatch ? '(canaux qui ont 3 ou 4 rattrapages)' : '(aucun canal à 3 ou 4 rattrapages connu pour l’instant : tous les canaux sont affichés)'}</label>${boxes || '<small>Aucun canal connu pour l’instant : saisis-le ci-dessous.</small>'}
+          ${anyMatch && rows.some(r => !shown(r)) ? '<label class="check" style="display:block;margin:8px 0"><input type="checkbox" onchange="document.querySelectorAll(\'.cfOther\').forEach(x => x.style.display = this.checked ? \'block\' : \'none\')"> Afficher aussi les autres canaux</label>' : ''}</div>
+        <div class="field"><label>Autre canal à suivre (ID ou @nom, facultatif)</label><input id="cfSourcesExtra" value="${esc(extra)}" placeholder="-1001234567890 ou @nomducanal"></div>
+        <div class="field"><label>Canal d’envoi des prédictions (ID) : c’est là que partira la prochaine prédiction du canal suivi</label><input id="cfChannels" list="cfChanList" value="${esc(c ? (c.channels || []).join(', ') : '')}" placeholder="-1009876543210 ou @nomducanal"><datalist id="cfChanList">${chans}</datalist></div>
+        <div class="field"><label>Rattrapage qui déclenche, en plus de la perte (0 → 9) : 4 = une prédiction gagnée au rattrapage 4 (✅4️⃣) déclenche aussi</label><input id="cfTrigger" type="number" min="1" max="9" value="${esc(c ? c.triggerStep : (p.triggerStepDefault || 4))}"></div>
+        <div class="field"><label>Format de prédiction (1 → ${esc(nFmt)})</label><input id="cfFormat" type="number" min="1" max="${esc(nFmt)}" value="${esc(c ? c.format : 1)}"></div>
+        <div class="field"><label>Rattrapages par défaut des canaux suivis (0 → 9), si un canal n’a pas de réglage — la prédiction envoyée garde les rattrapages du canal suivi</label><input id="cfSrcMaxR" type="number" min="0" max="9" value="${esc(c && c.srcMaxR !== null && c.srcMaxR !== undefined ? c.srcMaxR : '')}" placeholder="${esc(p.srcMaxRDefault || 4)}"></div>
+        <div class="field"><label>Mot-clé (facultatif) : ne suivre que les messages qui contiennent ce mot</label><input id="cfKeyword" value="${esc(c ? (c.keyword || '') : '')}" placeholder="laisse vide pour tout suivre"></div>
+        <div class="modal-actions" style="margin-top:14px"><button class="button small primary" onclick="saveConfirmation('${c ? esc(c.id) : ''}')">Confirmer et enregistrer</button><button class="button small ghost" onclick="closeModal()">Annuler</button></div>`);
+    }
+    async function saveConfirmation(id) {
+      try {
+        const checked = [...document.querySelectorAll('.cfSrc:checked')];
+        const sources = checked.map(x => x.value).concat(ids(val('cfSourcesExtra')));
+        const body = { name: val('cfName'), keyword: val('cfKeyword'), sources, channels: ids(val('cfChannels')), triggerStep: val('cfTrigger'), format: val('cfFormat'), srcMaxR: val('cfSrcMaxR'),
+          srcMaxRBy: Object.fromEntries(checked.map(x => [x.value, ([...document.querySelectorAll('.cfSrcR')].find(i => i.dataset.ch === x.value) || {}).value]).filter(([, v]) => v !== undefined && v !== '')) };
+        await api(id ? `/api/confirmation/configs/${encodeURIComponent(id)}` : '/api/confirmation/configs', id ? 'PUT' : 'POST', body);
+        closeModal(); await refresh(); confirmationPage(); toast('Confirmation enregistrée.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function toggleConfirmation(id, enabled) {
+      try { await api(`/api/confirmation/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); confirmationPage(); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testConfirmation(id) {
+      try { await api(`/api/confirmation/configs/${encodeURIComponent(id)}/test`, 'POST'); toast('Prédiction de test envoyée dans le canal.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetConfirmation(id) {
+      if (!confirm('Remettre à zéro les statistiques de cette confirmation ?')) return;
+      try { await api(`/api/confirmation/configs/${encodeURIComponent(id)}`, 'PUT', { resetStats: true }); await refresh(); confirmationPage(); toast('Statistiques remises à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+    async function removeConfirmation(id) {
+      if (!confirm('Supprimer cette confirmation ?')) return;
+      try { await api(`/api/confirmation/configs/${encodeURIComponent(id)}`, 'DELETE'); await refresh(); confirmationPage(); toast('Confirmation supprimée.'); } catch (e) { toast(e.message, 'error'); }
     }
     async function toggleBestWeak(id, enabled) {
       try { await api(`/api/best-weak/configs/${encodeURIComponent(id)}`, 'PUT', { enabled }); await refresh(); bwRerender(); }
@@ -6317,57 +6406,6 @@ Faites-en bon usage !
         ${b.sentCount ? `<p class="small muted" style="margin:10px 0 0">${b.sentCount} prédiction(s) envoyée(s) · ${b.wins || 0} gagné(s) · ${b.losses || 0} perdu(s)</p>` : ''}</div>`;
     }
     // -------------------------------------------------------------------
-    // « J'aime » (voir like-react.js) : on coche les canaux qui envoient des
-    // prédictions ; le bot met l'emoji du type (1 à 4) sur chaque prédiction
-    // « Type de mise » publiée dans un canal coché.
-    // -------------------------------------------------------------------
-    function likeReactPage() {
-      setNav('like-react');
-      const p = snapshot.likeReact || {};
-      if (p.disabled) { $('#app').innerHTML = '<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Désactivé</span><h2 style="margin-top:7px">J\'aime</h2><p class="small">Ce bouton est désactivé : aucune réaction n\'est envoyée.</p></div></div>'; return; }
-      const emojis = p.emojis || { 1: '👍', 2: '🔥', 3: '\u2764', 4: '🍾' };
-      const checked = (p.channels || []).map(String);
-      const all = (p.bestChannels || []).slice();
-      for (const id of checked) if (!all.some(x => String(x.id) === id)) all.push({ id, title: 'Canal conservé du réglage précédent', sources: [] });
-      const lrState = (n, x) => {
-        if (!x) return `Type ${n} : —`;
-        if (n === 1) return x.waitingSuit ? `Type 1 : attend ${x.waitingSuit}` : `Type 1 : série ${x.streakCount || 0}/2`;
-        if (n === 2) return x.armed ? 'Type 2 : prochaine prédiction' : `Type 2 : série ${x.streakCount || 0}/2`;
-        if (x.armed) return `Type ${n} : prochaine prédiction`;
-        return `Type ${n} : ${x.lossCount || 0}/${n === 3 ? 2 : 1} perte(s)`;
-      };
-      const lrTypeStats = (id) => {
-        const stats = ((p.typeStats || {})[String(id)] || {});
-        return `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">${[1, 2, 3, 4].map(n => {
-          const s = stats[n] || {};
-          const rate = s.ratePct === null || s.ratePct === undefined ? '—' : `${s.ratePct}%`;
-          return `<span class="tag">${esc(emojis[n])} Type ${n} · ${esc(String(s.verified || 0))} vérifiée(s) · ${esc(String(s.wins || 0))}✅ ${esc(String(s.losses || 0))}❌ · ${rate}</span>`;
-        }).join('')}</div>`;
-      };
-      const lrDiag = (ch) => {
-        const d = (p.diag || {})[String(ch.id)];
-        if (!checked.includes(String(ch.id))) return '';
-        if (!d) return '<br><span class="small muted">En attente du premier passage du bot…</span>';
-        const bits = [`${d.followed || 0} prédiction(s) suivie(s) dans ce canal (${d.pending || 0} en attente)`];
-        if ((d.recent || []).length) bits.push('dernières vues : ' + d.recent.map(x => `#N${x.target ?? ''} ${x.suit || ''} ${x.status || ''}`).join(', '));
-        if (d.lastFire) bits.push(`dernier déclenchement : type ${d.lastFire.type} ${d.lastFire.emoji} sur #N${d.lastFire.target ?? ''} ${d.lastFire.suit || ''}`);
-        if (!d.followed) bits.push('⚠ aucune prédiction du site trouvée dans ce canal : le bot n\'y a rien envoyé, ou ce n\'est pas le bon identifiant');
-        return `<br><span class="small muted">${bits.map(x => esc(x)).join(' · ')}</span>${d.lastError ? `<br><span class="small" style="color:var(--danger,#d33)">Erreur Telegram : ${esc(d.lastError)}</span>` : ''}<br><button type="button" class="button small ghost lr-test" data-id="${esc(ch.id)}" style="margin-top:4px">Tester les 4 emojis</button>`;
-      };
-      const rows = all.length ? all.map(ch => { const pr = (p.progress || {})[String(ch.id)]; return `<label class="check" style="align-items:flex-start;margin:8px 0"><input type="checkbox" class="lr-ch" value="${esc(ch.id)}" ${checked.includes(String(ch.id)) ? 'checked' : ''} ${checked.length >= 4 && !checked.includes(String(ch.id)) ? 'disabled' : ''}> <span><b>${esc(ch.title || 'Canal')}</b> · <span class="mono">${esc(String(ch.id))}</span>${ch.sources?.length ? `<br><span class="small muted">${ch.sources.map(x => esc(x)).join('<br>')}</span>` : ''}${pr ? `<br><span class="small muted">${[1, 2, 3, 4].map(n => esc(lrState(n, pr[n]))).join(' · ')}</span>` : ''}${lrTypeStats(ch.id)}${lrDiag(ch)}</span></label>`; }).join('')
-        : '<p class="small muted">Aucun canal connu pour l’instant. Ajoute un canal avec son identifiant ci-dessous.</p>';
-      const hist = (p.history || []).slice(0, 8).map(h => `<div class="small"><span class="tag mono">${esc(h.emoji)}</span> Type ${esc(String(h.type))} · #N${esc(String(h.target ?? ''))} ${esc(h.suit || '')} · <span class="mono">${esc(String(h.chatId))}</span></div>`).join('');
-      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Réactions automatiques</span><h2 style="margin-top:7px">J'aime</h2><p class="small">Choisis au plus 4 canaux à suivre (n'importe quel canal où le bot envoie des prédictions, ou ajoute-le avec son identifiant). Le bot suit les prédictions de ces canaux et ajoute l'emoji du type déclenché : ${[1, 2, 3, 4].map(n => `<b>Type ${n}</b> ${esc(emojis[n])}`).join(' · ')}. Le bilan indique, par type, les prédictions vérifiées, gagnées, perdues et le taux de réussite.</p></div><div class="toolbar"><button class="button ghost" onclick="likeReactRescan()">Revérifier les canaux</button></div></div>
-        <div class="panel"><label class="check"><input id="lrEnabled" type="checkbox" ${p.enabled !== false ? 'checked' : ''}> Activer « J'aime »</label>
-          <p class="small muted" style="margin:8px 0 0">Type 1 : deux prédictions de même costume de suite, puis dès que ce costume est prédit à nouveau → ${esc(emojis[1])}. Type 2 : même série, la prédiction suivante → ${esc(emojis[2])}. Type 3 : après 2 pertes, la suivante → ${esc(emojis[3])}. Type 4 : après 1 perte, la suivante → ${esc(emojis[4])}. Si plusieurs types se déclenchent sur la même prédiction, un seul emoji est mis (le plus petit numéro). Le bot doit être administrateur du canal et les réactions doivent y être autorisées. Les statistiques commencent quand le canal est suivi ; les prédictions antérieures ne sont pas recalculées.</p>
-          ${p.lastError ? `<div class="notice error" style="margin-top:12px">${esc(p.lastError)}</div>` : ''}</div>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Canaux à suivre</span><h2 style="margin-top:7px">${all.length} canal(aux) · ${checked.length}/4 coché(s)</h2></div></div>
-          <div class="panel"><div class="field"><label>Ajouter un canal à suivre (ID -100… ou @nomducanal)</label><div style="display:flex;gap:8px"><input id="lrAddId" placeholder="-1001234567890 ou @nomducanal" style="flex:1"><button type="button" class="button small primary" onclick="addLikeReactChannel()">Ajouter</button></div></div><div id="lrList" style="max-height:360px;overflow:auto">${rows}</div>
-            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveLikeReact()">Enregistrer</button></div></div></section>
-        <section class="section"><div class="section-head"><div><span class="eyebrow">Dernières réactions</span><h2 style="margin-top:7px">${esc(String(p.reactedCount || 0))} au total</h2></div></div>
-          <div class="panel">${hist || '<span class="small muted">Aucune réaction pour le moment.</span>'}</div></section>`;
-    }
-    // -------------------------------------------------------------------
     // Sélecteur de canaux partagé : sous chaque champ « ID du canal » de TOUS
     // les boutons, la même liste (canaux de tous les boutons et stratégies,
     // avec leurs configurations) pour choisir un canal d'un clic.
@@ -6415,60 +6453,6 @@ Faites-en bon usage !
       const boot = () => { new MutationObserver(run).observe(document.body, { childList: true, subtree: true }); run(); };
       if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot);
     })();
-    // ajoute un canal saisi à la main (n'importe quel canal où le bot envoie des prédictions) et le coche tout de suite
-    async function addLikeReactChannel() {
-      const raw = (document.getElementById('lrAddId')?.value || '').trim();
-      if (!raw) { toast('Saisis l’identifiant du canal.', 'error'); return; }
-      const id = raw.replace(/^https?:\/\/t\.me\//i, '@');
-      const checked = [...document.querySelectorAll('.lr-ch:checked')].map(x => x.value);
-      if (checked.some(x => String(x).toLowerCase() === id.toLowerCase())) { toast('Ce canal est déjà suivi.', 'error'); return; }
-      if (checked.length >= 4) { toast('J’aime peut suivre au maximum 4 canaux.', 'error'); return; }
-      try {
-        await api('/api/like-react/config', 'POST', { enabled: !!document.getElementById('lrEnabled')?.checked, channels: [...checked, id] });
-        await refresh(); likeReactPage();
-        toast('Canal ajouté et suivi.');
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    async function saveLikeReact() {
-      const channels = [...document.querySelectorAll('.lr-ch:checked')].map(x => x.value);
-      const scroll = document.getElementById('lrList')?.scrollTop || 0;
-      try {
-        await api('/api/like-react/config', 'POST', { enabled: !!document.getElementById('lrEnabled')?.checked, channels });
-        await refresh(); likeReactPage();
-        const list = document.getElementById('lrList'); if (list) list.scrollTop = scroll;
-        toast('Réglage enregistré.');
-      } catch (e) { toast(e.message, 'error'); }
-    }
-    // Cocher ou décocher un canal (ou l'interrupteur) enregistre tout de suite :
-    // plus besoin d'appuyer sur « Enregistrer » (oublié, le canal n'était pas suivi).
-    let lrSaveTimer = null;
-    document.addEventListener('change', e => {
-      const t = e.target;
-      if (!t || !(t.classList?.contains('lr-ch') || t.id === 'lrEnabled')) return;
-      if (t.classList?.contains('lr-ch') && t.checked && document.querySelectorAll('.lr-ch:checked').length > 4) {
-        t.checked = false;
-        toast('J’aime peut suivre au maximum 4 canaux.', 'error');
-        return;
-      }
-      clearTimeout(lrSaveTimer);
-      lrSaveTimer = setTimeout(() => { if (location.hash === '#/like-react') saveLikeReact(); }, 700);
-    });
-    document.addEventListener('click', async e => {
-      const b = e.target && e.target.closest ? e.target.closest('.lr-test') : null;
-      if (!b) return;
-      e.preventDefault(); e.stopPropagation();
-      b.disabled = true;
-      try {
-        const r = await api('/api/like-react/test', 'POST', { chatId: b.dataset.id });
-        const det = r.results ? Object.values(r.results).map(x => `${x.emoji} ${x.ok ? 'OK' : 'refusé (' + x.error + ')'}`).join(' · ') : '';
-        toast(r.ok ? `Test OK : ${det || 'réaction mise'}.` : `Échec : ${det || r.error}`, r.ok ? undefined : 'error');
-      } catch (err) { toast(err.message, 'error'); }
-      b.disabled = false;
-    });
-    async function likeReactRescan() {
-      try { await api('/api/like-react/scan', 'POST', {}); await refresh(); likeReactPage(); toast('Canaux revérifiés.'); }
-      catch (e) { toast(e.message, 'error'); }
-    }
     function betTypePage() {
       setNav('bet-type');
       const p = snapshot.betType || {};
@@ -6786,10 +6770,10 @@ Faites-en bon usage !
         else if (h === '#/suit-break') suitBreakPage();
         else if (h === '#/loss-return') lossReturnPage();
         else if (h === '#/loss-relaunch') lossRelaunchPage();
+        else if (h === '#/confirmation') confirmationPage();
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
         else if (h === '#/bet-type') betTypePage();
-        else if (h === '#/like-react') likeReactPage();
         else if (h === '#/statistics') statisticsPage();
         else if (h === '#/cards-count') cardsCountPage();
         else if (h === '#/parity-counter') parityCounterPage();
