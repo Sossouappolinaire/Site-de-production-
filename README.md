@@ -106,8 +106,6 @@ chaque redémarrage.
   format, le canal et les rattrapages sont configurables ; le message garde le
   format choisi une fois le résultat connu. Les configurations Test sont
   exportées et importées avec le panneau « Meilleur + plus faible ».
-- « J'aime » peut suivre jusqu'à quatre canaux actifs de « Test » ; les 4 types
-  affichent leurs emojis, résultats vérifiés et taux de réussite.
 
 ## Utilisation
 
@@ -116,7 +114,6 @@ Ouvre le tableau de bord sur l'URL du service Render :
 - `/#/` : accueil
 - `/#/strategies` : catalogue et réglages
 - `/#/test` : configuration du suivi meilleur / 2ᵉ meilleur
-- `/#/like-react` : emojis et taux de réussite des quatre types sur les canaux Test
 - `/#/ai` : analyseur et création de plans
 - `/#/formats` : aperçu des formats
 - `/#/settings` : token Telegram, base et réglages globaux

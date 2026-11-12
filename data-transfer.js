@@ -155,6 +155,7 @@ const PANELS = {
   bestWeakTop: { mod: './best-weak-top' },
   lossReturn: { mod: './loss-return' },
   lossRelaunch: { mod: './loss-relaunch' },        // « Relance après perte »
+  confirmation: { mod: './confirmation' },          // « Confirmation » (v140)
   gameStability: { mod: './game-stability' },        // « Stabilité du jeu »
   costumeFaibleTop: { mod: './costume-faible-top' },
   suitBreak: { mod: './suit-break' },
@@ -181,7 +182,6 @@ const PANELS = {
   analyseManque: { mod: './analyse-manque' },         // « Analyse manque » (le jeton n'est jamais exporté)
   channelLossGate: { mod: './channel-loss-gate' },    // « Envoi après perte » par canal (le planning se lit aussi dans la feuille PlanningEnvoi)
   betType: { mod: './bet-type' },                  // « Type de mise »
-  likeReact: { mod: './like-react' },              // « J'aime » (réactions automatiques)
   copyAnnounce: { mod: './copy-announce' },        // « Copie et annonce »
   game21Strategies: { mod: './game21-strategies' }, // stratégies Jeu 21 (liste lue directement dans data.json)
   secondCardRelay: { mod: './second-card-relay' },  // « Relais 2e carte » (module absent = réglage seulement conservé dans data.json)

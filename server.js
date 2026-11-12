@@ -58,6 +58,7 @@ const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un 
 const strategyRecap = require('./strategy-recap'); // récapitulatif / bilan par canal (était utilisé par /api/recap sans être importé ici)
 const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
+const confirmation = require('./confirmation'); // « Confirmation » (v140) : perte ou ✅ au rattrapage 4 → prochaine prédiction du canal
 const gameStability = require('./game-stability');
 const absenceAlert = require('./absence-alert');
 const analyseManque = require('./analyse-manque');
@@ -66,7 +67,7 @@ const channelLossGate = require('./channel-loss-gate');
 const costumeFaibleTop = require('./costume-faible-top');
 const copyAnnounce = require('./copy-announce');
 const betType = require('./bet-type');
-const likeReact = require('./like-react');
+const channelDiscovery = require('./channel-discovery'); // détection des canaux connus (ex-like-react.js)
 const suitBreak = require('./suit-break');
 const overlap = require('./overlap');
 const statistics = require('./statistics');
@@ -449,6 +450,7 @@ app.get('/api/state', async (req, res) => {
     bestWeakTop: bestWeakTop.status(),
     lossReturn: lossReturnView(),
     lossRelaunch: lossRelaunchView(),
+    confirmation: confirmationView(),
     prevSuit: prevSuitView(),
     miracle: miracleView(),
     canalTelegram: canalTelegram.status(),
@@ -468,7 +470,6 @@ app.get('/api/state', async (req, res) => {
     channelList,
     copyAnnounce: { ...copyAnnounce.status(), channels: channelList },
     betType: { ...betType.status(), allChannels: channelList },
-    likeReact: { ...likeReact.status(), allChannels: channelList, bestChannels: channelList },
     overlap: { ...overlap.status(), channelHints: overlapHintsCached() },
     statistics: statistics.status(),
     cardsCount: cardsCount.status(),
@@ -2528,6 +2529,63 @@ app.post('/api/loss-relaunch/configs/:id/test', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 
+// « Confirmation » (voir confirmation.js) : « Créer » liste les canaux qui ont 3 ou 4 rattrapages ; on en coche un ou plusieurs ;
+// une perte ou un ✅ au rattrapage 4 dans un canal coché → sa PROCHAINE prédiction est envoyée dans l'autre canal.
+// Rattrapage connu d'un canal : réglage « Canal Telegram » coché, sinon stratégie « Canal Telegram », sinon celui réellement observé dans ses messages.
+function confirmationChannelRows() {
+  let list = [];
+  try { list = configuredChannelList(); } catch (_) {}
+  let ctg = [];
+  try { ctg = canalTelegram.status().strategies || []; } catch (_) {}
+  return list.map((r) => {
+    const key = String(r.id).toLowerCase();
+    const vals = [];
+    try { const u = channelUniform.get(r.id); if (u && u.enabled && u.maxR !== null && u.maxR !== undefined) vals.push({ r: Number(u.maxR), from: 'réglé' }); } catch (_) {}
+    for (const st of ctg) {
+      if (!st || st.enabled === false) continue;
+      const k = String(st.channel || '').toLowerCase(); const un = String(st.username || '').toLowerCase();
+      if (k === key || (un && un === key)) vals.push({ r: Number(st.maxR), from: 'Canal Telegram' });
+    }
+    try { const o = channelUniform.observedOf(r.id); for (const x of (o.rs || [])) if (x.n > 0) vals.push({ r: Number(x.id), from: 'observé' }); } catch (_) {}
+    const first = vals.find((v) => Number.isFinite(v.r)) || null;
+    return { ...r, rattrapage: first ? first.r : null, rattrapageFrom: first ? first.from : '', matches: !!first && (first.r === 3 || first.r === 4) };
+  });
+}
+function confirmationView() {
+  return { ...confirmation.status(), channelRows: confirmationChannelRows() };
+}
+async function verifyConfirmationChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) confirmation.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/confirmation', (req, res) => res.json(confirmationView()));
+app.post('/api/confirmation/configs', async (req, res) => {
+  try {
+    const b = req.body || {};
+    await verifyConfirmationChannels(confirmation.parseChannels(b.sources));
+    await verifyConfirmationChannels(confirmation.parseChannels(b.channels));
+    const c = confirmation.addConfig(b);
+    res.json({ ok: true, config: c, confirmation: confirmationView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/confirmation/configs/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.sources !== undefined) await verifyConfirmationChannels(confirmation.parseChannels(b.sources));
+    if (b.channels !== undefined) await verifyConfirmationChannels(confirmation.parseChannels(b.channels));
+    const c = confirmation.updateConfig(req.params.id, b);
+    res.json({ ok: true, config: c, confirmation: confirmationView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/confirmation/configs/:id', (req, res) => { confirmation.removeConfig(req.params.id); res.json(confirmationView()); });
+app.post('/api/confirmation/configs/:id/test', async (req, res) => {
+  const r = await confirmation.test(req.params.id);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+
 // « Meilleur + plus faible » (voir best-weak-top.js) : un message à deux costumes (meilleur + plus faible) par jeu.
 async function verifyBestWeakChannels(list) {
   for (const id of (list || [])) {
@@ -3179,7 +3237,7 @@ async function removeChannelEverywhere(id) {
     ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
-    ['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle],
+    ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Confirmation', confirmation], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle],
   ];
   for (const [label, mod] of modules) {
     try {
@@ -3201,14 +3259,6 @@ async function removeChannelEverywhere(id) {
   }
   // Compteur miroir : canal unique
   try { if (sameChannel(mirrorCounter.getChannel(), id)) { mirrorCounter.setChannel(''); note('Compteur miroir', 1); } } catch (_) {}
-  // suivi interne de « J'aime » : états / diagnostics / liste détectée de ce canal
-  try {
-    const lp = likeReact.panel;
-    for (const k of Object.keys(lp.states || {})) if (sameChannel(k, id)) delete lp.states[k];
-    for (const k of Object.keys(lp.diag || {})) if (sameChannel(k, id)) delete lp.diag[k];
-    lp.known = (lp.known || []).filter((r) => !sameChannel(r.id, id));
-    likeReact.persist();
-  } catch (_) {}
   // Mémoire de suppression : un canal qui n'était plus qu'une trace de l'historique des envois ne revient pas dans la liste.
   try {
     const cur = new Set(((store.read() || {}).ignoredChannels || []).map(String));
@@ -3260,7 +3310,6 @@ const CC_SIMPLE_MODULES = [
   ['predit', 'Prédit IA', predit, '#/predit'], ['draw-two-three', 'Nul / 2-3', drawTwoThree, '#/draw-two-three'], ['victoire-vb', 'Victoire V1 / V2', victoireVb, '#/victoire-vb'],
   ['vip', 'VIP', vip, '#/vip'], ['statistics', 'Statistiques', statistics, '#/statistics'],
   ['cards-count', 'Comptage 2/2', cardsCount, '#/cards-count'], ['formation', 'Formation', formationRelay, '#/formation'],
-  ['like-react', 'J\'aime', likeReact, '#/like-react'],
 ];
 function channelConfigsFor(channelId) {
   const out = [];
@@ -3516,9 +3565,9 @@ function configuredChannelList() {
   const rows = new Map();
   const titles = {};
   let discovered = [];
-  try { discovered = likeReact.discoverChannels(); } catch (_) {}
+  try { discovered = channelDiscovery.discoverChannels(); } catch (_) {}
   for (const r of discovered) if (r.title) titles[r.id] = r.title;
-  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, lossReturn, lossRelaunch, overlap, copyAnnounce, betType]) {
+  for (const mod of [suitStreak, suitBreak, dizaineTop, costumeFaibleTop, bestWeakTop, lossReturn, lossRelaunch, confirmation, overlap, copyAnnounce, betType]) {
     try { Object.assign(titles, (mod.status() || {}).channelTitles || {}); } catch (_) {}
   }
   const add = (id, source) => {
@@ -3548,12 +3597,12 @@ function configuredChannelList() {
     } catch (_) {}
   }
   // Recherche profonde dans le réglage de TOUS les boutons : toute liste « …channels » ou « channelId » est importée
-  for (const [label, mod] of [['J\'aime', likeReact], ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+  for (const [label, mod] of [['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Confirmation', confirmation], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle], ['Jeu 21', game21Predict], ['Formation', formationRelay],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
     ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
     ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['VIP', vip], ['Prédit IA', predit],
     ['Statistiques', statistics], ['Stabilité du jeu', gameStability]]) {
-    try { likeReact.collectFrom(mod.panel, label, add); } catch (_) {}
+    try { channelDiscovery.collectFrom(mod.panel, label, add); } catch (_) {}
   }
   try { const mc = mirrorCounter.getChannel(); if (mc) add(mc, 'Compteur miroir'); } catch (_) {}
   // Copie et annonce : canaux de destination des règles
@@ -3641,30 +3690,12 @@ async function checkBetDest(list) {
 }
 const betTypeSnapshot = () => ({ ...betType.status(), allChannels: configuredChannelList() });
 
-// « J'aime » (voir like-react.js) : canaux cochés dont les prédictions Type de
-// mise reçoivent une réaction automatique selon leur type (1 à 4).
-likeReact.setChannelSource(configuredChannelList);
 const bestTestChannelList = () => {
   const ids = new Set((bestWeakTop.status().configs || [])
     .filter((c) => c.mode === 'test' && c.enabled !== false)
     .flatMap((c) => c.channels || []).map(String));
   return configuredChannelList().filter((channel) => ids.has(String(channel.id)));
 };
-const likeReactSnapshot = () => { const list = configuredChannelList(); return { ...likeReact.status(), allChannels: list, bestChannels: list }; };
-app.get('/api/like-react', (req, res) => { likeReact.scan(); res.json(likeReactSnapshot()); });
-app.post('/api/like-react/config', (req, res) => {
-  try {
-    likeReact.configure(req.body || {});
-    likeReact.scan();
-    res.json({ ok: true, likeReact: likeReactSnapshot() });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-app.post('/api/like-react/test', async (req, res) => {
-  const chatId = (req.body || {}).chatId;
-  if (chatId === undefined || chatId === null || chatId === '') return res.status(400).json({ ok: false, error: 'Canal manquant.' });
-  res.json(await likeReact.testReaction(chatId));
-});
-app.post('/api/like-react/scan', (req, res) => { likeReact.scan(); res.json({ ok: true, likeReact: likeReactSnapshot() }); });
 
 app.get('/api/bet-type', (req, res) => res.json(betTypeSnapshot()));
 

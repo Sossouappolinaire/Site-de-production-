@@ -58,7 +58,7 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 ## Telegram : envoi, canaux, bot
 
 - `bot.js` — bot Telegram + boucle de prédiction/vérification
-- `like-react.js` — bouton « J'aime » (demande admin).
+- `channel-discovery.js` — détection des canaux connus (v141, ex-`like-react.js`) : lit les réglages de tous les boutons ; utilisée par la liste unique de canaux de `server.js`. Le bouton « J'aime » a été supprimé en v141.
 - `copy-announce.js` — bouton « Copie et annonce » (demande admin).
 
 ## Boutons de prédiction automatique (déclencheurs)
@@ -94,6 +94,7 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `best-weak-top.js` (mode « bilan », v113) — bouton « 🏆 Meilleur selon le bilan » : classement figé à chaque bilan du canal (`strategy-recap.js` → `onBilan`), meilleur jusqu'au bilan, 2ᵉ meilleur après une perte jusqu'au bilan suivant, heure de démarrage Abidjan ; page `bilanPage()` dans `public/index.html`
 - `loss-return.js` — bouton « Retour après perte » (v47, demande admin) :
 - `loss-relaunch.js` — bouton « Relance après perte » : suit des canaux ou des configurations Relance ; dès que la main du joueur du dernier rattrapage est complète, une perte → même costume à N+R+D dans le canal choisi (D=1 = jeu suivant).
+- `confirmation.js` — bouton « Confirmation » (v140) : on coche des canaux qui ont 3 ou 4 rattrapages ; perte ou ✅ au rattrapage 4 (réglable) d'une de leurs prédictions → la PROCHAINE prédiction du canal est envoyée dans l'autre canal (format au choix, rattrapages du canal suivi), vérifiée et éditée ✅ / ❌ ; branché dans `bot.js` (channel_post, point d'envoi unique, tick) et `server.js` (`/api/confirmation`).
 - `canal-telegram.js` — bouton « Canal Telegram » (v99) : un canal = une stratégie (nom du canal) ; lecteur universel `parseUniversal` (n° de jeu + costume, tous formats) ; vérification uniforme (main du joueur, rattrapages réglés par canal) ; statistiques par canal ; branché dans `bot.js` (channel_post, point d'envoi unique, tick) et `server.js` (`/api/canal-telegram`).
 - `channel-uniform.js` — « Canal Telegram » (v103) : liste à cocher de tous les canaux qui reçoivent des prédictions ; par canal coché : format unique (réécriture au point d'envoi unique de `bot.js`, à partir du registre `locateRendered` de `formats.js`), rattrapage unique (`maxRFor` dans `predictor.js`), bilan toutes les 2 h (`strategy-recap.js`, `setChannelEnabled(id, on, 2)`) ; routes `/api/channel-uniform/…` dans `server.js`.
 - `prev-suit.js` — bouton « Costume N-1 → +4 » : stratégies / configurations cochées (liste fournie par server.js) ; costume prédit à N venu à N-1 et absent à N → même costume à N+4 dans le canal choisi.
