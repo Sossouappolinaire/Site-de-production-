@@ -158,6 +158,7 @@ let sender = null;
 let adminIdFn = null;
 let siteUrlFn = null; // () => URL publique du site (PUBLIC_URL, sinon adresse vue dans les requêtes)
 function setSiteUrl(fn) { siteUrlFn = typeof fn === 'function' ? fn : null; }
+function siteUrl() { try { return (siteUrlFn && siteUrlFn()) || ''; } catch (_) { return ''; } }
 function setSender(fn) { sender = typeof fn === 'function' ? fn : null; }
 function setAdminId(fn) { adminIdFn = typeof fn === 'function' ? fn : null; }
 const siteBot = () => (sender ? sender() : null);
@@ -472,5 +473,5 @@ function status() {
 
 module.exports = {
   panel, config, configure, restore, restoreFromDb, persist, onFinished, status,
-  setSender, setAdminId, setSiteUrl, setToken, setChatId, setUserIds, pollStarts, setThreshold, setEnabled, setSignals, detectChat, testAlert, buildAlert, buildReturn, buildSpecial, buildBilan, distributionOf, flushHourIfDue,
+  setSender, setAdminId, setSiteUrl, siteUrl, setToken, setChatId, setUserIds, pollStarts, setThreshold, setEnabled, setSignals, detectChat, testAlert, buildAlert, buildReturn, buildSpecial, buildBilan, distributionOf, flushHourIfDue,
 };

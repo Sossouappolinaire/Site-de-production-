@@ -266,7 +266,9 @@ const HELP =
   '/sql <SELECT ...> — requête de lecture seule\n\n' +
   '*Export / Import*\n' +
   '/exporter — envoie un fichier Excel avec toute la configuration (tokens, canaux, format, stratégies, stratégies IA, analyses IA, tous les panneaux)\n' +
-  '/importer — puis envoie un fichier .xlsx (ou envoie-le directement, sans /importer) pour restaurer la configuration';
+  '/importer — puis envoie un fichier .xlsx (ou envoie-le directement, sans /importer) pour restaurer la configuration\n\n' +
+  '*Site (administrateur)*\n' +
+  '/site — envoie automatiquement le lien du site (réservé aux administrateurs du site)';
 
 // ---------------------------------------------------------------------------
 // Commandes « arrêter / démarrer / planifier les prédictions » (demande
@@ -583,6 +585,20 @@ function wire(b) {
     const text = betType.meriReply(msg.chat);
     if (!text) return;
     (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, text).catch(() => {});
+  });
+
+  // /site (ou /lien) — réservé aux administrateurs du site : envoie automatiquement le lien du site.
+  // Envoi NON filtré (sendMessageUnguarded) : le garde-fou anti-doublon des envois ignorerait un message identique déjà envoyé dans ce chat.
+  b.onText(/^\/(?:site|lien)(?:@\w+)?\s*$/i, (msg) => {
+    const say = (t) => (b.sendMessageUnguarded || b.sendMessage.bind(b))(msg.chat.id, t, { disable_web_page_preview: false }).catch((e) => console.error('/site : envoi impossible —', e.message));
+    const fromId = msg.from && msg.from.id;
+    console.log(`/site demandé par ${fromId} (admin configuré : ${state.adminId || 'aucun'})`);
+    if (!isAdmin(msg)) {
+      return say(`⛔ Commande réservée à l'administrateur du site.\nTon ID Telegram : ${fromId}\nAdministrateur configuré : ${state.adminId || 'aucun (ADMIN_ID non renseigné)'}`);
+    }
+    const url = String(analyseManque.siteUrl() || '').trim();
+    if (!url) return say('⚠️ Adresse du site inconnue : renseigne PUBLIC_URL sur le serveur, ou ouvre une fois le site dans ton navigateur, puis renvoie /site.');
+    say(`🌐 Lien du site\n━━━━━━━━━━━━━━━\n👉 ${url}`);
   });
 
   b.onText(/^\/(aide|help)/, (msg) =>
