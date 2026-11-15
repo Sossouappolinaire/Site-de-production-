@@ -116,7 +116,7 @@ async function toAdmin(text) {
   try {
     const bot = typeof sender === 'function' ? sender() : null;
     const adminId = adminIdFn ? adminIdFn() : null;
-    if (!bot || !adminId) { panel.lastError = !adminId ? 'ADMIN_ID non renseigné (chat privé inconnu)' : 'Aucun token Telegram configuré'; return false; }
+    if (!bot || !adminId) { panel.lastError = !adminId ? 'ID administrateur non renseigné (Réglages → Bot Telegram)' : 'Aucun token Telegram configuré'; return false; }
     const bypass = bot.sendMessageUnguarded || bot.sendMessage.bind(bot);
     await bypass(adminId, text);
     panel.lastError = null;

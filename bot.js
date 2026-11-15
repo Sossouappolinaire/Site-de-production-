@@ -595,7 +595,7 @@ function wire(b) {
     const fromId = msg.from && msg.from.id;
     console.log(`/site demandé par ${fromId} (admin configuré : ${state.adminId || 'aucun'})`);
     if (!isAdmin(msg)) {
-      return say(`⛔ Commande réservée à l'administrateur du site.\nTon ID Telegram : ${fromId}\nAdministrateur configuré : ${state.adminId || 'aucun (ADMIN_ID non renseigné)'}`);
+      return say(`⛔ Commande réservée à l'administrateur du site.\nTon ID Telegram : ${fromId}\nAdministrateur configuré : ${state.adminId || 'aucun (à renseigner dans Réglages → Bot Telegram)'}`);
     }
     const url = String(analyseManque.siteUrl() || '').trim();
     if (!url) return say('⚠️ Adresse du site inconnue : renseigne PUBLIC_URL sur le serveur, ou ouvre une fois le site dans ton navigateur, puis renvoie /site.');

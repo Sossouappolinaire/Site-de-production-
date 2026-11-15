@@ -1,8 +1,8 @@
 // config.js — réglages généraux du service.
 //
-// AUCUNE clé privée n'est écrite ici : tout se règle par variables
-// d'environnement sur Render (ou depuis le tableau de bord pour les clés IA,
-// les canaux Telegram, stockées en base).
+// AUCUNE variable d'environnement n'est nécessaire : la base est intégrée (db-link.js) et le
+// token Telegram, l'ID administrateur, les canaux et les clés IA se règlent depuis le tableau de
+// bord (stockés en base). Les variables ci-dessous restent des options FACULTATIVES.
 'use strict';
 
 const { databaseUrl } = require('./database-url');
@@ -39,7 +39,7 @@ module.exports = {
 
   // ---- compte administrateur ---------------------------------------------
   // Identifiant admin configurable ; aucun mot de passe par défaut n'est livré.
-  // Définir ADMIN_PASSWORD_DEFAULT dans les variables d'environnement.
+  // Facultatif et inutile : le site est ouvert à tous, sans compte (voir server.js).
   ADMIN_IDENTIFIER: process.env.ADMIN_IDENTIFIER || 'sossoukouam',
   ADMIN_PASSWORD_DEFAULT: process.env.ADMIN_PASSWORD_DEFAULT || '',
 

@@ -9,6 +9,8 @@
 //     et l'INVERSE du meilleur (♦️ ↔ ♠️ · ♣️ ↔ ❤️) ; si les deux sont le même costume, un seul message part ;
 //   • dès que le meilleur revalide (✅), on repasse sur le meilleur. Chaque fin de numéro (0 à 9) a son propre état.
 //   • échantillon minimum (30 jeux pour cette fin de numéro) : en dessous, rien n'est envoyé ni vérifié.
+//   • v144 — ÉCART MINIMUM (2 par défaut, réglable) : un numéro n'est envoyé que s'il est à au moins 2 de la DERNIÈRE prédiction envoyée
+//     (1243 envoyé → 1244 non envoyé, 1245 envoyé) ; la vérification silencieuse du meilleur continue pour tous les numéros.
 // Chaque prédiction envoyée est vérifiée à son tour (N … N+R) et son message est édité (✅ / ❌). Jamais deux messages pour le même
 // costume et le même numéro de jeu, jamais pour un jeu déjà joué.
 'use strict';
@@ -25,12 +27,14 @@ const { state, hasSuit } = require('./predictor');
 
 const DB_KEY = 'end_digit_predict_state';
 const INVERSE = strategies.INVERSE;
-const DEFAULT_MAXR = 2, DEFAULT_LEAD = 2, DEFAULT_MINN = 30;
+const DEFAULT_MAXR = 2, DEFAULT_LEAD = 2, DEFAULT_MINN = 30, DEFAULT_MIN_GAP = 2;
 const WATCH_MAX = 300, SENT_RESOLVED_MAX = 100, DONE_MAX = 200;
 const ROLE_LABEL = { meilleur: 'Meilleur', faible: 'Plus faible', inverse: 'Inverse du meilleur', 'faible+inverse': 'Faible = inverse' };
 
 const panel = {
   enabled: false, channels: [], format: config.DEFAULT_FORMAT, maxR: DEFAULT_MAXR, lead: DEFAULT_LEAD, minN: DEFAULT_MINN,
+  minGap: DEFAULT_MIN_GAP, // v144 : écart minimum entre le numéro à prédire et la dernière prédiction envoyée (1 = aucune contrainte)
+  lastTarget: null,        // numéro visé par la dernière prédiction réellement envoyée
   last: {},            // dernier résultat du meilleur par fin de numéro : { '4': { ok, suit, target, at } }
   digitStats: {},      // { '4': { bestWon, bestLost } } — vérification silencieuse du meilleur
   watches: [],         // vérifications silencieuses du meilleur
@@ -121,15 +125,21 @@ async function tick() {
           const weak = strategies.normSuit(ranked[ranked.length - 1].suit);
           const inv = best ? INVERSE[best] : null;
           if (best) {
-            if (panel.enabled) {
+            // v144 : écart minimum avec la dernière prédiction ENVOYÉE (ex. 2 : après le №1243, le №1244 n'est pas envoyé, le №1245 l'est).
+            // La vérification silencieuse du meilleur (watch ci-dessous) continue pour TOUS les numéros, envoyés ou non.
+            const gapOk = panel.lastTarget == null || Math.abs(target - panel.lastTarget) >= panel.minGap;
+            if (panel.enabled && !gapOk) panel.gapSkipped = (panel.gapSkipped || 0) + 1;
+            if (panel.enabled && gapOk) {
               const mode = modeOf(digit);
-              if (mode === 'meilleur') await launch(target, digit, best, 'meilleur');
+              let any = false;
+              if (mode === 'meilleur') any = await launch(target, digit, best, 'meilleur');
               else {
                 const picks = [];
                 if (weak && weak !== best) picks.push([weak, weak === inv ? 'faible+inverse' : 'faible']);
                 if (inv && inv !== weak) picks.push([inv, 'inverse']);
-                for (const [suit, role] of picks) await launch(target, digit, suit, role);
+                for (const [suit, role] of picks) { if (await launch(target, digit, suit, role)) any = true; }
               }
+              if (any) panel.lastTarget = target;
             }
             panel.watches.push({ id: `edw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, digit, target, suit: best, pct: ranked[0].pct, maxR: panel.maxR, status: 'en attente', at: Date.now() });
           }
@@ -190,7 +200,7 @@ async function tick() {
 }
 
 // ── réglages ────────────────────────────────────────────────────────────────
-function config_() { return { enabled: panel.enabled, channels: [...panel.channels], format: panel.format, maxR: panel.maxR, lead: panel.lead, minN: panel.minN }; }
+function config_() { return { enabled: panel.enabled, channels: [...panel.channels], format: panel.format, maxR: panel.maxR, lead: panel.lead, minN: panel.minN, minGap: panel.minGap }; }
 function configure(patch = {}) {
   if (patch.enabled !== undefined) panel.enabled = !!patch.enabled;
   if (patch.channels !== undefined) panel.channels = loss.parseChannels(patch.channels);
@@ -198,10 +208,11 @@ function configure(patch = {}) {
   if (patch.maxR !== undefined) panel.maxR = clampInt(patch.maxR, 0, 9, DEFAULT_MAXR);
   if (patch.lead !== undefined) panel.lead = clampInt(patch.lead, 1, 20, DEFAULT_LEAD);
   if (patch.minN !== undefined) panel.minN = clampInt(patch.minN, 1, 5000, DEFAULT_MINN);
+  if (patch.minGap !== undefined) panel.minGap = clampInt(patch.minGap, 1, 20, DEFAULT_MIN_GAP);
   persist();
   return config_();
 }
-function resetStats() { panel.stats = emptyStats(); panel.last = {}; panel.digitStats = {}; panel.watches = []; panel.pendingMessages = panel.pendingMessages.filter((s) => s.status === 'en attente'); persist(); }
+function resetStats() { panel.stats = emptyStats(); panel.last = {}; panel.digitStats = {}; panel.watches = []; panel.lastTarget = null; panel.pendingMessages = panel.pendingMessages.filter((s) => s.status === 'en attente'); persist(); }
 function setChannelTitle(id, title) { const k = String(id == null ? '' : id).trim(); if (!k || !title) return; panel.channelTitles[k] = String(title).slice(0, 120); persist(); }
 
 async function test() {
@@ -219,7 +230,7 @@ function status() {
       const ds = panel.digitStats[String(d)] || { bestWon: 0, bestLost: 0 }; const l = panel.last[String(d)] || null;
       return { digit: d, mode: modeOf(d), bestWon: ds.bestWon, bestLost: ds.bestLost, rate: pct(ds.bestWon, ds.bestWon + ds.bestLost), lastOk: l ? l.ok : null, lastSuit: l ? l.suit : null, lastTarget: l ? l.target : null };
     }),
-    sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, duplicatesBlocked: panel.duplicatesBlocked, won: st.won, lost: st.lost, resolved, rate: pct(st.won, resolved),
+    sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, duplicatesBlocked: panel.duplicatesBlocked, gapSkipped: panel.gapSkipped || 0, lastTarget: panel.lastTarget, won: st.won, lost: st.lost, resolved, rate: pct(st.won, resolved),
     steps: Object.entries(st.byStep || {}).map(([k, n]) => ({ step: Number(k), n: Number(n) })).sort((a, b) => a.step - b.step),
     roles: Object.entries(st.byRole || {}).map(([k, v]) => ({ role: k, label: ROLE_LABEL[k] || k, won: v.won, lost: v.lost, rate: pct(v.won, v.won + v.lost) })),
     waiting: panel.pendingMessages.filter((s) => s.status === 'en attente').length,
@@ -230,7 +241,7 @@ function status() {
 
 // ── persistance ─────────────────────────────────────────────────────────────
 function persist() {
-  const saved = { config: config_(), last: panel.last, digitStats: panel.digitStats, watches: panel.watches, pendingMessages: panel.pendingMessages, done: panel.done, stats: panel.stats, sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, channelTitles: panel.channelTitles };
+  const saved = { config: config_(), last: panel.last, digitStats: panel.digitStats, watches: panel.watches, lastTarget: panel.lastTarget, pendingMessages: panel.pendingMessages, done: panel.done, stats: panel.stats, sentCount: panel.sentCount, lastSentAt: panel.lastSentAt, channelTitles: panel.channelTitles };
   try { store.patch({ endDigitPredict: saved }); } catch (_) {}
   if (db.ready) db.setSetting(DB_KEY, JSON.stringify(saved)).catch((e) => { panel.lastError = e.message; });
 }
@@ -240,6 +251,7 @@ function applySaved(saved) {
   panel.enabled = c.enabled === true; panel.channels = loss.parseChannels(c.channels);
   panel.format = fmt.clampFormat(c.format || config.DEFAULT_FORMAT); panel.maxR = clampInt(c.maxR, 0, 9, DEFAULT_MAXR);
   panel.lead = clampInt(c.lead, 1, 20, DEFAULT_LEAD); panel.minN = clampInt(c.minN, 1, 5000, DEFAULT_MINN);
+  panel.minGap = clampInt(c.minGap, 1, 20, DEFAULT_MIN_GAP); panel.lastTarget = Number.isInteger(saved.lastTarget) ? saved.lastTarget : null;
   panel.last = saved.last && typeof saved.last === 'object' ? saved.last : {};
   panel.digitStats = saved.digitStats && typeof saved.digitStats === 'object' ? saved.digitStats : {};
   panel.watches = Array.isArray(saved.watches) ? saved.watches.filter((e) => e && e.id).slice(-WATCH_MAX) : [];
@@ -257,7 +269,7 @@ async function restoreFromDb() {
 
 // v133 : remise à zéro de 00h00 — données du jour effacées, configuration conservée
 function wipeDay() {
-  panel.last = {}; panel.digitStats = {}; panel.watches = []; panel.pendingMessages = []; panel.done = []; panel.stats = null;
+  panel.last = {}; panel.digitStats = {}; panel.watches = []; panel.lastTarget = null; panel.pendingMessages = []; panel.done = []; panel.stats = null;
   panel.sentCount = 0; panel.lastSentAt = null; panel.duplicatesBlocked = 0; panel.lastError = null;
   persist();
 }

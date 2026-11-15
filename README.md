@@ -3,26 +3,17 @@
 Bot Baccarat 1xbet avec tableau de bord web, moteur multi-stratégies, séparation
 des canaux Telegram et analyseur guidé par Pollinations.ai.
 
-## Déploiement sur Render
+## Déploiement (aucune variable d'environnement)
 
 1. Crée un service Web Node depuis ce dossier.
 2. Commande de build : `npm install`
 3. Commande de démarrage : `npm start`
 4. Health check : `/health`
-5. Ajoute les variables suivantes dans Render :
+5. **Ne renseigne aucune variable d'environnement** : la base est intégrée (`db-link.js`) ; le token
+   Telegram, l'ID administrateur et les canaux se saisissent depuis **Réglages** dans le site.
 
-| Variable | Obligatoire | Rôle |
-| --- | --- | --- |
-| `BOT_TOKEN` | Oui pour Telegram | Token du bot Telegram |
-| `ADMIN_ID` | Recommandé | Identifiant Telegram de l'administrateur |
-| `POLLINATIONS_API_KEY` | Non | Clé secrète pour l'enrichissement IA distant |
-
-| `POLLINATIONS_MODEL` | Non | Modèle Pollinations, valeur par défaut `openai` |
-| `CHAMP_ID` | Non | Identifiant du championnat Baccarat, `2050671` par défaut |
-| `API_HOSTS` | Non | Hôtes LiveFeed séparés par des virgules ; `https://1xbet.cd/service-api` est le premier secours |
-
-Les clés et les URLs privées ne sont pas incluses dans le ZIP. Ne les écris jamais dans
-`config.js` ou dans un fichier versionné.
+Le site est ouvert à tous : aucune connexion ni aucun compte. Les variables (`BOT_TOKEN`, `ADMIN_ID`,
+`CHAMP_ID`, `API_HOSTS`, clés IA…) restent reconnues mais sont entièrement facultatives.
 
 ### Flux 1xBet
 

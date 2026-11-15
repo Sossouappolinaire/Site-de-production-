@@ -133,14 +133,16 @@ app.use(session({
     pruneSessionInterval: 60 * 60, // purge des sessions expirées toutes les heures
   })),
   name: 'baccara.sid',
-  secret: process.env.SESSION_SECRET || require('crypto').randomBytes(32).toString('hex'),
+  // secret STABLE sans variable d'environnement : dérivé du lien de la base intégrée (db-link.js), donc identique à chaque
+  // redémarrage → les connexions ne sautent plus quand le service redémarre.
+  secret: require('crypto').createHash('sha256').update('baccara-session:' + String(require('./db-link').CANDIDATES[0] || 'baccara')).digest('hex'),
   resave: false,
   saveUninitialized: false,
   rolling: true, // chaque requête prolonge la session de 12h glissantes
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: !!(process.env.RENDER || process.env.NODE_ENV === 'production'),
+    secure: 'auto', // cookie sécurisé automatiquement si le site est en HTTPS (proxy de confiance), sans variable d'environnement
     maxAge: 12 * 60 * 60 * 1000, // 12h
   },
 }));
@@ -955,11 +957,14 @@ app.get('/api/parity-palier', (req, res) => res.json(parityPalier.status()));
 app.post('/api/parity-palier/config', async (req, res) => {
   try {
     const b = req.body || {};
-    if (b.channels !== undefined && botStatus().tokenSet) {
-      for (const id of lossRelaunch.parseChannels(b.channels)) {
-        const check = await resolveChat(id);
-        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
-        if (check.chat && check.chat.title) parityPalier.setChannelTitle(id, check.chat.title);
+    if (botStatus().tokenSet) {
+      for (const field of ['channels', 'invChannels']) {
+        if (b[field] === undefined) continue;
+        for (const id of lossRelaunch.parseChannels(b[field])) {
+          const check = await resolveChat(id);
+          if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+          if (check.chat && check.chat.title) parityPalier.setChannelTitle(id, check.chat.title);
+        }
       }
     }
     parityPalier.configure(b);

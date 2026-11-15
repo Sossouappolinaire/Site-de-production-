@@ -77,7 +77,7 @@ async function sendExport(dayKey) {
   const bot = typeof sender === 'function' ? sender() : null;
   const adminId = predictor.state.adminId;
   if (!bot) return { ok: false, error: 'aucun token Telegram configuré' };
-  if (!adminId) return { ok: false, error: 'ADMIN_ID non renseigné (chat privé inconnu)' };
+  if (!adminId) return { ok: false, error: 'ID administrateur non renseigné (Réglages → Bot Telegram)' };
   let lastError = null;
   for (let i = 1; i <= EXPORT_TRIES; i++) {
     try {
@@ -126,7 +126,7 @@ const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap
   'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'bet-type', 'game21-predict', 'statistics',
   'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio', 'miracle-prediction',
   // v133 : panneaux qui gardaient encore leurs données du jour après 00h00
-  'canal-telegram', 'loss-return', 'loss-relaunch', 'prev-suit', 'end-digit-predict', 'strategy-recap', 'distribution-counter', 'parity-counter']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
+  'canal-telegram', 'loss-return', 'loss-relaunch', 'confirmation', 'prev-suit', 'end-digit-predict', 'strategy-recap', 'distribution-counter', 'parity-counter']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
 
 const DB_TABLES = [
   ['games', 'DELETE FROM games'],

@@ -204,7 +204,7 @@ async function toPrivate(text) {
   try {
     const b = bot();
     const target = String(panel.privateChat || '').trim() || (adminIdFn ? adminIdFn() : null);
-    if (!b || !target) { panel.lastError = !target ? 'Chat privé inconnu (ADMIN_ID non renseigné)' : 'Aucun token Telegram configuré'; return false; }
+    if (!b || !target) { panel.lastError = !target ? 'Chat privé inconnu (ID administrateur non renseigné dans Réglages)' : 'Aucun token Telegram configuré'; return false; }
     const send = b.sendMessageUnguarded || b.sendMessage.bind(b);
     await withTimeout(send(target, text), SEND_MAX_MS, 'message privé');
     return true;

@@ -1,9 +1,9 @@
 // auth.js — protection du tableau de bord web
 //
-//  • Compte administrateur fixe (identifiant + mot de passe fournis par
-//    variables d'environnement — ADMIN_IDENTIFIER / ADMIN_PASSWORD_DEFAULT) —
-//    semé automatiquement en base au premier démarrage, une seule fois : un
-//    changement de mot de passe ultérieur n'est jamais écrasé au redémarrage.
+//  • Le site est OUVERT À TOUS : aucune connexion ni aucun compte n'est nécessaire (voir server.js).
+//    Ce module (comptes, panneau « Utilisateurs ») reste en place, inactif, au cas où on le
+//    réactiverait. Aucun compte n'est créé automatiquement ; ADMIN_IDENTIFIER /
+//    ADMIN_PASSWORD_DEFAULT sont facultatifs et inutiles pour faire fonctionner le site.
 //  • Si les identifiants ne correspondent à aucun compte connu, la personne
 //    peut créer un compte : email @gmail.com + mot de passe + confirmation.
 //  • AUCUN code n'est envoyé par email : dès l'inscription, le compte est
@@ -33,9 +33,11 @@ function isGmail(email) {
 // ne jamais écraser un mot de passe déjà changé par la suite.
 // ---------------------------------------------------------------------------
 async function ensureAdminSeed() {
+  // Le site est ouvert à tous (aucune connexion, aucun compte à créer) : rien n'est semé sans mot de passe par défaut explicite.
   if (!db.ready || !ADMIN_PASSWORD_DEFAULT) return;
   try {
-    const hash = await bcrypt.hash(ADMIN_PASSWORD_DEFAULT, 10);
+    const seedPassword = ADMIN_PASSWORD_DEFAULT;
+    const hash = await bcrypt.hash(seedPassword, 10);
     await db.exec(
       `INSERT INTO baccara_users (identifier, email, password_hash, role, verified, approved)
        VALUES ($1, NULL, $2, 'admin', true, true)
