@@ -1,10 +1,11 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v144',
-  name: 'ecart-trio-rattrapage-confirmation',
-  date: '2026-11-14',
+  version: 'v145',
+  name: 'appel-apk',
+  date: '2026-11-15',
   features: [
+    'v145 — Nouveau bouton « 📞 Appel APK » : on choisit le(s) canal(aux) que l’application Android surveille ; chaque prédiction LANCÉE dans ce canal est écrite dans la table Supabase « apk_calls » (créée par le site, lecture seule pour l’APK) et l’APK sonne comme un appel entrant jusqu’à ce qu’on décroche ; appel de test, SQL de secours, remise à zéro à 00h00 (apk-call.js, apk-call.sql, bot.js, server.js, midnight-reset.js, data-transfer.js, public/index.html)',
     'v144 — « Palier parité » : nouveau « Canal de l’inverse » (facultatif) : quand le réglage « costume déjà venu N fois de suite » veut prédire l’INVERSE, le canal principal reçoit la prédiction NORMALE du palier et l’inverse part dans l’autre canal (vérifié et édité à part, sans bloquer ni décaler l’enchaînement ; bilan à part) ; canal vide = ancien comportement · « Prédiction fin de numéro » : nouvel ÉCART MINIMUM (2 par défaut, réglable) entre le numéro à prédire et la dernière prédiction envoyée · « Confirmation » : rattrapage déclencheur = SEUIL (réglé à 3 : rattrapage 3, 4, 5…9 ou perte) (parity-palier.js, end-digit-predict.js, confirmation.js, server.js, public/index.html)',
     'v143 — Site ouvert à tous, SANS compte ni connexion, et SANS variable d’environnement : retrait de la création automatique d’un compte administrateur (auth.js), guides corrigés (README.md, GUIDE-DEPLOIEMENT-SANS-DB.md)',
     'v142 — Le site n’exige plus aucune variable d’environnement : render.yaml ne réclame plus rien, secret de session stable, cookie sécurisé automatique, champ DATABASE_URL retiré des Réglages, messages d’aide sans « ADMIN_ID » (render.yaml, server.js, config.js, public/index.html, guides)',

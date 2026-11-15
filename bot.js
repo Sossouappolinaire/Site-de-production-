@@ -27,6 +27,7 @@ const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const confirmation = require('./confirmation'); // « Confirmation » (v140)
+const apkCall = require('./apk-call'); // « Appel APK » (v145)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
 const parityEgalite = require('./parity-egalite'); // « Palier parité égalité » : 2e taux quand deux taux faibles sont égaux
@@ -401,6 +402,8 @@ function installChannelGuard(inst) {
       try { if (m && !m.skipped && typeof rest[0] === 'string') lossRelaunch.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       // « Confirmation » : même lecture des messages envoyés par le bot (voir confirmation.js)
       try { if (m && !m.skipped && typeof rest[0] === 'string') confirmation.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Appel APK » : une prédiction lancée dans un canal choisi → ligne dans Supabase, l'APK sonne (voir apk-call.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') apkCall.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       // « Costume N-1 → +4 » : lecture des prédictions envoyées par les stratégies / configurations cochées (voir prev-suit.js)
       try { if (m && !m.skipped && typeof rest[0] === 'string') prevSuit.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       // « Miracle prediction » : lecture des prédictions de toutes les stratégies suivies (voir miracle-prediction.js)
@@ -519,6 +522,7 @@ function wire(b) {
     try { lossReturn.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     try { lossRelaunch.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     try { confirmation.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
+    try { apkCall.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     try { canalTelegram.onChannelPost(m.chat, m.text); } catch (_) { /* suivi seulement */ }
     const cmd = parsePredictionControlCommand(m.text);
     if (cmd) {
@@ -2168,6 +2172,8 @@ async function tick() {
       Promise.resolve(lossRelaunch.tick()),
       // « Confirmation » : perte ou ✅ au rattrapage 4 d'un canal suivi → sa prochaine prédiction est envoyée dans l'autre canal (voir confirmation.js)
       Promise.resolve(confirmation.tick()),
+      // « Appel APK » : création de la table apk_calls dans Supabase, nettoyage (voir apk-call.js)
+      Promise.resolve(apkCall.tick()),
       // « Costume N-1 → +4 » : costume venu à N-1 et absent à N → prédiction à N+4 (voir prev-suit.js)
       Promise.resolve(prevSuit.tick()),
       // « Miracle prediction » : reprise de la prédiction suivante d'une stratégie après sa perte, consensus de 5 stratégies (voir miracle-prediction.js)
@@ -2390,6 +2396,7 @@ async function applyDbConfigs() {
   await lossReturn.restoreFromDb();
   await lossRelaunch.restoreFromDb();
   await confirmation.restoreFromDb();
+  await apkCall.restoreFromDb();
   await prevSuit.restoreFromDb();
   await miracle.restoreFromDb();
   await canalTelegram.restoreFromDb();
@@ -2484,6 +2491,7 @@ async function startLoop() {
   lossRelaunch.setSender(senderFor);
   confirmation.restore();
   confirmation.setSender(senderFor);
+  apkCall.restore();
   prevSuit.restore();
   prevSuit.setSender(senderFor);
   miracle.restore();

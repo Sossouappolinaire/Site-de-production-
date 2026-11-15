@@ -156,6 +156,7 @@ const PANELS = {
   lossReturn: { mod: './loss-return' },
   lossRelaunch: { mod: './loss-relaunch' },        // « Relance après perte »
   confirmation: { mod: './confirmation' },          // « Confirmation » (v140)
+  apkCall: { mod: './apk-call' },                    // « Appel APK » (v145)
   gameStability: { mod: './game-stability' },        // « Stabilité du jeu »
   costumeFaibleTop: { mod: './costume-faible-top' },
   suitBreak: { mod: './suit-break' },

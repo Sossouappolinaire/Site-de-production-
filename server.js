@@ -58,6 +58,7 @@ const canalTelegram = require('./canal-telegram'); // « Canal Telegram » : un 
 const strategyRecap = require('./strategy-recap'); // récapitulatif / bilan par canal (était utilisé par /api/recap sans être importé ici)
 const channelUniform = require('./channel-uniform'); // « Canal Telegram » v103 : format / rattrapage / bilan 2 h uniformes par canal coché
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
+const apkCall = require('./apk-call'); // « Appel APK » (v145)
 const confirmation = require('./confirmation'); // « Confirmation » (v140) : perte ou ✅ au rattrapage 4 → prochaine prédiction du canal
 const gameStability = require('./game-stability');
 const absenceAlert = require('./absence-alert');
@@ -453,6 +454,7 @@ app.get('/api/state', async (req, res) => {
     lossReturn: lossReturnView(),
     lossRelaunch: lossRelaunchView(),
     confirmation: confirmationView(),
+    apkCall: apkCallView(),
     prevSuit: prevSuitView(),
     miracle: miracleView(),
     canalTelegram: canalTelegram.status(),
@@ -2566,6 +2568,32 @@ async function verifyConfirmationChannels(list) {
     if (check.chat && check.chat.title) confirmation.setChannelTitle(id, check.chat.title);
   }
 }
+// « Appel APK » (voir apk-call.js) : choix du canal que l'application Android surveille ; une prédiction lancée dans ce canal = ligne dans Supabase = l'APK sonne.
+function apkCallView() {
+  let list = [];
+  try { list = configuredChannelList(); } catch (_) {}
+  const st = apkCall.status();
+  const known = new Set(list.map((r) => String(r.id)));
+  const extra = st.channels.filter((id) => !known.has(String(id))).map((id) => ({ id: String(id), title: st.channelTitles[String(id)] || '', sources: [] }));
+  return { ...st, channelRows: [...list, ...extra] };
+}
+app.get('/api/apk-call', (req, res) => res.json(apkCallView()));
+app.post('/api/apk-call/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) {
+      for (const id of confirmation.parseChannels(b.channels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+        if (check.chat && check.chat.title) apkCall.setChannelTitle(id, check.chat.title);
+      }
+    }
+    apkCall.configure(b);
+    res.json({ ok: true, apkCall: apkCallView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/apk-call/test', async (req, res) => { const r = await apkCall.test(); res.status(r.ok ? 200 : 400).json(r); });
+
 app.get('/api/confirmation', (req, res) => res.json(confirmationView()));
 app.post('/api/confirmation/configs', async (req, res) => {
   try {
