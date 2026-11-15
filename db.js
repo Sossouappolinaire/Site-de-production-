@@ -5,14 +5,18 @@ let Pool = null;
 try { Pool = require('pg').Pool; } catch (_) { /* pg installé au déploiement */ }
 const config = require('./config');
 const store = require('./store');
-const { databaseUrl } = require('./database-url');
+const { databaseUrl, backupUrl } = require('./database-url');
 
-let pool = null;
-let ready = false;
+// Deux bases Supabase : PRINCIPALE (0) et SECOURS (1). Les écritures vont aux deux (miroir), les lectures à la base
+// « active ». Si la base active est pleine (lecture seule) ou injoignable, l'autre prend le relais automatiquement.
+//   état d'une base : 'ok' (lecture + écriture) · 'ro' (pleine / lecture seule) · 'down' (injoignable ou non configurée)
+const targets = [
+  { i: 0, name: 'principale', pool: null, url: '', state: 'down', error: null, schemaDone: false, mirrorPending: 0 },
+  { i: 1, name: 'secours',    pool: null, url: '', state: 'down', error: null, schemaDone: false, mirrorPending: 0 },
+];
+let active = 0;      // base lue en priorité
+let ready = false;   // au moins une base utilisable
 let lastError = null;
-// Lien unique : Supabase (db-link.js). L'ancien DATABASE_URL, /setdb et le panel web
-// ne peuvent plus changer de base.
-let url = databaseUrl() || '';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -222,7 +226,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS after_loss_sent_key_idx ON after_loss_sent (ta
 `;
 
 function status() {
-  return { configured: !!url, ready, error: lastError, url: mask(url) };
+  const t = targets[active];
+  const shown = t.url || (t.i === 0 ? databaseUrl() : backupUrl());
+  return {
+    configured: !!(databaseUrl() || backupUrl()),
+    ready,
+    error: lastError,
+    url: mask(shown),
+    active: t.name,
+    bases: targets.map((x) => ({
+      nom: x.name,
+      etat: x.state,
+      url: mask(x.url || (x.i === 0 ? databaseUrl() : backupUrl())) || null,
+      erreur: x.state === 'ok' ? null : x.error,
+    })),
+  };
 }
 
 function mask(u) {
@@ -230,49 +248,189 @@ function mask(u) {
   return u.replace(/\/\/([^:]+):[^@]*@/, '//$1:••••@');
 }
 
-async function connect(newUrl) {
-  // le lien est fixé par db-link.js : toute tentative de le remplacer (/setdb, panel) est ignorée
-  url = databaseUrl() || url;
-  // aucune adresse retenue au démarrage (base injoignable) : on réessaie toutes les adresses intégrées (db-link.js) avant d'abandonner
-  if (!url) { try { url = (await require('./db-link').ensureDatabaseUrl(1)) || ''; } catch (_) { url = ''; } }
-  ready = false;
+// ---- classement des erreurs : « base pleine » / « base injoignable » / erreur SQL normale ----
+function isFullError(e) {
+  const m = String((e && e.message) || '');
+  return !!e && (['25006', '53100', '53200'].includes(e.code)
+    || /read-only transaction|no space left|could not extend file|disk full|database is full/i.test(m));
+}
+function isDownError(e) {
+  const m = String((e && e.message) || '');
+  return !!e && (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', '57P01', '57P02', '57P03', '53300', '08000', '08001', '08003', '08004', '08006'].includes(e.code)
+    || /connection terminated|connection timeout|timeout exceeded when trying to connect|connection refused|starting up|shutting down|too many clients|remaining connection slots|tenant or user not found/i.test(m));
+}
+const isRead = (sql) => /^\s*(SELECT|SHOW|EXPLAIN|WITH)\b/i.test(sql)
+  && !/\b(INSERT|UPDATE|DELETE|MERGE)\b/i.test(sql) && !/\bFOR\s+(UPDATE|SHARE)\b/i.test(sql);
+
+// Choisit la base « active » : on garde l'actuelle tant qu'elle est saine ; sinon l'autre si elle est saine ;
+// à défaut une base en lecture seule (lire vaut mieux que rien).
+function pickActive() {
+  if (targets[active].state !== 'ok') {
+    const other = targets[1 - active];
+    if (other.state === 'ok') {
+      console.log(`🔁 Base ${targets[active].name} ${targets[active].state === 'ro' ? 'pleine' : 'indisponible'} → la base ${other.name} prend le relais`);
+      active = other.i;
+    } else if (targets[active].state === 'down' && other.state === 'ro') {
+      active = other.i;
+    }
+  }
+  ready = targets.some((t) => t.state !== 'down');
+}
+
+function setState(t, state, err) {
+  if (err) t.error = String((err && err.message) || err);
+  if (t.state === state) return;
+  const before = t.state;
+  t.state = state;
+  if (state === 'down') t.schemaDone = false;
+  console.log(`🗄️ Base ${t.name} : ${before} → ${state}${err ? ' (' + t.error.slice(0, 100) + ')' : ''}`);
+  // une base qui (re)devient saine : tout l'état connu est renvoyé une fois (réglages, instantané, prédictions)
+  if (state === 'ok') { lastSettings.clear(); lastSnapshot = null; predCache.clear(); }
+  pickActive();
+}
+
+function makePool(connectionString) {
+  const p = new Pool({
+    connectionString,
+    ssl: /localhost|127\.0\.0\.1/.test(connectionString) ? false : { rejectUnauthorized: false },
+    max: 6,
+    connectionTimeoutMillis: 10000,   // v133 : une connexion qui ne s'ouvre pas en 10 s échoue au lieu de bloquer le bot
+    idleTimeoutMillis: 30000,
+    statement_timeout: 30000,         // une requête bloquée est coupée côté Supabase
+    query_timeout: 35000,
+    keepAlive: true,
+  });
+  // sans ce récepteur, une connexion coupée par Supabase (inactivité, redémarrage) lève une erreur non gérée
+  p.on('error', (e) => { lastError = e.message; });
+  return p;
+}
+
+// Teste une base : 'ok' (écriture possible), 'ro' (pleine / lecture seule) ou 'down'.
+async function probe(t) {
+  try {
+    const r = await t.pool.query(`SELECT current_setting('transaction_read_only') AS ro, pg_is_in_recovery() AS rec`);
+    const row = r.rows[0] || {};
+    return (row.ro === 'on' || row.rec === true) ? 'ro' : 'ok';
+  } catch (e) {
+    t.error = e.message;
+    return isFullError(e) ? 'ro' : 'down';
+  }
+}
+
+async function connectTarget(t) {
+  if (!Pool) { t.error = "Module 'pg' absent — lance npm install"; setState(t, 'down'); return; }
+  let link = t.i === 0 ? databaseUrl() : backupUrl();
+  if (!link || !t.pool || t.state === 'down') {
+    // adresse inconnue ou base tombée : on reteste les adresses intégrées (db-link.js)
+    try { link = (await require('./db-link').ensureOne(t.i, false)) || ''; } catch (_) { link = ''; }
+  }
+  if (!link) {
+    t.error = t.i === 1 ? 'Base de secours non configurée (mot de passe manquant dans db-link.js)' : 'Aucune adresse de base répond';
+    setState(t, 'down');
+    return;
+  }
+  if (t.pool && t.url !== link) { try { await t.pool.end(); } catch (_) {} t.pool = null; t.schemaDone = false; }
+  if (!t.pool) { t.pool = makePool(link); t.url = link; }
+  const st = await probe(t);
+  if (st === 'ok' && !t.schemaDone) {
+    try { await t.pool.query(SCHEMA); t.schemaDone = true; }
+    catch (e) {
+      t.error = e.message;
+      setState(t, isFullError(e) ? 'ro' : 'down', e);
+      return;
+    }
+  }
+  if (st === 'down') { try { await t.pool.end(); } catch (_) {} t.pool = null; }
+  setState(t, st);
+}
+
+async function connect(newUrl) { // newUrl ignoré : les liens sont fixés par db-link.js
   lastError = null;
   lastSettings.clear(); lastSnapshot = null; predCache.clear(); // nouvelle connexion : tout est renvoyé une fois
-  if (pool) { try { await pool.end(); } catch (_) {} pool = null; }
-  if (!url) { lastError = 'Aucun lien de base de données configuré'; return status(); }
-  if (!Pool) { lastError = "Module 'pg' absent — lance npm install"; return status(); }
-  try {
-    pool = new Pool({
-      connectionString: url,
-      ssl: /localhost|127\.0\.0\.1/.test(url) ? false : { rejectUnauthorized: false },
-      max: 6,
-      connectionTimeoutMillis: 10000,   // v133 : une connexion qui ne s'ouvre pas en 10 s échoue au lieu de bloquer le bot
-      idleTimeoutMillis: 30000,
-      statement_timeout: 30000,         // une requête bloquée est coupée côté Supabase
-      query_timeout: 35000,
-      keepAlive: true,
-    });
-    // sans ce récepteur, une connexion coupée par Supabase (inactivité, redémarrage) lève une erreur non gérée
-    pool.on('error', (e) => { lastError = e.message; });
-    await pool.query(SCHEMA);
-    ready = true;
-  } catch (e) {
-    lastError = e.message;
-    pool = null;
-    // l'adresse retenue ne répond plus : elle est oubliée, le prochain passage (30 s) reteste toutes les adresses
-    try { require('./database-url').setDatabaseUrl(''); url = ''; } catch (_) { /* ignoré */ }
-  }
+  await Promise.all(targets.map((t) => connectTarget(t).catch((e) => { t.error = e.message; setState(t, 'down', e); })));
+  pickActive();
+  startHealth();
+  if (!ready) lastError = targets.map((t) => `${t.name} : ${t.error || 'indisponible'}`).join(' • ');
   return status();
 }
 
-async function q(sql, params = []) {
-  if (!ready || !pool) return null;
+// Surveillance en arrière-plan (toutes les 30 s) : détecte une base pleine / tombée, reconnecte celle qui est revenue.
+let healthTimer = null;
+let healthBusy = false;
+async function healthTick() {
+  if (healthBusy) return;
+  healthBusy = true;
   try {
-    return await pool.query(sql, params);
-  } catch (e) {
-    lastError = e.message;
-    return null;
+    for (const t of targets) {
+      if (t.state === 'down' || !t.pool) { await connectTarget(t); continue; }
+      const st = await probe(t);
+      if (st === 'ok' && !t.schemaDone) { await connectTarget(t); continue; }
+      if (st === 'down') { try { await t.pool.end(); } catch (_) {} t.pool = null; }
+      setState(t, st);
+    }
+  } catch (e) { lastError = e.message; }
+  finally { healthBusy = false; }
+}
+function startHealth() {
+  if (healthTimer) return;
+  healthTimer = setInterval(() => { healthTick().catch(() => {}); }, 30000);
+  if (healthTimer.unref) healthTimer.unref();
+}
+
+// Écriture « miroir » sur l'autre base : sans attendre, sans jamais gêner la base active.
+function mirror(t, sql, params) {
+  if (t.mirrorPending > 200) return; // base secondaire trop lente : on n'empile pas
+  t.mirrorPending++;
+  t.pool.query(sql, params)
+    .catch((e) => {
+      if (isFullError(e)) setState(t, 'ro', e);
+      else if (isDownError(e)) setState(t, 'down', e);
+      // autre erreur SQL sur la copie : ignorée, la base active fait foi
+    })
+    .finally(() => { t.mirrorPending--; });
+}
+
+async function q(sql, params = []) {
+  if (!ready) return null;
+  const read = isRead(sql);
+  // ordre : la base active d'abord, puis l'autre. Lecture : toute base non tombée ; écriture : bases saines uniquement.
+  const usable = [targets[active], targets[1 - active]]
+    .filter((t) => t.pool && (read ? t.state !== 'down' : t.state === 'ok'));
+  for (let k = 0; k < usable.length; k++) {
+    const t = usable[k];
+    try {
+      const r = await t.pool.query(sql, params);
+      if (!read) for (const o of usable.slice(k + 1)) mirror(o, sql, params);
+      return r;
+    } catch (e) {
+      lastError = e.message;
+      if (isFullError(e)) setState(t, 'ro', e);
+      else if (isDownError(e)) setState(t, 'down', e);
+      else return null; // erreur SQL normale (pas un problème de base) : aucune bascule
+      // base pleine / tombée : on retente tout de suite sur l'autre base
+    }
   }
+  return null;
+}
+
+// Exécute fn sur CHAQUE base saine : query(sql, params) vise cette base seulement (null si l'écriture échoue).
+// Sert aux écritures qui doivent exister sur les deux bases (ex. table apk_calls lue par l'appli Android).
+async function eachBase(fn) {
+  const out = [];
+  for (const t of targets) {
+    if (!t.pool || t.state !== 'ok') { out.push({ nom: t.name, ok: false, skipped: true }); continue; }
+    const query = async (sql, params = []) => {
+      try { return await t.pool.query(sql, params); }
+      catch (e) {
+        lastError = e.message;
+        if (isFullError(e)) setState(t, 'ro', e); else if (isDownError(e)) setState(t, 'down', e);
+        return null;
+      }
+    };
+    try { out.push({ nom: t.name, ok: true, result: await fn(query, t.name) }); }
+    catch (e) { out.push({ nom: t.name, ok: false, error: e.message }); }
+  }
+  return out;
 }
 
 // ---- jeux ------------------------------------------------------------------
@@ -954,7 +1112,7 @@ async function exec(sql, params = []) { return q(sql, params); }
 async function rows(sql, params = []) { const r = await q(sql, params); return r ? r.rows : []; }
 
 module.exports = {
-  connect, status, saveGame, gamesByDate, dailySummary, exec, rows,
+  connect, status, eachBase, saveGame, gamesByDate, dailySummary, exec, rows,
   savePrediction, closePrediction, predictionsByNumber, setSetting, getSetting, normalizeDate,
   saveStrategy, loadStrategies, deleteStrategy, strategyStats, strategyPredictions, clearPredictions,
   restorePredictions,

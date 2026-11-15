@@ -1,7 +1,7 @@
 // apk-call.js — bouton « 📞 Appel APK » (v145, demande admin).
 //
 // L'application Android (projet « AppelPredictions », compilée sur GitHub Actions) se connecte à la base Supabase du site et lit la table
-// « apk_calls ». Sur la page du bouton on CHOISIT le ou les canaux que l'APK doit surveiller : dès qu'une prédiction est LANCÉE dans un de
+// « apk_calls » (sur les DEUX bases : principale + secours, voir db.js). Sur la page du bouton on CHOISIT le ou les canaux que l'APK doit surveiller : dès qu'une prédiction est LANCÉE dans un de
 // ces canaux (envoyée par le bot du site, ou publiée par un autre bot dans un canal que le bot du site lit), une ligne est écrite dans
 // « apk_calls » ; l'APK la voit en quelques secondes et fait sonner le téléphone comme un appel entrant, jusqu'à ce qu'on décroche.
 //
@@ -27,6 +27,7 @@ const panel = {
   enabled: false, channels: [], channelTitles: {},
   sentCount: 0, lastAt: null, lastError: null,
   tableReady: false, tableError: null, tableTriedAt: 0,
+  tableBases: {}, // { principale: true, secours: true } : table apk_calls prête sur chaque base
   recent: [], seen: {}, // seen : { 'canal:jeu:costumes' : timestamp }
 };
 
@@ -55,30 +56,45 @@ const SQL_TEXT = `${SQL.join(';\n\n')};`;
 const clean = (v, n) => String(v == null ? '' : v).replace(/[<>]/g, '').trim().slice(0, n);
 const keyOf = (id) => String(id == null ? '' : id).trim();
 
+// La table doit exister sur CHAQUE base saine (principale + secours) : l'appli Android lit les deux.
 async function ensureTable() {
   if (!db.ready) { panel.tableReady = false; return false; }
-  if (panel.tableReady) return true;
-  if (Date.now() - panel.tableTriedAt < 60000) return false;
+  const okNames = db.status().bases.filter((b) => b.etat === 'ok').map((b) => b.nom);
+  const readyNow = () => okNames.some((n) => panel.tableBases[n]);
+  const missing = okNames.filter((n) => !panel.tableBases[n]);
+  if (!missing.length) { panel.tableReady = readyNow(); return panel.tableReady; }
+  if (Date.now() - panel.tableTriedAt < 60000) { panel.tableReady = readyNow(); return panel.tableReady; }
   panel.tableTriedAt = Date.now();
-  // table déjà créée (par le site ou à la main dans Supabase) : rien à refaire, les droits sont déjà posés
-  const there = await db.rows("SELECT to_regclass('public.apk_calls') AS t");
-  if (there[0] && there[0].t) { panel.tableReady = true; panel.tableError = null; return true; }
-  let failed = null;
-  for (const sql of SQL) {
-    const r = await db.exec(sql);
-    if (r === null) { failed = sql.split('\n')[0].slice(0, 60); if (/^CREATE TABLE/.test(sql)) break; }
-  }
-  const check = await db.rows("SELECT to_regclass('public.apk_calls') AS t");
-  panel.tableReady = !!(check[0] && check[0].t);
-  panel.tableError = panel.tableReady ? (failed ? `table créée, mais « ${failed} » a échoué : exécute le SQL de secours dans Supabase (SQL Editor)` : null) : 'création de la table impossible : exécute le SQL de secours dans Supabase (SQL Editor)';
+  const errors = [];
+  await db.eachBase(async (query, nom) => {
+    if (panel.tableBases[nom]) return;
+    // table déjà créée (par le site ou à la main dans Supabase) : rien à refaire, les droits sont déjà posés
+    const there = await query("SELECT to_regclass('public.apk_calls') AS t");
+    if (there && there.rows[0] && there.rows[0].t) { panel.tableBases[nom] = true; return; }
+    let failed = null;
+    for (const sql of SQL) {
+      const r = await query(sql);
+      if (r === null) { failed = sql.split('\n')[0].slice(0, 60); if (/^CREATE TABLE/.test(sql)) break; }
+    }
+    const check = await query("SELECT to_regclass('public.apk_calls') AS t");
+    panel.tableBases[nom] = !!(check && check.rows[0] && check.rows[0].t);
+    if (!panel.tableBases[nom]) errors.push(`base ${nom} : création de la table impossible : exécute le SQL de secours dans Supabase (SQL Editor)`);
+    else if (failed) errors.push(`base ${nom} : table créée, mais « ${failed} » a échoué : exécute le SQL de secours dans Supabase (SQL Editor)`);
+  });
+  panel.tableReady = readyNow();
+  panel.tableError = errors.length ? errors.join(' • ') : null;
   return panel.tableReady;
 }
 
+// Une ligne par appel sur CHAQUE base saine (principale + secours) : l'APK lit les deux et ignore le doublon.
 async function insertCall(channelId, channelName, gameNumber, suit, kind, message) {
   if (!(await ensureTable())) { panel.lastError = panel.tableError || 'Base Supabase non connectée'; return false; }
-  const r = await db.exec('INSERT INTO public.apk_calls (channel_id, channel_name, game_number, suit, kind, message) VALUES ($1,$2,$3,$4,$5,$6)',
-    [String(channelId), clean(channelName, 120), gameNumber == null ? null : Number(gameNumber), suit, kind, clean(message, 300)]);
-  if (r === null) { panel.lastError = 'écriture dans Supabase impossible'; return false; }
+  const params = [String(channelId), clean(channelName, 120), gameNumber == null ? null : Number(gameNumber), suit, kind, clean(message, 300)];
+  const res = await db.eachBase(async (query, nom) => {
+    if (!panel.tableBases[nom]) return null;
+    return query('INSERT INTO public.apk_calls (channel_id, channel_name, game_number, suit, kind, message) VALUES ($1,$2,$3,$4,$5,$6)', params);
+  });
+  if (!res.some((x) => x.ok && x.result)) { panel.lastError = 'écriture dans Supabase impossible (principale et secours)'; return false; }
   panel.lastError = null;
   return true;
 }
@@ -121,7 +137,7 @@ async function tick() {
   try {
     if (!panel.enabled || !db.ready) return;
     if (!(await ensureTable())) return;
-    if (Date.now() - lastPurge > 3600 * 1000) { lastPurge = Date.now(); await db.exec("DELETE FROM public.apk_calls WHERE created_at < now() - interval '1 day'"); }
+    if (Date.now() - lastPurge > 3600 * 1000) { lastPurge = Date.now(); await db.eachBase(async (query, nom) => (panel.tableBases[nom] ? query("DELETE FROM public.apk_calls WHERE created_at < now() - interval '1 day'") : null)); }
   } catch (e) { panel.lastError = e.message; }
 }
 
@@ -145,7 +161,7 @@ function status() {
   return {
     ...config_(), channelNames: panel.channels.map((id) => panel.channelTitles[String(id)] || String(id)), channelTitles: panel.channelTitles,
     sentCount: panel.sentCount, lastAt: panel.lastAt, lastError: panel.lastError,
-    dbReady: !!db.ready, tableReady: panel.tableReady, tableError: panel.tableError,
+    dbReady: !!db.ready, tableReady: panel.tableReady, tableError: panel.tableError, bases: db.status().bases, tableBases: { ...panel.tableBases },
     supabaseUrl: `https://${REF}.supabase.co`, sql: SQL_TEXT, recent: panel.recent,
   };
 }
@@ -175,7 +191,7 @@ async function restoreFromDb() {
 // remise à zéro de 00h00 : lignes du jour effacées dans Supabase, réglages conservés
 function wipeDay() {
   panel.sentCount = 0; panel.lastAt = null; panel.lastError = null; panel.recent = []; panel.seen = {};
-  if (db.ready && panel.tableReady) db.exec('DELETE FROM public.apk_calls').catch(() => {});
+  if (db.ready && panel.tableReady) db.eachBase(async (query, nom) => (panel.tableBases[nom] ? query('DELETE FROM public.apk_calls') : null)).catch(() => {});
   persist();
 }
 

@@ -116,7 +116,7 @@ app.use((req, res, next) => {
 // seule au démarrage) — sans ça (store par défaut = mémoire du process),
 // tout le monde est déconnecté à chaque redémarrage/redéploiement Render.
 // ---------------------------------------------------------------------------
-const SESSION_DB_URL = databaseUrl() || config.DATABASE_URL;
+const SESSION_DB_URL = databaseUrl() || require('./database-url').backupUrl() || config.DATABASE_URL; // principale, sinon secours
 const sessionPool = new Pool({
   connectionString: SESSION_DB_URL,
   ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
