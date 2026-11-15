@@ -322,6 +322,7 @@
         <a href="#/loss-return" data-nav="loss-return">📉 Retour après perte</a>
         <a href="#/loss-relaunch" data-nav="loss-relaunch">🔁 Relance après perte</a>
         <a href="#/confirmation" data-nav="confirmation">✅ Confirmation</a>
+        <a href="#/apk-call" data-nav="apk-call">📞 Appel APK</a>
         <a href="#/prev-suit" data-nav="prev-suit">⏮️ Costume N-1 → +4</a>
         <a href="#/miracle" data-nav="miracle">✨ Miracle prediction</a>
         <a href="#/canal-telegram" data-nav="canal-telegram">📲 Canal Telegram</a>
@@ -645,6 +646,7 @@
       <div class="home-grid">
         ${card('#/loss-return', '📉', 'Retour après perte', `${((snapshot.lossReturn || {}).configs || []).length} configuration(s) · le costume perdu revient à N+D, miroir ou inverse`)}
         ${card('#/loss-relaunch', '🔁', 'Relance après perte', `${((snapshot.lossRelaunch || {}).configs || []).length} configuration(s) · une prédiction perdue → même costume à +N`)}
+        ${card('#/apk-call', '📞', 'Appel APK', `${((snapshot.apkCall || {}).channels || []).length} canal(aux) surveillé(s) · ${(snapshot.apkCall || {}).sentCount || 0} appel(s) • ${(snapshot.apkCall || {}).enabled ? 'actif' : 'inactif'} · une prédiction lancée → l’application sonne comme un appel`)}
         ${card('#/confirmation', '✅', 'Confirmation', `${((snapshot.confirmation || {}).configs || []).length} configuration(s) · perte ou ✅ à partir du rattrapage choisi → prochaine prédiction du canal`)}
         ${card('#/prev-suit', '⏮️', 'Costume N-1 → +4', `${Object.keys((snapshot.prevSuit || {}).selected || {}).length} source(s) cochée(s) • ${(snapshot.prevSuit || {}).sentCount || 0} prédiction(s) • ${(snapshot.prevSuit || {}).enabled ? 'actif' : 'inactif'}`)}
         ${card('#/miracle', '✨', 'Miracle prediction', `${(snapshot.miracle || {}).inScopeCount || 0} stratégie(s) suivie(s) • ${(snapshot.miracle || {}).sentCount || 0} prédiction(s) • ${(snapshot.miracle || {}).enabled ? 'actif' : 'inactif'}`)}
@@ -2706,6 +2708,15 @@ Faites-en bon usage !
           'Si le canal coché est celui d’une « Relance » (deux costumes + relance), le bot suit la relance de ce canal (jeu relancé, rattrapages de la relance) et non la perte du message d’origine.',
         ],
         tips: ['Une configuration n’envoie jamais deux prédictions pour le même numéro de jeu, ni pour un jeu déjà joué. Le champ « Rattrapages du canal suivi » sert à savoir quand la prédiction suivie est perdue ; vide, il reprend le nombre de rattrapages de la relance.'] },
+      { g: 'auto', icon: '📞', title: 'Appel APK', hash: '#/apk-call',
+        what: 'L’application Android (APK) se connecte à la base Supabase du site : dès qu’une prédiction est lancée dans le canal choisi ici, le téléphone sonne comme un appel entrant, jusqu’à ce que tu décroches.',
+        steps: [
+          'Coche le ou les canaux que l’application doit surveiller (ou saisis un ID / @nom), coche « Activer », puis « Enregistrer ».',
+          'Vérifie que « Table Supabase » indique « prête ». Sinon colle le SQL de secours affiché sur la page dans Supabase (SQL Editor).',
+          'Dans l’application : saisis l’adresse Supabase et la clé publique (anon) affichées / indiquées sur la page, puis « Démarrer ».',
+          'Clique sur « Appel de test » : le téléphone doit sonner. Décroche (bouton vert) pour arrêter la sonnerie.',
+        ],
+        tips: ['Une ligne est écrite par prédiction lancée (jamais de doublon pour le même canal, jeu et costume). Les lignes sont effacées à 00h00 (heure d’Abidjan). Garde la clé publique pour toi : elle ne permet que de LIRE la table des appels.'] },
       { g: 'auto', icon: '✅', title: 'Confirmation', hash: '#/confirmation',
         what: 'Suit des canaux qui ont 3 ou 4 rattrapages : quand une de leurs prédictions est perdue, ou gagnée à partir du rattrapage choisi (3, 4, 5… 9), le bot envoie la prochaine prédiction de ce canal dans un autre canal.',
         steps: [
@@ -3271,6 +3282,44 @@ Faites-en bon usage !
         <div class="toolbar"><button class="button primary" onclick="confirmationModal()">Créer</button><button class="button ghost" onclick="confirmationPage()">Actualiser</button></div></div>
         ${p.lastError ? `<div class="notice error">${esc(p.lastError)}</div>` : ''}
         <section class="section">${cards}</section>`;
+    }
+    // 📞 « Appel APK » : choix du canal surveillé par l'application Android (voir apk-call.js)
+    async function apkCallPage() {
+      setNav('apk-call');
+      try { await refresh(); } catch (_) {}
+      const p = snapshot.apkCall || {};
+      const chosen = new Set((p.channels || []).map(String));
+      const rows = p.channelRows || [];
+      const known = new Set(rows.map(r => String(r.id)));
+      const boxes = rows.map(r => `<label class="check" style="display:block;margin:6px 0"><input type="checkbox" class="akSrc" value="${esc(r.id)}" ${chosen.has(String(r.id)) ? 'checked' : ''}> ${esc(r.title || r.id)} <small>${esc(r.id)}${(r.sources || []).length ? ' · ' + esc(r.sources.slice(0, 3).join(', ')) : ''}</small></label>`).join('');
+      const extra = [...chosen].filter(x => !known.has(x)).join(', ');
+      const recent = (p.recent || []).length ? `<table class="table" style="margin-top:10px"><thead><tr><th>Heure</th><th>Canal</th><th>Jeu</th><th>Costume</th></tr></thead><tbody>${p.recent.map(e => `<tr><td>${esc(new Date(e.at).toLocaleTimeString('fr-FR'))}</td><td>${esc(e.channel)}</td><td>${e.test ? '🧪 test' : '№' + esc(e.target)}</td><td>${esc(e.suit)}</td></tr>`).join('')}</tbody></table>` : '<p class="small muted">Aucun appel envoyé pour l’instant.</p>';
+      const tableTag = p.tableReady ? '<span class="tag good">prête</span>' : (p.dbReady ? '<span class="tag">⏳ pas encore créée</span>' : '<span class="tag">base Supabase non connectée</span>');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Application Android</span><h2 style="margin-top:7px">📞 Appel APK</h2>
+        <p class="small">L’application (APK) se connecte à la base Supabase du site. <b>Choisis ci-dessous le canal que l’application doit surveiller</b> : dès qu’une prédiction est <b>lancée</b> dans ce canal (envoyée par ce bot, ou publiée par un autre bot dans un canal que ce bot lit), une ligne est écrite dans Supabase et le téléphone <b>sonne comme un appel entrant, jusqu’à ce que tu décroches</b>.</p></div></div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="field"><label>Canaux surveillés par l’APK : coche un ou plusieurs</label>${boxes || '<small>Aucun canal connu pour l’instant : saisis-le ci-dessous.</small>'}</div>
+          <div class="field"><label>Autre canal (ID ou @nom, facultatif)</label><input id="akExtra" value="${esc(extra)}" placeholder="-1001234567890 ou @nomducanal"></div>
+          <label class="check"><input id="akEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer les appels</label>
+          <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveApkCall()">Enregistrer</button><button class="button small ghost" onclick="testApkCall()">📞 Appel de test</button><button class="button small ghost" onclick="apkCallPage()">Actualiser</button></div>
+          ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+          <p class="small" style="margin-top:10px">Table Supabase « apk_calls » : ${tableTag} • appels envoyés : <b>${p.sentCount || 0}</b>${(p.channelNames || []).length ? ' • canaux : ' + esc(p.channelNames.join(', ')) : ''}</p>
+          ${p.tableError ? `<p class="small" style="color:#fbbf24">${esc(p.tableError)}</p>` : ''}
+          <p class="small">Dans l’application, l’adresse <b>${esc(p.supabaseUrl || '')}</b> et la <b>clé publique</b> sont déjà pré-remplies (clé en lecture seule : elle ne peut que lire la table des appels).</p>
+          <details style="margin-top:8px"><summary class="small">SQL de secours (à coller dans Supabase → SQL Editor, seulement si la table n’est pas créée)</summary><pre style="white-space:pre-wrap;font-size:12px">${esc(p.sql || '')}</pre></details>
+        </div>
+        <div class="card"><h3>Derniers appels</h3>${recent}</div>`;
+    }
+    async function saveApkCall() {
+      try {
+        const ids = [...document.querySelectorAll('.akSrc:checked')].map(x => x.value);
+        const extra = val('akExtra').split(/[\s,;]+/).filter(Boolean);
+        await api('/api/apk-call/config', 'POST', { enabled: $('#akEnabled')?.checked, channels: [...new Set([...ids, ...extra])].join(', ') });
+        await refresh(); apkCallPage(); toast('« Appel APK » enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testApkCall() {
+      try { await saveApkCall(); const r = await api('/api/apk-call/test', 'POST', {}); await refresh(); apkCallPage(); toast(r.ok ? 'Appel de test envoyé : le téléphone va sonner.' : (r.error || 'Échec')); } catch (e) { toast(e.message, 'error'); }
     }
     function confirmationModal(id) {
       const p = snapshot.confirmation || {};
@@ -6774,6 +6823,7 @@ Faites-en bon usage !
         else if (h === '#/loss-return') lossReturnPage();
         else if (h === '#/loss-relaunch') lossRelaunchPage();
         else if (h === '#/confirmation') confirmationPage();
+        else if (h === '#/apk-call') apkCallPage();
         else if (h === '#/overlap') overlapPage();
         else if (h === '#/copy-announce') copyAnnouncePage();
         else if (h === '#/bet-type') betTypePage();
