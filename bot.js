@@ -256,6 +256,8 @@ const HELP =
   '*Base de données*\n' +
   '/setdb <url> — lien PostgreSQL Render\n' +
   '/db — état de la base\n' +
+  '/copierconfig [jeux] — copier les configurations de la base principale vers la base de secours\n' +
+  '/permuterbases confirmer — la base de secours devient la principale (et inversement), après copie des configurations\n' +
   '/base — nombre de lignes, dernier jeu, période couverte\n' +
   '/dates — dates disponibles\n' +
   '/jeux [2/04/2026] — résumé des jeux d\'une date\n' +
@@ -818,6 +820,32 @@ function wire(b) {
     if (!m[1]) return b.sendMessage(msg.chat.id, 'ℹ️ La base Supabase est intégrée au code : /setdb ne change plus de base.');
     const s = await db.connect();
     b.sendMessage(msg.chat.id, s.ready ? '✅ Base de données connectée, tables créées.' : `❌ Échec : ${s.error}`);
+  });
+
+  // v147 : copie des configurations principale → secours (option « jeux » : + les 50 derniers jeux)
+  b.onText(/^\/copierconfig(?:\s+(\S+))?/, async (msg, m) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const r = await db.copyConfig({ games: /^jeux$/i.test(m[1] || '') });
+    if (!r.ok) return b.sendMessage(msg.chat.id, `❌ Copie impossible : ${r.error}`);
+    const lignes = Object.entries(r.copied).map(([t, n]) => `• ${t} : ${n}`).join('\n');
+    b.sendMessage(msg.chat.id, `✅ Configurations copiées de la base ${r.from} vers la base ${r.to} :\n${lignes}`);
+  });
+
+  // v147 : permutation — la base de secours devient la principale, l'ancienne principale devient le secours
+  b.onText(/^\/permuterbases(?:\s+(\S+))?(?:\s+(\S+))?/, async (msg, m) => {
+    if (!isAdmin(msg)) return deny(msg.chat.id);
+    const args = [m[1], m[2]].filter(Boolean).map((x) => x.toLowerCase());
+    if (!args.includes('confirmer')) {
+      const s = db.status();
+      const lignes = s.bases.map((x) => `• ${x.nom} : ${x.etat}${x.erreur ? ' (' + String(x.erreur).slice(0, 80) + ')' : ''}`).join('\n');
+      return b.sendMessage(msg.chat.id,
+        `🔁 Permutation des bases\n${lignes}\n\nLes configurations de la principale sont d'abord copiées dans le secours, puis les rôles s'inversent.\n` +
+        `Pour lancer : /permuterbases confirmer  (ajoute « jeux » pour copier aussi les 50 derniers jeux)`);
+    }
+    const r = await db.swapPrimary({ games: args.includes('jeux') });
+    if (!r.ok) return b.sendMessage(msg.chat.id, `❌ Permutation annulée (étape ${r.step || 'copie'}) : ${r.error}\nRien n'a changé.`);
+    const lignes = Object.entries(r.copied).map(([t, n]) => `• ${t} : ${n}`).join('\n');
+    b.sendMessage(msg.chat.id, `✅ Permutation faite : la base « ${r.nouvellePrincipale} » est maintenant la PRINCIPALE, l'autre est le SECOURS.\nConfigurations copiées :\n${lignes}`);
   });
 
   b.onText(/^\/db\b/, (msg) => {

@@ -275,6 +275,14 @@ function pickActive() {
     }
   }
   ready = targets.some((t) => t.state !== 'down');
+  relabel();
+}
+
+// v147 : « principale » = la base active (lue en priorité), « secours » = l'autre. L'indice d'une base reste lié au projet
+// Supabase (0 = site-production-baccara, 1 = tv-kouame) ; seuls le rôle et le nom changent quand on permute.
+function relabel() {
+  targets[active].name = 'principale';
+  targets[1 - active].name = 'secours';
 }
 
 function setState(t, state, err) {
@@ -348,6 +356,8 @@ async function connect(newUrl) { // newUrl ignoré : les liens sont fixés par d
   lastError = null;
   lastSettings.clear(); lastSnapshot = null; predCache.clear(); // nouvelle connexion : tout est renvoyé une fois
   await Promise.all(targets.map((t) => connectTarget(t).catch((e) => { t.error = e.message; setState(t, 'down', e); })));
+  await applyStoredPrimary().catch(() => {}); // v147 : rôle principale/secours choisi par /permuterbases
+  await seedEmptyPrimary().catch(() => {});   // v147 : la base vide reçoit les configurations de l'autre
   pickActive();
   startHealth();
   if (!ready) lastError = targets.map((t) => `${t.name} : ${t.error || 'indisponible'}`).join(' • ');
@@ -1111,6 +1121,121 @@ async function readOnlyQuery(sql, limit = 50) {
 async function exec(sql, params = []) { return q(sql, params); }
 async function rows(sql, params = []) { const r = await q(sql, params); return r ? r.rows : []; }
 
+// ---- v147 : copie des configurations + permutation principale / secours --------------------------------
+// Configurations = réglages (token, canaux, panneaux, états), instantané du site, stratégies et stratégies IA.
+// Pas d'historique (prédictions, analyses IA, anti-doublons) : seulement les 50 derniers jeux, en option.
+const CONFIG_TABLES = [
+  { table: 'settings',      pk: ['key'] },
+  { table: 'app_state',     pk: ['key'] },
+  { table: 'strategies',    pk: ['key'] },
+  { table: 'ai_strategies', pk: ['id'] },
+];
+const GAMES_TABLE = { table: 'games', pk: ['number'] };
+
+// Copie (upsert, rien n'est supprimé sur la destination) les lignes d'une table d'une base vers l'autre.
+async function copyTable(src, dst, { table, pk }) {
+  const r = await src.pool.query(`SELECT * FROM ${table}`);
+  const cols = r.fields.map((f) => f.name);
+  const jsonCols = new Set(r.fields.filter((f) => f.dataTypeID === 3802).map((f) => f.name)); // jsonb
+  const set = cols.filter((c) => !pk.includes(c)).map((c) => `${c} = EXCLUDED.${c}`).join(', ');
+  const ph = cols.map((c, i) => (jsonCols.has(c) ? `$${i + 1}::jsonb` : `$${i + 1}`)).join(', ');
+  const sql = `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${ph}) ON CONFLICT (${pk.join(', ')}) DO ${set ? 'UPDATE SET ' + set : 'NOTHING'}`;
+  for (const row of r.rows) {
+    const vals = cols.map((c) => (jsonCols.has(c) && row[c] !== null && row[c] !== undefined ? JSON.stringify(row[c]) : row[c]));
+    await dst.pool.query(sql, vals);
+  }
+  return r.rows.length;
+}
+
+// Copie les configurations de la base PRINCIPALE (active) vers la base de SECOURS.
+async function copyConfig(opts = {}) {
+  const src = opts.reverse ? targets[1 - active] : targets[active];
+  const dst = opts.reverse ? targets[active] : targets[1 - active];
+  if (src.state !== 'ok' || !src.pool) return { ok: false, error: `La base ${src.name} n'est pas disponible (${src.state}).` };
+  if (dst.state !== 'ok' || !dst.pool) {
+    return { ok: false, error: `La base ${dst.name} n'est pas disponible (${dst.state}${dst.error ? ' : ' + String(dst.error).slice(0, 120) : ''}).` };
+  }
+  const tables = opts.games ? [...CONFIG_TABLES, GAMES_TABLE] : CONFIG_TABLES;
+  const counts = {};
+  try {
+    await dst.pool.query(SCHEMA); // sécurité : les tables existent côté destination
+    for (const t of tables) counts[t.table] = await copyTable(src, dst, t);
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e).slice(0, 200), copied: counts };
+  }
+  lastSettings.clear(); lastSnapshot = null; // la suite des écritures repart d'un état connu des deux côtés
+  return { ok: true, from: src.name, to: dst.name, copied: counts };
+}
+
+// Au démarrage : la base qui est VIDE (aucun état du site) reçoit les configurations de l'autre base, avant toute écriture.
+// Sans cela, un état vide serait renvoyé sur les deux bases et écraserait la configuration de celle qui est remplie.
+// Les deux vides : rien à copier (l'état local du site est envoyé comme d'habitude). Les deux remplies : rien ne bouge.
+async function seedEmptyPrimary() {
+  const a = targets[active];
+  const o = targets[1 - active];
+  if (a.state !== 'ok' || o.state !== 'ok' || !a.pool || !o.pool) return;
+  const has = async (t) => {
+    const r = await t.pool.query(`SELECT (SELECT count(*) FROM app_state WHERE key='store') + (SELECT count(*) FROM settings WHERE key='app_config') AS n`);
+    return Number(r.rows[0].n) > 0;
+  };
+  const [aFull, oFull] = [await has(a), await has(o)];
+  if (aFull === oFull) return;
+  const r = await copyConfig({ reverse: !aFull }); // principale vide → reprise depuis le secours ; secours vide → envoi vers le secours
+  const [from, to] = aFull ? [a, o] : [o, a];
+  console.log(r.ok ? `🌱 Base ${to.name} vide : configurations envoyées depuis la base ${from.name}` : `⚠️ Envoi des configurations impossible : ${r.error}`);
+}
+
+// Mémorise (sur les deux bases) quelle base est la principale : valeur « indice|date ».
+async function persistPrimary() {
+  const value = `${active}|${new Date().toISOString()}`;
+  let wrote = 0;
+  for (const t of targets) {
+    if (!t.pool || t.state !== 'ok') continue;
+    try {
+      await t.pool.query(`INSERT INTO settings (key, value) VALUES ('db_primary', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [value]);
+      wrote++;
+    } catch (_) { /* ignoré : l'autre base garde la valeur */ }
+  }
+  return wrote;
+}
+
+// Au démarrage : reprend le rôle mémorisé (la valeur la plus récente des deux bases fait foi).
+async function applyStoredPrimary() {
+  let best = null;
+  for (const t of targets) {
+    if (!t.pool || t.state === 'down') continue;
+    try {
+      const r = await t.pool.query(`SELECT value FROM settings WHERE key = 'db_primary'`);
+      const m = /^([01])\|(.+)$/.exec((r.rows[0] && r.rows[0].value) || '');
+      if (m && (!best || m[2] > best.at)) best = { i: Number(m[1]), at: m[2] };
+    } catch (_) { /* table absente : rien à reprendre */ }
+  }
+  if (best && targets[best.i]) { active = best.i; relabel(); }
+}
+
+// Permute : copie d'abord les configurations principale → secours (et les vérifie), puis la base de secours devient la
+// principale et l'ancienne principale devient le secours. Les écritures continuent d'aller sur les deux bases.
+async function swapPrimary(opts = {}) {
+  const old = targets[active];
+  const next = targets[1 - active];
+  const copy = await copyConfig(opts);
+  if (!copy.ok) return { ok: false, step: 'copie', ...copy };
+  // vérification : même nombre de lignes de configuration des deux côtés
+  const check = {};
+  for (const t of CONFIG_TABLES) {
+    const a = await old.pool.query(`SELECT count(*)::int AS n FROM ${t.table}`);
+    const b = await next.pool.query(`SELECT count(*)::int AS n FROM ${t.table}`);
+    check[t.table] = { principale: a.rows[0].n, secours: b.rows[0].n };
+    if (b.rows[0].n < a.rows[0].n) return { ok: false, step: 'verification', error: `Table ${t.table} incomplète sur la base de secours (${b.rows[0].n}/${a.rows[0].n}).`, check };
+  }
+  active = next.i;
+  relabel();
+  lastSettings.clear(); lastSnapshot = null; predCache.clear();
+  const saved = await persistPrimary();
+  console.log(`🔁 Permutation : la base ${next.i === 0 ? 'site-production-baccara' : 'tv-kouame'} est maintenant la PRINCIPALE`);
+  return { ok: true, copied: copy.copied, check, nouvellePrincipale: next.i === 0 ? 'site-production-baccara' : 'tv-kouame', memorise: saved };
+}
+
 module.exports = {
   connect, status, eachBase, saveGame, gamesByDate, dailySummary, exec, rows,
   savePrediction, closePrediction, predictionsByNumber, setSetting, getSetting, normalizeDate,
@@ -1127,5 +1252,6 @@ module.exports = {
   afterLossSendExists, reserveAfterLossSend, releaseAfterLossSend, clearAfterLossSent, listAfterLossSent,
   savePredictionControlState, loadPredictionControlState,
   dump, allSettings, lastPredictions, strategyRows, tableCounts,
+  copyConfig, swapPrimary,
   get ready() { return ready; },
 };

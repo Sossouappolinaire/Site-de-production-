@@ -8,17 +8,17 @@
 // L'ancien DATABASE_URL de Render est IGNORÉ : seule la base Supabase est utilisée.
 'use strict';
 
-const REF = 'kmvbsntmzjkpwwqgkqhz';
-const USER = 'bot_app';
-const PASS = 'ZHv41ll3G8Rir3v1YgzncBlzqk6Hyg2u3d3o6Rfb';
+const REF = 'hvjgqaxejqnvgvefjhnj';  // v147 : base PRINCIPALE = projet Supabase « tv-kouame » (région eu-west-1)
+const USER = 'site_secours';
+const PASS = 'eybmIUk5vAOuCERMY4FtrYbDKkHohvaI';
 
 // Adresses essayées dans l'ordre (la première qui répond est retenue). Le « pooler » est
 // obligatoire sur Render (réseau IPv4) ; la connexion directe est le dernier recours.
 const CANDIDATES = [
-  `postgresql://${USER}.${REF}:${PASS}@aws-1-eu-west-3.pooler.supabase.com:5432/postgres`,
-  `postgresql://${USER}.${REF}:${PASS}@aws-0-eu-west-3.pooler.supabase.com:5432/postgres`,
-  `postgresql://${USER}.${REF}:${PASS}@aws-1-eu-west-3.pooler.supabase.com:6543/postgres`,
-  `postgresql://${USER}.${REF}:${PASS}@aws-0-eu-west-3.pooler.supabase.com:6543/postgres`,
+  `postgresql://${USER}.${REF}:${PASS}@aws-1-eu-west-1.pooler.supabase.com:5432/postgres`,
+  `postgresql://${USER}.${REF}:${PASS}@aws-0-eu-west-1.pooler.supabase.com:5432/postgres`,
+  `postgresql://${USER}.${REF}:${PASS}@aws-1-eu-west-1.pooler.supabase.com:6543/postgres`,
+  `postgresql://${USER}.${REF}:${PASS}@aws-0-eu-west-1.pooler.supabase.com:6543/postgres`,
   `postgresql://${USER}:${PASS}@db.${REF}.supabase.co:5432/postgres`,
 ];
 
@@ -28,9 +28,9 @@ const CANDIDATES = [
 //   • ici, dans BACKUP_PASS (+ BACKUP_USER si le rôle n'est pas « bot_app »),
 //   • ou en collant l'adresse complète dans BACKUP_DATABASE_URL (variable Render ou constante ci-dessous).
 // Tant que rien n'est renseigné, la base de secours est simplement ignorée (le site marche comme avant).
-const BACKUP_REF  = 'hvjgqaxejqnvgvefjhnj';
+const BACKUP_REF  = 'kmvbsntmzjkpwwqgkqhz';  // v147 : base de SECOURS = ancien projet « site-production-baccara » (région eu-west-3)
 const BACKUP_USER = process.env.BACKUP_DB_USER || 'bot_app';
-const BACKUP_PASS = process.env.BACKUP_DB_PASS || '';          // ← mot de passe du rôle sur la base de secours
+const BACKUP_PASS = process.env.BACKUP_DB_PASS || 'ZHv41ll3G8Rir3v1YgzncBlzqk6Hyg2u3d3o6Rfb';          // ← mot de passe du rôle sur la base de secours
 const BACKUP_URL_OVERRIDE = String(process.env.BACKUP_DATABASE_URL || '').trim(); // ← ou adresse complète
 const BACKUP_REGION = process.env.BACKUP_DB_REGION || 'eu-west-3'; // région du projet de secours (voir Supabase → Settings)
 
