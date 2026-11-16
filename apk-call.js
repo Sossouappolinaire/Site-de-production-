@@ -104,11 +104,32 @@ function isChosen(chatId, username) {
   return (panel.channels || []).some((c) => String(c) === id || (un && String(c).toLowerCase() === un));
 }
 
+// Lecture d'une prédiction pour l'APK. On essaie d'abord la lecture commune (loss.parsePost), puis deux cas qu'elle ne reconnaît pas :
+//  • numéro écrit « #N1295 » (format 108 « JOUEUR », ex. 🤖 joueur #N1295) ;
+//  • prédiction Pair / Impair (« Couleur de la carte :PAIR »), sans symbole de costume.
+function parse(text) {
+  const base = loss.parsePost(text);
+  if (base) return base;
+  if (typeof text !== 'string' || !text || text.length > 1500 || text.trim().startsWith('/')) return null;
+  if (/RETOUR APRÈS PERTE|BILAN RETOUR|D CONSTATÉ|ПОВТОР|🧪/i.test(text)) return null;
+  const t = text.replace(/\uFE0F/g, '');
+  const n = /#\s*N\s*:?\s*(\d{1,4})/i.exec(t);
+  if (!n) return null;
+  const target = Number(n[1]);
+  if (!(target > 0)) return null;
+  // on ne lit que la ligne « Couleur de la carte : … » pour ne pas confondre avec la ligne Résultats
+  const line = (/Couleur de la carte\s*:\s*([^\n]*)/i.exec(t) || [])[1] || t;
+  const par = /\b(IMPAIR|PAIR)\b/i.exec(line);
+  if (par) return { target, suits: [par[1].toUpperCase()] };
+  const suits = loss.parsePost(`№${target} ${line}`);
+  return suits ? { target, suits: suits.suits } : null;
+}
+
 // prédiction vue dans un canal choisi (envoyée par ce bot ou publiée par un autre bot) → ligne dans apk_calls
 function observe(chat, text) {
   try {
     if (!panel.enabled || !chat || chat.id == null || !isChosen(chat.id, chat.username)) return false;
-    const post = loss.parsePost(text);
+    const post = parse(text);
     if (!post) return false;
     const suits = post.suits.join(' ');
     const k = `${keyOf(chat.id)}:${post.target}:${suits}`;
