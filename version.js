@@ -1,10 +1,11 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v147',
-  name: 'appel-apk',
-  date: '2026-11-15',
+  version: 'v148',
+  name: 'confirmation-ecart-palier',
+  date: '2026-11-17',
   features: [
+    'v148 — « Confirmation » ne prédisait jamais : le lecteur de publications (loss-return.js parsePost) ne reconnaissait pas « #N1234 » (96 formats sur 108, dont le format 1 par défaut) ni les chiffres « gras » Unicode, et lisait « en cours » comme le costume cœur ; aucune prédiction du canal suivi n’était donc suivie, aucune perte constatée, rien n’était envoyé. Lecture corrigée (95 formats sur 108 suivis, les 13 autres ne sont pas des prédictions de costume) ; un envoi ignoré (canal en pause, jeu instable…) s’affiche maintenant dans l’erreur du panneau (confirmation.js). « Palier parité » : nouveau réglage « Écart minimum entre deux prédictions » (2 par défaut, 1 = aucune contrainte), dans les modes « Une à la fois » et « Liste » : plus de prédictions collées (parity-palier.js, public/index.html, version.js)',
     'v147 — Les deux bases communiquent : « /copierconfig » copie les configurations (réglages, instantané du site, stratégies, stratégies IA ; option « jeux » = + les 50 derniers jeux) de la base principale vers la base de secours ; « /permuterbases confirmer » fait la copie, la vérifie, puis la base de secours devient la PRINCIPALE et l’ancienne principale devient le SECOURS (rôle mémorisé sur les deux bases, repris au redémarrage) (db.js, bot.js, version.js) ; la base PRINCIPALE est maintenant « tv-kouame » (eu-west-1) et l’ancienne base « site-production-baccara » est le SECOURS, accès intégrés dans db-link.js (aucune variable d’environnement) ; au démarrage, la base qui est vide reçoit les configurations de l’autre base avant toute écriture (db-link.js, db.js)',
     'v146 — Base de SECOURS : le site utilise deux bases Supabase (principale + secours « tv-kouame », les mêmes que l’appli Appel Prédictions). Écritures sur les deux ; si la base active est pleine ou injoignable, l’autre prend le relais. « Appel APK » écrit chaque appel sur les deux bases (db-link.js, db.js, database-url.js, apk-call.js, server.js)',
     'v145 — Nouveau bouton « 📞 Appel APK » : on choisit le(s) canal(aux) que l’application Android surveille ; chaque prédiction LANCÉE dans ce canal est écrite dans la table Supabase « apk_calls » (créée par le site, lecture seule pour l’APK) et l’APK sonne comme un appel entrant jusqu’à ce qu’on décroche ; appel de test, SQL de secours, remise à zéro à 00h00 (apk-call.js, apk-call.sql, bot.js, server.js, midnight-reset.js, data-transfer.js, public/index.html)',

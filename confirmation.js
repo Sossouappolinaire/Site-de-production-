@@ -63,13 +63,27 @@ function statsOf(cfg) { cfg.stats = cfg.stats && typeof cfg.stats === 'object' ?
 const chanMaxR = (cfg, key) => { const m = key != null && cfg.srcMaxRBy ? cfg.srcMaxRBy[String(key)] : null; return isNum(m) ? Number(m) : (isNum(cfg.srcMaxR) ? Number(cfg.srcMaxR) : DEFAULT_SRC_MAXR); };
 const reasonLabel = (r) => (r === 'perte' ? 'perte' : String(r || ''));
 
+// ── lecture d'une publication ───────────────────────────────────────────────
+// CORRECTIF (v148) « Confirmation ne prédit jamais » : loss.parsePost ne reconnaît pas « #N1234 » — la forme de 96 des 108 formats, dont le
+// format 1 par défaut — ni les chiffres/lettres « gras » Unicode (𝐍𝟏𝟐𝟑𝟒) ; il lit aussi « en cours » comme le costume cœur (« cour »).
+// Résultat : aucune prédiction n'était suivie, donc aucune perte constatée, donc rien n'était jamais envoyé. On corrige le texte avant lecture
+// (même normalisation que miracle-prediction.js / prev-suit.js, plus « en cours »).
+function readPost(text) {
+  if (typeof text !== 'string') return null;
+  const t = text
+    .replace(/[\u{1D400}-\u{1D7FF}]/gu, (ch) => ch.normalize('NFKC')) // 𝐍𝟏𝟐𝟑𝟒 → N1234
+    .replace(/(#|№)\s*N(?=\s*\d)/gi, '$1')                             // #N1234 → #1234
+    .replace(/\bcours\b/gi, ' ');                                      // « en cours » n'est pas le costume cœur
+  return loss.parsePost(t);
+}
+
 // ── observation : publications de canal ─────────────────────────────────────
 // appelé par le bot pour chaque NOUVELLE publication de canal (les modifications — résultats ajoutés — sont ignorées :
 // c'est ce module qui vérifie lui-même les résultats sur les jeux réels)
 function onChannelPost(chat, text) {
   try {
     if (!chat || chat.id == null) return false;
-    const post = loss.parsePost(text);
+    const post = readPost(text);
     if (!post) return false;
     const src = String(chat.id);
     const uname = chat.username ? `@${String(chat.username).toLowerCase()}` : null;
@@ -122,7 +136,11 @@ async function sendToChannels(cfg, out) {
     .then((m) => (m && m.skipped ? { ok: false, skipped: true, id } : { ok: true, id, messageId: m.message_id }))
     .catch((e) => ({ ok: false, id, error: e.message }))));
   const sent = [];
-  for (const r of results) { if (r.ok) sent.push({ chatId: r.id, messageId: r.messageId }); else if (!r.skipped) panel.lastError = `${r.id} : ${r.error}`; }
+  for (const r of results) {
+    if (r.ok) sent.push({ chatId: r.id, messageId: r.messageId });
+    else if (r.skipped) panel.lastError = `${r.id} : envoi ignoré (canal en pause, jeu instable, porte « envoi après perte » ou anti-doublon)`; // avant : silencieux
+    else panel.lastError = `${r.id} : ${r.error}`;
+  }
   return sent;
 }
 function editSent(entry, statusFr) {
