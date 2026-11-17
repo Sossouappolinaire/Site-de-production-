@@ -49,6 +49,7 @@ const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
+const miracleSerie = require('./miracle-serie'); // « Miracle série » (v148)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
 const parityEgalite = require('./parity-egalite'); // « Palier parité égalité »
 const parityPalier = require('./parity-palier'); // « Palier parité » (v114)
@@ -457,6 +458,7 @@ app.get('/api/state', async (req, res) => {
     apkCall: apkCallView(),
     prevSuit: prevSuitView(),
     miracle: miracleView(),
+    miracleSerie: miracleSerieView(),
     canalTelegram: canalTelegram.status(),
     channelUniform: channelUniformView(channelList),
     endDigitPredict: endDigitPredict.status(),
@@ -2432,6 +2434,32 @@ app.post('/api/miracle/test', async (req, res) => {
 });
 app.post('/api/miracle/reset', (req, res) => { miracle.resetStats(); res.json(miracleView()); });
 
+// « 🔁 Miracle série » (voir miracle-serie.js) : comme Miracle prediction (mêmes modes de suivi, mêmes stratégies à 3 rattrapages), mais après la perte
+// il enchaîne les prédictions suivantes de la stratégie, une à la fois, jusqu'à ce qu'elle obtienne ✅1️⃣ ou ✅2️⃣, puis attend une nouvelle perte.
+miracleSerie.setSourceProvider(miracleSources);
+function miracleSerieView() { return miracleSerie.status(); }
+async function verifyMiracleSerieChannels(list) {
+  for (const id of (list || [])) {
+    const check = await resolveChat(id);
+    if (!check.ok) throw new Error(`Canal ${id} : ${check.error}`);
+    if (check.chat && check.chat.title) miracleSerie.setChannelTitle(id, check.chat.title);
+  }
+}
+app.get('/api/miracle-serie', (req, res) => res.json(miracleSerieView()));
+app.post('/api/miracle-serie/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.channels !== undefined && botStatus().tokenSet) await verifyMiracleSerieChannels(lossRelaunch.parseChannels(b.channels));
+    miracleSerie.configure(b);
+    res.json({ ok: true, miracleSerie: miracleSerieView() });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/miracle-serie/test', async (req, res) => {
+  const r = await miracleSerie.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/miracle-serie/reset', (req, res) => { miracleSerie.resetStats(); res.json(miracleSerieView()); });
+
 // « Canal Telegram » (voir canal-telegram.js) : un canal = une stratégie, nommée comme le canal. Toutes les prédictions publiées dans
 // ce canal, quel que soit leur format ou leur rattrapage annoncé, sont lues de la même façon et vérifiées avec UN rattrapage unique.
 app.get('/api/canal-telegram', (req, res) => res.json(canalTelegram.status()));
@@ -3270,7 +3298,7 @@ async function removeChannelEverywhere(id) {
     ['Chevauchement', overlap], ['VIP', vip], ['Prédit IA', predit], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['Statistiques', statistics],
     ['Dizaine', dizaineTop], ['Costume faible', costumeFaibleTop], ['Meilleur + plus faible / Relance / Test', bestWeakTop],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Jeu 21', game21Predict], ['Formation', formationRelay],
-    ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Confirmation', confirmation], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle],
+    ['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Confirmation', confirmation], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle], ['Miracle série', miracleSerie],
   ];
   for (const [label, mod] of modules) {
     try {
@@ -3630,7 +3658,7 @@ function configuredChannelList() {
     } catch (_) {}
   }
   // Recherche profonde dans le réglage de TOUS les boutons : toute liste « …channels » ou « channelId » est importée
-  for (const [label, mod] of [['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Confirmation', confirmation], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle], ['Jeu 21', game21Predict], ['Formation', formationRelay],
+  for (const [label, mod] of [['Retour après perte', lossReturn], ['Relance après perte', lossRelaunch], ['Confirmation', confirmation], ['Costume N-1 → +4', prevSuit], ['Miracle prediction', miracle], ['Miracle série', miracleSerie], ['Jeu 21', game21Predict], ['Formation', formationRelay],
     ['Type de mise', betType], ['Copie et annonce', copyAnnounce], ['Meilleur + plus faible / Relance / Test', bestWeakTop], ['Dizaine', dizaineTop],
     ['Costume faible', costumeFaibleTop], ['Chevauchement', overlap], ['Répétition costume', suitStreak], ['Rupture costume', suitBreak],
     ['Prédiction après perte', afterLoss], ['Prédiction combinée', combined], ['Comptage 2/2', cardsCount], ['Nul / 2-3', drawTwoThree], ['Victoire V1 / V2', victoireVb], ['VIP', vip], ['Prédit IA', predit],

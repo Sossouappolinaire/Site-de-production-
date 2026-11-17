@@ -30,6 +30,7 @@ const confirmation = require('./confirmation'); // « Confirmation » (v140)
 const apkCall = require('./apk-call'); // « Appel APK » (v145)
 const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
 const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
+const miracleSerie = require('./miracle-serie'); // « Miracle série » (v148)
 const parityEgalite = require('./parity-egalite'); // « Palier parité égalité » : 2e taux quand deux taux faibles sont égaux
 const distributionFaible = require('./distribution-faible'); // « Distribution faible » : distribution au taux le plus faible du Compte distribution (v125)
 const parityPalier = require('./parity-palier'); // « Palier parité » : costume au plus faible pourcentage du palier du Compte parité (v114)
@@ -410,6 +411,8 @@ function installChannelGuard(inst) {
       try { if (m && !m.skipped && typeof rest[0] === 'string') prevSuit.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       // « Miracle prediction » : lecture des prédictions de toutes les stratégies suivies (voir miracle-prediction.js)
       try { if (m && !m.skipped && typeof rest[0] === 'string') miracle.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
+      // « Miracle série » : même lecture des prédictions suivies (voir miracle-serie.js)
+      try { if (m && !m.skipped && typeof rest[0] === 'string') miracleSerie.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       // « Canal Telegram » : un canal où ce bot publie peut aussi être une stratégie (voir canal-telegram.js)
       try { if (m && !m.skipped && typeof rest[0] === 'string') canalTelegram.onOwnPost(chatId, rest[0]); } catch (_) { /* suivi seulement */ }
       return m;
@@ -2206,6 +2209,8 @@ async function tick() {
       Promise.resolve(prevSuit.tick()),
       // « Miracle prediction » : reprise de la prédiction suivante d'une stratégie après sa perte, consensus de 5 stratégies (voir miracle-prediction.js)
       Promise.resolve(miracle.tick()),
+      // « Miracle série » : série de prédictions après une perte, jusqu'à ✅1️⃣ / ✅2️⃣ de la stratégie (voir miracle-serie.js)
+      Promise.resolve(miracleSerie.tick()),
       // « Canal Telegram » : vérification uniforme des prédictions lues dans chaque canal-stratégie (voir canal-telegram.js)
       Promise.resolve(canalTelegram.tick()),
       // « Prédiction fin de numéro » : meilleur costume du joueur, repli faible + inverse si le meilleur ne valide pas (voir end-digit-predict.js)
@@ -2427,6 +2432,7 @@ async function applyDbConfigs() {
   await apkCall.restoreFromDb();
   await prevSuit.restoreFromDb();
   await miracle.restoreFromDb();
+  await miracleSerie.restoreFromDb();
   await canalTelegram.restoreFromDb();
   await channelUniform.restoreFromDb();
   await endDigitPredict.restoreFromDb();
@@ -2525,6 +2531,8 @@ async function startLoop() {
   miracle.restore();
   miracle.setSender(senderFor);
   miracle.setAdminId(() => state.adminId);
+  miracleSerie.restore();
+  miracleSerie.setSender(senderFor);
   canalTelegram.restore();
   channelUniform.restore();
   endDigitPredict.restore();

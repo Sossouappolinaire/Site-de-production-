@@ -124,7 +124,7 @@ function wipePanel(panel) {
 
 const MODULES = ['after-loss', 'combined', 'suit-streak', 'suit-break', 'overlap', 'vip', 'cards-count',
   'dizaine-top', 'costume-faible-top', 'predit', 'formation-relay', 'copy-announce', 'bet-type', 'game21-predict', 'statistics',
-  'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio', 'miracle-prediction',
+  'parity-palier', 'parity-egalite', 'distribution-faible', 'end-digit-trio', 'miracle-prediction', 'miracle-serie',
   // v133 : panneaux qui gardaient encore leurs données du jour après 00h00
   'canal-telegram', 'loss-return', 'loss-relaunch', 'confirmation', 'apk-call', 'prev-suit', 'end-digit-predict', 'strategy-recap', 'distribution-counter', 'parity-counter']; // v127 : « Trio fin de numéro » aussi ; v125 : « Distribution faible » aussi ; v123 : « Palier parité » et « Palier parité égalité » repartent aussi de zéro à 00h00
 
