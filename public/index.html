@@ -325,6 +325,7 @@
         <a href="#/apk-call" data-nav="apk-call">📞 Appel APK</a>
         <a href="#/prev-suit" data-nav="prev-suit">⏮️ Costume N-1 → +4</a>
         <a href="#/miracle" data-nav="miracle">✨ Miracle prediction</a>
+        <a href="#/miracle-serie" data-nav="miracle-serie">🔁 Miracle série</a>
         <a href="#/canal-telegram" data-nav="canal-telegram">📲 Canal Telegram</a>
         <a href="#/overlap" data-nav="overlap">Chevauchement</a>
         <a href="#/copy-announce" data-nav="copy-announce">Copie et annonce</a>
@@ -650,6 +651,7 @@
         ${card('#/confirmation', '✅', 'Confirmation', `${((snapshot.confirmation || {}).configs || []).length} configuration(s) · perte ou ✅ à partir du rattrapage choisi → prochaine prédiction du canal`)}
         ${card('#/prev-suit', '⏮️', 'Costume N-1 → +4', `${Object.keys((snapshot.prevSuit || {}).selected || {}).length} source(s) cochée(s) • ${(snapshot.prevSuit || {}).sentCount || 0} prédiction(s) • ${(snapshot.prevSuit || {}).enabled ? 'actif' : 'inactif'}`)}
         ${card('#/miracle', '✨', 'Miracle prediction', `${(snapshot.miracle || {}).inScopeCount || 0} stratégie(s) suivie(s) • ${(snapshot.miracle || {}).sentCount || 0} prédiction(s) • ${(snapshot.miracle || {}).enabled ? 'actif' : 'inactif'}`)}
+        ${card('#/miracle-serie', '🔁', 'Miracle série', `${(snapshot.miracleSerie || {}).inScopeCount || 0} stratégie(s) suivie(s) • ${(snapshot.miracleSerie || {}).activeCount || 0} série(s) en cours • ${(snapshot.miracleSerie || {}).sentCount || 0} prédiction(s) • ${(snapshot.miracleSerie || {}).enabled ? 'actif' : 'inactif'}`)}
       </div>
 
       <div class="home-section-label">Suivi, statistiques et communauté</div>
@@ -2805,6 +2807,9 @@ Faites-en bon usage !
       { g: 'auto', icon: '✨', title: 'Miracle prediction', hash: '#/miracle',
         what: 'Suit les stratégies existantes et n’envoie une prédiction que lorsqu’une stratégie (réglée sur 3 rattrapages) vient de PERDRE : sa prédiction suivante part dans ton canal si le jeu en direct est à 2 numéros du numéro prédit. Après 2 puis 3 pertes consécutives, tu es prévenu en privé et la stratégie est mise en attente. Quand 5 stratégies ou plus prédisent le même numéro et le même costume, l’envoi est immédiat, sans condition.',
         steps: ['Ouvre « Miracle prediction » et choisis le mode : stratégies cochées, compteur parité + analyse fin de numéro, ou tout ce qui prédit sur le site.', 'Renseigne le canal d’envoi (ID), les rattrapages, le format, la proximité et le seuil de consensus, coche « Activer » puis enregistre.'] },
+      { g: 'auto', icon: '🔁', title: 'Miracle série', hash: '#/miracle-serie',
+        what: 'Comme Miracle prediction, mais après la perte d’une stratégie (réglée sur 3 rattrapages) il ne reprend pas une seule prédiction : il prédit la prédiction suivante et la fait vérifier. Si elle a eu ✅0️⃣, il prédit encore la suivante et continue tant que le rattrapage reste ✅0️⃣ ; si elle a eu ✅1️⃣, il continue tant que le rattrapage reste ✅1️⃣. Si la première a eu ✅3️⃣ ou ✅4️⃣, il attend qu’un ✅0️⃣ ou ✅1️⃣ arrive pour commencer. Dès que le rattrapage est différent de la référence, il s’arrête et attend une nouvelle perte (nombre de pertes d’affilée réglable).',
+        steps: ['Ouvre « Miracle série » et choisis le mode : stratégies cochées, compteur parité + analyse fin de numéro, ou tout ce qui prédit sur le site.', 'Renseigne le canal d’envoi (ID), le nombre de pertes d’affilée avant de démarrer une série, les rattrapages, le format et la proximité, coche « Activer » puis enregistre.'] },
       { g: 'auto', icon: '⏮️', title: 'Costume N-1 → +4', hash: '#/prev-suit',
         what: 'Tu coches des stratégies / configurations de tout le site ; le bot observe leurs prédictions. Quand le costume prédit au jeu N est venu au jeu N-1 mais n’est pas sorti au jeu N, il prédit le même costume au jeu N+4 dans le canal (ID) choisi.',
         steps: ['Ouvre « Costume N-1 → +4 », coche les stratégies / configurations à observer.', 'Renseigne le canal d’envoi (ID), le décalage (+4 par défaut), les rattrapages et le format, coche « Activer » puis enregistre.'],
@@ -5025,6 +5030,80 @@ Faites-en bon usage !
       try { await api('/api/miracle/reset', 'POST', {}); await refresh(); miraclePage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
     }
 
+    // « 🔁 Miracle série » (voir miracle-serie.js) : comme Miracle prediction, mais après la perte il enchaîne les prédictions de la stratégie.
+    function miracleSeriePage() {
+      setNav('miracle-serie');
+      const p = snapshot.miracleSerie || {};
+      const src = p.sources || [];
+      const groups = {};
+      src.forEach((x) => { (groups[x.group || 'Autres'] = groups[x.group || 'Autres'] || []).push(x); });
+      const modeSel = p.mode || 'all';
+      const need = p.lossesNeeded ?? 1;
+      const statusBadge = (st) => st === 'gagné' ? '✅ gagné' : st === 'perdu' ? '❌ perdu' : st === 'en attente' ? '⏳ envoyé' : '🚫 annulé';
+      const groupHtml = Object.keys(groups).map((g) => `<details style="margin-top:8px" ${groups[g].some((x) => x.inScope) ? 'open' : ''}><summary><b>${esc(g)}</b> <span class="small muted">— ${groups[g].filter((x) => x.inScope).length}/${groups[g].length} suivie(s)</span></summary>
+          ${modeSel === 'select' ? `<div style="margin:6px 0 4px 10px"><button class="button small ghost" onclick="miracleSerieToggleGroup(${esc(JSON.stringify(g))}, true)">Tout cocher</button> <button class="button small ghost" onclick="miracleSerieToggleGroup(${esc(JSON.stringify(g))}, false)">Tout décocher</button></div>` : ''}
+          ${groups[g].map((x) => `<label class="check" style="display:block;margin-top:4px;${x.inScope ? '' : 'opacity:.5'}"><input type="checkbox" class="mspSrc" data-group="${esc(g)}" data-key="${esc(x.key)}" ${x.selected ? 'checked' : ''} ${modeSel === 'select' ? '' : 'disabled'}> ${esc(x.name)} ${x.parity ? '🔢' : ''} <span class="small muted">— ${esc((x.channels || []).join(', '))} — ${x.followable ? 'rattrapage 3 ✅' : (x.maxR === null || x.maxR === undefined ? 'rattrapage inconnu (ignorée)' : 'rattrapage ' + x.maxR + ' (ignorée)')}</span></label>`).join('')}
+        </details>`).join('');
+      const refLabel = (r) => r === null || r === undefined ? '—' : r === 'L' ? '❌' : '✅' + r + '️⃣';
+      const unitRows = (p.units || []).map((u) => `<tr><td>${esc(u.names || u.chat)}</td><td>${u.active ? '—' : u.lossRun + ' / ' + need}</td><td>${u.active ? (u.waiting ? '👀 attend un ✅0️⃣ ou ✅1️⃣ de la stratégie' : u.armed ? '🎯 prête (prochaine prédiction)' : '🔁 série en cours (prédiction en vérification)') : '⏸️ attend ' + need + ' perte(s) d’affilée'}</td><td>${u.active ? u.count : '—'}</td><td>${u.active ? refLabel(u.ref) : '—'}</td><td>${u.cycles}</td><td>${u.avgToday || '—'} / ${u.avg || '—'}</td></tr>`).join('');
+      $('#app').innerHTML = `<div class="section-head" style="padding-top:20px"><div><span class="eyebrow">Suivi des stratégies</span><h2 style="margin-top:7px">🔁 Miracle série</h2><p class="small">Construit comme Miracle prediction (mêmes modes de suivi, stratégies réglées sur <b>3 rattrapages</b>, proximité de <b>${p.proximity ?? 2}</b> numéro(s)). Après la <b>perte</b> d'une stratégie (${need > 1 ? need + ' pertes d’affilée' : 'dès la 1ʳᵉ perte'}), il prédit sa <b>prédiction suivante</b>, la fait vérifier, puis <b>enchaîne</b> : le rattrapage de la <b>première</b> sert de référence. Si elle a eu <b>✅0️⃣</b>, il prédit la suivante et continue <b>tant que le rattrapage reste ✅0️⃣</b> ; si elle a eu <b>✅1️⃣</b>, il continue tant que le rattrapage reste ✅1️⃣ (idem ✅2️⃣). Si la première a eu <b>✅3️⃣ ou ✅4️⃣</b> (ou ❌), il n'envoie plus rien et <b>attend qu'un ✅0️⃣ ou ✅1️⃣ de la stratégie arrive</b> : ce résultat devient la référence, puis il prédit la suivante. <b>Dès que le rattrapage est différent de la référence, il s'arrête</b> et attend une nouvelle perte. Une seule prédiction à la fois. À 00h00 tout repart de zéro, seule la longueur moyenne des séries est gardée.</p></div></div>
+        <div class="grid two">
+          <div class="card">
+            <h3>Mode de suivi</h3>
+            <label class="check" style="display:block"><input type="radio" name="mspMode" value="select" ${modeSel === 'select' ? 'checked' : ''} onchange="miracleSerieModeChanged()"> 1️⃣ Stratégies / configurations existantes que je coche</label>
+            <label class="check" style="display:block;margin-top:6px"><input type="radio" name="mspMode" value="parity" ${modeSel === 'parity' ? 'checked' : ''} onchange="miracleSerieModeChanged()"> 2️⃣ Uniquement le compteur parité + l'analyse fin de numéro</label>
+            <label class="check" style="display:block;margin-top:6px"><input type="radio" name="mspMode" value="all" ${modeSel === 'all' ? 'checked' : ''} onchange="miracleSerieModeChanged()"> 3️⃣ Toutes les stratégies + tout ce qui prédit sur le site</label>
+            <h3 style="margin-top:16px">Envoi et réglages</h3>
+            <div class="field"><label>ID ou @nom du canal d'envoi</label><input id="mspChannel" value="${esc((p.channels || []).join(', '))}" placeholder="-1001234567890"></div>
+            <div class="field"><label>Pertes d'affilée de la stratégie avant de démarrer une série (1 = dès la perte ; à régler selon ton analyse)</label><input id="mspLosses" type="number" min="1" max="10" value="${need}"></div>
+            <div class="field"><label>Rattrapages des prédictions Miracle série</label><input id="mspMaxR" type="number" min="0" max="9" value="${p.maxR ?? 3}"></div>
+            <div class="field"><label>Format de prédiction (1 → ${esc(String(snapshot.formatCount || 107))})</label><input id="mspFormat" type="number" min="1" max="${esc(String(snapshot.formatCount || 107))}" value="${p.format ?? 107}"></div>
+            <div class="field"><label>Proximité : le jeu en direct doit être à … numéro(s) avant</label><input id="mspProx" type="number" min="1" max="20" value="${p.proximity ?? 2}"></div>
+            <label class="check"><input id="mspEnabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Activer « Miracle série »</label>
+            <div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveMiracleSerie()">Enregistrer</button><button class="button small ghost" onclick="testMiracleSerie()">Envoyer un test</button><button class="button small danger" onclick="resetMiracleSerie()">Remettre à zéro</button></div>
+            ${p.lastError ? `<p class="small" style="color:#f87171">${esc(p.lastError)}</p>` : ''}
+            ${p.lastSkip ? `<p class="small" style="color:#fbbf24">Dernier envoi refusé par le canal ${esc(p.lastSkip.chat)} : ${esc(p.lastSkip.why)}.</p>` : ''}
+            <p class="small" style="margin-top:10px">Jeu en direct : <b>${p.live || '—'}</b> • stratégies suivies : <b>${p.inScopeCount || 0}</b> (dont <b>${p.followableCount || 0}</b> à 3 rattrapages) • séries en cours : <b>${p.activeCount || 0}</b> • prédictions observées : <b>${p.following || 0}</b> • en attente de proximité : <b>${(p.candidates || []).length}</b></p>
+            <p class="small">Envoyées : <b>${p.sentCount || 0}</b> • gagnées <b>${p.won || 0}</b> / perdues <b>${p.lost || 0}</b> (${p.rate || 0} %) • trop tard : ${p.lateSkipped || 0}</p>
+          </div>
+          <div class="card">
+            <h3>Stratégies suivies ${modeSel === 'select' ? '(coche)' : '(selon le mode)'}</h3>
+            <p class="small">🔢 = utilise le compteur parité ou l'analyse fin de numéro. Seules les sources à <b>${p.sourceMaxR ?? 3} rattrapages</b> sont suivies. Le canal d'envoi n'est jamais observé.</p>
+            ${groupHtml || '<p class="small">Aucune stratégie ni configuration avec un canal pour le moment.</p>'}
+            ${modeSel === 'select' ? '<div class="toolbar" style="margin-top:12px"><button class="button small primary" onclick="saveMiracleSerie()">Enregistrer</button></div>' : ''}
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px"><h3>Séries par stratégie</h3>
+          ${unitRows ? `<table class="table"><thead><tr><th>Stratégie (canal)</th><th>Pertes d'affilée</th><th>État</th><th>Prédictions de la série</th><th>Rattrapage de référence</th><th>Séries terminées</th><th>Longueur moyenne jour / gardée</th></tr></thead><tbody>${unitRows}</tbody></table>` : '<p class="small">Aucune stratégie observée pour le moment.</p>'}
+        </div>
+        <div class="card" style="margin-top:16px"><h3>Prédictions Miracle série envoyées</h3>
+          ${(p.recent || []).length ? `<table class="table"><thead><tr><th>Jeu</th><th>Costume</th><th>Origine</th><th>N° dans la série</th><th>État</th><th>Rattrapage</th></tr></thead><tbody>${p.recent.map((e) => `<tr><td>№${e.target}</td><td>${esc(e.suit)}</td><td>🔁 ${esc(e.src || '')}</td><td>${e.position ?? 1}</td><td>${statusBadge(e.status)}</td><td>${e.step ?? 0}/${p.maxR ?? 3}</td></tr>`).join('')}</tbody></table>` : '<p class="small">Aucune prédiction envoyée pour le moment.</p>'}
+        </div>`;
+    }
+    function miracleSerieModeChanged() {
+      const m = document.querySelector('input[name="mspMode"]:checked')?.value;
+      document.querySelectorAll('.mspSrc').forEach((c) => { c.disabled = m !== 'select'; });
+    }
+    function miracleSerieToggleGroup(group, on) { document.querySelectorAll('.mspSrc').forEach((c) => { if (c.dataset.group === group) c.checked = on; }); }
+    async function saveMiracleSerie() {
+      const selected = [...document.querySelectorAll('.mspSrc')].filter((c) => c.checked).map((c) => c.dataset.key);
+      const mode = document.querySelector('input[name="mspMode"]:checked')?.value || 'all';
+      const body = { enabled: $('#mspEnabled')?.checked, mode, channels: val('mspChannel'), lossesNeeded: val('mspLosses'), maxR: val('mspMaxR'), format: val('mspFormat'), proximity: val('mspProx') };
+      if (mode === 'select') body.selected = selected;
+      try {
+        await api('/api/miracle-serie/config', 'POST', body);
+        await refresh(); miracleSeriePage(); toast('« Miracle série » enregistré.');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    async function testMiracleSerie() {
+      try { await saveMiracleSerie(); const r = await api('/api/miracle-serie/test', 'POST', {}); toast(r.ok ? 'Prédiction de test envoyée dans le canal.' : (r.error || 'Échec')); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function resetMiracleSerie() {
+      if (!confirm('Remettre à zéro les statistiques et les séries en cours ?')) return;
+      try { await api('/api/miracle-serie/reset', 'POST', {}); await refresh(); miracleSeriePage(); toast('Remis à zéro.'); } catch (e) { toast(e.message, 'error'); }
+    }
+
     // « Canal Telegram » (voir canal-telegram.js) : un canal = une stratégie ; tous formats et rattrapages uniformisés.
     function canalTelegramPage() {
       setNav('canal-telegram');
@@ -6845,6 +6924,7 @@ Faites-en bon usage !
         else if (h === '#/victoire-vb') victoireVbPage();
         else if (h === '#/prev-suit') prevSuitPage();
         else if (h === '#/miracle') miraclePage();
+        else if (h === '#/miracle-serie') miracleSeriePage();
         else if (h === '#/canal-telegram') canalTelegramPage();
         else if (h === '#/vip') vipPage();
         else if (h === '#/formation') await formationPage();
