@@ -138,6 +138,11 @@ function setStrategyConfig(key, patch = {}) {
     if (patch.pctMin !== undefined) next.pctMin = Math.max(1, Math.min(100, Math.round(Number(patch.pctMin)) || 60));
     if (patch.minN !== undefined) next.minN = Math.max(1, Math.min(5000, parseInt(patch.minN, 10) || 30));
   }
+  // stratégie « Trèfle ×3 » : liste des déclencheurs + créneau de jeux
+  if (key === 'trefleTrio') {
+    if (patch.triggers !== undefined) { const t = strategies.sanitizeTriggers(patch.triggers); next.triggers = t.length ? t : strategies.BY_KEY.trefleTrio.defaults.triggers.slice(); }
+    if (patch.windows !== undefined) { const w = strategies.sanitizeWindows(patch.windows); next.windows = w.length ? w : strategies.BY_KEY.trefleTrio.defaults.windows.map((x) => x.slice()); }
+  }
   // paramètres de la stratégie Pair / Impair (VAR)
   if (patch.startGame !== undefined) next.startGame = Math.max(1, parseInt(patch.startGame, 10) || 1);
   if (patch.varStep !== undefined) next.varStep = Math.max(0, Math.min(99, parseInt(patch.varStep, 10) || 0));

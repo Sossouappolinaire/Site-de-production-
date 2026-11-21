@@ -1591,7 +1591,104 @@ const mama = {
   },
 };
 
-const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois, carteManquante, finNumero, mama];
+
+// ---------------------------------------------------------------------------
+// 16) Trèfle ×3 — déclencheurs fixes + 3 mains avec ♣️ (demande admin, stratégie Christophe)
+// ---------------------------------------------------------------------------
+// Règle : on ne joue que dans des créneaux de jeux (200 → 300 et 1271 → 1371 par défaut) et
+// seulement sur une liste fixe de numéros DÉCLENCHEURS (202 … 298 et 1273 … 1369).
+// Sur un déclencheur N, on observe les 3 jeux N-2, N-1 et N : la main du JOUEUR doit
+// contenir au moins un ♣️ dans CHACUN des trois. Si un seul n'a pas de ♣️ → on ne joue pas
+// et on passe au déclencheur suivant. Si les trois ont du ♣️ → on prédit ♣️ chez le joueur
+// sur le jeu N+1, avec les rattrapages (4 par défaut : N+1 … N+5, puis stop).
+// Gain à n'importe quel niveau (R0, R1, R2…) ou fin des rattrapages → on attend le
+// déclencheur suivant. Tant qu'une prédiction de cette stratégie est en cours, un
+// déclencheur qui tombe dans ses rattrapages est ignoré (un seul cycle à la fois).
+const TREFLE_TRIGGERS_200 = [202, 205, 209, 212, 215, 219, 222, 225, 232, 235, 242, 245, 248, 252, 255, 258,
+  265, 268, 275, 278, 281, 285, 288, 291, 295, 298];
+const TREFLE_WINDOWS = [[200, 300], [1271, 1371]];
+const TREFLE_TRIGGERS = [...TREFLE_TRIGGERS_200, 1273, 1280, 1283, 1286, 1290, 1293, 1296, 1303, 1306, 1313, 1316, 1323,
+  1326, 1329, 1333, 1336, 1339, 1346, 1349, 1356, 1359, 1362, 1366, 1369];
+
+// « 200-300, 1271-1371 » ou [[200,300],[1271,1371]] -> [[200,300],[1271,1371]]
+function sanitizeWindows(input) {
+  const out = [];
+  const add = (a, b) => {
+    a = parseInt(a, 10); b = parseInt(b, 10);
+    if (Number.isFinite(a) && Number.isFinite(b) && a >= 1 && b <= 5000 && a <= b) out.push([a, b]);
+  };
+  if (Array.isArray(input)) { for (const w of input) if (Array.isArray(w)) add(w[0], w[1]); }
+  else for (const m of String(input == null ? '' : input).matchAll(/(\d+)\s*[-–à>]+\s*(\d+)/g)) add(m[1], m[2]);
+  return out;
+}
+
+function sanitizeTriggers(input) {
+  const raw = Array.isArray(input) ? input : String(input == null ? '' : input).split(/[^0-9]+/);
+  const out = [];
+  for (const x of raw) {
+    const n = parseInt(x, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 5000 && !out.includes(n)) out.push(n);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+const trefleTrio = {
+  key: 'trefleTrio',
+  name: 'Trèfle ×3 — déclencheurs fixes (200-300 · 1271-1371)',
+  about:
+    "Deux créneaux : 200 → 300 (26 déclencheurs : 202, 205, 209 … 298) et 1271 → 1371 (24 déclencheurs : 1273, 1280, 1283 … 1369). Sur un déclencheur N, " +
+    "la main du JOUEUR doit avoir au moins un ♣️ dans les trois jeux N-2, N-1 et N. Si l'un des trois n'a pas de ♣️ : " +
+    "on ne joue pas et on passe au déclencheur suivant. Sinon on prédit ♣️ sur N+1, avec rattrapages jusqu'à N+5 " +
+    "(ex. déclencheur 1280 → 1281, 1282 … 1285 puis stop). Gagné (R0, R1, R2…) ou rattrapages épuisés → déclencheur suivant.",
+  defaults: {
+    enabled: false,
+    format: config.DEFAULT_FORMAT,
+    maxR: 4,
+    b: 0,
+    lead: 1,
+    windows: TREFLE_WINDOWS.map((w) => w.slice()),
+    triggers: TREFLE_TRIGGERS.slice(),
+    template: null,
+    channels: [],
+  },
+  usesB: false,
+  source: 'finished',
+  detect(game, cfg, ctx) {
+    if (!game || !game.finished) return null;
+    const n = Number(game.number);
+    if (!Number.isFinite(n)) return null;
+    const list = sanitizeTriggers(cfg && cfg.triggers);
+    const triggers = list.length ? list : TREFLE_TRIGGERS;
+    if (!triggers.includes(n)) return null;
+    let wins = sanitizeWindows(cfg && cfg.windows);
+    if (!wins.length) wins = TREFLE_WINDOWS;
+    if (!wins.some(([a, b]) => n >= a && n <= b)) return null; // hors créneau
+    const predictions = (ctx && ctx.predictions) || [];
+    if (predictions.some((p) => p.strategy === 'trefleTrio' && p.status === 'en attente')) return null; // un seul cycle à la fois
+    const games = (ctx && ctx.games) || new Map();
+    const checked = [];
+    for (const k of [n - 2, n - 1, n]) {
+      const g = k === n ? game : games.get(k);
+      if (!g || !g.finished) return null;          // jeu manquant : on ne devine pas
+      const ps = suitsOf(g.playerSuits);
+      if (ps.length < 2) return null;               // main du joueur illisible
+      if (!ps.includes('♣️')) return null;          // un signal sans ♣️ → on ne joue pas
+      checked.push(k);
+    }
+    const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 1));
+    return {
+      kind: 'suit',
+      target: n + lead,
+      suit: '♣️',
+      label: '♣️',
+      trigger: n,
+      reason: `Déclencheur #N${n} — ♣️ présent chez le joueur sur #N${n - 2}, #N${n - 1} et #N${n} → prédiction ♣️ sur #N${n + lead}`,
+      meta: { checked, lead },
+    };
+  },
+};
+
+const LIST = [costume, dominant, matchnul, parite, absente, carteBanquier, ombre, ombreJoueur, dizaine, absenceJoueur, absenceDecalage, costumeFaible, troisiemeBanquier, collecte, secondeCarte, deuxTrois, carteManquante, finNumero, mama, trefleTrio];
 const BY_KEY = Object.fromEntries(LIST.map((s) => [s.key, s]));
 
 function defaultsFor(key) {
@@ -1672,5 +1769,5 @@ function catalog() {
 module.exports = {
   LIST, BY_KEY, SUITS, INVERSE, MIRROR, weakSuitOf, missingSuitOf, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
   normParity, triggerAt, triggerIndexOf, lastTriggerAtOrBefore, nextTriggerAfter, triggerSequence, varCounterAt,
-  sanitizeAbsenceEntries,
+  sanitizeAbsenceEntries, sanitizeTriggers, sanitizeWindows,
 };

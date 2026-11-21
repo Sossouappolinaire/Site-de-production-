@@ -8,9 +8,9 @@
 // L'ancien DATABASE_URL de Render est IGNORÉ : seule la base Supabase est utilisée.
 'use strict';
 
-const REF = 'hvjgqaxejqnvgvefjhnj';  // v147 : base PRINCIPALE = projet Supabase « tv-kouame » (région eu-west-1)
-const USER = 'site_secours';
-const PASS = 'eybmIUk5vAOuCERMY4FtrYbDKkHohvaI';
+const REF = 'nhsdckpvykikrgsntisw';  // nouvelle base PRINCIPALE = projet Supabase « tv-kouame-2 » (région eu-west-1)
+const USER = 'site_app';
+const PASS = 'JamXumDWvhcC9eJ7QuVMfAKOmbyZw88a';
 
 // Adresses essayées dans l'ordre (la première qui répond est retenue). Le « pooler » est
 // obligatoire sur Render (réseau IPv4) ; la connexion directe est le dernier recours.
