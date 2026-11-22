@@ -1826,7 +1826,7 @@ async function testSend(key, mode = 'published') {
   if (!ids.length) return { ok: false, error: `Aucun canal ${mode === 'published' ? 'public' : mode === 'calc' ? 'du calcul' : 'silencieux'} configuré pour cette stratégie` };
   const cfg = state.strategies[key] || {};
   const preview = fmt.formatPreview(cfg.format, { maxR: cfg.maxR });
-  const text = `🧪 TEST D'ENVOI\n\n🧠 ${def.name}\n🧭 ${mode === 'published' ? 'Canal public' : 'Canal silencieux'}\n\n${preview}\n\nSi tu vois ce message, le routage est correctement configuré. ✅`;
+  const text = `🧪 TEST D'ENVOI\n\n🧠 ${def.name}\n🧭 ${mode === 'published' ? 'Canal public' : mode === 'calc' ? 'Canal du calcul IB × 0,21' : 'Canal silencieux'}\n\n${preview}\n\nSi tu vois ce message, le routage est correctement configuré. ✅`;
   const sent = [];
   const failed = [];
   for (const id of ids) {
