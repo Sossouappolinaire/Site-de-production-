@@ -1003,6 +1003,7 @@ Faites-en bon usage !
           <div class="field"><label>Numéros déclencheurs (séparés par des virgules)</label><textarea id="cfgTriggers" rows="4">${esc((c.triggers || []).join(', '))}</textarea></div>
           <label class="check"><input id="cfgFallback" type="checkbox" ${c.fallbackEnabled ? 'checked' : ''}> Si la condition n'est pas respectée (pas de ♣️ sur N-2, N-1 et N), prédire quand même un autre costume</label>
           <div class="field"><label>Costume de repli</label><select id="cfgFallbackSuit"><option value="♥️" ${c.fallbackSuit !== '♠️' ? 'selected' : ''}>♥️ Cœur</option><option value="♠️" ${c.fallbackSuit === '♠️' ? 'selected' : ''}>♠️ Pique</option></select></div>
+          <label class="check"><input id="cfgBypass" type="checkbox" ${c.bypassGates !== false ? 'checked' : ''}> Envoi direct : ignorer les filtres du canal (« Envoi après perte », mode du jour, ralentisseur, stabilité du jeu)</label>
           <label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
           ${s.sendError ? `<p class="small" style="color:#e5484d">⚠️ Dernier échec d'envoi Telegram : ${esc(s.sendError)}</p>` : ''}
           <p class="small muted">Sur un déclencheur N, la main du joueur doit avoir au moins un ♣️ dans les jeux N-2, N-1 et N. Sinon aucune prédiction : on attend le déclencheur suivant. Sinon ♣️ est prédit sur N+1, avec les rattrapages réglés ci-dessus (4 = jusqu'à N+5).</p>
@@ -1120,7 +1121,7 @@ Faites-en bon usage !
     }
     async function saveTrefleTrio() {
       try {
-        const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), windows: val('cfgWindows'), triggers: val('cfgTriggers'), fallbackEnabled: $('#cfgFallback')?.checked, fallbackSuit: val('cfgFallbackSuit'), publishedChannels: ids(val('pubChannel')) };
+        const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), windows: val('cfgWindows'), triggers: val('cfgTriggers'), fallbackEnabled: $('#cfgFallback')?.checked, fallbackSuit: val('cfgFallbackSuit'), bypassGates: $('#cfgBypass')?.checked, publishedChannels: ids(val('pubChannel')) };
         await api('/api/strategies/trefleTrio', 'POST', patch);
         await refresh(); await strategyPage('trefleTrio'); toast('Réglages enregistrés.');
       } catch (e) { toast(e.message, 'error'); }
