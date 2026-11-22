@@ -1648,6 +1648,8 @@ const trefleTrio = {
     lead: 1,
     windows: TREFLE_WINDOWS.map((w) => w.slice()),
     triggers: TREFLE_TRIGGERS.slice(),
+    fallbackEnabled: false,   // repli : prédire ♥️ ou ♠️ quand la condition ♣️ n'est pas remplie (désactivé par défaut)
+    fallbackSuit: '\u2665\ufe0f',
     template: null,
     channels: [],
   },
@@ -1667,15 +1669,30 @@ const trefleTrio = {
     if (predictions.some((p) => p.strategy === 'trefleTrio' && p.status === 'en attente')) return null; // un seul cycle à la fois
     const games = (ctx && ctx.games) || new Map();
     const checked = [];
+    let condFail = false;
     for (const k of [n - 2, n - 1, n]) {
       const g = k === n ? game : games.get(k);
       if (!g || !g.finished) return null;          // jeu manquant : on ne devine pas
       const ps = suitsOf(g.playerSuits);
       if (ps.length < 2) return null;               // main du joueur illisible
-      if (!ps.includes('♣️')) return null;          // un signal sans ♣️ → on ne joue pas
+      if (!ps.includes('♣️')) condFail = true;      // un jeu sans ♣️ : condition non remplie
       checked.push(k);
     }
     const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 1));
+    if (condFail) {
+      // Repli optionnel (désactivé par défaut) : ♥️ ou ♠️ au lieu de ne rien jouer
+      if (!(cfg && cfg.fallbackEnabled)) return null; // un signal sans ♣️ → on ne joue pas
+      const fb = normSuit(cfg.fallbackSuit) === normSuit('♠️') ? '♠️' : '♥️';
+      return {
+        kind: 'suit',
+        target: n + lead,
+        suit: fb,
+        label: fb,
+        trigger: n,
+        reason: `Déclencheur #N${n} — pas de ♣️ chez le joueur sur #N${n - 2}, #N${n - 1} et #N${n} → prédiction de repli ${fb} sur #N${n + lead}`,
+        meta: { checked, lead, fallback: true },
+      };
+    }
     return {
       kind: 'suit',
       target: n + lead,

@@ -141,6 +141,8 @@ function setStrategyConfig(key, patch = {}) {
   // stratégie « Trèfle ×3 » : liste des déclencheurs + créneau de jeux
   if (key === 'trefleTrio') {
     if (patch.triggers !== undefined) { const t = strategies.sanitizeTriggers(patch.triggers); next.triggers = t.length ? t : strategies.BY_KEY.trefleTrio.defaults.triggers.slice(); }
+    if (patch.fallbackEnabled !== undefined) next.fallbackEnabled = !!patch.fallbackEnabled;
+    if (patch.fallbackSuit !== undefined) next.fallbackSuit = normSuit(patch.fallbackSuit) === normSuit('♠️') ? '♠️' : '♥️';
     if (patch.windows !== undefined) { const w = strategies.sanitizeWindows(patch.windows); next.windows = w.length ? w : strategies.BY_KEY.trefleTrio.defaults.windows.map((x) => x.slice()); }
   }
   // paramètres de la stratégie Pair / Impair (VAR)
