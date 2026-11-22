@@ -1155,7 +1155,7 @@ app.post('/api/strategies/:key', async (req, res) => {
 app.post('/api/strategies/:key/channel', async (req, res) => {
   const key = req.params.key;
   if (!strategies.BY_KEY[key]) return res.status(404).json({ error: 'Stratégie inconnue' });
-  const mode = req.body.mode === 'shadow' ? 'shadow' : 'published';
+  const mode = req.body.mode === 'shadow' ? 'shadow' : (req.body.mode === 'calc' && key === 'trefleTrio') ? 'calc' : 'published';
   const raw = String(req.body.channelId || '').trim();
   if (!raw) return res.status(400).json({ error: "Renseigne l'ID du canal (ex : -1001234567890 ou @moncanal)" });
   if (!botStatus().tokenSet) {
@@ -1171,9 +1171,11 @@ app.post('/api/strategies/:key/channel', async (req, res) => {
   }
   const cfg = setStrategyConfig(key, mode === 'shadow'
     ? { shadowChannelId: String(check.chat.id) }
+    : mode === 'calc' ? { calcChannels: [String(check.chat.id)] }
     : { publishedChannels: [String(check.chat.id)] });
   const notice = await announceConfig(key, mode);
   if (mode === 'shadow') cfg.shadowChannelInfos = notice.channels || [check.chat];
+  else if (mode === 'calc') cfg.calcChannelInfos = notice.channels || [check.chat];
   else cfg.publishedChannelInfos = notice.channels || [check.chat];
   persist();
   if (db.ready) await db.saveStrategy(key, strategies.BY_KEY[key].name, cfg);
@@ -1183,9 +1185,11 @@ app.post('/api/strategies/:key/channel', async (req, res) => {
 // retirer le canal d'une stratégie
 app.delete('/api/strategies/:key/channel', async (req, res) => {
   if (!strategies.BY_KEY[req.params.key]) return res.status(404).json({ error: 'Stratégie inconnue' });
-  const mode = req.body && req.body.mode === 'shadow' ? 'shadow' : 'published';
+  const mode = req.body && req.body.mode === 'shadow' ? 'shadow' : (req.body && req.body.mode === 'calc' && req.params.key === 'trefleTrio') ? 'calc' : 'published';
   const cfg = mode === 'shadow'
     ? setStrategyConfig(req.params.key, { shadowChannels: [], shadowChannelInfos: [] })
+    : mode === 'calc'
+    ? setStrategyConfig(req.params.key, { calcChannels: [], calcChannelInfos: [] })
     : setStrategyConfig(req.params.key, { publishedChannels: [], publishedChannelInfos: [], channels: [], channelInfos: [] });
   persist();
   if (db.ready) await db.saveStrategy(req.params.key, strategies.BY_KEY[req.params.key].name, cfg);
@@ -1195,7 +1199,7 @@ app.delete('/api/strategies/:key/channel', async (req, res) => {
 // test d'envoi réel dans le canal configuré
 app.post('/api/strategies/:key/test', async (req, res) => {
   if (!strategies.BY_KEY[req.params.key]) return res.status(404).json({ error: 'Stratégie inconnue' });
-  const r = await testSend(req.params.key, req.body && req.body.mode === 'shadow' ? 'shadow' : 'published');
+  const r = await testSend(req.params.key, req.body && req.body.mode === 'shadow' ? 'shadow' : (req.body && req.body.mode === 'calc' && req.params.key === 'trefleTrio') ? 'calc' : 'published');
   persist();
   if (!r.ok) return res.status(400).json({ error: r.error || (r.failed || []).map((f) => `${f.id} : ${f.error}`).join(' / ') });
   res.json(r);
@@ -3111,7 +3115,8 @@ app.get('/api/diagnostics/channels', async (req, res) => {
       // les anciennes configurations incomplètes.
       publishedUsesGlobalFallback: publishedUsesFallback,
     };
-    for (const mode of ['published', 'shadow']) {
+    for (const mode of (def.key === 'trefleTrio' ? ['published', 'shadow', 'calc'] : ['published', 'shadow'])) {
+      if (mode === 'calc' && !entry.calc) entry.calc = [];
       const ids = strategyChannels(def.key, mode);
       const checks = await Promise.all(ids.map(async (id) => ({ id, check: bot.tokenSet ? await resolveChatCached(id) : { ok: false, error: 'Aucun token Telegram configuré' } })));
       for (const { id, check } of checks) {
@@ -3120,7 +3125,7 @@ app.get('/api/diagnostics/channels', async (req, res) => {
           : { id, ok: false, error: check.error });
       }
     }
-    entry.ready = !!bot.tokenSet && (entry.published.some((c) => c.ok) || entry.shadow.some((c) => c.ok));
+    entry.ready = !!bot.tokenSet && (entry.published.some((c) => c.ok) || entry.shadow.some((c) => c.ok) || (entry.calc || []).some((c) => c.ok));
     out.push(entry);
   }
 
@@ -3376,9 +3381,9 @@ function channelConfigsFor(channelId) {
   const out = [];
   const has = (arr) => (Array.isArray(arr) ? arr : []).some((x) => sameChannel(x, channelId));
   for (const def of strategies.LIST) {
-    for (const mode of ['published', 'shadow']) {
+    for (const mode of (def.key === 'trefleTrio' ? ['published', 'shadow', 'calc'] : ['published', 'shadow'])) {
       const ids = strategyChannels(def.key, mode);
-      if (has(ids)) out.push({ kind: 'strategy', id: def.key, mode, group: 'Stratégies', name: `${def.name} · ${mode === 'shadow' ? 'silencieux' : 'public'}`, enabled: !!(state.strategies[def.key] || {}).enabled, channels: ids.map(String), page: `#/strategy/${def.key}`, canDelete: false });
+      if (has(ids)) out.push({ kind: 'strategy', id: def.key, mode, group: 'Stratégies', name: `${def.name} · ${mode === 'shadow' ? 'silencieux' : mode === 'calc' ? 'calcul IB × 0,21' : 'public'}`, enabled: !!(state.strategies[def.key] || {}).enabled, channels: ids.map(String), page: `#/strategy/${def.key}`, canDelete: false });
     }
   }
   for (const [panelId, label, mod, page] of CC_TRACKER_PANELS) {
@@ -3640,8 +3645,8 @@ function configuredChannelList() {
   };
   try {
     for (const def of strategies.LIST) {
-      for (const mode of ['published', 'shadow']) {
-        for (const id of strategyChannels(def.key, mode)) add(id, `${def.name}${mode === 'shadow' ? ' · silencieux' : ''}`);
+      for (const mode of (def.key === 'trefleTrio' ? ['published', 'shadow', 'calc'] : ['published', 'shadow'])) {
+        for (const id of strategyChannels(def.key, mode)) add(id, `${def.name}${mode === 'shadow' ? ' · silencieux' : mode === 'calc' ? ' · calcul' : ''}`);
       }
     }
   } catch (_) {}

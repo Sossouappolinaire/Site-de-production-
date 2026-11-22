@@ -1632,6 +1632,17 @@ function sanitizeTriggers(input) {
   return out.sort((a, b) => a - b);
 }
 
+// Calcul « IB × 0,21 » : Z = partie entière de IB × 0,21 ; (IB + Z) % 4 -> 0 ♣️ · 1 ♠️ · 2 ♥️ · 3 ♦️
+// (entiers uniquement : IB × 21 / 100, sans arrondi flottant)
+const CALC_SUITS = ['♣️', '♠️', '♥️', '♦️'];
+function calcSuit(ib) {
+  const n = Math.floor(Number(ib));
+  const z = Math.floor((n * 21) / 100);
+  const sum = n + z;
+  const rest = ((sum % 4) + 4) % 4;
+  return { ib: n, z, sum, rest, suit: CALC_SUITS[rest] };
+}
+
 const trefleTrio = {
   key: 'trefleTrio',
   name: 'Trèfle ×3 — déclencheurs fixes (200-300 · 1271-1371)',
@@ -1639,7 +1650,9 @@ const trefleTrio = {
     "Deux créneaux : 200 → 300 (26 déclencheurs : 202, 205, 209 … 298) et 1271 → 1371 (24 déclencheurs : 1273, 1280, 1283 … 1369). Sur un déclencheur N, " +
     "la main du JOUEUR doit avoir au moins un ♣️ dans les trois jeux N-2, N-1 et N. Si l'un des trois n'a pas de ♣️ : " +
     "on ne joue pas et on passe au déclencheur suivant. Sinon on prédit ♣️ sur N+1, avec rattrapages jusqu'à N+5 " +
-    "(ex. déclencheur 1280 → 1281, 1282 … 1285 puis stop). Gagné (R0, R1, R2…) ou rattrapages épuisés → déclencheur suivant.",
+    "(ex. déclencheur 1280 → 1281, 1282 … 1285 puis stop). Gagné (R0, R1, R2…) ou rattrapages épuisés → déclencheur suivant. " +
+    "Option « calcul IB × 0,21 » : si elle est activée, TOUS les jeux en direct deviennent des déclencheurs ; le costume à prédire est celui du calcul " +
+    "((IB + partie entière de IB × 0,21) % 4 : 0 ♣️, 1 ♠️, 2 ♥️, 3 ♦️), prédit sur N+1 seulement s'il est sorti chez le joueur sur N-2, N-1 et N.",
   defaults: {
     enabled: false,
     format: config.DEFAULT_FORMAT,
@@ -1652,6 +1665,8 @@ const trefleTrio = {
     fallbackSuit: '\u2665\ufe0f',
     template: null,
     channels: [],
+    calcChannels: [],         // canal utilisé quand le calcul IB × 0,21 est activé (vide = on garde le canal des déclencheurs fixes)
+    useCalc: false,           // false = déclencheurs fixes (comportement d'origine) ; true = calcul IB × 0,21 sur chaque jeu en direct
     bypassGates: true,        // envoi direct : ignore « Envoi après perte », mode du jour et ralentisseur du canal
   },
   usesB: false,
@@ -1662,7 +1677,8 @@ const trefleTrio = {
     if (!Number.isFinite(n)) return null;
     const list = sanitizeTriggers(cfg && cfg.triggers);
     const triggers = list.length ? list : TREFLE_TRIGGERS;
-    if (!triggers.includes(n)) return null;
+    const useCalc = !!(cfg && cfg.useCalc);
+    if (!useCalc && !triggers.includes(n)) return null; // calcul activé : tous les jeux sont déclencheurs
     let wins = sanitizeWindows(cfg && cfg.windows);
     if (!wins.length) wins = TREFLE_WINDOWS;
     if (!wins.some(([a, b]) => n >= a && n <= b)) return null; // hors créneau
@@ -1671,15 +1687,32 @@ const trefleTrio = {
     const games = (ctx && ctx.games) || new Map();
     const checked = [];
     let condFail = false;
+    // costume à vérifier : ♣️ (déclencheurs fixes) ou costume du calcul IB × 0,21 sur le jeu N
+    const calc = useCalc ? calcSuit(n) : null;
+    const want = useCalc ? calc.suit : '♣️';
     for (const k of [n - 2, n - 1, n]) {
       const g = games.get(k) || (k === n ? game : null);
       if (!g || !g.finished || g.complete === false) return null; // jeu manquant ou incomplet : on ne devine pas
       const ps = suitsOf(g.playerSuits);
       if (ps.length < 2) return null;               // main du joueur illisible
-      if (!ps.includes('♣️')) condFail = true;      // un jeu sans ♣️ : condition non remplie
+      if (!ps.includes(want)) condFail = true;      // un jeu sans le costume attendu : condition non remplie
       checked.push(k);
     }
     const lead = Math.max(1, Math.min(20, parseInt(cfg && cfg.lead, 10) || 1));
+    if (useCalc) {
+      // Calcul activé : pas de repli — on ne prédit que si le costume du calcul est sorti sur N-2, N-1 et N
+      if (condFail) return null;
+      const detail = `${calc.ib} + ${calc.z} = ${calc.sum}, ${calc.sum} % 4 = ${calc.rest}`;
+      return {
+        kind: 'suit',
+        target: n + lead,
+        suit: want,
+        label: want,
+        trigger: n,
+        reason: `Calcul IB×0,21 sur #N${n} (${detail} → ${want}) — ${want} présent chez le joueur sur #N${n - 2}, #N${n - 1} et #N${n} → prédiction ${want} sur #N${n + lead}`,
+        meta: { checked, lead, calc },
+      };
+    }
     if (condFail) {
       // Repli optionnel (désactivé par défaut) : ♥️ ou ♠️ au lieu de ne rien jouer
       if (!(cfg && cfg.fallbackEnabled)) return null; // un signal sans ♣️ → on ne joue pas
@@ -1787,5 +1820,5 @@ function catalog() {
 module.exports = {
   LIST, BY_KEY, SUITS, INVERSE, MIRROR, weakSuitOf, missingSuitOf, normSuit, suitsOf, suitForNumber, dominantOf, defaultsFor, catalog,
   normParity, triggerAt, triggerIndexOf, lastTriggerAtOrBefore, nextTriggerAfter, triggerSequence, varCounterAt,
-  sanitizeAbsenceEntries, sanitizeTriggers, sanitizeWindows,
+  sanitizeAbsenceEntries, sanitizeTriggers, sanitizeWindows, calcSuit,
 };

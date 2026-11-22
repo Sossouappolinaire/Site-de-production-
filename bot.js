@@ -1692,7 +1692,7 @@ async function sendBilan(key, snapshot) {
   // (voir plus bas) — sans lui (appel manuel /bilan sur UNE stratégie via
   // le panneau admin), on retombe sur l'état live, comportement inchangé.
   const text = bilanText(key, snapshot);
-  for (const id of strategyChannels(key)) {
+  for (const id of strategyChannels(key, 'active')) {
     try { await sender.sendMessage(id, text); countSent(key); }
     catch (e) { console.error('Bilan non envoyé', id, e.message); }
   }
@@ -1763,7 +1763,7 @@ async function announceConfig(key, mode = 'published') {
   const cfg = state.strategies[key] || {};
   const ids = strategyChannels(key, mode);
   if (!def) return { ok: false, error: 'Stratégie inconnue' };
-  if (!ids.length) return { ok: false, error: `Aucun canal ${mode === 'published' ? 'public' : 'silencieux'} configuré pour cette stratégie` };
+  if (!ids.length) return { ok: false, error: `Aucun canal ${mode === 'published' ? 'public' : mode === 'calc' ? 'du calcul' : 'silencieux'} configuré pour cette stratégie` };
   const sender = senderFor();
   if (!sender) return { ok: false, error: "Aucun token API configuré dans les réglages" };
 
@@ -1783,8 +1783,8 @@ async function announceConfig(key, mode = 'published') {
       `🤖 Bot : @${state.botUsername || 'bot'} (token des réglages)\n` +
       `🎯 Format ${cfg.format} • +${cfg.maxR} rattrapage(s)\n` +
       `📊 Bilan automatique : ${cfg.bilan === false ? 'non' : 'oui'}\n` +
-      `🧭 Routage : ${mode === 'published' ? 'prédictions activées' : 'prédictions silencieuses'}\n\n` +
-      `Ce canal recevra désormais les ${mode === 'published' ? 'prédictions publiées' : 'prédictions silencieuses'} de cette stratégie. 🚀`;
+      `🧭 Routage : ${mode === 'published' ? 'prédictions activées' : mode === 'calc' ? 'prédictions du calcul IB × 0,21' : 'prédictions silencieuses'}\n\n` +
+      `Ce canal recevra désormais les ${mode === 'published' ? 'prédictions publiées' : mode === 'calc' ? 'prédictions du mode calcul IB × 0,21' : 'prédictions silencieuses'} de cette stratégie. 🚀`;
     try {
       // l'envoi est tenté même si getChat a échoué : certains canaux ne
       // répondent pas à getChat mais acceptent parfaitement les messages.
@@ -1823,7 +1823,7 @@ async function testSend(key, mode = 'published') {
   const sender = senderFor();
   if (!sender) return { ok: false, error: "Aucun token API configuré dans les réglages" };
   const ids = strategyChannels(key, mode);
-  if (!ids.length) return { ok: false, error: `Aucun canal ${mode === 'published' ? 'public' : 'silencieux'} configuré pour cette stratégie` };
+  if (!ids.length) return { ok: false, error: `Aucun canal ${mode === 'published' ? 'public' : mode === 'calc' ? 'du calcul' : 'silencieux'} configuré pour cette stratégie` };
   const cfg = state.strategies[key] || {};
   const preview = fmt.formatPreview(cfg.format, { maxR: cfg.maxR });
   const text = `🧪 TEST D'ENVOI\n\n🧠 ${def.name}\n🧭 ${mode === 'published' ? 'Canal public' : 'Canal silencieux'}\n\n${preview}\n\nSi tu vois ce message, le routage est correctement configuré. ✅`;
@@ -1871,7 +1871,7 @@ async function announceMainBot() {
   if (!sender) return { ok: false, error: 'Aucun token API configuré' };
   const ids = [...new Set([
     ...(state.activeChannels || []),
-    ...strategies.LIST.flatMap((d) => strategyChannels(d.key)),
+    ...strategies.LIST.flatMap((d) => [...strategyChannels(d.key), ...strategyChannels(d.key, 'calc')]),
   ])];
   if (!ids.length) return { ok: false, error: "Token enregistré. Configure maintenant un ID de canal pour recevoir les messages." };
   const text =
@@ -1929,7 +1929,7 @@ async function broadcast(pred) {
     return;
   }
   pred.silent = false;
-  const ids = strategyChannels(pred.strategy);
+  const ids = strategyChannels(pred.strategy, 'active'); // « Trèfle ×3 » : canal du calcul si l'option est activée, sinon canal des déclencheurs fixes
   if (!ids.length) { state.sendErrors[pred.strategy] = 'Aucun canal configuré'; return; }
   await sendPrediction(pred, sender, ids);
   // panneau « Prédit » : reprise si la stratégie est certifiée 100%

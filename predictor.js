@@ -75,6 +75,7 @@ function initStrategies() {
       'silenceChannels', 'silenceChannelInfos']) delete cur[f];
     if (s.key === 'ombre') { cur.silent = true; cur.autoUnlockMin = 0; } else cur.silent = false;
     // « Trèfle ×3 » : canal public UNIQUEMENT — ni canal silencieux, ni déclencheur automatique (qui retenait les envois)
+    if (s.key === PUBLIC_ONLY_KEY) { if (!Array.isArray(cur.calcChannels)) cur.calcChannels = []; cur.useCalc = !!cur.useCalc; }
     if (s.key === PUBLIC_ONLY_KEY) { cur.silent = false; cur.autoEnabled = false; cur.shadowChannels = []; cur.shadowChannelInfos = []; }
   }
   syncCostume();
@@ -146,6 +147,9 @@ function setStrategyConfig(key, patch = {}) {
   if (key === 'trefleTrio') {
     if (patch.triggers !== undefined) { const t = strategies.sanitizeTriggers(patch.triggers); next.triggers = t.length ? t : strategies.BY_KEY.trefleTrio.defaults.triggers.slice(); }
     if (patch.fallbackEnabled !== undefined) next.fallbackEnabled = !!patch.fallbackEnabled;
+    if (patch.useCalc !== undefined) next.useCalc = !!patch.useCalc; // calcul IB × 0,21 : tous les jeux en direct sont déclencheurs
+    if (patch.calcChannels !== undefined) next.calcChannels = parseChannels(patch.calcChannels); // canal utilisé quand le calcul IB × 0,21 est ACTIVÉ
+    if (patch.calcChannelInfos !== undefined) next.calcChannelInfos = Array.isArray(patch.calcChannelInfos) ? patch.calcChannelInfos : [];
     if (patch.bypassGates !== undefined) next.bypassGates = !!patch.bypassGates;
     if (patch.fallbackSuit !== undefined) next.fallbackSuit = normSuit(patch.fallbackSuit) === normSuit('♠️') ? '♠️' : '♥️';
     if (patch.windows !== undefined) { const w = strategies.sanitizeWindows(patch.windows); next.windows = w.length ? w : strategies.BY_KEY.trefleTrio.defaults.windows.map((x) => x.slice()); }
@@ -271,6 +275,15 @@ function strategyChannels(key, mode = 'published') {
   // `initStrategies()` migre déjà l'ancien champ `channels` vers
   // `publishedChannels`; il n'y a donc plus besoin d'un fallback implicite.
   if (!c) return [];
+  // « Trèfle ×3 » : deux canaux selon l'option « calcul IB × 0,21 »
+  //   'calc'   -> canal du mode calcul (option ACTIVÉE)
+  //   'active' -> canal réellement utilisé pour envoyer : canal du calcul si l'option est activée
+  //               ET qu'il est renseigné, sinon le canal des déclencheurs fixes
+  if (key === 'trefleTrio') {
+    const calc = Array.isArray(c.calcChannels) ? c.calcChannels : [];
+    if (mode === 'calc') return calc;
+    if (mode === 'active' && c.useCalc && calc.length) return calc;
+  }
   const configured = Array.isArray(c.publishedChannels)
     ? c.publishedChannels
     : Array.isArray(c.channels) ? c.channels : [];
@@ -1529,7 +1542,7 @@ function evaluate() {
       // (strategies.js/collecte) : le nombre de rattrapages suit le conseil
       // de Formation (formationLength) de la stratégie SOURCE relayée,
       // jamais un réglage indépendant de la Collecte.
-      maxR: hit.maxR != null ? hit.maxR : channelUniform.maxRFor([...strategyChannels(def.key), ...strategyChannels(def.key, 'shadow')], cfg.maxR),
+      maxR: hit.maxR != null ? hit.maxR : channelUniform.maxRFor([...strategyChannels(def.key, 'active'), ...strategyChannels(def.key, 'shadow')], cfg.maxR),
       counter: hit.counter != null ? hit.counter : null,
       b: cfg.b || 0,
       format: hit.format || cfg.format,
