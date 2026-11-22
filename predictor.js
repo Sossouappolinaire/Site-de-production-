@@ -142,6 +142,7 @@ function setStrategyConfig(key, patch = {}) {
   if (key === 'trefleTrio') {
     if (patch.triggers !== undefined) { const t = strategies.sanitizeTriggers(patch.triggers); next.triggers = t.length ? t : strategies.BY_KEY.trefleTrio.defaults.triggers.slice(); }
     if (patch.fallbackEnabled !== undefined) next.fallbackEnabled = !!patch.fallbackEnabled;
+    if (patch.bypassGates !== undefined) next.bypassGates = !!patch.bypassGates;
     if (patch.fallbackSuit !== undefined) next.fallbackSuit = normSuit(patch.fallbackSuit) === normSuit('♠️') ? '♠️' : '♥️';
     if (patch.windows !== undefined) { const w = strategies.sanitizeWindows(patch.windows); next.windows = w.length ? w : strategies.BY_KEY.trefleTrio.defaults.windows.map((x) => x.slice()); }
   }
@@ -1225,7 +1226,9 @@ function registerGames(games) {
     if (prev && prev.finished && prev.complete && !(g.finished && g.complete)) continue;
     if (prev && prev.complete && !g.complete) continue;
     state.games.set(g.number, g);
-    if (g.finished && (!prev || !prev.finished) && !baseline) onFinished(g);
+    // CORRECTIF : un tour d'abord reçu « terminé » mais sans ses cartes est réévalué quand il devient complet
+    const becameComplete = !!prev && prev.finished && prev.complete === false && g.finished && g.complete !== false;
+    if (g.finished && (!prev || !prev.finished || becameComplete) && !baseline) onFinished(g);
   }
   if (baseline) state.baselineNext = false;
   if (state.games.size > GAMES_KEPT) {

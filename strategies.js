@@ -1652,6 +1652,7 @@ const trefleTrio = {
     fallbackSuit: '\u2665\ufe0f',
     template: null,
     channels: [],
+    bypassGates: true,        // envoi direct : ignore « Envoi après perte », mode du jour et ralentisseur du canal
   },
   usesB: false,
   source: 'finished',
@@ -1671,8 +1672,8 @@ const trefleTrio = {
     const checked = [];
     let condFail = false;
     for (const k of [n - 2, n - 1, n]) {
-      const g = k === n ? game : games.get(k);
-      if (!g || !g.finished) return null;          // jeu manquant : on ne devine pas
+      const g = games.get(k) || (k === n ? game : null);
+      if (!g || !g.finished || g.complete === false) return null; // jeu manquant ou incomplet : on ne devine pas
       const ps = suitsOf(g.playerSuits);
       if (ps.length < 2) return null;               // main du joueur illisible
       if (!ps.includes('♣️')) condFail = true;      // un jeu sans ♣️ : condition non remplie

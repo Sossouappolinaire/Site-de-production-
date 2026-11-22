@@ -377,24 +377,28 @@ function installChannelGuard(inst) {
   const edit = inst.editMessageText.bind(inst);
   inst.sendMessageUnguarded = send;
   const doSend = function guardedSend(chatId, rest, fromQueue) {
+    // option « envoi direct » (ex. Trèfle ×3) : ignore les filtres de canal (après perte, mode du jour, ralentisseur)
+    let bypass = false;
+    if (rest[1] && rest[1].__bypassGates) { bypass = true; const o = { ...rest[1] }; delete o.__bypassGates; rest = [rest[0], o, ...rest.slice(2)]; }
     // « Canal Telegram » (channel-uniform.js) : prédiction réécrite dans le format imposé au canal coché (jamais bloquant : sinon message d'origine)
     if (!fromQueue) { const u = channelUniform.rewrite(chatId, rest[0], rest[1]); if (u) rest = [u.text, u.opts, ...rest.slice(2)]; }
-    if (predictionControl.isChannelPaused(chatId) || gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
-      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
+    if (predictionControl.isChannelPaused(chatId)) return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, why: 'canal arrêté par /stop (tapez /start dans le canal)' });
+    if (!bypass && gameStability.isBlocked(chatId)) { // arrêt du canal OU jeu instable (voir game-stability.js)
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, why: 'jeu instable : canal bloqué par « Stabilité du jeu »' });
     }
     // « Envoi après perte » par canal (channel-loss-gate.js) : planning de l'Excel ; une prédiction est retenue tant qu'aucune perte n'a eu lieu dans le canal
     // + « Canal Telegram » (channel-uniform.js) : mode du jour du canal (favorable / instable 2 = 1 perte / instable 1 = 2 pertes)
-    if (!fromQueue && (channelLossGate.shouldBlock(chatId, rest[0]) || channelUniform.shouldBlock(chatId, rest[0]))) {
-      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, gated: true });
+    if (!fromQueue && !bypass && (channelLossGate.shouldBlock(chatId, rest[0]) || channelUniform.shouldBlock(chatId, rest[0]))) {
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, gated: true, why: 'retenue par « Envoi après perte » ou le mode du jour du canal' });
     }
     if (!fromQueue && isRecentDuplicate(chatId, rest[0])) { // même message, même canal, quelques secondes plus tôt
       state.dupSkipped = (state.dupSkipped || 0) + 1;
-      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true });
+      return Promise.resolve({ message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, why: 'doublon (même message envoyé il y a quelques secondes)' });
     }
     // Anti-doublon persistant (send-dedupe.js) : même message ou même jeu + costume déjà envoyé dans ce canal → ignoré (réservation en base)
     const go = (ddKeys) => {
     // « Ralentisseur » (slow-mode.js) : canal ralenti + jeu futur dont le précédent n'a pas commencé → message retenu, envoi automatique plus tard
-    if (!fromQueue && slowMode.shouldHold(chatId, rest[0])) return Promise.resolve(slowMode.hold(chatId, rest));
+    if (!fromQueue && !bypass && slowMode.shouldHold(chatId, rest[0])) return Promise.resolve(slowMode.hold(chatId, rest));
     // prédiction « en cours » → animation du statut (status-animator.js)
     return Promise.resolve(send(chatId, ...rest)).then((m) => {
       try { statusAnimator.maybeTrack(edit, chatId, m, rest[0], rest[1]); } catch (_) { /* l'animation ne doit jamais bloquer l'envoi */ }
@@ -422,7 +426,7 @@ function installChannelGuard(inst) {
     return sendDedupe.claim(chatId, rest[0]).then((c) => {
       if (!c.ok) {
         state.dupSkipped = (state.dupSkipped || 0) + 1;
-        return { message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, duplicate: true };
+        return { message_id: null, chat: { id: chatId }, date: Math.floor(Date.now() / 1000), skipped: true, duplicate: true, why: 'déjà envoyée dans ce canal (anti-doublon)' };
       }
       return go(c.keys);
     });
@@ -1959,6 +1963,9 @@ function ordinalFr(n) {
 async function sendPrediction(pred, sender, ids) {
   state.sendErrors[pred.strategy] = null;
   const { text, parse_mode } = predictionText(pred);
+  const stratCfgSend = state.strategies[pred.strategy] || {};
+  const sendOpts = { ...(parse_mode ? { parse_mode } : {}), ...(stratCfgSend.bypassGates ? { __bypassGates: true } : {}) };
+  const blocked = [];
   for (const id of [...new Set(ids)]) {
     if (predictionControl.isPaused()) {
       pred.silent = true;
@@ -1966,17 +1973,21 @@ async function sendPrediction(pred, sender, ids) {
       break;
     }
     try {
-      const m = await sender.sendMessage(id, text, parse_mode ? { parse_mode } : {});
+      const m = await sender.sendMessage(id, text, sendOpts);
+      if (m && m.skipped && !m.deferred) blocked.push(`${id} : ${m.why || 'retenue par un filtre du canal'}`);
       if (m && m.gated) { // retenue par « Envoi après perte » : ni publiée, ni comptée ; on garde seulement le canal pour suivre son résultat
         (pred.gatedChannels = pred.gatedChannels || []).push(id);
         continue;
       }
+      if (m && m.skipped && !m.deferred) continue; // rien n'est parti : ne pas compter comme envoyée
       pred.messages.push({ chatId: id, messageId: m.message_id });
       countSent(pred.strategy);
     } catch (e) {
       state.sendErrors[pred.strategy] = `${id} : ${e.message}`;
     }
   }
+  if (blocked.length && !state.sendErrors[pred.strategy]) state.sendErrors[pred.strategy] = `Prédiction #${pred.target} non envoyée — ${blocked.join(' / ')}`;
+  if (blocked.length) pred.blockedReason = blocked.join(' / ');
 }
 
 async function updateResult(pred) {
