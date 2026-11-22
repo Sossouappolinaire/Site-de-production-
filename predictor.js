@@ -53,6 +53,8 @@ const state = {
 // ---------------------------------------------------------------------------
 // Configuration des stratégies
 // ---------------------------------------------------------------------------
+const PUBLIC_ONLY_KEY = 'trefleTrio'; // stratégie qui n'a qu'un canal public (jamais de silencieux)
+
 function initStrategies() {
   for (const s of strategies.LIST) {
     const def = strategies.defaultsFor(s.key);
@@ -72,6 +74,8 @@ function initStrategies() {
       'silenceRatCount', 'silenceOffset', 'silenceInterval', 'silenceCount',
       'silenceChannels', 'silenceChannelInfos']) delete cur[f];
     if (s.key === 'ombre') { cur.silent = true; cur.autoUnlockMin = 0; } else cur.silent = false;
+    // « Trèfle ×3 » : canal public UNIQUEMENT — ni canal silencieux, ni déclencheur automatique (qui retenait les envois)
+    if (s.key === PUBLIC_ONLY_KEY) { cur.silent = false; cur.autoEnabled = false; cur.shadowChannels = []; cur.shadowChannelInfos = []; }
   }
   syncCostume();
   return state.strategies;
@@ -189,6 +193,7 @@ function setStrategyConfig(key, patch = {}) {
   }
   // déclencheur automatique (perte / rattrapage + nombre de prédictions)
   if (patch.autoEnabled !== undefined) next.autoEnabled = key === 'ombre' ? false : !!patch.autoEnabled;
+  if (key === PUBLIC_ONLY_KEY) next.autoEnabled = false; // jamais de déclencheur automatique : tout part dans le canal public
   if (patch.autoTrigger !== undefined) next.autoTrigger = patch.autoTrigger === 'rattrapage' ? 'rattrapage' : 'perte';
   if (patch.autoRattrapage !== undefined) next.autoRattrapage = Math.max(1, Math.min(9, parseInt(patch.autoRattrapage, 10) || 1));
   if (patch.autoSkip !== undefined) next.autoSkip = Math.max(0, Math.min(20, parseInt(patch.autoSkip, 10) || 0));
@@ -207,7 +212,7 @@ function setStrategyConfig(key, patch = {}) {
       next.publishedChannelInfos = [];
     }
   }
-  if (key === RUN_KEY) { next.shadowChannels = []; next.shadowChannelInfos = []; } // pas de canal silencieux pour cette stratégie
+  if (key === RUN_KEY || key === PUBLIC_ONLY_KEY) { next.shadowChannels = []; next.shadowChannelInfos = []; } // pas de canal silencieux pour cette stratégie
   else   if (patch.shadowChannels !== undefined || patch.shadowChannelId !== undefined) {
     const value = patch.shadowChannels !== undefined ? patch.shadowChannels : patch.shadowChannelId;
     next.shadowChannels = parseChannels(value);
@@ -909,6 +914,7 @@ function runView(key) {
 function canSend(key) {
   const cfg = state.strategies[key];
   if (!cfg) return true;
+  if (key === PUBLIC_ONLY_KEY) return true; // canal public uniquement : jamais de routage silencieux
   if (key === RUN_KEY && runOn(cfg)) return runState(key).phase !== 'silent'; // série puis pause (voir ci-dessus)
   // « ombre » : seul le mode silencieux 1 décide de l'envoi. Le déclencheur
   // automatique ne s'applique pas à cette stratégie (elle n'a qu'un seul
