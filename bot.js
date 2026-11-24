@@ -2062,6 +2062,7 @@ async function tick() {
     await raceTimeout(ensureDb(), 30000, 'base de données');
     const games = await raceTimeout(api.fetchGames(), FETCH_MAX_MS, 'API 1xbet');
     state.lastError = null;
+    try { db.noteFeed(Array.isArray(games) ? games.length : 0, Array.isArray(games) && games.length ? Math.max(...games.map((x) => x.number)) : null); } catch (_) { /* statut seulement */ }
     registerGames(games);
 
     // CORRECTIF « bilan pendant l'envoi des prédictions / un bilan par jour » :

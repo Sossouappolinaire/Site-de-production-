@@ -76,6 +76,14 @@ function initStrategies() {
     if (s.key === 'ombre') { cur.silent = true; cur.autoUnlockMin = 0; } else cur.silent = false;
     // « Trèfle ×3 » : canal public UNIQUEMENT — ni canal silencieux, ni déclencheur automatique (qui retenait les envois)
     if (s.key === PUBLIC_ONLY_KEY) { if (!Array.isArray(cur.calcChannels)) cur.calcChannels = []; cur.useCalc = !!cur.useCalc; if (!Array.isArray(cur.mirrorChannels)) cur.mirrorChannels = []; cur.mirrorEnabled = !!cur.mirrorEnabled; }
+    if (s.key === PUBLIC_ONLY_KEY) {
+      cur.fallbackEnabled = false; // v151 : ♣️ uniquement
+      if (!cur.triggersV151) { // une seule fois : déclencheurs et créneaux fournis par l'admin (26 + 24 numéros)
+        cur.triggers = strategies.BY_KEY.trefleTrio.defaults.triggers.slice();
+        cur.windows = strategies.BY_KEY.trefleTrio.defaults.windows.map((x) => x.slice());
+        cur.triggersV151 = true;
+      }
+    }
     if (s.key === PUBLIC_ONLY_KEY) { cur.silent = false; cur.autoEnabled = false; cur.shadowChannels = []; cur.shadowChannelInfos = []; }
   }
   syncCostume();
@@ -146,7 +154,7 @@ function setStrategyConfig(key, patch = {}) {
   // stratégie « Trèfle ×3 » : liste des déclencheurs + créneau de jeux
   if (key === 'trefleTrio') {
     if (patch.triggers !== undefined) { const t = strategies.sanitizeTriggers(patch.triggers); next.triggers = t.length ? t : strategies.BY_KEY.trefleTrio.defaults.triggers.slice(); }
-    if (patch.fallbackEnabled !== undefined) next.fallbackEnabled = !!patch.fallbackEnabled;
+    next.fallbackEnabled = false; // v151 : plus de costume de repli, ♣️ uniquement
     if (patch.useCalc !== undefined) next.useCalc = !!patch.useCalc; // calcul IB × 0,21 : tous les jeux en direct sont déclencheurs
     if (patch.calcChannels !== undefined) next.calcChannels = parseChannels(patch.calcChannels); // canal utilisé quand le calcul IB × 0,21 est ACTIVÉ
     if (patch.calcChannelInfos !== undefined) next.calcChannelInfos = Array.isArray(patch.calcChannelInfos) ? patch.calcChannelInfos : [];

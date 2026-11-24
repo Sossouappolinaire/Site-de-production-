@@ -1661,7 +1661,7 @@ const trefleTrio = {
     lead: 1,
     windows: TREFLE_WINDOWS.map((w) => w.slice()),
     triggers: TREFLE_TRIGGERS.slice(),
-    fallbackEnabled: false,   // repli : prédire ♥️ ou ♠️ quand la condition ♣️ n'est pas remplie (désactivé par défaut)
+    fallbackEnabled: false,   // retiré (v151) : calcul désactivé = ♣️ uniquement, jamais d'autre costume
     fallbackSuit: '\u2665\ufe0f',
     template: null,
     channels: [],
@@ -1678,7 +1678,7 @@ const trefleTrio = {
     const n = Number(game.number);
     if (!Number.isFinite(n)) return null;
     const list = sanitizeTriggers(cfg && cfg.triggers);
-    const triggers = list.length ? list : TREFLE_TRIGGERS;
+    const triggers = list.length ? list : TREFLE_TRIGGERS; // calcul désactivé : liste des déclencheurs fixes (202…298 · 1273…1369)
     const useCalc = !!(cfg && cfg.useCalc);
     if (!useCalc && !triggers.includes(n)) return null; // calcul activé : tous les jeux sont déclencheurs
     let wins = sanitizeWindows(cfg && cfg.windows);
@@ -1715,20 +1715,8 @@ const trefleTrio = {
         meta: { checked, lead, calc },
       };
     }
-    if (condFail) {
-      // Repli optionnel (désactivé par défaut) : ♥️ ou ♠️ au lieu de ne rien jouer
-      if (!(cfg && cfg.fallbackEnabled)) return null; // un signal sans ♣️ → on ne joue pas
-      const fb = normSuit(cfg.fallbackSuit) === normSuit('♠️') ? '♠️' : '♥️';
-      return {
-        kind: 'suit',
-        target: n + lead,
-        suit: fb,
-        label: fb,
-        trigger: n,
-        reason: `Déclencheur #N${n} — pas de ♣️ chez le joueur sur #N${n - 2}, #N${n - 1} et #N${n} → prédiction de repli ${fb} sur #N${n + lead}`,
-        meta: { checked, lead, fallback: true },
-      };
-    }
+    // Calcul désactivé : déclencheurs fixes, TRÈFLE uniquement — si ♣️ manque chez le joueur sur N-2, N-1 ou N, on ne joue pas
+    if (condFail) return null;
     return {
       kind: 'suit',
       target: n + lead,

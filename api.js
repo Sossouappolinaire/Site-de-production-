@@ -136,7 +136,8 @@ function parseChamp(data) {
       playerCards: cards.player.length,
       bankerCards: cards.banker.length,
       dealing: cards.player.length > 0 || cards.banker.length > 0,
-      winner: winnerOf(scS),
+      winner: winnerOf(scS) || (finished && playerValue != null && bankerValue != null
+        ? (playerValue === bankerValue ? 'Égalité' : (playerValue > bankerValue ? 'Joueur' : 'Banquier')) : null),
       phase: ph,
       finished,
       // CORRECTIF « jeux sautés » : un tour n'est exploitable pour la

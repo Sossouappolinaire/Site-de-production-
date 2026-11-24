@@ -230,6 +230,7 @@ function status() {
   const shown = t.url || (t.i === 0 ? databaseUrl() : backupUrl());
   return {
     configured: !!(databaseUrl() || backupUrl()),
+    games: { ...gameSave, pending: pendingGames.length },
     ready,
     error: lastError,
     url: mask(shown),
@@ -450,12 +451,36 @@ let savedSinceTrim = 0;
 async function trimGames() {
   return q(`DELETE FROM games WHERE number NOT IN (SELECT number FROM games ORDER BY played_at DESC, number DESC LIMIT ${GAMES_KEPT})`);
 }
+// v152 : état du dernier enregistrement de jeu (visible dans status().games) + file d'attente des jeux non enregistrés
+const gameSave = { lastNumber: null, lastOkAt: null, lastTryAt: null, lastError: null, okCount: 0, failCount: 0, pending: 0, feedAt: null, feedCount: 0, feedMax: null };
+const pendingGames = [];
+let flushingGames = false;
+function noteFeed(count, maxNumber) { gameSave.feedAt = new Date().toISOString(); gameSave.feedCount = count; gameSave.feedMax = maxNumber; }
+async function flushPendingGames() {
+  if (flushingGames) return;
+  flushingGames = true;
+  try {
+    while (pendingGames.length) {
+      const g = pendingGames[0];
+      gameSave.lastTryAt = new Date().toISOString();
+      const r = await saveGameRaw(g);
+      if (!r) { gameSave.lastError = lastError || (ready ? 'écriture refusée' : 'aucune base utilisable'); gameSave.failCount++; break; }
+      pendingGames.shift();
+      gameSave.lastNumber = g.number; gameSave.lastOkAt = new Date().toISOString(); gameSave.lastError = null; gameSave.okCount++;
+      trimGames().catch(() => {}); // v135 : exactement GAMES_KEPT (50) jeux en base
+    }
+  } finally { gameSave.pending = pendingGames.length; flushingGames = false; }
+}
 async function saveGame(g) {
   // un jeu EN LIVE (non terminé) n'est jamais enregistré en base
   if (!g || !g.finished) return null;
-  const r = await saveGameRaw(g);
-  if (r) trimGames().catch(() => {}); // v135 : nettoyage à CHAQUE jeu enregistré → exactement GAMES_KEPT (50) jeux en base
-  return r;
+  const i = pendingGames.findIndex((x) => x.number === g.number);
+  if (i >= 0) pendingGames[i] = g; else pendingGames.push(g);
+  if (pendingGames.length > 200) pendingGames.shift();
+  gameSave.pending = pendingGames.length;
+  await flushPendingGames();
+  if (pendingGames.length) { console.error(`⚠️ Jeu #${g.number} non enregistré en base (${gameSave.lastError}) : réessai au prochain jeu / dans 20 s`); setTimeout(() => flushPendingGames().catch(() => {}), 20000); }
+  return pendingGames.length === 0;
 }
 async function saveGameRaw(g) {
   return q(
@@ -1237,7 +1262,7 @@ async function swapPrimary(opts = {}) {
 }
 
 module.exports = {
-  connect, status, eachBase, saveGame, gamesByDate, dailySummary, exec, rows,
+  connect, status, eachBase, saveGame, noteFeed, flushPendingGames, gamesByDate, dailySummary, exec, rows,
   savePrediction, closePrediction, predictionsByNumber, setSetting, getSetting, normalizeDate,
   saveStrategy, loadStrategies, deleteStrategy, strategyStats, strategyPredictions, clearPredictions,
   restorePredictions,
