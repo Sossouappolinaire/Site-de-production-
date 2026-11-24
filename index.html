@@ -994,20 +994,7 @@ Faites-en bon usage !
       catch (e) { s = { ...s, ...(strategyDetails[key] || {}) }; }
       setNav('strategies'); const c = s.config || {};
       $('#app').innerHTML = `<div class="section-head"><div><span class="eyebrow">Configuration stratégie</span><h2 style="margin-top:7px">${esc(s.name)}</h2><p class="small">${esc(s.about)}</p></div><span class="tag ${c.enabled ? 'good' : 'bad'}">${c.enabled ? 'Active' : 'En pause'}</span></div>
-        ${s.key === 'trefleTrio' ? (() => { const pubIds = (s.publishedChannels || s.channels || []);
-          return `<div class="panel"><h3>Réglages</h3>
-          <div class="field"><label>ID ou @nom du canal</label><input id="pubChannel" value="${esc(pubIds.join(', '))}" placeholder="-1001234567890"></div>
-          <div class="two-col"><div class="field"><label>Rattrapages</label><input id="cfgMaxR" type="number" min="0" max="9" value="${c.maxR ?? 4}"></div>
-          <div class="field"><label>Format de prédiction</label><input id="cfgFormat" type="number" min="1" max="${snapshot.formatCount}" value="${c.format || 1}"></div></div>
-          <div class="field"><label>Créneaux de jeux (ex. 200-300, 1271-1371)</label><input id="cfgWindows" value="${esc((c.windows || [[200,300],[1271,1371]]).map(w => w.join('-')).join(', '))}"></div>
-          <div class="field"><label>Numéros déclencheurs (séparés par des virgules)</label><textarea id="cfgTriggers" rows="4">${esc((c.triggers || []).join(', '))}</textarea></div>
-          <label class="check"><input id="cfgFallback" type="checkbox" ${c.fallbackEnabled ? 'checked' : ''}> Si la condition n'est pas respectée (pas de ♣️ sur N-2, N-1 et N), prédire quand même un autre costume</label>
-          <div class="field"><label>Costume de repli</label><select id="cfgFallbackSuit"><option value="♥️" ${c.fallbackSuit !== '♠️' ? 'selected' : ''}>♥️ Cœur</option><option value="♠️" ${c.fallbackSuit === '♠️' ? 'selected' : ''}>♠️ Pique</option></select></div>
-          <label class="check"><input id="cfgBypass" type="checkbox" ${c.bypassGates !== false ? 'checked' : ''}> Envoi direct : ignorer les filtres du canal (« Envoi après perte », mode du jour, ralentisseur, stabilité du jeu)</label>
-          <label class="check"><input id="cfgEnabled" type="checkbox" ${c.enabled ? 'checked' : ''}> Activer cette stratégie</label>
-          ${s.sendError ? `<p class="small" style="color:#e5484d">⚠️ Dernier échec d'envoi Telegram : ${esc(s.sendError)}</p>` : ''}
-          <p class="small muted">Sur un déclencheur N, la main du joueur doit avoir au moins un ♣️ dans les jeux N-2, N-1 et N. Sinon aucune prédiction : on attend le déclencheur suivant. Sinon ♣️ est prédit sur N+1, avec les rattrapages réglés ci-dessus (4 = jusqu'à N+5).</p>
-          <div class="toolbar" style="margin-top:14px"><button class="button primary" onclick="saveTrefleTrio()">Enregistrer</button><button class="button small ghost" onclick="testStrategy('trefleTrio','published')">Tester le canal</button><button class="button small danger" onclick="removeChannel('trefleTrio','published')">Retirer le canal</button></div><div id="strategyMessage"></div></div>`; })() : s.key === 'secondeCarte' ? (() => { const pubIds = (s.publishedChannels || s.channels || []); const rv = s.gate?.run;
+        ${s.key === 'secondeCarte' ? (() => { const pubIds = (s.publishedChannels || s.channels || []); const rv = s.gate?.run;
           return `<div class="panel"><h3>Réglages</h3>
           <p class="small">${esc(rv?.label || '')}</p>
           <div class="field"><label>ID ou @nom du canal</label><input id="pubChannel" value="${esc(pubIds.join(', '))}" placeholder="-1001234567890"></div>
@@ -1118,13 +1105,6 @@ Faites-en bon usage !
       const pub = new Set(patch.publishedChannels), shadow = new Set(patch.shadowChannels), overlap = [...pub].filter(id => shadow.has(id));
       if (overlap.length) return toast('Un même canal ne peut pas être public et silencieux pour la même stratégie.', 'error');
       try { await api(`/api/strategies/${key}`, 'POST', patch); await refresh(); await strategyPage(key); toast('Réglages enregistrés.'); } catch (e) { toast(e.message, 'error'); }
-    }
-    async function saveTrefleTrio() {
-      try {
-        const patch = { enabled: $('#cfgEnabled')?.checked, format: val('cfgFormat'), maxR: val('cfgMaxR'), windows: val('cfgWindows'), triggers: val('cfgTriggers'), fallbackEnabled: $('#cfgFallback')?.checked, fallbackSuit: val('cfgFallbackSuit'), bypassGates: $('#cfgBypass')?.checked, publishedChannels: ids(val('pubChannel')) };
-        await api('/api/strategies/trefleTrio', 'POST', patch);
-        await refresh(); await strategyPage('trefleTrio'); toast('Réglages enregistrés.');
-      } catch (e) { toast(e.message, 'error'); }
     }
     async function saveSecondeCarte() {
       try {

@@ -47,7 +47,8 @@ const suitStreak = require('./suit-streak');
 const dizaineTop = require('./dizaine-top');
 const bestWeakTop = require('./best-weak-top');
 const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
-const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const prevSuit = require('./prev-suit'); // « Costume N-1 → +n » (v93)
+const trefleMiroir = require('./trefle-miroir'); // « Trèfle ×3 » : image inverse du calcul dans un autre canal
 const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
 const miracleSerie = require('./miracle-serie'); // « Miracle série » (v148)
 const endDigitPredict = require('./end-digit-predict'); // « Prédiction fin de numéro » (v101)
@@ -231,6 +232,10 @@ app.use((req, res, next) => {
 // dans index.html et login.html (<meta name="boot-id">) pour que l'intro animée
 // (public/intro.js) ne soit jouée qu'UNE fois après chaque redémarrage.
 const BOOT_ID = String(Date.now());
+// Compression gzip des réponses (index.html pèse ~800 Ko : ~5x moins de bande passante). Facultatif : si le paquet
+// « compression » n'est pas installé, le site fonctionne comme avant.
+try { app.use(require('compression')()); } catch (_) { console.log('ℹ️  Paquet « compression » absent : réponses non compressées.'); }
+
 app.get(['/', '/index.html', '/login.html'], (req, res, next) => {
   const file = path.join(__dirname, 'public', req.path === '/login.html' ? 'login.html' : 'index.html');
   require('fs').readFile(file, 'utf8', (err, html) => {
@@ -288,6 +293,20 @@ function requireAdmin(req, res) {
 app.get('/api/users', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   res.json({ users: await auth.listUsers() });
+});
+// --- Nettoyage automatique (cleanup.js) : état, lancement manuel, réglages -----
+app.get('/api/cleanup', (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(require('./cleanup').status());
+});
+app.post('/api/cleanup/run', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try { res.json(await require('./cleanup').runOnce('manuel')); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/cleanup/config', express.json(), (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json({ config: require('./cleanup').setConfig(req.body || {}) });
 });
 // --- Panneau admin « Déploiement » : génère un ZIP de bot autonome --------
 app.get('/api/deploy/options', (req, res) => {
@@ -457,6 +476,7 @@ app.get('/api/state', async (req, res) => {
     confirmation: confirmationView(),
     apkCall: apkCallView(),
     prevSuit: prevSuitView(),
+    trefleMiroir: trefleMiroir.status(),
     miracle: miracleView(),
     miracleSerie: miracleSerieView(),
     canalTelegram: canalTelegram.status(),
@@ -1132,6 +1152,18 @@ app.get('/api/strategies/:key', (req, res) => {
 
 // modification (administrateur) — enregistrée en base de données
 app.post('/api/strategies/:key', async (req, res) => {
+  // « Trèfle ×3 » : le canal de l'image inverse est vérifié (bot administrateur avec le droit de publier) avant d'être enregistré
+  if (req.params.key === 'trefleTrio' && req.body && req.body.mirrorChannels !== undefined && botStatus().tokenSet) {
+    try {
+      for (const id of lossRelaunch.parseChannels(req.body.mirrorChannels)) {
+        const check = await resolveChat(id);
+        if (!check.ok) return res.status(400).json({ error: `Canal de l’image inverse ${id} : ${check.error}` });
+        if (['channel', 'supergroup', 'group'].includes(check.chat.type) && check.chat.canPost === false) {
+          return res.status(400).json({ error: `Le bot n'est pas administrateur de « ${check.chat.title} » avec le droit « Publier des messages ».` });
+        }
+      }
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+  }
   const cfg = setStrategyConfig(req.params.key, req.body || {});
   if (!cfg) return res.status(404).json({ error: 'Stratégie inconnue' });
   persist();
@@ -2372,6 +2404,14 @@ app.post('/api/prev-suit/test', async (req, res) => {
   res.status(r.ok ? 200 : 400).json(r);
 });
 app.post('/api/prev-suit/reset', (req, res) => { prevSuit.resetStats(); res.json(prevSuitView()); });
+
+// « Trèfle ×3 » : image inverse du calcul (voir trefle-miroir.js)
+app.get('/api/trefle-miroir', (req, res) => res.json(trefleMiroir.status()));
+app.post('/api/trefle-miroir/test', async (req, res) => {
+  const r = await trefleMiroir.test();
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.post('/api/trefle-miroir/reset', (req, res) => { trefleMiroir.resetStats(); res.json(trefleMiroir.status()); });
 
 // ---------------------------------------------------------------------------
 // « ✨ Miracle prediction » (voir miracle-prediction.js) : suit les stratégies / configurations existantes (3 modes : cochées,
