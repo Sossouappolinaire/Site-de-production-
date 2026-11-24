@@ -35,6 +35,7 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `data-transfer.js` — export/import de TOUTE la configuration du bot (tokens
 - `auto-import.js` — import AUTOMATIQUE du classeur de configuration au démarrage
 - `midnight-reset.js` — « NOUVEAU DÉPART » chaque jour à 00h00 heure d'Abidjan
+- `cleanup.js` — NETTOYAGE AUTOMATIQUE (toutes les 60 min) : sauvegardes `.repair-backups`, fichiers temporaires, lignes de base expirées (anti-doublons, sessions, codes e-mail, vieilles analyses/annonces/prédictions), historiques démesurés de `data.json` ; routes admin `/api/cleanup`, `/api/cleanup/run`, `/api/cleanup/config` ; `CLEANUP=off` pour le couper.
 
 ## Cœur : jeux, stratégies, vérification
 
@@ -99,6 +100,7 @@ Ce fichier sert de plan : une ligne par module, rangé par rôle. Chaque module 
 - `canal-telegram.js` — bouton « Canal Telegram » (v99) : un canal = une stratégie (nom du canal) ; lecteur universel `parseUniversal` (n° de jeu + costume, tous formats) ; vérification uniforme (main du joueur, rattrapages réglés par canal) ; statistiques par canal ; branché dans `bot.js` (channel_post, point d'envoi unique, tick) et `server.js` (`/api/canal-telegram`).
 - `channel-uniform.js` — « Canal Telegram » (v103) : liste à cocher de tous les canaux qui reçoivent des prédictions ; par canal coché : format unique (réécriture au point d'envoi unique de `bot.js`, à partir du registre `locateRendered` de `formats.js`), rattrapage unique (`maxRFor` dans `predictor.js`), bilan toutes les 2 h (`strategy-recap.js`, `setChannelEnabled(id, on, 2)`) ; routes `/api/channel-uniform/…` dans `server.js`.
 - `prev-suit.js` — bouton « Costume N-1 → +4 » : stratégies / configurations cochées (liste fournie par server.js) ; costume prédit à N venu à N-1 et absent à N → même costume à N+4 dans le canal choisi.
+- `trefle-miroir.js` — « Trèfle ×3 » : IMAGE INVERSE du calcul IB × 0,21 (v150). Si l'option est cochée dans la page de la stratégie, chaque prédiction du calcul est doublée dans un autre canal par son image (❤️ ↔ ♣️, ♦️ ↔ ♠️) ; vérifiée et éditée à part ; branché dans `bot.js` (`broadcast`, tick) et `server.js` (`/api/trefle-miroir`).
 - `formation.js` — bouton « Formation » (page Analyseur IA)
 - `formation-relay.js` — « Envoyer la formation dans le canal »
 

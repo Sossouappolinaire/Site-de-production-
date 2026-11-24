@@ -12,6 +12,20 @@ const session = require('express-session');
 
 module.exports = function hybridStore(pgStore) {
   const mem = new session.MemoryStore();
+
+  // Les sessions gardées en mémoire (repli) n'étaient jamais purgées : on retire celles dont le cookie est expiré.
+  const sweep = setInterval(() => {
+    try {
+      mem.all((_e, all) => {
+        const now = Date.now();
+        for (const sid of Object.keys(all || {})) {
+          const exp = all[sid] && all[sid].cookie && all[sid].cookie.expires;
+          if (exp && new Date(exp).getTime() < now) mem.destroy(sid, () => {});
+        }
+      });
+    } catch (_) { /* balayage facultatif */ }
+  }, 30 * 60 * 1000);
+  if (sweep.unref) sweep.unref();
   const store = new session.Store();
 
   const safe = (fn) => {

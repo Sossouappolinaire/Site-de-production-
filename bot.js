@@ -28,7 +28,8 @@ const lossReturn = require('./loss-return'); // « Retour après perte » (v47)
 const lossRelaunch = require('./loss-relaunch'); // « Relance après perte » (v57)
 const confirmation = require('./confirmation'); // « Confirmation » (v140)
 const apkCall = require('./apk-call'); // « Appel APK » (v145)
-const prevSuit = require('./prev-suit'); // « Costume N-1 → +4 » (v93)
+const prevSuit = require('./prev-suit'); // « Costume N-1 → +n » (v93)
+const trefleMiroir = require('./trefle-miroir'); // « Trèfle ×3 » : image inverse du calcul dans un autre canal
 const miracle = require('./miracle-prediction'); // « Miracle prediction » (v129)
 const miracleSerie = require('./miracle-serie'); // « Miracle série » (v148)
 const parityEgalite = require('./parity-egalite'); // « Palier parité égalité » : 2e taux quand deux taux faibles sont égaux
@@ -1929,6 +1930,8 @@ async function broadcast(pred) {
     return;
   }
   pred.silent = false;
+  // « Trèfle ×3 » avec le calcul : l'image inverse (❤️ ↔ ♣️, ♦️ ↔ ♠️) part aussi dans l'autre canal choisi (voir trefle-miroir.js)
+  try { if (pred.strategy === 'trefleTrio') trefleMiroir.onPrediction(pred); } catch (_) { /* option facultative */ }
   const ids = strategyChannels(pred.strategy, 'active'); // « Trèfle ×3 » : canal du calcul si l'option est activée, sinon canal des déclencheurs fixes
   if (!ids.length) { state.sendErrors[pred.strategy] = 'Aucun canal configuré'; return; }
   await sendPrediction(pred, sender, ids);
@@ -2218,6 +2221,8 @@ async function tick() {
       Promise.resolve(apkCall.tick()),
       // « Costume N-1 → +4 » : costume venu à N-1 et absent à N → prédiction à N+4 (voir prev-suit.js)
       Promise.resolve(prevSuit.tick()),
+      // « Trèfle ×3 » : vérification des images inverses envoyées (voir trefle-miroir.js)
+      Promise.resolve(trefleMiroir.tick()),
       // « Miracle prediction » : reprise de la prédiction suivante d'une stratégie après sa perte, consensus de 5 stratégies (voir miracle-prediction.js)
       Promise.resolve(miracle.tick()),
       // « Miracle série » : série de prédictions après une perte, jusqu'à ✅1️⃣ / ✅2️⃣ de la stratégie (voir miracle-serie.js)
@@ -2442,6 +2447,7 @@ async function applyDbConfigs() {
   await confirmation.restoreFromDb();
   await apkCall.restoreFromDb();
   await prevSuit.restoreFromDb();
+  await trefleMiroir.restoreFromDb();
   await miracle.restoreFromDb();
   await miracleSerie.restoreFromDb();
   await canalTelegram.restoreFromDb();
@@ -2539,6 +2545,8 @@ async function startLoop() {
   apkCall.restore();
   prevSuit.restore();
   prevSuit.setSender(senderFor);
+  trefleMiroir.restore();
+  trefleMiroir.setSender(senderFor);
   miracle.restore();
   miracle.setSender(senderFor);
   miracle.setAdminId(() => state.adminId);
@@ -2712,6 +2720,8 @@ async function startLoop() {
     setInterval(() => { midnightReset.check().catch((e) => { state.lastError = e.message; }); }, 1000);
     // récapitulatif des prédictions (case « Récapitulatif » de chaque stratégie) : toutes les 2 h, bilan à 00h puis remise à zéro
     setInterval(() => { strategyRecap.tick().catch((e) => { state.lastError = e.message; }); }, 20000);
+    // nettoyage automatique (sauvegardes, temporaires, anciennes lignes de base, historiques) : voir cleanup.js
+    try { require('./cleanup').start(); } catch (e) { console.error('⚠️ Nettoyage automatique non démarré :', e.message); }
     tick();
   }
   startBot();

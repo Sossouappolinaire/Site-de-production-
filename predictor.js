@@ -75,7 +75,7 @@ function initStrategies() {
       'silenceChannels', 'silenceChannelInfos']) delete cur[f];
     if (s.key === 'ombre') { cur.silent = true; cur.autoUnlockMin = 0; } else cur.silent = false;
     // « Trèfle ×3 » : canal public UNIQUEMENT — ni canal silencieux, ni déclencheur automatique (qui retenait les envois)
-    if (s.key === PUBLIC_ONLY_KEY) { if (!Array.isArray(cur.calcChannels)) cur.calcChannels = []; cur.useCalc = !!cur.useCalc; }
+    if (s.key === PUBLIC_ONLY_KEY) { if (!Array.isArray(cur.calcChannels)) cur.calcChannels = []; cur.useCalc = !!cur.useCalc; if (!Array.isArray(cur.mirrorChannels)) cur.mirrorChannels = []; cur.mirrorEnabled = !!cur.mirrorEnabled; }
     if (s.key === PUBLIC_ONLY_KEY) { cur.silent = false; cur.autoEnabled = false; cur.shadowChannels = []; cur.shadowChannelInfos = []; }
   }
   syncCostume();
@@ -150,6 +150,8 @@ function setStrategyConfig(key, patch = {}) {
     if (patch.useCalc !== undefined) next.useCalc = !!patch.useCalc; // calcul IB × 0,21 : tous les jeux en direct sont déclencheurs
     if (patch.calcChannels !== undefined) next.calcChannels = parseChannels(patch.calcChannels); // canal utilisé quand le calcul IB × 0,21 est ACTIVÉ
     if (patch.calcChannelInfos !== undefined) next.calcChannelInfos = Array.isArray(patch.calcChannelInfos) ? patch.calcChannelInfos : [];
+    if (patch.mirrorEnabled !== undefined) next.mirrorEnabled = !!patch.mirrorEnabled; // calcul activé : image inverse envoyée dans un autre canal (trefle-miroir.js)
+    if (patch.mirrorChannels !== undefined) next.mirrorChannels = parseChannels(patch.mirrorChannels);
     if (patch.bypassGates !== undefined) next.bypassGates = !!patch.bypassGates;
     if (patch.fallbackSuit !== undefined) next.fallbackSuit = normSuit(patch.fallbackSuit) === normSuit('♠️') ? '♠️' : '♥️';
     if (patch.windows !== undefined) { const w = strategies.sanitizeWindows(patch.windows); next.windows = w.length ? w : strategies.BY_KEY.trefleTrio.defaults.windows.map((x) => x.slice()); }

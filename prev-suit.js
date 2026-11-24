@@ -101,7 +101,7 @@ function onOwnPost(chatId, text) {
 
 // ── envoi / édition ─────────────────────────────────────────────────────────
 function renderFor(entry, statusFr) {
-  return fmt.renderMessage(entry.format, { gameNumber: entry.target, suit: entry.suit, strategy: 'Costume N-1 → +4', maxR: entry.maxR, status: statusFr, rattrapage: entry.step || 0 }, null);
+  return fmt.renderMessage(entry.format, { gameNumber: entry.target, suit: entry.suit, strategy: `Costume N-1 → +${entry.offset || panel.offset}`, maxR: entry.maxR, status: statusFr, rattrapage: entry.step || 0 }, null);
 }
 async function sendToChannels(out) {
   const b = bot();
@@ -139,7 +139,7 @@ async function launch(e) {
   if (panel.pendingMessages.some((s) => s.target === target) || inflight.has(String(target))) { e.launch = 'doublon ignoré'; panel.duplicatesBlocked += 1; return false; } // un seul message par numéro de jeu
   inflight.add(String(target));
   try {
-    const entry = { id: `pss-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, cfgId: 'prev-suit', suit: e.suit, target, maxR: panel.maxR, format: panel.format, step: 0,
+    const entry = { id: `pss-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, cfgId: 'prev-suit', suit: e.suit, target, offset: panel.offset, maxR: panel.maxR, format: panel.format, step: 0,
       status: 'en attente', messages: [], origin: { target: e.target, src: e.src }, createdAt: Date.now(), resolvedAt: null };
     entry.messages = await sendToChannels(renderFor(entry, null));
     if (!entry.messages.length) { e.launch = 'non envoyé'; return false; }

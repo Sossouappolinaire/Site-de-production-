@@ -1667,6 +1667,8 @@ const trefleTrio = {
     channels: [],
     calcChannels: [],         // canal utilisé quand le calcul IB × 0,21 est activé (vide = on garde le canal des déclencheurs fixes)
     useCalc: false,           // false = déclencheurs fixes (comportement d'origine) ; true = calcul IB × 0,21 sur chaque jeu en direct
+    mirrorEnabled: false,     // calcul activé : envoyer aussi l'IMAGE INVERSE de chaque prédiction (❤️ ↔ ♣️, ♦️ ↔ ♠️) dans un autre canal (trefle-miroir.js)
+    mirrorChannels: [],       // canal de l'image inverse
     bypassGates: true,        // envoi direct : ignore « Envoi après perte », mode du jour et ralentisseur du canal
   },
   usesB: false,
