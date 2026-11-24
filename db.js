@@ -302,7 +302,7 @@ function makePool(connectionString) {
   const p = new Pool({
     connectionString,
     ssl: /localhost|127\.0\.0\.1/.test(connectionString) ? false : { rejectUnauthorized: false },
-    max: 6,
+    max: 3,
     connectionTimeoutMillis: 10000,   // v133 : une connexion qui ne s'ouvre pas en 10 s échoue au lieu de bloquer le bot
     idleTimeoutMillis: 30000,
     statement_timeout: 30000,         // une requête bloquée est coupée côté Supabase

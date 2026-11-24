@@ -8,7 +8,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const archiver = require('archiver');
+// allègement mémoire : « archiver » n'est chargé qu'à la première génération de ZIP
+const archiver = (...args) => require('archiver')(...args);
 
 const ROOT = __dirname;
 

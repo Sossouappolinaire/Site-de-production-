@@ -10,7 +10,8 @@
 // localement à partir des mêmes chiffres (jamais de texte inventé).
 'use strict';
 
-const PDFDocument = require('pdfkit');
+// allègement mémoire : « pdfkit » n'est chargé qu'à la première génération de PDF
+function PDFDocument(...args) { return new (require('pdfkit'))(...args); }
 const strategies = require('./strategies');
 const afterLoss = require('./after-loss');
 const { stats: strategyStats } = require('./predictor');

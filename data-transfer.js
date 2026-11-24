@@ -12,7 +12,9 @@
 // compte. Ces deux vérifications sont faites côté bot.js, pas ici.
 'use strict';
 
-const XLSX = require('xlsx');
+// allègement mémoire : « xlsx » (lourd) n'est chargé qu'au premier usage
+let _xlsx = null;
+const XLSX = new Proxy({}, { get: (_t, k) => (_xlsx || (_xlsx = require('xlsx')))[k] });
 const { state, initStrategies, setStrategyConfig } = require('./predictor');
 const strategies = require('./strategies');
 

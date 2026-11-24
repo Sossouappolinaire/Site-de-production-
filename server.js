@@ -122,7 +122,7 @@ const SESSION_DB_URL = databaseUrl() || require('./database-url').backupUrl() ||
 const sessionPool = new Pool({
   connectionString: SESSION_DB_URL,
   ssl: /localhost|127\.0\.0\.1/.test(SESSION_DB_URL) ? false : { rejectUnauthorized: false },
-  max: 4,
+  max: 2,
 });
 sessionPool.on('error', (e) => console.error('Pool de sessions (pg) :', e.message));
 
@@ -236,13 +236,26 @@ const BOOT_ID = String(Date.now());
 // « compression » n'est pas installé, le site fonctionne comme avant.
 try { app.use(require('compression')()); } catch (_) { console.log('ℹ️  Paquet « compression » absent : réponses non compressées.'); }
 
+// allègement mémoire/CPU : la page est lue, personnalisée et compressée UNE seule fois (puis servie depuis le cache)
+const _pageCache = {};
+function _loadPage(name) {
+  const file = path.join(__dirname, 'public', name);
+  const st = require('fs').statSync(file);
+  const hit = _pageCache[name];
+  if (hit && hit.mtime === st.mtimeMs) return hit;
+  const html = require('fs').readFileSync(file, 'utf8').replace('content="__BOOT_ID__"', `content="${BOOT_ID}"`);
+  const raw = Buffer.from(html, 'utf8');
+  const gz = require('zlib').gzipSync(raw, { level: 6 });
+  return (_pageCache[name] = { mtime: st.mtimeMs, raw, gz });
+}
 app.get(['/', '/index.html', '/login.html'], (req, res, next) => {
-  const file = path.join(__dirname, 'public', req.path === '/login.html' ? 'login.html' : 'index.html');
-  require('fs').readFile(file, 'utf8', (err, html) => {
-    if (err) return next();
-    res.set('Cache-Control', 'no-store');
-    res.type('html').send(html.replace('content="__BOOT_ID__"', `content="${BOOT_ID}"`));
-  });
+  let page;
+  try { page = _loadPage(req.path === '/login.html' ? 'login.html' : 'index.html'); } catch (_) { return next(); }
+  res.set('Cache-Control', 'no-store');
+  res.set('Vary', 'Accept-Encoding');
+  res.type('html');
+  if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) { res.set('Content-Encoding', 'gzip'); return res.send(page.gz); }
+  res.send(page.raw);
 });
 
 app.use(express.static(path.join(__dirname, 'public')));

@@ -6,7 +6,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node bootstrap.js"
+    "start": "node --max-old-space-size=170 --max-semi-space-size=4 --expose-gc bootstrap.js"
   },
   "dependencies": {
     "archiver": "^7.0.1",
