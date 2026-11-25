@@ -2421,7 +2421,7 @@ app.post('/api/prev-suit/reset', (req, res) => { prevSuit.resetStats(); res.json
 // « Trèfle ×3 » : image inverse du calcul (voir trefle-miroir.js)
 app.get('/api/trefle-miroir', (req, res) => res.json(trefleMiroir.status()));
 app.post('/api/trefle-miroir/test', async (req, res) => {
-  const r = await trefleMiroir.test();
+  const r = await trefleMiroir.test(req.body && req.body.kind);
   res.status(r.ok ? 200 : 400).json(r);
 });
 app.post('/api/trefle-miroir/reset', (req, res) => { trefleMiroir.resetStats(); res.json(trefleMiroir.status()); });

@@ -161,6 +161,7 @@ function setStrategyConfig(key, patch = {}) {
     if (patch.mirrorEnabled !== undefined) next.mirrorEnabled = !!patch.mirrorEnabled; // calcul activé : image inverse envoyée dans un autre canal (trefle-miroir.js)
     if (patch.mirrorChannels !== undefined) next.mirrorChannels = parseChannels(patch.mirrorChannels);
     if (patch.bypassGates !== undefined) next.bypassGates = !!patch.bypassGates;
+    if (patch.calcClubToChannel1 !== undefined) next.calcClubToChannel1 = !!patch.calcClubToChannel1; // le ♣️ du calcul s'affiche aussi dans le canal 1 (trefle-miroir.js)
     if (patch.fallbackSuit !== undefined) next.fallbackSuit = normSuit(patch.fallbackSuit) === normSuit('♠️') ? '♠️' : '♥️';
     if (patch.windows !== undefined) { const w = strategies.sanitizeWindows(patch.windows); next.windows = w.length ? w : strategies.BY_KEY.trefleTrio.defaults.windows.map((x) => x.slice()); }
   }
@@ -287,12 +288,14 @@ function strategyChannels(key, mode = 'published') {
   if (!c) return [];
   // « Trèfle ×3 » : deux canaux selon l'option « calcul IB × 0,21 »
   //   'calc'   -> canal du mode calcul (option ACTIVÉE)
-  //   'active' -> canal réellement utilisé pour envoyer : canal du calcul si l'option est activée
-  //               ET qu'il est renseigné, sinon le canal des déclencheurs fixes
+  //   'active' -> canal réellement utilisé par la stratégie : canal du calcul (canal 2) si l'option est activée,
+  //               sinon le canal des déclencheurs fixes (canal 1)
   if (key === 'trefleTrio') {
     const calc = Array.isArray(c.calcChannels) ? c.calcChannels : [];
     if (mode === 'calc') return calc;
-    if (mode === 'active' && c.useCalc && calc.length) return calc;
+    // v153 « trio » : calcul activé -> la prédiction du calcul part UNIQUEMENT dans le canal 2 (canal du calcul) ;
+    // le canal 1 (déclencheurs fixes) ne reçoit que du ♣️ et le canal 3 que l'image inverse (voir trefle-miroir.js)
+    if (mode === 'active' && c.useCalc) return calc;
   }
   const configured = Array.isArray(c.publishedChannels)
     ? c.publishedChannels

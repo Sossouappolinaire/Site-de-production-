@@ -1,10 +1,13 @@
 // Numéro de version de CE ZIP : affiché sur le site (Accueil, Aide, Envois) et dans /api/version.
 // À changer à chaque nouvelle archive pour vérifier d'un coup d'œil que le bon fichier est déployé.
 module.exports = {
-  version: 'v152',
-  name: 'trefle-miroir',
+  version: 'v155',
+  name: 'trio-canal1-correctif',
   date: '2026-11-24',
   features: [
+    'v155 — « Trèfle ×3 » trio : le canal 1 (♣️) et le canal 3 (image inverse) ne partaient pas quand le jeu suivant était déjà en distribution : le contrôle « jeu déjà joué » comptait le jeu en cours de distribution, alors que le moteur (canal 2) ne compte que les jeux terminés. Même règle que le moteur maintenant (trefle-miroir.js)',
+    'v154 — Allègement : dossier public/ réduit à index.html + intro.js (login.html, succes.html, pay-sebpay.html et splash.jpg supprimés : aucune route ni page ne les utilise, le site est ouvert sans connexion) ; doublons inutilisés supprimés à la racine (index.html, login.html, intro.js, succes.html, pay-sebpay.html : seul le dossier public/ est servi). pdfkit, xlsx et archiver étaient déjà chargés à la demande',
+    'v153 — « Trèfle ×3 » : TRIO DE CANAUX qui peuvent prédire en même temps. Canal 1 = ♣️ UNIQUEMENT, quelle que soit la configuration, avec les déclencheurs ajoutés (♣️ chez le joueur sur N-2, N-1 et N) et, par défaut, aussi le ♣️ du calcul (option) ; les 3 canaux suivent le même créneau de jeux ; canal 2 = le calcul IB × 0,21 (toutes ses prédictions, il n’envoie plus dans le canal 1) ; canal 3 = l’inverse du canal 2 (❤️ ↔ ♣️, ♦️ ↔ ♠️). Exemple : le calcul prédit ♣️ → canal 1 ♣️, canal 2 ♣️, canal 3 ❤️. Chaque canal est vérifié et édité (✅ / ❌) à part, statistiques du canal 1 dans la page de la stratégie, bouton de test par canal (trefle-miroir.js, predictor.js, server.js, public/index.html, version.js)',
     'v152 — Jeux en base : chaque jeu terminé est réessayé et mis en file d’attente tant que la base refuse l’écriture (plus d’échec silencieux), le match nul est enregistré « Égalité » (gagnant déduit des valeurs si la phase ne le donne pas), et le statut de la base (db.status().games) montre le dernier jeu enregistré, la dernière erreur, les jeux en attente et la dernière réponse de l’API (db.js, api.js, bot.js, version.js)',
     'v151 — « Trèfle ×3 » : calcul IB × 0,21 désactivé = uniquement les numéros déclencheurs fixes (202 … 298 et 1273 … 1369) et uniquement le ♣️ : la règle (♣️ chez le joueur sur N-2, N-1 et N) est vérifiée sur chaque déclencheur, sinon aucune prédiction ; costume de repli ♥️/♠️ retiré (strategies.js, predictor.js, public/index.html, version.js)',
     'v150 — « Trèfle ×3 » : nouvelle option « image inverse » (trefle-miroir.js). Quand le calcul IB × 0,21 est activé, chaque prédiction du calcul est doublée dans un AUTRE canal par son image (❤️ ↔ ♣️, ♦️ ↔ ♠️), même jeu et mêmes rattrapages, vérifiée et éditée (✅ / ❌) à part, statistiques dans la page de la stratégie, bouton de test. « Costume N-1 → +n » : le décalage n réglable apparaît maintenant dans le message envoyé (au lieu de +4 fixe). Nettoyage automatique (cleanup.js) et compression gzip des pages',
